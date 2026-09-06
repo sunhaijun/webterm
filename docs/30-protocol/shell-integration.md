@@ -122,25 +122,38 @@ agent 侧的状态机：
 
 ### 4.1 命令原文的获取
 
-用 `DEBUG` trap + 守卫标志（经典的 bash-preexec 模式），并从 `history 1` 取**完整命令行**：
+用 `DEBUG` trap + 两个守卫标志（经典的 bash-preexec 模式），并从 `history 1` 取**完整命令行**：
 
 ```bash
-__webterm_preexec_invoked=0
+__webterm_in_prompt=1      # 1 = 正处在 PROMPT_COMMAND 里，DEBUG 应当忽略
+__webterm_invoked=0        # 1 = 本命令行已上报过
+__webterm_last_histno=     # 上次上报的历史编号
 
 __webterm_preexec() {
-    [ -n "$COMP_LINE" ] && return                  # 补全过程中，跳过
-    [ "$__webterm_preexec_invoked" = 1 ] && return # 一个命令行内只触发一次
-    __webterm_preexec_invoked=1
-    local line
-    line=$(HISTTIMEFORMAT= builtin history 1)
-    line=${line#*[0-9]  }                          # 去掉历史编号
-    …emit OSC 1701;cmd + OSC 133;C…
+    [ -n "$COMP_LINE" ] && return              # 补全过程中，跳过
+    [ "$__webterm_in_prompt" = 1 ] && return   # PROMPT_COMMAND 内部的命令，不是用户命令
+    [ "$__webterm_invoked" = 1 ] && return     # 一个命令行内只触发一次
+    __webterm_invoked=1
+
+    local raw histno line
+    raw=$(HISTTIMEFORMAT= builtin history 1)   # 形如 "  512  go test ./..."
+    histno=${raw%%[!0-9 ]*}; histno=${histno//[[:space:]]/}
+    line=${raw#*[0-9]  }                       # 去掉历史编号
+
+    # 编号没变 = 本命令没进历史（前导空格）→ 只发边界，不上报原文
+    if [ "$histno" != "$__webterm_last_histno" ]; then
+        __webterm_last_histno=$histno
+        …emit OSC 1701;cmd…                    # 必须在 133;C 之前
+    fi
+    …emit OSC 133;C…
 }
 ```
 
 **为什么用 `history 1` 而不是 `$BASH_COMMAND`**：`$BASH_COMMAND` 在 DEBUG trap 里给的是**当前正在执行的单个简单命令**。对 `foo | bar` 它会触发两次，分别给 `foo` 和 `bar`；对 `for` 循环会触发 N 次。守卫标志能保证只取第一次，但那就只拿到 `foo`，不是完整命令行。`history 1` 给的是用户实际输入的整行。
 
-**副作用即是特性**：`HISTCONTROL=ignorespace` 时，以空格开头的命令不进历史，`history 1` 会返回**上一条**命令。脚本必须检测这种情况（把上次记录的命令行缓存下来比对，相同则判定为"本次命令未进历史"）并**跳过上报** —— 这正好实现了 AC-6.2 / US-6.7 的隐私需求。
+**为什么比历史编号而不是命令原文**：`HISTCONTROL=ignorespace` 时，以空格开头的命令不进历史，`history 1` 会返回**上一条**命令 —— 编号也跟着不变，据此跳过上报正好实现了 AC-6.2 / US-6.7 的隐私需求。但若比的是**原文**，连着跑两次 `make` 会被误判成"没进历史"而漏记第二次（AC-6.1 破功）。连续重复的命令太常见了，必须比编号。
+
+**为什么需要 `__webterm_in_prompt`**：`__webterm_precmd` 装在 `PROMPT_COMMAND` 上，而排在它后面的用户函数会继续触发 DEBUG trap。没有这个标志，那些函数会被当成用户命令上报 —— 产生假的命令记录，并把输入模式误切到 Raw。标志在 precmd 入口置 1，在 precmd 出口置 0（此时 prompt 即将显示，下一个 DEBUG 才是真的用户命令）。
 
 脚本必须显式确保 `HISTCONTROL` 包含 `ignorespace`（如果用户没设，我们追加；不移除用户已有的设置）。
 
@@ -151,14 +164,18 @@ __webterm_preexec() {
 ```bash
 __webterm_precmd() {
     local code=$?
-    if [ "$__webterm_preexec_invoked" = 1 ]; then
+    __webterm_in_prompt=1               # 屏蔽 PROMPT_COMMAND 内部命令的 DEBUG trap
+    if [ "$__webterm_invoked" = 1 ]; then
         …emit OSC 133;D;$code…
     fi
-    __webterm_preexec_invoked=0
+    __webterm_invoked=0
     …emit OSC 7 (cwd)…
     __webterm_assert_ps1                # 重新断言 PS1 上的标记
+    __webterm_in_prompt=0               # 必须是 PROMPT_COMMAND 链的最后一步
 }
 ```
+
+`__webterm_in_prompt=0` 必须在整条 `PROMPT_COMMAND` 链**执行完**之后才置回 —— 否则排在我们后面的用户函数又会漏出去。实现上把它单独追加为 `PROMPT_COMMAND` 的最后一项。
 
 **`$?` 必须在函数第一行捕获**，否则会被函数内的任何命令覆盖。
 
@@ -179,7 +196,7 @@ PS1='\[\e]133;A\a\]'"$PS1"'\[\e]133;B\a\]'
 ### 4.5 容错要求（AC-7.7）
 
 - 整个钩子安装过程包在 `{ …; } 2>/dev/null || true` 里
-- 开头检查 bash 版本；`BASH_VERSINFO[0] < 4` 时只安装最基本的 `PROMPT_COMMAND` 钩子（放弃 `cmd` 上报，保留 CWD 与 prompt 状态）
+- 开头检查 bash 版本；`BASH_VERSINFO[0] < 4` 时只安装最基本的 `PROMPT_COMMAND` 钩子（放弃 `cmd` 上报，保留 CWD 与 prompt 状态）。**bash 4.4 是另一条线**：它是 readline 支持 bracketed paste 的起点，低于它 Composer 的多行提交会降级（见 [`../40-frontend/input-modes.md`](../40-frontend/input-modes.md#提交格式ac-32)），但集成本身照常工作
 - 脚本里所有变量与函数名统一 `__webterm_` 前缀，避免污染用户命名空间
 - **绝不能让 shell 启动失败**。宁可没有集成，也不能没有终端
 
@@ -208,6 +225,7 @@ PS1='\[\e]133;A\a\]'"$PS1"'\[\e]133;B\a\]'
 必测用例（AC-7.5）：
 
 ```
+UT-osc-1  webterm 相关 OSC（133 / 7 / 1701）被完整剥离，输出流里一个都不剩
 UT-osc-2  完整序列一次读入
 UT-osc-3  序列被切成 N 份（对每个字节位置都切一次，逐一验证）
 UT-osc-4  ST 终止符 vs BEL 终止符

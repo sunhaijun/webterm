@@ -10,8 +10,9 @@
 
 ```
 1. go build 出真二进制（含 go:embed 的前端产物）
-2. webterm serve --dev --data-dir <临时目录> --max-sessions 5 --ring-bytes 65536
-   （ring-bytes 调小到 64 KiB，让 reset 路径可测）
+2. webterm serve --dev --data-dir <临时目录> --max-sessions 5
+   默认 ring-bytes（1 MiB）—— 断线窗口内的输出不会溢出，字节级比较才稳定
+   只有 E2E-2c / E2E-4 用 --ring-bytes 65536 单独起一个实例，让 reset 路径可测
 3. 从 stdout 抓配对 URL
 4. Playwright 打开 URL，完成配对
 ```
@@ -74,6 +75,8 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 
 ### E2E-2c 断开期间输出超过 ring_bytes → reset
 
+> 用 `--ring-bytes 65536` 的实例。
+
 1. 断开，在断开期间让会话产出 > 64 KiB 输出（`emit.sh 5000`）
 2. 重连
 3. 断言：
@@ -85,6 +88,13 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 ### E2E-2d 连续快速断开
 
 断开 10 次，每次间隔 300ms。最终字节一致（验证无累积错位）。
+
+### E2E-2e 断点落在着色区间内
+
+让 `emit.sh` 输出一段跨越多帧的同色文本，**在这段中间**断开重连。断言：
+
+- 回放的第一帧 `flags == 0`（`status == "ok"` 时**不得**注入 `ESC[0m`）
+- 断点之后的文本颜色与基准一致 —— 这是 AC-2.7 最容易写错的一面
 
 ---
 
@@ -98,6 +108,7 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 4. UI 应显示这些输入处于"待发送"状态（而不是静默吞掉）
 5. 恢复连接
 6. 终端依次出现 `A1`、`A2`、`A3`，**顺序正确、无重复、无丢失**
+7. 断言重连过程中**没有出现 `input_gap`**：`welcome.resumed[].in_ack` 必须是断开前的累计值而不是 0（AC-2.12）
 
 变体：断开期间提交超过 64 KiB 的输入 → UI 明确提示"离线输入已满"，不静默丢弃。
 
@@ -129,7 +140,7 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 1. 创建会话 A、B
 2. 在 A 里跑 `emit.sh 100 50`（持续输出）
 3. 切到 B
-4. A 的列表项出现未读标记
+4. A 的列表项出现未读标记（由 `session.updated{head_seq}` > 本地 `out_seq` 推导）
 5. 在 B 里 `echo in-b`，正常工作
 6. 切回 A：内容**完整**（切走期间的输出全在），未读标记清除
 7. A 的滚动位置保持在切走前的位置（除非之前在底部，则跟到底部）
@@ -292,12 +303,26 @@ Playwright 可以派发 composition 事件。
 
 ## E2E-17 PWA
 
-> AC-1.4（US-1.4）
+> AC-1.14
 
 1. `manifest.json` 可访问，字段完整
 2. Service Worker 注册成功
 3. 断网后刷新 → 显示"无法连接到 agent"的明确状态页（不是浏览器的默认错误页，也不假装能用）
 4. 断言 Service Worker **没有缓存任何 `/api/*` 或 `/ws` 的响应**
+
+---
+
+---
+
+## E2E-18 agent 重启后不张冠李戴
+
+> AC-2.13
+
+1. 开两个标签页，各自持有会话
+2. 重启 agent 进程（会话全部消失，[ADR-0003](../20-architecture/adr/0003-no-tmux.md)）
+3. 标签页 A 先重连并新建一个会话 → 它拿到 `sid = 1`
+4. 标签页 B 随后重连，`hello` 里带着旧的 `instance_id` 与 `resume{sid:1, out_seq:很大}`
+5. 断言：B 拿到的是 `status: "gone"`，UI 提示"会话已结束"，**屏幕上没有把 A 的新会话的输出接到 B 的旧内容后面**
 
 ---
 

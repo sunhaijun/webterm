@@ -131,7 +131,8 @@ xterm 的主题（前景/背景/16 色）从同一组 CSS 变量读取并在切�
 
 ## 渲染
 
-- 优先 `WebglAddon`；`webgl2` 上下文创建失败或 addon 抛异常时**静默回退**到默认 canvas renderer（AC-5.5）
+- **只有当前可见的终端挂 `WebglAddon`**，切走时 `dispose()`。浏览器的 WebGL 上下文数有上限（Chrome 约 16 个，超了会静默丢弃最老的），而会话上限是 20 且切走的 xterm 实例不销毁（[`session-ux.md`](session-ux.md#会话在-client-侧的表示)）—— 全挂上必然撞线，症状是别的终端莫名变黑
+- `webgl2` 上下文创建失败或 addon 抛异常时**静默回退**到默认 canvas renderer（AC-5.5）
 - 监听 `webglcontextlost`，丢失时也回退，不要留一个黑屏
 - `scrollback: 5000`（AC-5.1）
 - 选中文本时暂停自动滚动（`terminal.onSelectionChange` → 有选区则不 `scrollToBottom`）（AC-5.4）

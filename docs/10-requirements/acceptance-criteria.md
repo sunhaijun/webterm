@@ -25,6 +25,8 @@
 | AC-1.10 | DB 中存的是 Cookie token 的哈希，不是原文 | UT-auth-1 |
 | AC-1.11 | 吊销设备后，该设备的下一次请求（含已建立的 WebSocket）在 5 秒内被断开并要求重新配对 | IT-auth-4 |
 | AC-1.12 | DB 文件权限为 `0600` | IT-store-1 |
+| AC-1.13 | 证书申请失败时 stdout 给出「原因 + 怎么修」（至少覆盖：80 被占、DNS 未指向本机、ACME 限流），不是 Go error 堆栈；`webterm doctor` 逐项检查同样的前置条件（US-7.2） | IT-tls-3 |
+| AC-1.14 | PWA：`manifest.json` 字段完整、Service Worker 注册成功、`display: standalone`；SW **只缓存静态壳**，不缓存 `/api/*` 与 `/ws`；离线时显示明确状态页（US-1.4） | E2E-17 |
 
 ---
 
@@ -37,12 +39,14 @@
 | AC-2.3 | 重连时 client 上报 `out_seq`，agent 仅回放 `out_seq` 之后的字节，不重发已收到的字节 | UT-ring-1, IT-resume-2 |
 | AC-2.4 | 断线期间提交的输入在重连后按原顺序、不重复、不丢失地写入 PTY | E2E-3, IT-resume-3 |
 | AC-2.5 | `out_seq` 严格等于 agent 已发送的累计字节数；剥离 OSC 之后才计数 | UT-seq-1 |
-| AC-2.6 | `last_seq < base_seq` 时 agent 发 `reset`，client 先清屏再写入缓冲现存内容，并显示"历史输出已截断"提示 | E2E-4, UT-ring-2 |
-| AC-2.7 | 环形缓冲裁剪优先在 `\n` 边界，且回放起点前置 `ESC[0m` 以清除悬空属性 | UT-ring-3 |
+| AC-2.6 | client 的 `out_seq < base_seq` 时 agent 判 `reset`，client 先清屏再写入缓冲现存内容，并显示"历史输出已截断"提示 | E2E-4, UT-ring-2 |
+| AC-2.7 | 环形缓冲裁剪优先在 `\n` 边界（64 KiB 窗口内找不到则硬裁）；`ESC[0m` 属性修正**只在 reset 回放时**前置，且不计入 `out_seq`（增量续传时注入会破坏 AC-2.1） | UT-ring-3, UT-ring-4 |
 | AC-2.8 | 心跳：client 每 30 秒发协议级 ping；agent 60 秒未收到任何帧则关闭连接 | UT-hb-1, IT-hb-1 |
 | AC-2.9 | client 重连采用指数退避（0.5s 起，上限 15s，带抖动），网络恢复事件触发立即重试 | UT-reconnect-1 |
 | AC-2.10 | 连接状态在 UI 上有明确指示：在线 / 重连中（含下次重试倒计时）/ 已恢复（含补齐字节数） | E2E-5 |
 | AC-2.11 | 未订阅的会话在 agent 侧照常缓冲；切回时通过 resume 补齐，不丢输出 | E2E-6, IT-sub-1 |
+| AC-2.12 | `in_ack` 按 `(client_id, sid)` 记账并**跨重连存活**：重连后 client 按 `welcome.resumed[].in_ack` 重发，不触发 `input_gap` | IT-resume-3 |
+| AC-2.13 | `hello.instance_id` 与 agent 当前值不符时，所有 `resume` 项判 `gone`（防止 agent 重启后 sid 复用导致张冠李戴） | IT-resume-4 |
 
 ---
 
@@ -51,7 +55,7 @@
 | ID | 标准 | 验证 |
 |---|---|---|
 | AC-3.1 | Composer 模式下，IME composition 事件不触发任何向 PTY 的写入；只有提交动作才写入 | E2E-7 |
-| AC-3.2 | Composer 提交的内容以 bracketed paste 包裹发送（多行不被逐条执行），末尾附 `\r` | UT-input-1, E2E-8 |
+| AC-3.2 | Composer 提交：含换行时以 bracketed paste 包裹（不被逐条执行），单行与空输入不包裹；一律以 `CR` 结尾 | UT-input-1, E2E-8 |
 | AC-3.3 | Raw 模式下，composition 期间不向 PTY 写入；`compositionend` 时一次性写入最终文本 | UT-input-2, E2E-7 |
 | AC-3.4 | Raw 模式下 `Ctrl+C` / `Ctrl+D` / 方向键 / `Esc` / 功能键正确映射为控制字节 | UT-keymap-1 |
 | AC-3.5 | 输入模式随 shell 集成的 prompt 状态自动切换：`B`→Composer，`C`→Raw，`D`→Composer | UT-mode-1, E2E-9 |
@@ -70,7 +74,7 @@
 |---|---|---|
 | AC-4.1 | 可同时存在多个会话，各自独立 PTY、独立缓冲、独立序列号 | IT-session-1 |
 | AC-4.2 | 会话数达上限（默认 20，可配）时 `session.create` 返回 `session_limit` 错误，UI 显示提示 | IT-session-2, E2E-11 |
-| AC-4.3 | 未订阅会话产生输出时，agent 发 `session.updated{unread:true}`，UI 显示未读标记 | E2E-6 |
+| AC-4.3 | 未订阅会话产生输出时，agent 发 `session.updated{head_seq}`；client 按 `head_seq > out_seq` 显示未读标记 | E2E-6 |
 | AC-4.4 | 会话默认名为其 CWD 的 basename，CWD 变化时自动更新；手动改名后停止自动更新 | IT-session-3, UT-name-1 |
 | AC-4.5 | shell 退出后会话状态变 `exited` 并携带退出码；缓冲内容保留可查看，直到用户显式关闭 | IT-session-4, E2E-11 |
 | AC-4.6 | 关闭会话时先送 `SIGHUP`，2 秒后仍存活则 `SIGKILL`，并释放 PTY 与缓冲 | IT-session-5 |
@@ -93,9 +97,9 @@
 
 | ID | 标准 | 验证 |
 |---|---|---|
-| AC-6.1 | 每条执行的命令产生一条记录，含原文、CWD、开始时间、退出码、耗时、所属会话名 | IT-shell-1 |
+| AC-6.1 | 每条执行的命令产生一条记录，含原文、CWD、开始时间、退出码、耗时、所属会话名；**连续两次执行同一条命令产生两条记录** | IT-shell-1 |
 | AC-6.2 | 以空格开头的命令不产生记录 | IT-shell-2 |
-| AC-6.3 | 历史可按原文子串和 CWD 过滤，返回按时间倒序分页 | UT-store-1 |
+| AC-6.3 | 历史可按原文子串和 CWD 过滤，按时间倒序**游标分页**（翻页期间新增记录不导致漏行/重行） | UT-store-1 |
 | AC-6.4 | 点击历史条目将其原文填入 Composer，光标置于末尾，不自动执行 | E2E-14 |
 | AC-6.5 | 置顶操作把 `pinned` 置为 true 并分配 `pin_order`；置顶列表按 `pin_order` 排序 | UT-store-2, E2E-14 |
 | AC-6.6 | 快捷命令可设置 `label`、可拖动排序、可取消置顶；改动即时持久化 | E2E-14 |
@@ -114,7 +118,7 @@
 | AC-7.2 | 集成脚本在用户配置**之后**安装钩子，不覆盖用户的 `PS1` / `PROMPT_COMMAND` / 已有 `DEBUG` trap | IT-shell-4 |
 | AC-7.3 | 登录模式下只加载 profile 链（`~/.bash_profile` → `~/.bash_login` → `~/.profile`，取第一个存在的）；非登录模式下只加载 `~/.bashrc`。不重复加载 | IT-shell-5 |
 | AC-7.4 | agent 剥离所有 webterm 相关 OSC 序列，client 收到的字节流中不含它们 | UT-osc-1 |
-| AC-7.5 | OSC 解析器正确处理跨读边界分片、`BEL` 与 `ST` 两种终止符、超长负载（截断保护）、畸形负载（忽略不崩溃） | UT-osc-2..5 |
+| AC-7.5 | OSC 解析器正确处理跨读边界分片、`BEL` 与 `ST` 两种终止符、超长负载（截断保护）、畸形负载（忽略不崩溃）、无关 OSC 原样透传 | UT-osc-2..9 |
 | AC-7.6 | 集成握手（`OSC 1701;hello`）10 秒内未收到时，会话标记 `integration: inactive`，UI 显示降级提示 | IT-shell-6, E2E-13 |
 | AC-7.7 | 集成脚本执行失败或语法错误不导致 shell 启动失败（终端仍可用） | IT-shell-7 |
 
@@ -129,3 +133,4 @@
 | AC-8.3 | `go vet ./...` 与 `golangci-lint run` 无告警 | CI |
 | AC-8.4 | 终端输出内容不出现在任何落盘文件中（DB、日志） | IT-privacy-1 |
 | AC-8.5 | 日志不包含配对码、Cookie token、命令原文 | IT-privacy-2 |
+| AC-8.6 | 连接读写两侧的队列都不阻塞：会话输入队列满 → `input_stalled` 关连接；连接写队列满 → 关连接。任一情况下**其它会话的 PTY 不受影响** | IT-queue-1..2 |

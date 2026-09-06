@@ -19,7 +19,7 @@
 | [`00-overview/`](00-overview/) | 愿景、非目标、术语表 |
 | [`10-requirements/`](10-requirements/) | 用户故事、验收标准、设备与布局矩阵 |
 | [`20-architecture/`](20-architecture/) | 架构总览、架构决策记录（ADR） |
-| [`30-protocol/`](30-protocol/) | ★ WebSocket 协议、bash shell 集成协议 |
+| [`30-protocol/`](30-protocol/) | ★ WebSocket 协议、HTTP API、bash shell 集成协议 |
 | [`40-frontend/`](40-frontend/) | 响应式布局、输入模式、会话交互、命令交互、快捷键 |
 | [`50-backend/`](50-backend/) | 会话管理与 PTY 生命周期、环形缓冲、存储模型 |
 | [`60-security/`](60-security/) | 威胁模型、认证与配对、历史隐私 |

@@ -71,9 +71,9 @@ systemctl --user enable --now webterm
 
 | 检查 | 说明 |
 |---|---|
-| 浏览器控制台的 WS 错误码 | `401` = 认证问题（Cookie 丢了？设备被吊销了？）；`403` = Origin 不匹配；`426` = 协议版本不匹配 |
+| 浏览器控制台的 WS 错误码 | `401` = 认证问题（Cookie 丢了？设备被吊销了？）；`403` = Origin 不匹配；`503` = 并发连接数超过 `--max-conns` |
 | `403` | `--domain` 的值必须与浏览器地址栏的域名完全一致 |
-| `426` | agent 与前端版本不匹配。刷新页面（Service Worker 可能缓存了旧前端）；仍不行则确认二进制里的前端是新构建的 |
+| 连上了但立刻被关，日志有 `protocol_unsupported` | agent 与前端版本不匹配。刷新页面（Service Worker 可能缓存了旧前端）；仍不行则确认二进制里的前端是新构建的 |
 | 反代场景下连不上 | 代理是否传递了 `Upgrade` / `Connection` 头 |
 
 ### 每 60 秒断一次
@@ -99,7 +99,12 @@ webterm 自己的心跳是 30 秒一次，所以正常情况下不会触发 60s 
 
 ### 连接总是很快被断开（正常用着突然掉）
 
-可能是慢客户端保护触发了（写队列满 4 MiB）。看日志里有没有 `conn queue full`。原因通常是客户端所在网络太慢而输出太快。加大 `--conn-queue-bytes`，或减少输出量。
+有界队列保护触发了（[协议 §5.5](../30-protocol/websocket-protocol.md#55-有界队列策略读写两侧)）。看日志区分是哪一侧：
+
+| 日志 | 含义 | 处理 |
+|---|---|---|
+| `conn queue full` | 输出侧：客户端网络太慢而输出太快 | 加大 `--conn-queue-bytes`，或减少输出量 |
+| `input_stalled` | 输入侧：某个会话的前台程序长时间不读 stdin，PTY 写不进去 | 看那个会话在跑什么（`Ctrl+C` 或关掉它）。这是保护措施 —— 不这样做的话整条连接的所有会话都会一起卡住 |
 
 ---
 
@@ -110,12 +115,13 @@ webterm 自己的心跳是 30 秒一次，所以正常情况下不会触发 60s 
 诊断顺序：
 
 ```bash
-bash --version                    # 需要 4.4+
+bash --version
 ```
 
 | 原因 | 现象 | 处理 |
 |---|---|---|
-| bash < 4.4 | 集成部分降级 | 升级 bash，或接受降级（终端仍可用） |
+| bash < 4.0 | 集成降级：只有 CWD 与 prompt 状态，没有命令原文 | 升级 bash，或接受降级（终端仍可用） |
+| bash < 4.4 | 集成正常，但 Composer 的**多行**提交会被逐行执行（readline 没有 bracketed paste） | 升级 bash，或分多次提交 |
 | 会话里 `exec zsh` / `su` / 进了容器 | 集成在替换后失效 | 预期行为。在新 shell 里手动 `eval "$(webterm shell-init bash)"` |
 | 用户的 prompt 主题重写 `PS1` | 命令记录缺失或 prompt 状态不准 | 我们每次 precmd 都重新断言标记；如果仍失效，把主题初始化放在 `.bashrc` 更早的位置 |
 | 会话里跑了 tmux | tmux 过滤未知 OSC | `set -g allow-passthrough on`（[shell-integration.md](../30-protocol/shell-integration.md#与-tmux-共存)） |
@@ -137,7 +143,7 @@ bash --version                    # 需要 4.4+
 | 现象 | 原因 |
 |---|---|
 | 一直不切到 Raw | 集成未生效，或者用户手动锁定了模式（点"解锁自动"） |
-| 模式来回跳 | 命令输出里含 OSC 133 序列（比如 `cat` 一个含这些字节的文件）。**固有限制**，见 [shell-integration.md](../30-protocol/shell-integration.md#已知限制) |
+| 模式来回跳 | 命令输出里含 OSC 133 序列（比如 `cat` 一个含这些字节的文件）。**固有限制**，见 [shell-integration.md](../30-protocol/shell-integration.md#6-已知限制) |
 | 短命令时闪一下 Raw | 去抖失效。正常应该有 120ms 去抖 —— 报 bug |
 
 ---

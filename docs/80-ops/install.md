@@ -12,8 +12,9 @@
 | 域名 A/AAAA 记录指向本机公网 IP | HTTP-01 挑战需要 | 上面的结果 == `curl -s ifconfig.me` |
 | **80 端口可用** | HTTP-01 挑战走 80 | `ss -lntp \| grep :80` 为空 |
 | **443 端口可用** | 服务本体 | `ss -lntp \| grep :443` 为空 |
-| bash 4.4+ | shell 集成需要可靠的 `PS0`/`DEBUG` trap | `bash --version` |
 | Linux（x86_64 / arm64） | | `uname -m` |
+
+bash 不是硬要求，但版本影响功能完整度：**4.4+** 才有 readline 的 bracketed paste（Composer 的多行提交依赖它）；**4.0+** 才有完整的 shell 集成（更低版本降级为只上报 CWD 与 prompt 状态）。任何版本下终端本身都完全可用。
 
 `webterm doctor` 子命令会逐项检查并给出可读的诊断。**部署前先跑它。**
 
@@ -93,6 +94,7 @@ webterm 0.1.0 · https://term.example.com
 | `--no-tls` | false | 关闭 TLS。**仅允许在 `--bind` 为回环或私有地址时使用** |
 | `--trust-proxy` | false | 信任 `X-Forwarded-For`（**仅在反代后启用**，否则限速可被绕过） |
 | `--max-sessions` | 20 | 会话数上限 |
+| `--max-conns` | 16 | 并发 WebSocket 连接上限（每条连接占一个写队列） |
 | `--ring-bytes` | 1048576 | 每会话输出缓冲（影响能容忍的断线时长） |
 | `--conn-queue-bytes` | 4194304 | 每连接写队列上限 |
 | `--max-history` | 50000 | 命令历史条数上限 |

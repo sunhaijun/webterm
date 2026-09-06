@@ -100,7 +100,9 @@ $ webterm pair
 
 不能只在握手时检查 —— WebSocket 可能挂几天。
 
-agent 每 5 秒扫一遍活跃连接，对应设备已吊销的：先发 `notice{level:"error", message:"此设备已被吊销"}`，再发 `error{code:"unauthorized"}`，然后关闭连接。
+agent 每 **2 秒**扫一遍活跃连接，对应设备已吊销的：先发 `notice{level:"error", message:"此设备已被吊销"}`，再发 `error{code:"unauthorized"}`，然后关闭连接。
+
+扫描周期取 2 秒而不是 5 秒，是为了给 AC-1.11 的 5 秒 SLA 留出余量 —— 周期与 SLA 取同一个值的话，最坏情况必然略微超时。
 
 ## 会话 Cookie
 
