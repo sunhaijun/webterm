@@ -39,9 +39,8 @@ func runServe(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *httpPort == 8080 && c.dev {
-		// --dev 默认 8080
-	} else if c.dev && !isFlagSet(fs, "http-port") {
+	// --dev 默认监听 8080（AC-1.2），除非用户显式指定了端口
+	if c.dev && !isFlagSet(fs, "http-port") {
 		*httpPort = 8080
 	}
 

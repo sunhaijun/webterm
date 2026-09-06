@@ -13,6 +13,9 @@ sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm
 
 > ⚠️ 每次替换二进制后 `setcap` 都要重做（capability 附在文件上，不在路径上）。升级脚本里必须包含这一步。
 
+> 仓库里有一份现成的：[`deploy/webterm.service`](../../deploy/webterm.service)，
+> 改掉 `--domain` 就能用。
+
 ## `~/.config/systemd/user/webterm.service`
 
 ```ini
