@@ -1,0 +1,34 @@
+# Go
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Node / 前端构建产物
+node_modules/
+web/dist/
+.vite/
+
+# 内嵌资源（由构建生成，不入库）
+internal/webui/dist/
+
+# 运行时数据
+*.db
+*.db-wal
+*.db-shm
+/.webterm/
+
+# 测试与工具
+/coverage/
+/playwright-report/
+/test-results/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude Code worktrees
+/.claude/worktrees/
