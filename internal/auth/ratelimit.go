@@ -72,8 +72,18 @@ func (l *Limiter) Allow(ip string, now time.Time) (bool, time.Duration) {
 	}
 	st.attempts = kept
 	if len(st.attempts) >= perIPPerMinute {
-		st.blockedTo = now.Add(l.backoffFor(st.failures))
-		return false, st.blockedTo.Sub(now)
+		// 至少要等到最早那次尝试滑出一分钟窗口；连续失败过的话再叠上退避。
+		// 【必须给出一个正的时长】—— 客户端拿它做倒计时，返回 0 等于让它
+		// 立刻重试，限速就形同虚设。
+		wait := st.attempts[0].Add(time.Minute).Sub(now)
+		if b := l.backoffFor(st.failures); b > wait {
+			wait = b
+		}
+		if wait <= 0 {
+			wait = time.Second
+		}
+		st.blockedTo = now.Add(wait)
+		return false, wait
 	}
 	st.attempts = append(st.attempts, now)
 	return true, 0

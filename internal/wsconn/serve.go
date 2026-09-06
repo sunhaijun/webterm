@@ -3,6 +3,7 @@ package wsconn
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -14,21 +15,24 @@ import (
 func (c *Conn) Serve(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	c.mu.Lock()
+	c.cancel = cancel
+	c.mu.Unlock()
 
-	go c.writeLoop(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); c.writeLoop(ctx) }()
 	go c.watchRevocation(ctx)
 
 	err := c.readLoop(ctx)
 
+	c.closeWith(websocket.StatusNormalClosure, "")
+	wg.Wait() // 等写 goroutine 把队列（尤其是致命 error）刷完
 	c.detachAll()
+
 	c.mu.Lock()
 	code, msg := c.closeCode, c.closeMsg
-	if code == 0 {
-		code, msg = websocket.StatusNormalClosure, ""
-	}
-	c.closed = true
 	c.mu.Unlock()
-	c.doneOnce.Do(func() { close(c.done) })
 	_ = c.ws.Close(code, msg)
 
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -46,7 +50,7 @@ func (c *Conn) readLoop(ctx context.Context) error {
 		default:
 		}
 		// agent 判死：60 秒没收到任何帧就关连接（AC-2.8）
-		rctx, cancel := context.WithTimeout(ctx, idleTimeout)
+		rctx, cancel := context.WithTimeout(ctx, c.deps.idleTimeout())
 		typ, data, err := c.ws.Read(rctx)
 		cancel()
 		if err != nil {
@@ -88,8 +92,12 @@ func (c *Conn) writeLoop(ctx context.Context) {
 	for {
 		select {
 		case <-c.done:
+			c.drain()
+			c.flushedOnce.Do(func() { close(c.flushed) })
 			return
 		case <-ctx.Done():
+			c.drain()
+			c.flushedOnce.Do(func() { close(c.flushed) })
 			return
 		case <-ticker.C:
 			c.flushPendingAcks()
@@ -102,13 +110,41 @@ func (c *Conn) writeLoop(ctx context.Context) {
 			if f.binary {
 				typ = websocket.MessageBinary
 			}
-			wctx, cancel := context.WithTimeout(ctx, writeTimeout)
+			// 【不能用 Serve 的 ctx】：closeWith 会把它取消，而 select 在
+			// done 与 c.out 同时就绪时是随机挑的 —— 挑中 c.out 就会拿着
+			// 一个已取消的 ctx 去写，那条正要告诉用户"为什么断"的 error
+			// 就这么丢了。写的时限由 writeTimeout 自己兜。
+			wctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 			err := c.ws.Write(wctx, typ, f.data)
 			cancel()
 			if err != nil {
+				c.flushedOnce.Do(func() { close(c.flushed) })
 				c.closeWith(websocket.StatusInternalError, "写失败")
 				return
 			}
+		}
+	}
+}
+
+// drain 在关闭前把写队列里剩下的帧刷出去。
+//
+// 用独立的 context —— Serve 的那个此刻已经被 cancel 了，拿它写必然失败，
+// 而队列里往往正躺着那条要告诉用户"为什么断"的 error。
+func (c *Conn) drain() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for {
+		select {
+		case f := <-c.out:
+			typ := websocket.MessageText
+			if f.binary {
+				typ = websocket.MessageBinary
+			}
+			if err := c.ws.Write(ctx, typ, f.data); err != nil {
+				return
+			}
+		default:
+			return
 		}
 	}
 }

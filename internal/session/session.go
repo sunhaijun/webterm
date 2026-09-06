@@ -44,7 +44,9 @@ type Session struct {
 	rcPath    string // 临时 rcfile，销毁时删除
 	createdAt time.Time
 	store     *store.Store
-	history   bool // 是否记录命令历史
+	// mgrHistory 报告此刻是否记录命令历史。取成函数是因为用户可以在会话
+	// 运行期间从 UI 上关掉它（做敏感工作时一键静默）。
+	mgrHistory func() bool
 
 	mu          sync.RWMutex // 保护以下所有字段
 	name        string
@@ -463,7 +465,7 @@ func (s *Session) beginCommand() {
 	now := time.Now()
 	s.curCmdAt = now
 	var cmdID int64
-	if s.history && s.store != nil {
+	if s.historyOn() && s.store != nil {
 		id, err := s.store.BeginCommand(text, name, cwd, now)
 		if err != nil {
 			return
@@ -487,7 +489,7 @@ func (s *Session) endCommand(exitCode *int) {
 	s.curCmdID = nil
 	dur := time.Since(s.curCmdAt)
 
-	if s.history && s.store != nil {
+	if s.historyOn() && s.store != nil {
 		if err := s.store.FinishCommand(id, exitCode, dur); err != nil {
 			return
 		}
@@ -568,6 +570,9 @@ func (s *Session) close() {
 		s.mu.Unlock()
 	})
 }
+
+// historyOn 报告此刻是否记录命令历史。
+func (s *Session) historyOn() bool { return s.mgrHistory != nil && s.mgrHistory() }
 
 func strPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool    { return &b }

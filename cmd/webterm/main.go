@@ -1,8 +1,7 @@
 // Command webterm 是 agent 的入口。
 //
-// m1 只落地协议与会话核心（internal/*），serve / pair / doctor 等子命令
-// 在 m2（feat/50-agent-serve）。这里先保证 CGO_ENABLED=0 的静态构建这条
-// 不变式从第一天起就有 CI 守着（AC-8.1）。
+// 一个二进制就是完整的服务：自带前端资源、自己终结 TLS、自己做认证、
+// 自己管会话（ADR-0002）。
 package main
 
 import (
@@ -12,11 +11,46 @@ import (
 
 var version = "0.1.0-dev"
 
+var usage = "webterm " + version + ` —— 浏览器终端 agent
+
+用法:
+  webterm serve [选项]           启动服务
+  webterm pair                   生成新的配对码（打印 URL + 二维码）
+  webterm devices [子命令]        设备管理：list | revoke <id> | revoke-all
+  webterm doctor [--domain X]    检查部署前置条件
+  webterm shell-init bash        输出 shell 集成脚本（手动接入的降级路径）
+  webterm version                版本信息
+
+"webterm serve --help" 查看 serve 的全部选项。
+`
+
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Printf("webterm %s\n", version)
-		return
+	if len(os.Args) < 2 {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
 	}
-	fmt.Fprintf(os.Stderr, "webterm %s —— serve / pair / doctor 尚未实现（m2）\n", version)
-	os.Exit(1)
+	var err error
+	switch os.Args[1] {
+	case "serve":
+		err = runServe(os.Args[2:])
+	case "pair":
+		err = runPair(os.Args[2:])
+	case "devices":
+		err = runDevices(os.Args[2:])
+	case "doctor":
+		err = runDoctor(os.Args[2:])
+	case "shell-init":
+		err = runShellInit(os.Args[2:])
+	case "version":
+		fmt.Printf("webterm %s\n", version)
+	case "-h", "--help", "help":
+		fmt.Print(usage)
+	default:
+		fmt.Fprintf(os.Stderr, "未知子命令 %q\n\n%s", os.Args[1], usage)
+		os.Exit(2)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n错误：%v\n", err)
+		os.Exit(1)
+	}
 }

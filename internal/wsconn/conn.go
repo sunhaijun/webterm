@@ -42,6 +42,25 @@ type Deps struct {
 	Logger        *slog.Logger
 	// Revoked 报告本连接对应的设备是否已被吊销。每 2 秒轮询一次（AC-1.11）。
 	Revoked func() bool
+	// IdleTimeout 覆盖默认的 60 秒判死间隔。0 表示用默认值。
+	// 存在只是为了让 IT-hb-1 不必真的等 60 秒。
+	IdleTimeout time.Duration
+	// WriteQueueBytes 覆盖默认的 4 MiB 写队列上限。0 表示用默认值。
+	WriteQueueBytes int
+}
+
+func (d Deps) idleTimeout() time.Duration {
+	if d.IdleTimeout > 0 {
+		return d.IdleTimeout
+	}
+	return idleTimeout
+}
+
+func (d Deps) writeQueueBytes() int {
+	if d.WriteQueueBytes > 0 {
+		return d.WriteQueueBytes
+	}
+	return writeQueueBytes
 }
 
 type outFrame struct {
@@ -70,6 +89,16 @@ type Conn struct {
 	out      chan outFrame
 	done     chan struct{}
 	doneOnce sync.Once
+	// flushed 在写队列刷干净之后关闭。
+	flushed     chan struct{}
+	flushedOnce sync.Once
+	// cancel 取消 Serve 的 context，用来把阻塞在 ws.Read 上的 readLoop 叫醒
+	// （否则连接要等到 60 秒判死才真的断，AC-1.11 会挂）。
+	//
+	// 但它【必须等写队列刷完再调】：coder/websocket 在读 context 被取消时
+	// 会直接销毁底层连接，抢在刷完之前调等于把那条"为什么断"的 error 一起
+	// 扔掉 —— 用户又只剩一个莫名的重连失败。
+	cancel context.CancelFunc
 }
 
 // New 包一条已升级的 WebSocket。
@@ -88,6 +117,7 @@ func New(ws *websocket.Conn, deps Deps) *Conn {
 		lastHead: make(map[uint16]time.Time),
 		out:      make(chan outFrame, 256),
 		done:     make(chan struct{}),
+		flushed:  make(chan struct{}),
 	}
 }
 
@@ -182,7 +212,7 @@ func (c *Conn) enqueue(f outFrame) {
 		c.mu.Unlock()
 		return
 	}
-	if c.queued+len(f.data) > writeQueueBytes {
+	if c.queued+len(f.data) > c.deps.writeQueueBytes() {
 		c.mu.Unlock()
 		c.log.Warn("conn queue full，断开慢客户端", "client_id", c.clientID)
 		c.closeWith(websocket.StatusTryAgainLater, "写队列已满")
@@ -203,7 +233,7 @@ func (c *Conn) enqueue(f outFrame) {
 	}
 }
 
-// closeWith 请求关闭连接。幂等。
+// closeWith 请求关闭连接。幂等，第一次调用的原因胜出。
 func (c *Conn) closeWith(code websocket.StatusCode, msg string) {
 	c.mu.Lock()
 	if c.closed {
@@ -212,18 +242,31 @@ func (c *Conn) closeWith(code websocket.StatusCode, msg string) {
 	}
 	c.closed = true
 	c.closeCode, c.closeMsg = code, msg
+	cancel := c.cancel
 	c.mu.Unlock()
 	c.doneOnce.Do(func() { close(c.done) })
+	if cancel == nil {
+		return
+	}
+	// 先让 writeLoop 把队列刷完，再叫醒 readLoop
+	go func() {
+		select {
+		case <-c.flushed:
+		case <-time.After(3 * time.Second):
+		}
+		cancel()
+	}()
 }
 
 // sendError 发一条 error 控制消息；fatal 为 true 时随后关闭连接。
+//
+// 致命错误【必须先入队再关】，而且 Serve 要等写 goroutine 把队列刷完才
+// 真正关闭 socket —— 否则客户端只会看到一个裸的 close。"给出可读的错误
+// 消息而不是一个裸的握手失败"正是不在握手阶段做版本协商的理由（协议 §1）。
 func (c *Conn) sendError(reqID string, sid *uint16, code, message string, fatal bool) {
 	c.Event(&protocol.Error{ReqID: reqID, SID: sid, Code: code, Message: message})
 	if fatal {
-		// 给写 goroutine 一点时间把这条 error 送出去
-		time.AfterFunc(200*time.Millisecond, func() {
-			c.closeWith(websocket.StatusPolicyViolation, code)
-		})
+		c.closeWith(websocket.StatusPolicyViolation, code)
 	}
 }
 
