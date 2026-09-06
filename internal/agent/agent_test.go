@@ -735,3 +735,49 @@ func TestSessionLimitReported(t *testing.T) {
 		t.Fatal("会话数超限不该关连接")
 	}
 }
+
+// 缓冲被覆盖时，续传【必须】带上属性修正前缀并让客户端知道要清屏。
+//
+// 回归测试：agent 曾经拿钳过的 from_seq 去订阅，于是 ring 认为这是一次
+// 正常的增量续传 —— ESC[0m 不发、flags 不置位，客户端不知道该清屏，
+// 会把一段毫不相干的内容接到旧屏幕后面。钳位是 ring 自己的事。
+func TestResumeResetCarriesAttrPrefix(t *testing.T) {
+	// 很小的 ring，让 reset 路径可测
+	h := newHarnessWith(t, harnessOpts{ringBytes: 8 << 10})
+
+	c := h.client()
+	h.pair(c).Body.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	w := cl.welcome()
+	sid := cl.createSession(t.TempDir())
+	cl.send(&protocol.Subscribe{SID: sid, OutSeq: 0})
+
+	cl.input(sid, "printf 'START-%s\\n' MARK\r")
+	waitFor(t, "第一段输出", func() bool { return strings.Contains(cl.screenOf(sid), "START-MARK") })
+
+	// 起一个持续产出的循环，好让断线期间真的把 8 KiB 的 ring 灌穿
+	cl.input(sid, "for i in $(seq 1 4000); do printf 'fill %04d %s\\n' $i xxxxxxxxxxxxxxxxxxxxxxxxxxxx; done\r")
+	waitFor(t, "循环开始产出", func() bool { return strings.Contains(cl.screenOf(sid), "fill 0001") })
+
+	cl.mu.Lock()
+	at := cl.outSeq[sid]
+	cl.mu.Unlock()
+
+	cl.ws.CloseNow()
+	waitFor(t, "旧连接消失", func() bool { return cl.isClosed() })
+
+	s, _ := h.sessions.Get(sid)
+	waitFor(t, "缓冲被覆盖", func() bool {
+		return s.Snapshot().BaseSeq > at
+	})
+
+	cl2 := h.connect(ctx, c, "tab-1", []protocol.ResumeReq{{SID: sid, OutSeq: at}}, w.InstanceID)
+	w2 := cl2.welcome()
+	if len(w2.Resumed) != 1 || w2.Resumed[0].Status != protocol.ResumeReset {
+		t.Fatalf("resumed = %+v, want status=reset", w2.Resumed)
+	}
+	waitFor(t, "回放帧带上了属性修正前缀", func() bool { return cl2.sawAttrPrefix(sid) })
+}

@@ -24,23 +24,30 @@
 ```bash
 #!/bin/bash
 # 用法: emit.sh <总行数> [每行延迟ms]
-# 内容含：ANSI 颜色、CJK 宽字符、超长行、控制序列
+# 内容含：ANSI 颜色、CJK 宽字符、超长行
 ```
 
-必须**完全确定性**（不含时间戳、不含随机数、不含主机名），否则字节级比较无意义。
+必须**完全确定性**（不含时间戳、不含随机数、不含主机名、不含 `$PWD`），否则字节级比较无意义。
+
+两条容易踩的坑：
+
+- **完成标记必须只出现在输出里。** 写 `echo EMIT-DONE` 的话，被回显的命令行本身就含这个串，等待条件会在命令刚敲完时就满足 —— 测的是回显不是输出。用 `printf 'EMIT-%s\n' DONE`。
+- **要测断线期间的行为，就得给每行加延迟**，让输出跨越整个断线窗口。不加的话几千行可能在你把线掐掉之前就全送到了。
 
 ### 断开 WebSocket 的手段
 
 ```ts
-// 方式一：路由层面切断（首选，最贴近真实网络中断）
-await page.routeWebSocket('**/ws', ws => ws.close())
+// 方式一：路由层面切断（首选）。装一个可控的中继，随时掐断、随时恢复。
+const net = await installWSControl(page)   // e2e/harness.ts
+await net.goOffline()
+net.goOnline()
 
 // 方式二：CDP 模拟离线
 const cdp = await context.newCDPSession(page)
 await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 ```
 
-两种方式都要用：方式一测服务端视角的断开，方式二测浏览器 `offline` 事件驱动的重连逻辑。
+**方式一是首选。** CDP 的 offline 对【已建立】的 WebSocket 不会立刻触发 `onclose` —— 页面会一直以为自己还在线，直到 40 秒后心跳判死。那测的就不是断线了。方式二适合测浏览器 `online` 事件驱动的立即重试。
 
 ---
 

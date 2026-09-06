@@ -48,7 +48,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			return nil, nil, fmt.Errorf("监听 %s 失败: %w", addr, err)
+			return nil, nil, describeBindError(err, cfg.HTTPPort)
 		}
 		go func() { errCh <- s.http.Serve(ln) }()
 		a.log.Info("webterm 已启动（开发模式）", "url", "http://"+addr)
@@ -64,7 +64,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			return nil, nil, fmt.Errorf("监听 %s 失败: %w", addr, err)
+			return nil, nil, describeBindError(err, cfg.HTTPPort)
 		}
 		go func() { errCh <- s.http.Serve(ln) }()
 		a.log.Info("webterm 已启动（明文，等待反代接管 TLS）", "addr", addr)

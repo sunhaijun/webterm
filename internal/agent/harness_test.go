@@ -31,6 +31,12 @@ type harness struct {
 	logs     *lockedBuffer
 }
 
+// harnessOpts 是夹具的可调项。
+type harnessOpts struct {
+	ringBytes int
+	tune      func(*agent.Config)
+}
+
 type lockedBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -49,6 +55,18 @@ func (l *lockedBuffer) String() string {
 }
 
 func newHarness(t *testing.T, tune ...func(*agent.Config)) *harness {
+	return newHarnessWith(t, harnessOpts{tune: chain(tune)})
+}
+
+func chain(fns []func(*agent.Config)) func(*agent.Config) {
+	return func(c *agent.Config) {
+		for _, f := range fns {
+			f(c)
+		}
+	}
+}
+
+func newHarnessWith(t *testing.T, o harnessOpts) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
@@ -57,8 +75,12 @@ func newHarness(t *testing.T, tune ...func(*agent.Config)) *harness {
 	}
 	t.Cleanup(func() { st.Close() })
 
+	ring := o.ringBytes
+	if ring == 0 {
+		ring = 1 << 20
+	}
 	sessions := session.NewManager(session.Config{
-		MaxSessions: 5, RingBytes: 1 << 20, Shell: "bash", History: true,
+		MaxSessions: 5, RingBytes: ring, Shell: "bash", History: true,
 	}, st)
 	t.Cleanup(sessions.Shutdown)
 
@@ -68,14 +90,17 @@ func newHarness(t *testing.T, tune ...func(*agent.Config)) *harness {
 		Version: "test",
 		Logger:  slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
-	for _, f := range tune {
-		f(&cfg)
+	if o.tune != nil {
+		o.tune(&cfg)
 	}
 	a := agent.New(cfg, st, sessions)
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
 
-	return &harness{t: t, srv: srv, agent: a, store: st, sessions: sessions, dataDir: dir, logs: logs}
+	return &harness{
+		t: t, srv: srv, agent: a, store: st, sessions: sessions,
+		dataDir: dir, logs: logs,
+	}
 }
 
 // client 返回一个带 cookie jar 的 HTTP 客户端（模拟一个浏览器）。
@@ -160,6 +185,14 @@ type wsClient struct {
 	closed   bool
 	stopRead bool
 	reqSeq   int
+	attrSeen map[uint16]bool
+}
+
+// sawAttrPrefix 报告是否收到过带属性修正前缀的帧（即一次 reset 回放）。
+func (c *wsClient) sawAttrPrefix(sid uint16) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.attrSeen[sid]
 }
 
 // stopReading 让客户端不再从 socket 上取数据，用来撑爆服务端的写队列。
@@ -256,6 +289,10 @@ func (c *wsClient) readLoop(ctx context.Context) {
 			if f.Flags&protocol.FlagAttrPrefix != 0 {
 				buf.Reset() // reset 回放：客户端清屏
 				payload = payload[len(protocol.AttrPrefix):]
+				if c.attrSeen == nil {
+					c.attrSeen = map[uint16]bool{}
+				}
+				c.attrSeen[f.SID] = true
 			}
 			buf.Write(payload)
 			c.outSeq[f.SID] = f.Seq + uint64(f.DataLen())

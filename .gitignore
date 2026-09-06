@@ -10,8 +10,10 @@ node_modules/
 web/dist/
 .vite/
 
-# 内嵌资源（由构建生成，不入库）
-internal/webui/dist/
+# 内嵌资源（由 npm run build 生成，不入库）
+# 但 .gitkeep 必须留着：go:embed 找不到目录的话整个仓库都编不过
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
 
 # 运行时数据
 *.db
@@ -32,3 +34,6 @@ internal/webui/dist/
 
 # Claude Code worktrees
 /.claude/worktrees/
+
+# 本地构建出来的二进制
+/webterm

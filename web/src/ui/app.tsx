@@ -1,0 +1,219 @@
+/**
+ * m3 的前端骨架：连接层 + 终端 + 状态指示 + 一个最小输入框。
+ *
+ * 输入框在 m4 会长成真正的 Composer（IME、历史、模式自动切换）。这里先按
+ * AC-3.2 的提交格式实现，m4 是在它上面加东西而不是推翻重来。
+ */
+import { useEffect, useRef, useState } from 'preact/hooks'
+
+import { Connection, type ConnState, type StateInfo } from '../conn/connection'
+import { T, type SessionInfo } from '../protocol/messages'
+import { createTerminal, type TermHandle } from '../term/terminal'
+import { RecoveredToast, StatusBar } from './status'
+
+/** client_id 每个标签页一个，存 sessionStorage —— localStorage 是同源共享的，区分不了标签页。 */
+function clientID(): string {
+  const key = 'webterm.client_id'
+  let v = sessionStorage.getItem(key)
+  if (!v) {
+    v = crypto.randomUUID()
+    sessionStorage.setItem(key, v)
+  }
+  return v
+}
+
+export function App() {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const connRef = useRef<Connection | null>(null)
+  const termRef = useRef<TermHandle | null>(null)
+  const sidRef = useRef<number | null>(null)
+
+  const [state, setState] = useState<ConnState>('connecting')
+  const [info, setInfo] = useState<StateInfo>({})
+  const [session, setSession] = useState<SessionInfo | null>(null)
+  const [recovered, setRecovered] = useState<number | null>(null)
+  const [truncated, setTruncated] = useState(false)
+  const [fatal, setFatal] = useState<string | null>(null)
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+
+    // 最近一次 welcome，E2E 用它直接断言续传结果（reset / ok / gone）
+    let lastWelcome: unknown = null
+
+    const handle = createTerminal(14)
+    termRef.current = handle
+    handle.term.open(host)
+    handle.attachWebgl()
+    handle.fit.fit()
+
+    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
+    const conn = new Connection({
+      url,
+      clientID: clientID(),
+      handlers: {
+        onOutput(_sid, data, _attrPrefix) {
+          // 清屏在收到 welcome.resumed[].status === "reset" 时就做了（见下），
+          // 这里只管把字节写进去。attrPrefix 那 4 个字节是渲染修正，本来就
+          // 该原样写入。
+          handle.term.write(data)
+        },
+        onMessage(msg) {
+          if (msg.t === T.welcome) {
+            lastWelcome = msg
+            // 缓冲被覆盖 → 先清屏再接后续帧，并明确告诉用户历史被截断了，
+            // 而不是让他拿着一屏东西猜发生了什么（AC-2.6）
+            if (msg.resumed.some((r) => r.status === 'reset')) {
+              handle.term.reset()
+              setTruncated(true)
+            }
+            const first = msg.sessions[0]
+            if (first) {
+              sidRef.current = first.sid
+              setSession(first)
+              conn.subscribe(first.sid)
+            } else {
+              conn.send({
+                t: T.sessionCreate,
+                req_id: 'boot',
+                name: null,
+                cwd: null,
+                cols: handle.term.cols,
+                rows: handle.term.rows,
+              })
+            }
+          } else if (msg.t === T.sessionCreated) {
+            sidRef.current = msg.session.sid
+            setSession(msg.session)
+            conn.subscribe(msg.session.sid)
+          } else if (msg.t === T.sessionUpdated && msg.sid === sidRef.current) {
+            setSession((s) => (s ? { ...s, ...msg } : s))
+          }
+        },
+        onState(s, i) {
+          setState(s)
+          setInfo(i)
+          if (s === 'online' && i.replayedBytes) {
+            setRecovered(i.replayedBytes)
+            setTimeout(() => setRecovered(null), 3000)
+          }
+        },
+        onFatal: (reason) => setFatal(reason),
+      },
+    })
+    connRef.current = conn
+    conn.connect()
+
+    // 网络恢复 / 页面重新可见 → 立即重试一次并重置退避（AC-2.9）
+    const kick = () => conn.retryNow()
+    addEventListener('online', kick)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') kick()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    // AC-2.1（字节级连续性）是这个项目最重要的一个测试，它必须能拿到
+    // xterm 缓冲的序列化结果。这里把把手挂到 window 上。
+    //
+    // 不做安全兜底是刻意的：它只暴露【屏幕上已经有的东西】，而页面同源、
+    // CSP 又禁止外部脚本，所以没有多出来的攻击面。
+    ;(window as unknown as Record<string, unknown>).__webterm = {
+      text: () => {
+        const buf = handle.term.buffer.active
+        const out: string[] = []
+        for (let i = 0; i < buf.length; i++) out.push(buf.getLine(i)?.translateToString(true) ?? '')
+        return out.join('\n')
+      },
+      serialize: () => handle.serialize.serialize(),
+      outSeq: () => (sidRef.current === null ? 0 : conn.outSeqOf(sidRef.current)),
+      sid: () => sidRef.current,
+      size: () => ({ cols: handle.term.cols, rows: handle.term.rows }),
+      welcome: () => lastWelcome,
+    }
+
+    const ro = new ResizeObserver(() => {
+      handle.fit.fit()
+      const sid = sidRef.current
+      if (sid !== null) {
+        conn.send({ t: T.resize, sid, cols: handle.term.cols, rows: handle.term.rows })
+      }
+    })
+    ro.observe(host)
+
+    return () => {
+      removeEventListener('online', kick)
+      document.removeEventListener('visibilitychange', onVisible)
+      ro.disconnect()
+      conn.close()
+      handle.dispose()
+    }
+  }, [])
+
+  const submit = () => {
+    const el = inputRef.current
+    const conn = connRef.current
+    const sid = sidRef.current
+    if (!el || !conn || sid === null) return
+    conn.sendInput(sid, encodeSubmission(el.value))
+    el.value = ''
+  }
+
+  return (
+    <div class="app">
+      <StatusBar
+        state={state}
+        info={info}
+        sessionName={session?.name ?? 'webterm'}
+        cwd={session?.cwd ?? ''}
+      />
+      {fatal && (
+        <div class="banner error" data-testid="fatal">
+          {fatal}
+        </div>
+      )}
+      {truncated && (
+        <div class="banner warn" data-testid="truncated">
+          ── 历史输出已截断 ──
+          <button onClick={() => setTruncated(false)}>知道了</button>
+        </div>
+      )}
+      <div class="term" ref={hostRef} data-testid="terminal" />
+      <textarea
+        class="composer"
+        ref={inputRef}
+        data-testid="composer"
+        rows={1}
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck={false}
+        enterkeyhint="send"
+        onKeyDown={(e) => {
+          // 组字期间按 Enter 是在选词，绝不能提交 —— 中文输入的关键一点
+          if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+            e.preventDefault()
+            submit()
+          }
+        }}
+      />
+      {recovered !== null && <RecoveredToast bytes={recovered} />}
+    </div>
+  )
+}
+
+/**
+ * 提交格式（AC-3.2）：
+ *   含换行 → bracketed paste 包裹 + CR
+ *   单行   → 内容 + CR
+ *   空     → CR
+ *
+ * 单行【不包】bracketed paste：ESC[200~ 只有在对端开着它时才会被吞掉，
+ * 集成失效时对端可能是 cat / python REPL / bash < 4.4，那两串会变成字面量。
+ */
+export function encodeSubmission(text: string): Uint8Array {
+  const enc = new TextEncoder()
+  if (text.trim() === '') return enc.encode('\r')
+  if (!text.includes('\n')) return enc.encode(text + '\r')
+  return enc.encode(`\x1b[200~${text}\x1b[201~\r`)
+}

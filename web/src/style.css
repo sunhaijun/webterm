@@ -1,0 +1,102 @@
+/* 三态主题：跟随系统 / 强制浅色 / 强制深色。所有颜色都在 :root 上定义。 */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #6b6b6b;
+  --line: #e3e3e3;
+  --term-bg: #111111;
+  --ok: #2ea043;
+  --warn: #d29922;
+  --err: #cf222e;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas,
+    'Liberation Mono', 'Noto Sans Mono CJK SC', 'Sarasa Mono SC', monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --line: #21262d;
+  }
+}
+:root[data-theme='dark'] {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --line: #21262d;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 var(--font-mono);
+}
+
+.app {
+  display: grid;
+  /* 高度的唯一真相来源是 visualViewport，不是 100vh（iOS Safari 上 100vh
+     不随键盘变化）。m4 接管软键盘适配时会把它接上。 */
+  grid-template-rows: 28px auto 1fr auto;
+  height: 100%;
+}
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.statusbar .name { font-weight: 600; }
+.statusbar .cwd { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.statusbar .conn { margin-left: auto; color: var(--muted); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted); }
+.dot[data-state='online'] { background: var(--ok); }
+.dot[data-state='connecting'],
+.dot[data-state='reconnecting'] { background: var(--warn); animation: pulse 1s infinite; }
+.dot[data-state='closed'] { background: var(--err); }
+@keyframes pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+
+.banner { padding: 4px 10px; font-size: 12px; display: flex; gap: 8px; align-items: center; }
+.banner.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.banner.error { background: color-mix(in srgb, var(--err) 18%, transparent); }
+.banner button { font: inherit; border: 0; background: transparent; cursor: pointer; color: inherit; text-decoration: underline; }
+
+.term { min-height: 0; background: var(--term-bg); padding: 4px; overflow: hidden; }
+.term .xterm { height: 100%; }
+
+.composer {
+  font: inherit;
+  border: 0;
+  border-top: 1px solid var(--line);
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  resize: none;
+  max-height: 40vh;
+  outline-offset: -2px;
+}
+
+.toast {
+  position: fixed;
+  bottom: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--fg);
+  color: var(--bg);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.gate, .pair { padding: 2rem; max-width: 32rem; margin: 0 auto; }
+.gate pre, .pair pre { background: var(--term-bg); color: #e6e6e6; padding: 8px 12px; border-radius: 6px; }
+.error { color: var(--err); }
