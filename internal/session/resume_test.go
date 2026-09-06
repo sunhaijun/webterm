@@ -35,7 +35,7 @@ func itoa(n int) string {
 func TestITResume1_SessionKeepsRunningWhileDisconnected(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	c := newConn(t, "tab")
+	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0)
 
 	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
@@ -53,7 +53,7 @@ func TestITResume1_SessionKeepsRunningWhileDisconnected(t *testing.T) {
 		t.Fatal("断线导致会话暂停了")
 	}
 	// 重连补齐：断线期间的输出必须一个字节不少地回来
-	c2 := newConn(t, "tab")
+	c2 := newConn(t, m, "tab")
 	s.Subscribe(c2, before)
 	waitScreen(t, c2, "while-offline")
 }
@@ -62,7 +62,7 @@ func TestITResume1_SessionKeepsRunningWhileDisconnected(t *testing.T) {
 func TestITResume2_IncrementalReplay(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	c := newConn(t, "tab")
+	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0)
 
 	// 标记必须【只出现在输出里】—— 直接写 "echo ONE-MARK" 的话，被回显的
@@ -83,7 +83,7 @@ func TestITResume2_IncrementalReplay(t *testing.T) {
 	waitFor(t, "第二段输出产生", func() bool { return s.HeadSeq() > at })
 
 	// 从断点续订：只应收到断点之后的内容
-	c2 := newConn(t, "tab")
+	c2 := newConn(t, m, "tab")
 	s.Subscribe(c2, at)
 	waitScreen(t, c2, "TWO-MARK")
 
@@ -103,7 +103,7 @@ func TestITResume2_IncrementalReplay(t *testing.T) {
 func TestITResume3_InputSurvivesReconnect(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	c := newConn(t, "tab-1")
+	c := newConn(t, m, "tab-1")
 	s.Subscribe(c, 0)
 
 	if err := c.Send(s, "echo A1\r"); err != nil {
@@ -117,7 +117,7 @@ func TestITResume3_InputSurvivesReconnect(t *testing.T) {
 	s.DetachClient("tab-1")
 
 	// 重连：同一个 client_id 拿回自己的 in_ack
-	c2 := newConn(t, "tab-1")
+	c2 := newConn(t, m, "tab-1")
 	resumed := m.Resume("tab-1", m.InstanceID(), []protocol.ResumeReq{
 		{SID: s.SID(), OutSeq: c.OutSeq()},
 	})
@@ -153,7 +153,7 @@ func TestITResume3_InputSurvivesReconnect(t *testing.T) {
 func TestInputResendIsDeduplicated(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	c := newConn(t, "tab")
+	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0)
 
 	first := "echo DEDUP-"
@@ -253,7 +253,7 @@ func TestResumeResetWhenBufferOverwritten(t *testing.T) {
 	c.RingBytes = 4096 // 调小，让 reset 路径可测
 	m := newManager(t, c)
 	s := create(t, m)
-	conn := newConn(t, "tab")
+	conn := newConn(t, m, "tab")
 	s.Subscribe(conn, 0)
 
 	if err := conn.Send(s, emitScript(300)); err != nil {
@@ -271,7 +271,7 @@ func TestResumeResetWhenBufferOverwritten(t *testing.T) {
 	}
 
 	// 走 reset 路径的订阅：必须带属性修正前缀
-	fresh := newConn(t, "tab-2")
+	fresh := newConn(t, m, "tab-2")
 	s.Subscribe(fresh, 0)
 	if fresh.Resets() != 1 {
 		t.Fatalf("reset 次数 = %d, want 1", fresh.Resets())
@@ -281,7 +281,7 @@ func TestResumeResetWhenBufferOverwritten(t *testing.T) {
 	}
 
 	// 而普通增量续传【绝不能】前置 —— 注入会清掉断点处生效中的属性
-	incr := newConn(t, "tab-3")
+	incr := newConn(t, m, "tab-3")
 	s.Subscribe(incr, s.Snapshot().BaseSeq+10)
 	if incr.Resets() != 0 {
 		t.Fatal("增量续传注入了 ESC[0m —— 会让字节级连续性失败")
@@ -298,5 +298,35 @@ func TestResumeClientAhead(t *testing.T) {
 	got := m.Resume("tab", m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: head + 1000}})
 	if got[0].Status != protocol.ResumeOK || got[0].FromSeq != head {
 		t.Fatalf("got %+v, want ok/from_seq=%d", got[0], head)
+	}
+}
+
+// 未订阅的会话产生输出时，未订阅的连接也要收到 head_seq —— 未读靠它推导。
+//
+// 订阅只决定收不收 OUTPUT 字节；只发给订阅者的话，后台会话永远算不出未读。
+func TestUnreadDerivedFromHeadSeq(t *testing.T) {
+	m := newManager(t, cfg())
+	visible, background := create(t, m), create(t, m)
+
+	c := newConn(t, m, "tab")
+	visible.Subscribe(c, 0) // 只订阅当前可见的那个
+
+	if err := c.Send(background, "echo in-background\r"); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, "收到后台会话的 head_seq", func() bool {
+		for _, e := range c.Events() {
+			if u, ok := e.(*protocol.SessionUpdated); ok &&
+				u.SID == background.SID() && u.HeadSeq != nil && *u.HeadSeq > 0 {
+				return true
+			}
+		}
+		return false
+	})
+
+	// 而它的字节【不该】过网络 —— 这是移动端的关键优化
+	if strings.Contains(c.Screen(), "in-background") {
+		t.Fatal("未订阅的会话把输出也推过来了")
 	}
 }

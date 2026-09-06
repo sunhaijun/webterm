@@ -57,9 +57,10 @@ type Manager struct {
 	// 的内容，之后接的却是一个毫不相干的新会话的输出，用户无从察觉。
 	instanceID string
 
-	mu       sync.RWMutex
-	sessions map[uint16]*Session
-	nextSID  uint16
+	mu        sync.RWMutex
+	sessions  map[uint16]*Session
+	nextSID   uint16
+	observers map[Subscriber]struct{}
 
 	janitorStop chan struct{}
 	janitorDone chan struct{}
@@ -75,6 +76,7 @@ func NewManager(cfg Config, st *store.Store) *Manager {
 		store:       st,
 		instanceID:  hex.EncodeToString(b[:]),
 		sessions:    make(map[uint16]*Session),
+		observers:   make(map[Subscriber]struct{}),
 		nextSID:     1, // 0 保留为无效值
 		janitorStop: make(chan struct{}),
 		janitorDone: make(chan struct{}),
@@ -85,6 +87,49 @@ func NewManager(cfg Config, st *store.Store) *Manager {
 
 // InstanceID 返回本次进程启动的实例 id（放进 welcome）。
 func (m *Manager) InstanceID() string { return m.instanceID }
+
+// AddObserver / RemoveObserver 登记一条连接。
+//
+// 【订阅与观察是两件事】：订阅（Session.Subscribe）决定收不收 OUTPUT 字节，
+// 观察决定收不收控制消息。未订阅的连接照样要收 session.updated —— 未读正是
+// 靠它带的 head_seq 推导出来的，只发给订阅者的话永远算不出未读。
+func (m *Manager) AddObserver(sub Subscriber) {
+	m.mu.Lock()
+	m.observers[sub] = struct{}{}
+	m.mu.Unlock()
+}
+
+func (m *Manager) RemoveObserver(sub Subscriber) {
+	m.mu.Lock()
+	delete(m.observers, sub)
+	m.mu.Unlock()
+}
+
+func (m *Manager) observerList() []Subscriber {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Subscriber, 0, len(m.observers))
+	for o := range m.observers {
+		out = append(out, o)
+	}
+	return out
+}
+
+// fanout 把一条控制消息发给所有连接。
+func (m *Manager) fanout(msg any) {
+	for _, o := range m.observerList() {
+		o.Event(msg)
+	}
+}
+
+// fanoutTo 只发给某个 client 的连接（ack 是 per-client 的）。
+func (m *Manager) fanoutTo(clientID string, msg any) {
+	for _, o := range m.observerList() {
+		if o.ClientID() == clientID {
+			o.Event(msg)
+		}
+	}
+}
 
 // Limits 返回给 welcome 用的上限信息。
 func (m *Manager) Limits() protocol.Limits {
@@ -191,6 +236,7 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 	}
 
 	s := &Session{
+		mgr:         m,
 		sid:         sid,
 		ptmx:        ptmx,
 		cmd:         cmd,

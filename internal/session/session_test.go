@@ -32,7 +32,7 @@ func TestITSession1_Independence(t *testing.T) {
 		t.Fatal("两个会话拿到了同一个 sid")
 	}
 
-	ca, cb := newConn(t, "tab-a"), newConn(t, "tab-b")
+	ca, cb := newConn(t, m, "tab-a"), newConn(t, m, "tab-b")
 	a.Subscribe(ca, 0)
 	b.Subscribe(cb, 0)
 
@@ -113,7 +113,7 @@ func TestITSession3_AutoNaming(t *testing.T) {
 func TestITSession4_ExitedKeepsBuffer(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	c := newConn(t, "tab")
+	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0)
 
 	if err := c.Send(s, "echo before-exit\rexit 3\r"); err != nil {
@@ -129,7 +129,7 @@ func TestITSession4_ExitedKeepsBuffer(t *testing.T) {
 	if !strings.Contains(c.Screen(), "before-exit") {
 		t.Fatal("退出前的输出丢了")
 	}
-	replay := newConn(t, "tab2")
+	replay := newConn(t, m, "tab2")
 	s.Subscribe(replay, 0)
 	if !strings.Contains(replay.Screen(), "before-exit") {
 		t.Fatal("exited 会话的缓冲没有保留，无法回看最后的报错")
@@ -144,7 +144,7 @@ func TestITSession4_ExitedKeepsBuffer(t *testing.T) {
 func TestITSession5_CloseKillsProcessGroup(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	c := newConn(t, "tab")
+	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0)
 
 	// 起一个后台子进程，把它的 pid 打出来
@@ -179,13 +179,13 @@ func TestITSession5_CloseKillsProcessGroup(t *testing.T) {
 func TestCloseKillsHupImmuneJob(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	c := newConn(t, "tab")
+	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0)
 
 	marker := t.TempDir() + "/child.pid"
 	script := fmt.Sprintf(
-		`bash -c 'trap "" HUP; echo $$ > %s; sleep 300' & printf 'SPAWN-%%s
-' OK`+"", marker)
+		`bash -c 'trap "" HUP; echo $$ > %s; sleep 300' & printf 'SPAWN-%%s\n' OK`+"\r",
+		marker)
 	if err := c.Send(s, script); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestSIDNotImmediatelyReused(t *testing.T) {
 func TestResizeAppliesToPTY(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	c := newConn(t, "tab")
+	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0)
 
 	if err := s.Resize(100, 30); err != nil {

@@ -50,8 +50,15 @@ func (c *fakeConn) Attach() {
 	c.mu.Unlock()
 }
 
-func newConn(t *testing.T, clientID string) *fakeConn {
-	return &fakeConn{t: t, clientID: clientID}
+// newConn 建一个测试连接，并把它登记为 manager 的 observer。
+//
+// 订阅与观察是两件事：Subscribe 只决定收不收 OUTPUT 字节，控制消息走
+// observer 列表 —— 未订阅的连接也要收 session.updated（未读靠它推导）。
+func newConn(t *testing.T, m *session.Manager, clientID string) *fakeConn {
+	c := &fakeConn{t: t, clientID: clientID}
+	m.AddObserver(c)
+	t.Cleanup(func() { m.RemoveObserver(c) })
+	return c
 }
 
 func (c *fakeConn) ClientID() string { return c.clientID }
