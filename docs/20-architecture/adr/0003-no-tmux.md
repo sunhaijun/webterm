@@ -1,0 +1,75 @@
+# ADR-0003 不用 tmux，agent 自持 PTY
+
+> 状态：Accepted · 2026-09-06
+
+## 背景
+
+原始需求提到"会话的维持，如果需要可以使用 tmux 来达到目的"。中间方案曾是"agent 自持 PTY + 环形缓冲做持久化，tmux 作为每会话可选开关"。最终决定完全去掉 tmux。
+
+## 决策
+
+**会话由 agent 自己持有 PTY 管理。不套 tmux，连可选开关都不做。**
+
+```go
+cmd := exec.Command("bash", "-i", "--rcfile", rcPath)
+ptmx, _ := pty.Start(cmd)   // agent 持有 master fd
+```
+
+## 否决 tmux 的理由
+
+### 1. tmux 在持久化上给不出更好的东西
+
+断线恢复真正需要的是**增量**：客户端说"我收到第 N 字节了"，服务端从第 N 字节接着发。
+
+tmux 给不出这个。`tmux attach` 只能**重画当前屏幕**（`capture-pane` 也只是快照）。要做增量续传，环形缓冲 + 序列号是必须自己实现的 —— 而一旦实现了它，tmux 在持久化上的价值就归零。
+
+### 2. 模型冲突
+
+tmux 有自己的 session / window / pane 三层模型。如果把它透传到 Web，我们会连它那套交互（前缀键、copy-mode、状态栏）一起继承过来 —— 而"摆脱 copy-mode 那种反人类的回看方式"本来就是 webterm 的需求之一。
+
+如果不透传，那 tmux 就只是一层多余的间接。
+
+### 3. 多一个外部依赖
+
+违背"一个二进制就是完整服务"（[ADR-0002](0002-self-contained-binary.md)）。目标机器上 tmux 的版本差异（1.8 到 3.x 行为差别不小）会成为长期的排障噪音源。
+
+### 4. 可选开关也有成本
+
+"每会话可选 tmux" 意味着两条代码路径、两套测试、两种排障场景。为了一个边缘的互操作场景付这个成本不值得。
+
+## 后果
+
+**正面**：
+- 会话模型简单：一个会话 = 一个 PTY + 一个环形缓冲，没有嵌套
+- 无外部依赖，无版本兼容矩阵
+- 单一代码路径
+
+**负面（重要，已明确接受）**：
+
+> **agent 进程重启 = 所有会话消失。**
+
+PTY 的 master fd 由 agent 持有。agent 一死，slave 端的 shell 收到 `SIGHUP` 就退出了。所以升级 webterm、重启服务器，会话都保不住。有 tmux 的话它们能活下来。
+
+**为什么接受**：
+
+"网络断线"和"进程重启"是两个不同频率的问题。
+
+| | 频率 | webterm 的处理 |
+|---|---|---|
+| 网络断线 | 每天多次 | **彻底解决**（增量续传，用户只看到状态灯闪一下） |
+| agent 进程重启 | 升级时，很少 | 会话丢失 |
+
+用户的真实痛点是前者。为了后者引入 tmux 是错配。
+
+**缓解措施**：
+- 升级前 UI 明确提示"将关闭 N 个会话"
+- `webterm serve` 收到 `SIGTERM` 时先向所有客户端广播 `notice{level:"warn"}`，再等 2 秒关闭，让用户至少知道发生了什么
+- 命令历史存在 SQLite 里，**跨重启存活** —— 所以"我刚才在跑什么"这个信息不会丢
+
+**未来可能的补法**（v0.3+，不在当前范围）：
+升级时用 `exec.Cmd.ExtraFiles` 把 PTY 的 fd 传递给新进程，并通过 unix socket 把会话元数据和环形缓冲交接过去，实现无损 re-exec。这是 nginx / systemd socket activation 的经典模式，在 Go 里可行。届时会写新的 ADR。
+
+## 用户仍然可以自己用 tmux
+
+这个决策**不阻止**用户在 webterm 的会话里手动敲 `tmux`。它只是说 webterm 不管理 tmux。
+需要注意的是：那种情况下 shell 集成的 OSC 序列要穿过 tmux（tmux 默认会过滤未知 OSC，需要 `set -g allow-passthrough on`），命令历史与 CWD 上报可能失效。这属于用户自选的降级路径，见 [`../../30-protocol/shell-integration.md`](../../30-protocol/shell-integration.md#与-tmux-共存)。

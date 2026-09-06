@@ -1,0 +1,174 @@
+# 安装与部署
+
+> 状态：Accepted
+
+## 前置条件（硬要求）
+
+[ADR-0004](../20-architecture/adr/0004-acme-only-tls.md) 决定 TLS 只走 ACME，所以这些是**硬要求**，不是建议：
+
+| 要求 | 为什么 | 怎么验证 |
+|---|---|---|
+| 一个域名 | ACME 需要它 | `dig +short term.example.com` |
+| 域名 A/AAAA 记录指向本机公网 IP | HTTP-01 挑战需要 | 上面的结果 == `curl -s ifconfig.me` |
+| **80 端口可用** | HTTP-01 挑战走 80 | `ss -lntp \| grep :80` 为空 |
+| **443 端口可用** | 服务本体 | `ss -lntp \| grep :443` 为空 |
+| bash 4.4+ | shell 集成需要可靠的 `PS0`/`DEBUG` trap | `bash --version` |
+| Linux（x86_64 / arm64） | | `uname -m` |
+
+`webterm doctor` 子命令会逐项检查并给出可读的诊断。**部署前先跑它。**
+
+## 安装
+
+```bash
+# 1. 下载（或自己 go build）
+curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/webterm-linux-amd64 -o webterm
+chmod +x webterm
+
+# 2. 检查环境
+./webterm doctor --domain term.example.com
+
+# 3. 试运行（用 ACME staging，避免撞正式环境限流）
+sudo ./webterm serve --domain term.example.com --acme-staging
+
+# 4. 正式运行
+sudo ./webterm serve --domain term.example.com
+```
+
+### 关于 sudo
+
+绑定 80/443 需要特权。三个选择，**推荐第二个**：
+
+```bash
+# ① 直接 root 运行 —— 不推荐（agent 的 shell 就是 root shell）
+sudo ./webterm serve --domain X
+
+# ② 普通用户 + CAP_NET_BIND_SERVICE —— 推荐
+sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm
+webterm serve --domain X
+
+# ③ 普通用户监听高端口 + 系统层转发
+webterm serve --domain X --http-port 8080 --https-port 8443
+# 再用 nftables/iptables 把 80→8080、443→8443
+```
+
+**强烈建议 agent 以普通用户运行**（方案 ②）。webterm 不试图沙箱化自己（[`../60-security/threat-model.md`](../60-security/threat-model.md#信任边界)），所以 agent 跑在哪个用户下，攻破它就等于拿到哪个用户的权限。以 root 跑等于把 root shell 挂到公网。
+
+需要 root 时用会话里的 `sudo`。
+
+## 首次配对
+
+启动后 stdout 打印：
+
+```
+webterm 0.1.0 · https://term.example.com
+证书已就绪（Let's Encrypt，到期 2026-12-05，自动续期）
+
+尚无已授权设备。配对码 5 分钟内有效：
+
+  https://term.example.com/pair#kJ8xR2mQ...
+
+  ▄▄▄▄▄▄▄ ▄  ▄▄ ▄▄▄▄▄▄▄
+  █ ▄▄▄ █ ▀▄▄▀█▄ █ ▄▄▄ █
+  █ ███ █ █▄ ▄ ▀ █ ███ █
+  …
+
+用手机扫码即可完成授权。
+```
+
+之后新设备接入用 `webterm pair` 再生成一个。
+
+## 命令行参数
+
+### `webterm serve`
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--domain` | — | 域名。生产必填 |
+| `--dev` | false | 本地开发：`127.0.0.1:8080` 明文，不申请证书 |
+| `--acme-staging` | false | 用 Let's Encrypt staging 环境（调试部署用） |
+| `--data-dir` | `$XDG_DATA_HOME/webterm` | 数据目录 |
+| `--http-port` | 80 | ACME 挑战 + HTTPS 跳转 |
+| `--https-port` | 443 | |
+| `--bind` | `0.0.0.0` | 监听地址。设为 `127.0.0.1` 配合隧道/反代 |
+| `--no-tls` | false | 关闭 TLS。**仅允许在 `--bind` 为回环或私有地址时使用** |
+| `--trust-proxy` | false | 信任 `X-Forwarded-For`（**仅在反代后启用**，否则限速可被绕过） |
+| `--max-sessions` | 20 | 会话数上限 |
+| `--ring-bytes` | 1048576 | 每会话输出缓冲（影响能容忍的断线时长） |
+| `--conn-queue-bytes` | 4194304 | 每连接写队列上限 |
+| `--max-history` | 50000 | 命令历史条数上限 |
+| `--no-history` | false | 完全关闭命令历史记录 |
+| `--no-shell-integration` | false | 不注入 shell 集成（排障用） |
+| `--no-login-shell` | false | 用非登录交互 shell（只读 `~/.bashrc`） |
+| `--shell` | `bash` | v0.1 只支持 bash |
+| `--log-level` | `info` | `debug` / `info` / `warn` / `error` |
+
+### 其它子命令
+
+| 命令 | 说明 |
+|---|---|
+| `webterm doctor [--domain X]` | 检查部署前置条件 |
+| `webterm pair` | 生成新的配对码（打印 URL + 二维码） |
+| `webterm devices [list\|revoke <id>\|revoke-all]` | 设备管理（CLI 侧，UI 里也有） |
+| `webterm shell-init bash` | 输出 shell 集成脚本（手动接入的降级路径） |
+| `webterm version` | 版本信息 |
+
+## systemd
+
+见 [`systemd.md`](systemd.md)。
+
+## 数据与备份
+
+```
+$XDG_DATA_HOME/webterm/     （默认 ~/.local/share/webterm/）
+├── webterm.db       ← 设备授权 + 命令历史 + 快捷命令
+├── certs/           ← autocert 缓存（丢了会重新申请，注意 Let's Encrypt 限流）
+└── run/             ← 临时 rcfile，无需备份
+```
+
+备份 `webterm.db` 即可。建议先停服或用 `sqlite3 webterm.db ".backup /path/to/backup.db"`，直接 `cp` 可能撞上 WAL 状态不一致。
+
+> ⚠️ **`webterm.db` 里有你的完整命令历史。** 备份到哪里就等于把历史复制到哪里。见 [`../60-security/privacy-history.md`](../60-security/privacy-history.md)。
+
+**`certs/` 值得一并备份** —— 不是因为不能重新申请，而是 Let's Encrypt 有签发频率限制（每域名每周 50 次），频繁重建会撞限流。
+
+## 升级
+
+> ⚠️ **升级会关闭所有会话。** 这是 [ADR-0003](../20-architecture/adr/0003-no-tmux.md) 的已知取舍：agent 持有 PTY，进程重启则 shell 收到 `SIGHUP`。
+
+```bash
+# 1. UI 上确认没有正在跑的重要任务
+# 2. 替换二进制
+sudo install -m755 webterm-new /usr/local/bin/webterm
+# 3. 重启
+systemctl --user restart webterm
+```
+
+agent 收到 `SIGTERM` 时会先向所有客户端广播"agent 即将重启，所有会话将结束"再退出，所以你至少能看到发生了什么，而不是一个莫名的重连失败。
+
+**命令历史存在 SQLite 里，跨重启存活** —— "我刚才在跑什么"这个信息不会丢。
+
+## 反向代理 / 隧道场景
+
+架构上完全支持（[ADR-0002](../20-architecture/adr/0002-self-contained-binary.md) 的"不烧桥"性质）：
+
+```bash
+webterm serve --domain term.example.com --bind 127.0.0.1 --no-tls --http-port 8080 --trust-proxy
+```
+
+然后让 nginx / Caddy / cloudflared / frp 接管 TLS 与暴露。要点：
+
+- **必须传递 WebSocket 升级头**（`Upgrade` / `Connection`）
+- **`--domain` 仍然要填**，因为 `Origin` 校验需要它
+- 代理的读超时必须足够长或禁用，否则长连接会被掐（nginx 默认 60s 会断 WebSocket，需要 `proxy_read_timeout 3600s`）
+- 只在真的有反代时开 `--trust-proxy`，否则限速可被伪造 `X-Forwarded-For` 绕过
+
+## 卸载
+
+```bash
+systemctl --user disable --now webterm
+rm /usr/local/bin/webterm
+rm -rf ~/.local/share/webterm       # 含历史，确认后再删
+rm ~/.config/systemd/user/webterm.service
+```
+
+**不需要清理 dotfiles** —— webterm 从不修改 `~/.bashrc`（[ADR-0010](../20-architecture/adr/0010-bash-rcfile-injection.md)），集成通过临时 rcfile 注入，卸载即干净。
