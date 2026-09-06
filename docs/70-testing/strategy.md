@@ -99,15 +99,16 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 | ID | 内容 |
 |---|---|
 | `IT-session-1..5` | 多会话独立性、上限、自动命名、退出保留缓冲、关闭杀进程组 |
-| `IT-resume-1..3` | 断线期间会话不暂停、增量回放不重发、输入重发不丢不重 |
+| `IT-resume-1..4` | 断线期间会话不暂停、增量回放不重发、输入重发不丢不重（`in_ack` 跨重连存活）、`instance_id` 不符判 `gone` |
 | `IT-shell-1..7` | 命令记录、空格跳过、rcfile 注入、不覆盖用户配置、登录/非登录 profile 链、握手超时、脚本出错不影响 shell |
 | `IT-auth-1..4` | 路由认证矩阵（**含 `/ws`**）、Origin 校验、Cookie 属性、吊销即时生效 |
 | `IT-pair-1..3` | 二维码输出、配对码不进日志、限速 |
-| `IT-tls-1..2` | 用 [pebble](https://github.com/letsencrypt/pebble) 本地 ACME 验证签发；`--dev` 不申请证书 |
+| `IT-tls-1..3` | 用 [pebble](https://github.com/letsencrypt/pebble) 本地 ACME 验证签发；`--dev` 不申请证书；失败时的可读诊断（AC-1.13） |
 | `IT-privacy-1..2` | canary 字符串不出现在数据目录 / 日志中 |
 | `IT-embed-1` | 删掉 `web/dist` 后二进制仍能提供前端（证明真的嵌入了） |
 | `IT-resize-1` | `resize` 消息导致 PTY 的 `TIOCSWINSZ` 生效（在会话内跑 `stty size` 验证） |
 | `IT-hb-1` | 60 秒无帧的连接被关闭 |
+| `IT-queue-1..2` | 会话输入队列满 → `input_stalled` 关连接；连接写队列满 → 关连接。两种情况下其它会话的 PTY 都不受影响 |
 | `IT-sub-1` | 未订阅会话继续缓冲，`subscribe{out_seq}` 补齐正确 |
 
 **shell 集成测试需要真 bash。** CI 里确保有 bash 4.4+；测试跑一个受控的 `.bashrc`（通过 `HOME` 指向临时目录）以获得确定性。

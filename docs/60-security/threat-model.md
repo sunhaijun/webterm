@@ -113,10 +113,12 @@ webterm 把一台服务器的 shell 暴露到公网。**攻破 webterm = 拿到�
 |---|---|
 | 大量未认证连接 | 认证前的处理极轻（查 Cookie 哈希）；配对限速 |
 | 会话耗尽内存 | 会话数上限 20，每会话缓冲 1 MiB → 上界 20 MiB |
-| 慢客户端拖死会话 | 每连接写队列有界（4 MiB），满则**断开该连接**而不是阻塞 PTY（[协议 §5.5](../30-protocol/websocket-protocol.md#55-慢客户端策略)） |
+| 连接耗尽内存 | 并发连接上限 16（`--max-conns`），每连接写队列 4 MiB → 上界 64 MiB。**必须有这个上限** —— 协议允许同设备开任意多标签页 |
+| 慢客户端拖死会话 | 连接写队列有界（4 MiB），满则**断开该连接**而不是阻塞 PTY（[协议 §5.5](../30-protocol/websocket-protocol.md#55-有界队列策略读写两侧)） |
+| 卡住的 shell 拖死整条连接 | 会话输入队列有界（256 KiB），满则回 `input_stalled` 并**断开该连接**，绝不阻塞连接读循环（同上） |
 | 巨帧内存放大 | 单帧上限 256 KiB，超出即断开 |
 | OSC 负载放大 | OSC 负载上限 8 KiB，超限原样吐出 |
-| 输入队列膨胀 | client 侧 `pending` 上限 64 KiB；agent 侧 `inputCh` 容量 64（背压） |
+| 输入队列膨胀 | client 侧 `pending` 上限 64 KiB |
 | 历史表膨胀 | 5 万条上限 + 定期淘汰 |
 
 **注意**：失去了 Cloudflare 的 DDoS 防护（[ADR-0002](../20-architecture/adr/0002-self-contained-binary.md)）。缓解仅限应用层。网络层的 volumetric 攻击超出本项目范围 —— 如果用户面临这种威胁，应该自己套隧道或 CDN（架构上支持）。
@@ -128,7 +130,7 @@ webterm 把一台服务器的 shell 暴露到公网。**攻破 webterm = 拿到�
 | rcfile 被同机其它用户读取/篡改 | `0600`，放 `$XDG_RUNTIME_DIR/webterm/` 或数据目录下的 `run/`（`0700`），**不放 `/tmp`** |
 | 命令注入进 rcfile | rcfile 内容完全由 agent 生成，**不插入任何用户输入** |
 | 集成脚本破坏用户 shell | 全部包在 `{…} 2>/dev/null \|\| true`，且不能导致 shell 启动失败（AC-7.7） |
-| OSC 带内信令被输出伪造 | **无法防御**（固有问题）。影响限于模式误切与命令记录错误，不涉权限。见 [`../30-protocol/shell-integration.md`](../30-protocol/shell-integration.md#已知限制) |
+| OSC 带内信令被输出伪造 | **无法防御**（固有问题）。影响限于模式误切与命令记录错误，不涉权限。见 [`../30-protocol/shell-integration.md`](../30-protocol/shell-integration.md#6-已知限制) |
 
 ### T8 TLS 相关
 

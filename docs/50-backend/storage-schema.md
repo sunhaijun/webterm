@@ -22,11 +22,14 @@ $XDG_DATA_HOME/webterm/          （否则 ~/.local/share/webterm/）
 ## PRAGMA
 
 ```sql
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous  = NORMAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
+PRAGMA journal_mode  = WAL;
+PRAGMA synchronous   = NORMAL;
+PRAGMA foreign_keys  = ON;
+PRAGMA busy_timeout  = 5000;
+PRAGMA auto_vacuum   = INCREMENTAL;   -- 必须在建第一张表之前设，否则无效
 ```
+
+`auto_vacuum` 只在建库时能设定，事后改要整库 `VACUUM` 才生效 —— 所以它必须出现在 `0001_init.sql` 的最前面，否则后面的 `incremental_vacuum` 是空操作。
 
 ## Schema
 
@@ -109,9 +112,12 @@ SELECT * FROM commands
 WHERE (:q      IS NULL OR text LIKE '%' || :q || '%')
   AND (:cwd    IS NULL OR cwd = :cwd)
   AND (:failed = 0     OR (exit_code IS NOT NULL AND exit_code != 0))
+  AND (:before IS NULL OR started_at < :before)
 ORDER BY started_at DESC
-LIMIT :limit OFFSET :offset;
+LIMIT :limit;
 ```
+
+**游标分页（`:before`）而不是 `OFFSET`** —— 历史一直在追加，翻页期间新插入的行会让 `OFFSET` 漏行和重行。端点契约见 [`../30-protocol/http-api.md`](../30-protocol/http-api.md#get-apicommands)。
 
 **v0.1 用 `LIKE` 不用 FTS5。** 5 万行的 `LIKE '%x%'` 是毫秒级。等真的慢了再加 FTS5 虚拟表 —— 那是纯增量改动。
 

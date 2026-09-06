@@ -86,12 +86,14 @@ in_ack += len  →  ack 控制消息 → client 裁剪重发队列
 
 ```
 client 重连（Cookie 认证）
-   ↓  hello{ resume: [{sid, out_seq, in_seq}, ...] }
+   ↓  hello{ client_id, instance_id, resume: [{sid, out_seq}, ...] }
 agent 对每个会话判断：
+   ├─ instance_id 不符               → gone：agent 重启过，sid 已被重新分配
    ├─ out_seq ∈ [base_seq, head_seq]  → 从 out_seq 增量回放
    └─ out_seq <  base_seq             → reset：client 清屏 + 全量重发缓冲
-   ↓  welcome{ sessions, resumed: [{sid, status, in_ack}, ...] }
+   ↓  welcome{ instance_id, sessions, resumed: [{sid, status, in_ack}, ...] }
 client 按 in_ack 裁剪重发队列，重发其后的输入
+（in_ack 按 (client_id, sid) 记账，跨重连存活 —— 否则重连必然触发 input_gap）
 ```
 
 ## 分层与目录
@@ -134,7 +136,10 @@ docs/                   本目录
 | `writeLoop` | 从输入 channel 取数据 → `PTY.Write()` → 更新 `in_ack` |
 | `waitLoop` | `cmd.Wait()`，进程退出后设置 `exited` 状态与退出码 |
 
-每个 WebSocket 连接两个 goroutine（读、写），写侧带有界队列 —— **队列满时丢弃该连接而不是阻塞 Session**。慢客户端不能拖慢 PTY 读取，因为那会反压到 shell。断掉它，让它走续传重连。这是刻意的设计。
+每个 WebSocket 连接两个 goroutine（读、写）。**读写两侧的队列都有界，且都不阻塞** —— 满了就断开该连接，让它走续传重连。
+
+- 写侧阻塞会反压到 `PTY.Read()`，一个慢客户端就能拖慢服务器上真正在跑的活
+- 读侧阻塞更糟：一条连接复用所有会话，一个不读 stdin 的前台程序会把整条连接的读循环卡死（ping、resize、其它会话的输入全停）
 
 环形缓冲用 `sync.RWMutex`；`out_seq` 与缓冲内容必须在同一把锁下更新，否则续传会算错切片。
 

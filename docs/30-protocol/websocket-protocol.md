@@ -17,6 +17,8 @@
 | `in_ack` | agent 已真正写入 PTY 的累计输入字节数 |
 | `base_seq` | 环形缓冲当前保留内容的起始 `out_seq` |
 | `head_seq` | 环形缓冲当前的末尾 `out_seq`（= 该会话累计产出字节数） |
+| `client_id` | 一个浏览器标签页的身份。**输入记账的 key**，见 §5.3 |
+| `instance_id` | agent 进程本次启动的随机 id。用于识别"agent 重启过"，见 §5.2 |
 
 **seq 是字节计数，不是消息计数。** 理由见 [ADR-0009](../20-architecture/adr/0009-hybrid-ws-framing.md)。
 
@@ -39,15 +41,14 @@ Origin: https://<配置的域名>
 |---|---|
 | Cookie 存在且对应未吊销的设备 | `401` |
 | `Origin` 与配置域名严格相等（`--dev` 下允许 `http://localhost:*` 与 `http://127.0.0.1:*`） | `403` |
-| 协议版本可协商（见下） | `426` + JSON 说明 |
 
-**不使用子协议（`Sec-WebSocket-Protocol`）做版本协商** —— 版本在 `hello`/`welcome` 里协商，这样版本不匹配时能给出可读的错误消息而不是一个裸的握手失败。
+**握手阶段不做版本协商** —— 握手上没有携带 client 版本的字段（不使用 `Sec-WebSocket-Protocol`）。版本在 `hello`/`welcome` 里协商，不匹配时回 `error{code:"protocol_unsupported"}`，这样能给出可读的错误消息而不是一个裸的握手失败。
 
 ### 单连接约定
 
 - 一条 WebSocket 复用所有会话，帧头带 `sid`
 - 同一设备可以开多条连接（多个标签页）。**agent 允许并且不做互斥**：每条连接独立订阅、独立记 `out_seq`
-- 输入侧多连接并发写同一会话是允许的但语义上由用户负责（就像两个人 attach 同一个 tmux）。`in_seq` 按 **连接** 独立记账，见 §5.3
+- 输入侧多连接并发写同一会话是允许的但语义上由用户负责（就像两个人 attach 同一个 tmux）。`in_seq` 按 **`client_id`** 独立记账，见 §5.3
 
 ---
 
@@ -73,7 +74,8 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 ────  ────  ────────  ────────  ──────────────────────────────────────
   0     1   type      uint8     0x01 = OUTPUT (agent→client)
                                 0x02 = INPUT  (client→agent)
-  1     1   flags     uint8     保留。发送方必须填 0；接收方忽略未知位
+  1     1   flags     uint8     bit0 = ATTR_PREFIX（仅 OUTPUT，见下）
+                                其余位保留：发送方填 0，接收方忽略
   2     2   sid       uint16    会话 id
   4     8   seq       uint64    本帧【首字节】的 out_seq / in_seq
  12     N   payload   bytes     原始终端字节，N ≥ 1
@@ -87,7 +89,8 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 ### OUTPUT 帧（agent → client）
 
 - agent 从环形缓冲连续读出后发送。分帧边界完全由 agent 的读取时机决定，**没有语义**
-- 连续的 OUTPUT 帧对同一 `sid` 必须满足 `seq(n+1) == seq(n) + len(payload(n))`
+- **`flags` bit0（`ATTR_PREFIX`）**：置位表示 `payload` 的前 4 字节是 `ESC [ 0 m`（属性修正，见 §5.1），**不计入 seq**。只出现在 reset 回放的第一帧上
+- 记 `data_len(n) = len(payload(n)) - (flags(n) & 1 ? 4 : 0)`。连续的 OUTPUT 帧对同一 `sid` 必须满足 `seq(n+1) == seq(n) + data_len(n)`
 - client 收到 `seq != 期望值` 时：
   - `seq < 期望` → 重复数据（不应发生），丢弃并记 warning
   - `seq > 期望` → 出现空洞（不应发生），**立即关闭连接并走重连续传**，不要尝试自行修补
@@ -95,8 +98,8 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 ### INPUT 帧（client → agent）
 
 - client 分配 `in_seq` 并写入本地重发队列
-- agent 校验：
-  - `seq == 该连接的 in_ack` → 正常，写 PTY
+- agent 校验（`in_ack` 属于 `(client_id, sid)`，不属于连接，见 §5.3）：
+  - `seq == in_ack` → 正常，写 PTY
   - `seq < in_ack` → 重发的已处理数据，**丢弃前 `in_ack - seq` 字节**，写入剩余部分（重连时的正常情况）
   - `seq > in_ack` → 空洞 → `error{code:"input_gap"}` 并关闭连接
 - 会话状态为 `exited` 时收到 INPUT → 丢弃并回 `error{code:"session_exited", sid}`，不关闭连接
@@ -116,8 +119,9 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
   "t": "hello",
   "protocol": 1,
   "client_id": "c7f3…",
+  "instance_id": "a91e…",
   "resume": [
-    { "sid": 1, "out_seq": 483920, "in_seq": 1204 }
+    { "sid": 1, "out_seq": 483920 }
   ]
 }
 ```
@@ -125,8 +129,9 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 | 字段 | 说明 |
 |---|---|
 | `protocol` | client 支持的协议版本 |
-| `client_id` | client 自己生成并存在 `localStorage` 的稳定 id，用于日志关联和多标签页区分 |
-| `resume` | 想要续传的会话及其进度。首次连接为 `[]` |
+| `client_id` | **每个标签页一个**，client 自己生成并存在 `sessionStorage`（不是 `localStorage` —— 那是同源共享的，区分不了标签页）。跨重连稳定，是输入记账的 key（§5.3） |
+| `instance_id` | 上次 `welcome` 里拿到的值，首次连接为 `null`。与 agent 当前值不符 → agent 把所有 `resume` 项判为 `gone`（§5.2） |
+| `resume` | 想要续传的会话及其输出进度。首次连接为 `[]`。**不带输入进度** —— `in_ack` 由 agent 保管 |
 
 agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_hello"}` 并关闭。
 
@@ -163,7 +168,7 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 { "t": "unsubscribe", "sid": 1 }
 ```
 
-**只对当前可见的会话订阅。** 未订阅的会话在 agent 侧照常运行和缓冲，agent 只在其产生输出时发一条 `session.updated{unread:true}`（做节流，见 §6.3）。
+**只对当前可见的会话订阅。** 未订阅的会话在 agent 侧照常运行和缓冲，agent 只在其产生输出时发一条 `session.updated{head_seq}`（做节流，见 §6.3），client 据此自行判定未读。
 
 `subscribe` 携带 `out_seq`，语义与 `resume` 相同：agent 从该位置开始补齐。切回会话时用这个消息，不需要重连。
 
@@ -192,6 +197,7 @@ client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
   "t": "welcome",
   "protocol": 1,
   "server_version": "0.1.0",
+  "instance_id": "a91e…",
   "limits": { "max_sessions": 20, "ring_bytes": 1048576, "max_frame_bytes": 262144 },
   "sessions": [
     {
@@ -201,7 +207,6 @@ client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
       "cols": 80, "rows": 24,
       "integration": "active",
       "base_seq": 0, "head_seq": 483920,
-      "unread": false,
       "created_at": 1757116000000
     }
   ],
@@ -217,19 +222,22 @@ client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
 |---|---|---|
 | `ok` | 可增量续传 | 不清屏，等着接 OUTPUT 帧 |
 | `reset` | 缓冲已覆盖（`out_seq < base_seq`） | **先清屏**（`terminal.reset()`），再接 OUTPUT 帧，并提示"历史输出已截断" |
-| `gone` | 该 sid 已不存在（agent 重启过 / 会话已销毁） | 移除该会话的 UI，提示"会话已结束" |
+| `gone` | 该 sid 已不存在（会话已销毁 / `instance_id` 不符） | 移除该会话的 UI，提示"会话已结束" |
 
-`resumed[].in_ack` 是 agent 侧对该会话已写入 PTY 的累计字节数。**client 必须据此裁剪重发队列，并重发其后的全部输入。**
+`resumed[].in_ack` 是 agent 对 **该 `client_id`** 在该会话上已写入 PTY 的累计字节数（§5.3）。**client 必须据此裁剪重发队列，并重发其后的全部输入。**
+
+**未读靠 `head_seq` 推导**，不是服务端状态：`unread = head_seq > 本地 out_seq`。未读天然是 per-client 的，放在服务端会让两个标签页互相清对方的未读。
 
 #### `session.created` / `session.closed` / `session.updated`
 
 ```json
 { "t": "session.created", "req_id": "r1", "session": { …同 welcome.sessions[] 的结构… } }
 { "t": "session.closed",  "req_id": "r2", "sid": 1, "exit_code": 0 }
-{ "t": "session.updated", "sid": 1, "name": "api", "cwd": "/srv/api", "status": "running", "unread": true, "integration": "active" }
+{ "t": "session.updated", "sid": 1, "name": "api", "cwd": "/srv/api", "status": "running", "head_seq": 491337, "integration": "active" }
 ```
 
-`session.updated` 只包含**发生变化的字段** + `sid`。client 做增量合并。
+- 三条都**广播给该设备的所有连接**（否则 B 标签页看不到 A 新建的会话）。`req_id` 只出现在发起请求的那条连接的副本上
+- `session.updated` 只包含**发生变化的字段** + `sid`。client 做增量合并
 
 #### `ack`
 
@@ -328,7 +336,8 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 - `head_seq` = 该会话自创建以来累计产出的字节数（剥离 OSC 之后）
 - `base_seq` = `max(0, head_seq - 缓冲实际保留字节数)`
 - **裁剪规则**：需要腾空间时，优先裁剪到下一个 `\n` 之后，以减少把转义序列切成两半的概率。若 64 KiB 内找不到换行则按字节硬裁（AC-2.7）
-- **回放起点前置 `ESC [ 0 m`**（SGR reset），清除因裁剪而悬空的颜色/属性。这 4 个字节**不计入 `out_seq`** —— 它是渲染修正，不是流内容
+- **只有 reset 回放**（`status == "reset"` 或 `reset` 消息）在起点前置 `ESC [ 0 m`（SGR reset），清除因裁剪而悬空的颜色/属性。承载它的帧置 `flags` bit0，这 4 个字节**不计入 `out_seq`**（§3）
+  - 增量续传（`status == "ok"`）**绝不能注入** —— 客户端的终端状态是完整的，注入会把断点处生效中的属性清掉，让 AC-2.1 的字节级比较失败
 
 > **已知限制**：硬裁剪可能把一个转义序列切成两半，导致回放起点出现少量可见垃圾字符。这个瑕疵在一行内自愈。只在"断开很久 + 期间输出很多"时才可能触发，正常网络抖动（几秒）永远走不到这条路径。已接受，记录在此。
 
@@ -339,19 +348,22 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 ②  client 保留：每会话的 out_seq、未 ack 的输入队列
 ③  指数退避重连（0.5s 起，×1.5，上限 15s，±20% 抖动）
     online 事件 / 页面重新可见 → 立即重试一次并重置退避
-④  连接建立 → 发 hello{ resume: [{sid, out_seq, in_seq}, …] }
+④  连接建立 → 发 hello{ client_id, instance_id, resume: [{sid, out_seq}, …] }
 ⑤  agent 对每个 sid 判定：
+       instance_id 不符        → status: "gone"   （agent 重启过，sid 会被重新分配，见下）
        sid 不存在              → status: "gone"
        out_seq ∈ [base, head]  → status: "ok",    from_seq = out_seq
        out_seq <  base_seq     → status: "reset", from_seq = base_seq
        out_seq >  head_seq     → status: "ok",    from_seq = head_seq   （client 领先，不应发生；不回放）
-⑥  agent 回 welcome（含 resumed[].in_ack）
+⑥  agent 回 welcome（含 instance_id 与 resumed[].in_ack）
 ⑦  client：
        status=="reset"  → terminal.reset() + 显示截断提示
        status=="gone"   → 移除会话 UI
        按 in_ack 裁剪重发队列 → 重发其后全部输入
 ⑧  agent 从 from_seq 开始推送 OUTPUT 帧
 ```
+
+**为什么要 `instance_id`**：`sid` 是 `uint16` 且 agent 重启后从头分配。没有实例标识时，一个 `resume{sid:1, out_seq:很大}` 会落进"client 领先"分支 —— 屏幕上留着旧会话的内容，之后接的却是一个**毫不相干的新会话**的输出，用户无从察觉。
 
 **关键点**：只有当前可见的会话在 `resume` 里带 `out_seq` 并被立即回放。后台会话可以在 `resume` 里报进度但暂不订阅 —— 由 client 决定，避免重连瞬间涌入大量数据。推荐做法：`resume` 只列可见会话，其它会话在用户切过去时用 `subscribe{out_seq}` 补齐。
 
@@ -369,7 +381,11 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 - 重连后：按 `welcome.resumed[].in_ack` 裁剪，然后**按 seq 升序重发** `pending` 全部内容
 - `pending` 上限 **64 KiB**。超出时停止接受新输入并在 UI 上明确提示"离线输入已满"，**不要静默丢弃**
 
-**多连接下的 in_seq**：`in_seq` 与 `in_ack` 按 **(连接, 会话)** 记账，不是全局。因为两个标签页各自独立计数，混在一起没有意义。agent 为每条连接的每个会话维护独立的 `in_ack`。
+**记账的 key 是 `(client_id, sid)`，不是连接。** 两个标签页各自独立计数（混在一起没有意义），但**同一标签页的重连必须继承 `in_ack`**：
+
+- agent 为每个 `(client_id, sid)` 维护 `in_ack`，**保留到会话销毁为止**（一个 `uint64`，上界 `max_conns × max_sessions`）
+- 该 `client_id` 从未对这个会话发过输入时 `in_ack = 0`，此时 client 侧的 `in_seq_next` 也必然是 0，两侧天然对齐
+- 若按连接记账，重连后 `in_ack` 归零而 client 的 `pending` 仍从旧 `seq` 起，agent 会判 `seq > in_ack` → `input_gap` → 关连接 → 无限重连。**断线期间的输入不丢**（US-2.2）整条就废了
 
 ### 5.4 心跳与超时
 
@@ -382,11 +398,16 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 
 `ping`/`pong` 不影响 `out_seq`/`in_seq`。
 
-### 5.5 慢客户端策略
+### 5.5 有界队列策略（读写两侧）
 
-每条连接的写队列有界（默认 4 MiB）。**队列满时 agent 关闭该连接，而不是阻塞会话。**
+| 队列 | 上限 | 满了怎么办 |
+|---|---|---|
+| 连接写队列（输出 → client） | 4 MiB，`--conn-queue-bytes` | 关闭该连接 |
+| 会话输入队列（client → PTY） | 256 KiB | 回 `error{code:"input_stalled", sid}` 并关闭该连接 |
 
-理由：阻塞写会反压到 `PTY.Read()`，进而卡住 shell —— 一个慢客户端不能拖慢服务器上真正在跑的活。被关掉的客户端会自动重连并走续传，只要没落后超过 `ring_bytes` 就无损。
+**两侧都绝不阻塞。** 写侧阻塞会反压到 `PTY.Read()` 卡住 shell —— 一个慢客户端不能拖慢服务器上真正在跑的活。读侧阻塞更糟：**一条 WebSocket 复用所有会话**，一个不读 stdin 的前台程序（`sleep`、某些 TUI）会把 PTY 输入缓冲填满，进而卡住整条连接的读循环 —— ping/pong、`resize`、`session.create`、其它会话的输入全停。
+
+关连接是无损的：client 自动重连走续传，输出只要没落后超过 `ring_bytes`、输入按 `in_ack`（§5.3）重发即可。
 
 ---
 
@@ -409,14 +430,14 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 - 会话创建时为 `pending`
 - 收到 `OSC 1701;hello` → `active`
 - 10 秒内未收到 → `inactive`，并发 `session.updated{integration:"inactive"}`
-- 从 `active` 变回 `inactive` 也要上报（如用户 `exec zsh`）：连续 2 个命令周期缺失 OSC 133 标记则判定失效
+- `active` → `inactive`（如用户 `exec zsh`）：**距上一个 OSC 133 标记超过 5 分钟**。这是个宽松启发（用户可能只是没敲命令），所以误判代价必须低 —— 只影响降级提示与自动切换，不影响终端可用性。再收到 133 标记立即转回 `active`
 
 ### 6.3 节流规则汇总
 
 | 消息 | 节流 |
 |---|---|
 | `ack` | 每会话最多 50ms 一条，取最新累计值 |
-| `session.updated{unread:true}` | 每会话最多 1s 一条（未读是布尔量，重复无意义） |
+| `session.updated{head_seq}` | 每会话最多 1s 一条（client 只用它判未读，中间值无害） |
 | `cwd` | 仅在路径实际变化时发送 |
 | `resize`（client 侧） | 100ms 防抖 |
 
@@ -431,6 +452,7 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 | `bad_frame` | 帧格式非法（长度不足、payload 为空、JSON 解析失败） | 是 |
 | `frame_too_large` | 超过 `max_frame_bytes` | 是 |
 | `input_gap` | INPUT 帧的 `seq` 大于 `in_ack`，出现空洞 | 是 |
+| `input_stalled` | 会话输入队列满（PTY 长时间写不进去，§5.5） | 是 |
 | `unauthorized` | 设备已被吊销 | 是（先发 `notice`） |
 | `unknown_session` | `sid` 不存在 | 否 |
 | `session_exited` | 向已退出的会话写输入 | 否 |
@@ -458,9 +480,14 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
   "binary_frames": [
     {
       "name": "output_basic",
-      "hex": "0100000100000000000000e8" ,
-      "decoded": { "type": "OUTPUT", "flags": 0, "sid": 1, "seq": 232, "payload_hex": "" },
-      "note": "头部单独校验，payload 另测"
+      "hex": "0100000100000000000000e86869",
+      "decoded": { "type": "OUTPUT", "flags": 0, "sid": 1, "seq": 232, "payload_hex": "6869" }
+    },
+    {
+      "name": "output_attr_prefix",
+      "hex": "0101000100000000000000e81b5b306d6869",
+      "decoded": { "type": "OUTPUT", "flags": 1, "sid": 1, "seq": 232, "payload_hex": "1b5b306d6869" },
+      "note": "flags bit0：前 4 字节 ESC[0m 不计入 seq，data_len == 2"
     }
   ],
   "control_messages": [

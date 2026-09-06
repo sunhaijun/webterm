@@ -14,12 +14,12 @@ type Session = {
   exitCode: number | null
   cols: number; rows: number
   integration: 'pending' | 'active' | 'inactive'
-  unread: boolean
   createdAt: number
 
   // 本地状态，不来自服务端
   term: Terminal            // xterm 实例，切走时不销毁
   outSeq: number            // 已接收的累计输出字节数
+  headSeq: number           // agent 侧该会话的累计产出字节数（未读 = headSeq > outSeq）
   inSeqNext: number         // 下一个要分配的输入序号
   pending: PendingInput[]   // 未 ack 的输入
   inputMode: { mode: 'composer' | 'raw'; locked: boolean }
@@ -40,7 +40,7 @@ type Session = {
   1. unsubscribe(当前会话)
   2. subscribe(X, out_seq: X.outSeq)
   3. 挂载 X.term 的 DOM
-  4. X.unread = false
+  4. （未读随 outSeq 追上 headSeq 自动消失）
   5. fit() → resize(X)
 ```
 
@@ -56,9 +56,9 @@ type Session = {
 
 ## 未读标记（AC-4.3）
 
-- agent 对未订阅会话产生输出时发 `session.updated{unread:true}`（每会话最多 1s 一条）
-- client 在会话列表/卡片/细条上显示未读点
-- 切换到该会话时清除
+- **未读是 client 推导出来的，不是服务端状态**：`unread = headSeq > outSeq`
+- agent 对未订阅会话产生输出时发 `session.updated{head_seq}`（每会话最多 1s 一条）
+- 之所以不让服务端存一个 `unread` 布尔量：未读天然是 per-client 的，两个标签页会互相清对方的未读
 - **`exited` 状态也算一种"需要注意"**：会话退出时（尤其非零退出码）显示带退出码的标记，用不同颜色区分于普通未读
 
 ## 自动命名（AC-4.4）

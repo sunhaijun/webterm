@@ -49,7 +49,7 @@ TLS 代码路径只有两条：
 - 证书缓存目录 `~/.local/share/webterm/certs`，权限 `0700`
 - `:80` 除了 ACME 的 `/.well-known/acme-challenge/` 之外，一律 301 到 HTTPS
 - HSTS：`Strict-Transport-Security: max-age=31536000`（`--dev` 下不发）
-- **失败时给人看得懂的错误**（AC-7.2）。至少覆盖这几种：
+- **失败时给人看得懂的错误**（US-7.2 / AC-1.13）。至少覆盖这几种：
   - 80 端口被占用 → 提示查 `ss -lntp`，说明 HTTP-01 挑战需要 80
   - DNS 未指向本机 → 打印解析结果与本机公网 IP 的对比
   - Let's Encrypt 限流 → 说明限流窗口，建议先用 `--acme-staging` 调通

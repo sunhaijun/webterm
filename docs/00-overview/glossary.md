@@ -21,11 +21,13 @@
 | **ring buffer（环形缓冲）** | 每个会话在内存里保留的最近 N 字节输出，用于断线后的增量回放。只在内存，不落盘。 |
 | **out_seq** | 输出序列号 = **agent 已发给 client 的累计字节数**（该会话）。不是消息计数。剥离 OSC 之后再计数。 |
 | **in_seq** | 输入序列号 = **client 已发给 agent 的累计字节数**（该会话）。 |
-| **in_ack** | agent 已经真正写进 PTY 的累计输入字节数。client 靠它决定重发队列裁到哪里。 |
-| **base_seq** | 环形缓冲当前保留内容的起始 `out_seq`。client 的 `last_seq < base_seq` 时说明缓冲已覆盖，触发 reset。 |
+| **in_ack** | agent 已经真正写进 PTY 的累计输入字节数。按 `(client_id, sid)` 记账、跨重连存活。client 靠它决定重发队列裁到哪里。 |
+| **base_seq** | 环形缓冲当前保留内容的起始 `out_seq`。client 的 `out_seq < base_seq` 时说明缓冲已覆盖，触发 reset。 |
 | **resume（续传）** | 重连时 client 上报各会话的 `out_seq` / `in_seq`，agent 只回放缺失的增量。 |
 | **reset（重置）** | 断开太久、缓冲被覆盖，无法续传。client 清屏，agent 把缓冲里现存的全部内容重发。 |
 | **subscribe（订阅）** | client 只对**当前可见**的会话订阅实时输出。未订阅的会话在 agent 侧照常运行和缓冲，切回去时走 resume 补齐。 |
+| **client_id** | 一个浏览器标签页的身份，存 `sessionStorage`，跨重连稳定。输入记账的 key。 |
+| **instance_id** | agent 进程本次启动的随机 id。用来识别"agent 重启过"，因为 `sid` 重启后会被重新分配。 |
 
 ## 输入
 

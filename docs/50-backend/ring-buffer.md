@@ -56,13 +56,14 @@ func (b *Buffer) HeadSeq() uint64   // 累计追加的总字节数
 
 ## 回放的属性修正
 
-`Slice` 返回 `StatusReset` 或 `from > BaseSeq` 时，回放起点可能落在一段有颜色/属性设置的中间，导致后续文本继承了错误的属性。
+**只在 `Slice` 返回 `StatusReset` 时**：前面的字节已被裁掉，回放起点可能落在一段颜色/属性设置的中间，后续文本会继承错误的属性。修正是在数据前插入 `ESC [ 0 m`（SGR reset，4 字节），承载它的 OUTPUT 帧置 `flags` bit0（协议 §3）。
 
-**修正**：agent 在发送回放数据前，先发一个 `ESC [ 0 m`（SGR reset，4 字节）。
+**两条都必须做对，各自都是永久性错位的来源**：
 
-**这 4 个字节不计入 `out_seq`。** 它是渲染修正，不是流内容。实现上：`Push` 一个特殊标记让连接层在数据前插入这 4 字节，但 seq 记账只按 `data` 长度走。
+1. **`StatusOK` 绝不能插。** 增量续传时客户端的终端状态是完整的，插入 SGR reset 会把断点处生效中的属性清掉 —— AC-2.1 的字节级比较会在"断点恰好落在着色区间内"时失败（偶发，很难查）
+2. **这 4 个字节不计入 `out_seq`。** 它是渲染修正，不是流内容。实现上：`Push` 一个特殊标记让连接层插入这 4 字节并置 `flags` bit0，seq 记账只按 `data` 长度走。若计入 seq，两侧会永久错开 4 字节
 
-如果搞错了（把它计入 seq），客户端和服务端的 seq 会永久错开 4 字节，之后所有续传都会错位。**这一条必须有单测**（UT-ring-4）。
+**这两条都必须有单测**（UT-ring-4）。
 
 ## 已知限制（已接受）
 
@@ -100,7 +101,7 @@ type Buffer struct {
 | UT-ring-1 | 顺序 Append 后 `Slice(k)` 对每个 `k ∈ [0, Head]` 长度都等于 `Head - k` |
 | UT-ring-2 | 超容后 `Slice(0)` 返回 `StatusReset` 且内容 == 末尾 capacity 字节 |
 | UT-ring-3 | 裁剪优先落在 `\n` 之后；无换行时硬裁；64 KiB 窗口生效 |
-| UT-ring-4 | SGR reset 前缀不计入 seq（Append/Slice 前后 `HeadSeq` 不变） |
+| UT-ring-4 | SGR reset 前缀：只在 `StatusReset` 时产生，且不计入 seq（`HeadSeq` 不变） |
 | UT-ring-5 | 环绕（`start + n > capacity`）时 `Slice` 拼接正确 |
 | UT-ring-6 | 单次 Append 超过 capacity：只留末尾，`HeadSeq` 加满 |
 | UT-ring-7 | `Slice(HeadSeq())` 返回空 + OK；`Slice(HeadSeq()+1)` 返回 nil + OK |

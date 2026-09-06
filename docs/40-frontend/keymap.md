@@ -32,13 +32,11 @@ Raw 模式下**所有按键都要能进 PTY**。所以应用级快捷键必须�
 | `Ctrl+Shift+↑` / `↓` | 上一个 / 下一个会话 |
 | `Ctrl+Shift+M` | 手动切换输入模式（并锁定） |
 | `Ctrl+Shift+B` | 折叠/展开侧栏（desktop）/ 开关抽屉（tablet） |
-| `Ctrl+Shift+P` | 打开快捷命令面板 |
-| `Ctrl+Shift+H` | 打开历史面板 |
 | `Ctrl+Shift+,` | 设置 |
 
-**注意 `Ctrl+Shift+W`**：浏览器里是"关闭窗口"。在 PWA standalone 模式下可拦截；普通标签页里会被浏览器抢走。这是已知妥协 —— PWA 是推荐的使用方式，命令面板里也有"关闭会话"作为备用路径。
+**被浏览器强占、不能用的组合**：`Ctrl+Shift+T/N`（新标签页/新窗口）、`Ctrl+Shift+P`（Firefox 隐私窗口）、`Ctrl+Shift+H`（Firefox 历史库）。快捷命令面板和历史面板因此**不设快捷键** —— `Ctrl/Cmd+K` 本来就是它们的总入口，这正是"只留极少快捷键"的意义。
 
-不用 `Ctrl+Shift+T/N`（浏览器强占，无法拦截）。
+**`Ctrl+Shift+W` 是已知妥协**：浏览器里是"关闭窗口"，PWA standalone 下可拦截，普通标签页里抢不过。PWA 是推荐用法，命令面板里也有"关闭会话"作为备用路径。
 
 ## Composer 模式键位
 

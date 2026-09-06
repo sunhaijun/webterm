@@ -8,7 +8,8 @@
 |---|---|
 | `SessionManager` | `sid` 分配、会话表、上限控制、生命周期编排 |
 | `Session` | 一个 PTY + 一个环形缓冲 + 订阅者集合 + OSC 状态机 |
-| `Conn` | 一条 WebSocket 连接。持有它对各会话的订阅与 `in_ack` |
+| `Conn` | 一条 WebSocket 连接。持有它对各会话的订阅 |
+| `inputState` | `(client_id, sid) → in_ack`。**挂在 Session 上而不是 Conn 上**，跨重连存活（协议 §5.3） |
 
 **`Session` 不知道 WebSocket 的存在** —— 它只有一个"订阅者"接口。这让会话逻辑可以在没有网络的情况下单测（IT-session-*）。
 
@@ -55,7 +56,9 @@ type Session struct {
     curCmdID *int64            // 进行中的 commands 行主键
     curCmdAt time.Time
 
-    inputCh  chan []byte      // 有界，容量 64，满则阻塞发送方（写侧背压）
+    inputCh  chan input       // input = {clientID string; data []byte}
+                              // 有界 256 KiB，满则关连接（绝不阻塞，见下）
+    inAck    map[string]uint64 // client_id → 已写入 PTY 的累计字节数（跨重连存活）
     done     chan struct{}
 }
 ```
@@ -63,6 +66,7 @@ type Session struct {
 ### 锁的规则
 
 - **`ring` 的内容与它的 seq 必须在同一把锁下更新。** 否则续传会算错切片位置 —— 这是最容易出错的地方。
+- **`subscribe` 的「取切片 + 加入订阅者集合」必须在同一把锁下完成。** 分开做的话，中间到达的一批输出要么被推送和切片各发一遍（重复），要么两边都漏（空洞）—— 而协议 §3 规定客户端遇到空洞**直接关连接**。
 - `Session.mu` 是读写锁：`readLoop` 写（append），订阅者列表读多写少。
 - **不要在持有 `Session.mu` 时调用 `Subscriber.Push`。** 先在锁内拷出订阅者列表和数据切片，出锁再推。否则一个慢订阅者会卡住 PTY 读取。
 
@@ -71,6 +75,8 @@ type Session struct {
 `uint16` 递增，跳过仍在使用的值，回绕后从 1 重新找空位（0 保留为无效值）。
 
 **不复用刚释放的 sid**（至少隔一轮回绕），避免"客户端还没处理完 sid=3 的关闭，新会话又叫 sid=3"这类竞态。
+
+进程内的这个保证跨不过重启 —— 重启后 `sid` 从头分配，老客户端手里的 `sid` 可能指向一个毫不相干的新会话。所以 `SessionManager` 启动时生成一个随机 `instance_id`，放进 `welcome`；`hello` 里带的 `instance_id` 不符时，所有 `resume` 项一律判 `gone`（协议 §5.2）。
 
 ## 三个 goroutine
 
@@ -99,14 +105,18 @@ for {
 ### `writeLoop`
 
 ```
-for data := range inputCh {
-    n, err := ptmx.Write(data)
+for item := range inputCh {                    // item = {clientID, data}
+    n, err := ptmx.Write(item.data)
     if err != nil { break }
-    conn.addAck(sid, n)                // in_ack += n，节流后发 ack
+    session.addAck(item.clientID, sid, n)      // in_ack += n，节流后发 ack
 }
 ```
 
-`inputCh` 有界（容量 64）。满时阻塞发送方 —— 这是**期望行为**：输入是用户驱动的低频事件，如果 PTY 写不进去（shell 卡住），背压到客户端比丢输入正确。
+`inputCh` 有界（256 KiB）。**入队必须是非阻塞的**：满了就回 `error{code:"input_stalled", sid}` 并关闭那条连接（协议 §5.5）。
+
+**绝不能阻塞发送方** —— 发送方是 `Conn` 的读 goroutine，而一条 WebSocket 复用所有会话。一个不读 stdin 的前台程序（`sleep 1000`、某些 TUI）把 PTY 输入缓冲填满，就会顺着 `ptmx.Write` → `writeLoop` → `inputCh` 一路把整条连接的读循环卡死：ping/pong、`resize`、`session.create`、**其它会话的输入**全停，60 秒后 agent 还会把这条本来健康的连接判死。
+
+关连接是无损的：client 重连后按 `in_ack` 重发（协议 §5.3）。
 
 ### `waitLoop`
 
@@ -185,24 +195,28 @@ func (s *Session) displayName() string {
 ```
 pending ──收到 OSC 1701;hello──> active
 pending ──10 秒超时──────────> inactive
-active  ──连续 2 个命令周期没有 133 标记──> inactive
+active  ──距上一个 133 标记超过 5 分钟──> inactive ──收到 133 标记──> active
 ```
 
-"命令周期"的判定：收到 `prompt{state:"running"}`（即 `133;C`）算一个周期开始。如果在 `readLoop` 里观察到大量输出但从未见过 133 标记，无法可靠判定 —— 所以退化为一个简单启发：**从 `active` 转 `inactive` 只在检测到 `OSC 1701;hello` 之后又过了 5 分钟且期间零个 133 标记**。
+"距上一个 133 标记超过 5 分钟"是个刻意宽松的启发。想精确判定"集成失效了"是做不到的：`readLoop` 看到大量输出但没有 133 标记，既可能是 `exec zsh`，也可能只是用户在跑一条长命令。
 
-这个启发不完美（用户可能只是没敲命令），所以：**误判的代价必须低** —— `inactive` 只会让 UI 显示降级提示并停止自动切换模式，不影响终端可用性。如果后续又收到 133 标记，立即转回 `active`。
+所以：**误判的代价必须低** —— `inactive` 只会让 UI 显示降级提示并停止自动切换模式，不影响终端可用性。再收到 133 标记立即转回 `active`。
 
 ## 上限与资源
 
 | 项 | 默认 | 配置项 |
 |---|---|---|
 | 最大会话数 | 20 | `--max-sessions` |
+| 最大并发连接数 | 16 | `--max-conns` |
 | 每会话环形缓冲 | 1 MiB | `--ring-bytes` |
 | 每连接写队列 | 4 MiB | `--conn-queue-bytes` |
+| 每会话输入队列 | 256 KiB | 常量 |
 | 单帧上限 | 256 KiB | 协议常量，不可配 |
 | PTY 读缓冲 | 32 KiB | 常量 |
 
-20 会话 × 1 MiB = 20 MiB 环形缓冲，加上每会话一个 xterm 在客户端侧 —— 内存占用可控。
+内存上界 = 20 × 1 MiB（环形缓冲）+ 16 × 4 MiB（连接写队列）≈ 84 MiB。
+
+**连接数必须有上限**：协议 §1 允许同设备开任意多标签页，而每条连接挂着一个 4 MiB 的写队列。超出时握手阶段直接拒绝（`503`），不进入协议层。
 
 ## 优雅关闭（`SIGTERM`）
 

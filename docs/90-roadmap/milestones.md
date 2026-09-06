@@ -57,7 +57,7 @@ feat/<docs编号>-<主题>
 | 交付 | 对应文档 |
 |---|---|
 | HTTP 路由、认证中间件（**含 `/ws`**） | [auth-pairing.md](../60-security/auth-pairing.md) |
-| 配对码 + 二维码 + 设备管理 REST | 同上 |
+| 配对码 + 二维码 + 设备管理 REST | 同上 + [http-api.md](../30-protocol/http-api.md) |
 | WebSocket 连接层（订阅、seq 记账、慢客户端保护） | [websocket-protocol.md](../30-protocol/websocket-protocol.md) |
 | autocert TLS + `--dev` | [ADR-0004](../20-architecture/adr/0004-acme-only-tls.md) |
 | `webterm doctor` / `pair` / `devices` / `version` | [install.md](../80-ops/install.md) |
@@ -152,6 +152,7 @@ feat/<docs编号>-<主题>
 
 | 交付 | 对应文档 |
 |---|---|
+| `/api/commands*` 与 `/api/settings` | [http-api.md](../30-protocol/http-api.md) |
 | 历史面板（搜索、过滤、分组、退出码显示） | [commands-ux.md](../40-frontend/commands-ux.md#历史面板) |
 | 置顶（☆）→ 快捷命令；label、拖动排序 | 同上 |
 | 移动端快捷命令条 | 同上 |
