@@ -44,9 +44,11 @@ feat/<docs编号>-<主题>
 | `internal/session`（Session / SessionManager / 真 PTY） | [session-manager.md](../50-backend/session-manager.md) |
 | `internal/store` + 迁移 | [storage-schema.md](../50-backend/storage-schema.md) |
 
-**测试**：`UT-ring-1..9`、`UT-osc-1..9`、协议编解码、`UT-store-1..4`、`IT-session-1..5`、`IT-resume-1..3`
+**测试**：`UT-ring-1..9`、`UT-osc-1..9`、协议编解码 + 测试向量、`UT-store-1..4`、`IT-session-1..5`、`IT-resume-1..4`、`IT-queue-1`
 
 **出口标准**：`IT-resume-*` 通过 —— **在没有浏览器的情况下证明续传逻辑是对的**。这是整个项目风险最高的部分，先用最便宜的测试手段打穿它。
+
+配套一条无浏览器版的字节级连续性测试（`TestByteLevelContinuity`）：同一段确定性输出跑两遍，第二遍中途断开重连若干次，断言两次收到的字节流完全一致。E2E-2 会在真浏览器 + xterm 序列化的层面再测一遍。
 
 ---
 

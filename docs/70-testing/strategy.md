@@ -108,7 +108,8 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 | `IT-embed-1` | 删掉 `web/dist` 后二进制仍能提供前端（证明真的嵌入了） |
 | `IT-resize-1` | `resize` 消息导致 PTY 的 `TIOCSWINSZ` 生效（在会话内跑 `stty size` 验证） |
 | `IT-hb-1` | 60 秒无帧的连接被关闭 |
-| `IT-queue-1..2` | 会话输入队列满 → `input_stalled` 关连接；连接写队列满 → 关连接。两种情况下其它会话的 PTY 都不受影响 |
+| `IT-queue-1` | 会话输入队列满 → `input_stalled`，入队非阻塞，其它会话不受影响（m1） |
+| `IT-queue-2` | 连接写队列满 → 关闭该连接而不是阻塞 Session（m2，需要连接层） |
 | `IT-sub-1` | 未订阅会话继续缓冲，`subscribe{out_seq}` 补齐正确 |
 
 **shell 集成测试需要真 bash。** CI 里确保有 bash 4.4+；测试跑一个受控的 `.bashrc`（通过 `HOME` 指向临时目录）以获得确定性。

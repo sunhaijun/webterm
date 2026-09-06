@@ -162,13 +162,13 @@ bash --version
 
 ### 会话里的程序在关闭会话后还在跑
 
-不应该发生 —— 我们杀的是整个进程组（`kill(-pgid)`）。如果发生了：
+不应该发生 —— 关闭时先让 bash 把 SIGHUP 转发给所有作业，兜底再按会话清扫一遍（[session-manager.md](../50-backend/session-manager.md#关闭)）。如果发生了：
 
 ```bash
-ps -eo pid,pgid,ppid,cmd | grep <进程名>
+ps -eo pid,pgid,sid,ppid,cmd | grep <进程名>
 ```
 
-带 `nohup` / `setsid` / `systemd-run` 启动的进程会脱离进程组，那是用户主动的行为，符合预期。其它情况请报 bug。
+看 `sid`：如果它和别的进程不在同一个会话里，说明它主动 `setsid` 脱离了。带 `nohup` / `setsid` / `systemd-run` 启动的进程就是这样，那是用户主动的行为，符合预期。其它情况请报 bug。
 
 ---
 

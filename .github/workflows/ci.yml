@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    name: Go 单测与集成测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      # shell 集成测试需要真 bash（m5 起）
+      - run: bash --version
+      - run: go vet ./...
+      - run: go test ./... -count=1 -timeout 10m
+      - name: 竞态检测
+        run: go test ./... -race -count=1 -timeout 15m
+
+  static:
+    name: 单二进制（AC-8.1）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      # 不变式 1：不引入 cgo，GOOS=linux GOARCH=amd64 go build 必须直接出货
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o webterm ./cmd/webterm
+      - name: 断言不是动态可执行文件
+        run: ldd webterm 2>&1 | grep -q 'not a dynamic executable'
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./...
+
+  fmt:
+    name: 格式
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "以下文件未格式化:"; echo "$out"; exit 1; fi
+
+  docs:
+    name: 文档链接
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # docs/ 是唯一事实来源，坏链等于文档腐烂
+      - run: python3 scripts/check-doc-links.py

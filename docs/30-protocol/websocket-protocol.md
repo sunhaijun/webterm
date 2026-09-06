@@ -98,10 +98,16 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 ### INPUT 帧（client → agent）
 
 - client 分配 `in_seq` 并写入本地重发队列
-- agent 校验（`in_ack` 属于 `(client_id, sid)`，不属于连接，见 §5.3）：
-  - `seq == in_ack` → 正常，写 PTY
-  - `seq < in_ack` → 重发的已处理数据，**丢弃前 `in_ack - seq` 字节**，写入剩余部分（重连时的正常情况）
-  - `seq > in_ack` → 空洞 → `error{code:"input_gap"}` 并关闭连接
+- agent 校验（记账属于 `(client_id, sid)`，不属于连接，见 §5.3）。设 `accepted`
+  为 agent 已接受入队的累计字节数：
+  - `seq == accepted` → 正常，入队待写 PTY
+  - `seq < accepted` → 重发的已处理数据，**丢弃前 `accepted - seq` 字节**，接受剩余部分（重连时的正常情况）
+  - `seq > accepted` → 空洞 → `error{code:"input_gap"}` 并关闭连接
+
+  **校验用的是 `accepted` 而不是 `in_ack`。** 两者不同：`in_ack` 是已经真正
+  写进 PTY 的字节数，它滞后于入队。拿 `in_ack` 做校验的话，客户端连着发两帧
+  时第二帧就会被误判成空洞 —— PTY 还没来得及消费第一帧。`in_ack` 只用于
+  `ack` 与重连后的重发起点。
 - 会话状态为 `exited` 时收到 INPUT → 丢弃并回 `error{code:"session_exited", sid}`，不关闭连接
 
 ---
@@ -386,6 +392,11 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 - agent 为每个 `(client_id, sid)` 维护 `in_ack`，**保留到会话销毁为止**（一个 `uint64`，上界 `max_conns × max_sessions`）
 - 该 `client_id` 从未对这个会话发过输入时 `in_ack = 0`，此时 client 侧的 `in_seq_next` 也必然是 0，两侧天然对齐
 - 若按连接记账，重连后 `in_ack` 归零而 client 的 `pending` 仍从旧 `seq` 起，agent 会判 `seq > in_ack` → `input_gap` → 关连接 → 无限重连。**断线期间的输入不丢**（US-2.2）整条就废了
+
+**连接断开时，agent 必须丢弃该 `client_id` 已入队但尚未写入 PTY 的输入**，并把
+`accepted` 回退到 `in_ack`。这些字节从未被 ack，client 仍持在 `pending` 里，
+重连后会重发；不丢的话它们会被写进 PTY 一次、重发时再写一次。回退之后
+`accepted == in_ack`，client 按 `in_ack` 重发就精确对齐。
 
 ### 5.4 心跳与超时
 
