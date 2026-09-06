@@ -166,6 +166,29 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("超时等待：%s", what)
 }
 
+// waitQuiet 等会话的输出停止推进。
+//
+// 做字节级比较时不能只等某个标记出现就收工 —— 标记之后还有内容（比如
+// 下一个 prompt），两轮跑到哪一刻收手是随机的，比出来的差异是采样点不同
+// 而不是续传出错。等静默能给两轮一个确定的截止点。
+func waitQuiet(t *testing.T, s *session.Session, quiet time.Duration) {
+	t.Helper()
+	last := s.HeadSeq()
+	stableSince := time.Now()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		if h := s.HeadSeq(); h != last {
+			last, stableSince = h, time.Now()
+			continue
+		}
+		if time.Since(stableSince) >= quiet {
+			return
+		}
+	}
+	t.Fatal("超时等待：输出静默")
+}
+
 // waitScreen 等屏幕内容包含 sub。
 func waitScreen(t *testing.T, c *fakeConn, sub string) {
 	t.Helper()

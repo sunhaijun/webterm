@@ -168,10 +168,46 @@ func TestITSession5_CloseKillsProcessGroup(t *testing.T) {
 	if _, err := m.Close(s.SID()); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "子进程被回收", func() bool {
-		// 进程组被杀之后，sleep 应该没了
-		return syscallKillZero(pid) != nil
+	waitFor(t, "后台作业被回收", func() bool { return !processAlive(pid) })
+}
+
+// 忽略 SIGHUP 的后台作业也必须被清掉 —— 这条走的是 SIGKILL 兜底路径。
+//
+// 交互式 bash 开着 job control，后台作业在【自己的】进程组里，kill(-pgid)
+// 根本打不到它。优雅路径靠 bash 转发 SIGHUP；作业把 SIGHUP 屏蔽了的话，
+// 只剩按会话清扫这一条路。
+func TestCloseKillsHupImmuneJob(t *testing.T) {
+	m := newManager(t, cfg())
+	s := create(t, m)
+	c := newConn(t, "tab")
+	s.Subscribe(c, 0)
+
+	marker := t.TempDir() + "/child.pid"
+	script := fmt.Sprintf(
+		`bash -c 'trap "" HUP; echo $$ > %s; sleep 300' & printf 'SPAWN-%%s
+' OK`+"", marker)
+	if err := c.Send(s, script); err != nil {
+		t.Fatal(err)
+	}
+	waitScreen(t, c, "SPAWN-OK")
+
+	var pid int
+	waitFor(t, "子进程 pid 落盘", func() bool {
+		b, err := os.ReadFile(marker)
+		if err != nil {
+			return false
+		}
+		_, err = fmt.Sscanf(strings.TrimSpace(string(b)), "%d", &pid)
+		return err == nil && pid > 0
 	})
+	if !processAlive(pid) {
+		t.Fatal("测试前提不成立：子进程还没起来")
+	}
+
+	if _, err := m.Close(s.SID()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "屏蔽 SIGHUP 的作业也被杀掉", func() bool { return !processAlive(pid) })
 }
 
 // 关闭 exited 会话不需要走信号流程，且必须是幂等的。

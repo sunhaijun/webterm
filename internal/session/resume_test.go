@@ -3,6 +3,7 @@ package session_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/session"
@@ -64,14 +65,19 @@ func TestITResume2_IncrementalReplay(t *testing.T) {
 	c := newConn(t, "tab")
 	s.Subscribe(c, 0)
 
-	if err := c.Send(s, "echo marker-one\r"); err != nil {
+	// 标记必须【只出现在输出里】—— 直接写 "echo ONE-MARK" 的话，被回显的
+	// 命令行本身就含这个串，断点会落在命令刚敲完、输出还没出来的位置。
+	if err := c.Send(s, `printf 'ONE-%s\n' MARK`+"\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitScreen(t, c, "marker-one")
+	waitScreen(t, c, "ONE-MARK")
+	waitQuiet(t, s, 200*time.Millisecond) // 断点取在第一段输出彻底结束之后
 
+	c.Detach() // 断线之后到达的字节应当石沉大海，否则断点会被竞态污染
 	at := c.OutSeq()
 	s.Unsubscribe(c)
-	if err := c.Send(s, "echo marker-two\r"); err != nil {
+
+	if err := c.Send(s, `printf 'TWO-%s\n' MARK`+"\r"); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "第二段输出产生", func() bool { return s.HeadSeq() > at })
@@ -79,9 +85,9 @@ func TestITResume2_IncrementalReplay(t *testing.T) {
 	// 从断点续订：只应收到断点之后的内容
 	c2 := newConn(t, "tab")
 	s.Subscribe(c2, at)
-	waitScreen(t, c2, "marker-two")
+	waitScreen(t, c2, "TWO-MARK")
 
-	if strings.Contains(c2.Screen(), "marker-one") {
+	if strings.Contains(c2.Screen(), "ONE-MARK") {
 		t.Fatal("重发了客户端已经收到的字节 —— 续传应当是增量的")
 	}
 	if c2.Resets() != 0 {

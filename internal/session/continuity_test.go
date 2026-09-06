@@ -42,6 +42,7 @@ func TestByteLevelContinuity(t *testing.T) {
 			s.Subscribe(conn, at) // 重连续传
 		}
 		waitScreen(t, conn, "EMIT-DONE")
+		waitQuiet(t, s, 300*time.Millisecond) // 两轮用同一个截止点
 
 		if conn.Resets() != 0 {
 			t.Fatalf("走了 %d 次 reset —— 缓冲溢出了，这一轮的比较没有意义", conn.Resets())

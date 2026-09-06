@@ -183,15 +183,27 @@ os.Remove(rcPath)
 
 ```
 running:
-  1. syscall.Kill(-pgid, SIGHUP)     // 负 pgid：杀整个进程组
+  1. syscall.Kill(-pgid, SIGHUP)     // bash 收到后会把 SIGHUP 转发给它的所有作业
   2. select { <-done | <-time.After(2s) }
-  3. 超时 → syscall.Kill(-pgid, SIGKILL)
-  4. ptmx.Close()、删 rcfile、释放 ring、从表里摘除
+  3. 超时 → killSession(sid, SIGKILL) + syscall.Kill(-pgid, SIGKILL)
+  4. shell 退出后再 killSession(sid, SIGKILL) 扫一遍
+  5. ptmx.Close()、删 rcfile、释放 ring、从表里摘除
 exited:
-  直接执行 3–4
+  直接执行 5
 ```
 
-**必须杀进程组而不是单个进程**（`-pgid`），否则 shell 的子进程会变成孤儿继续跑。`pty.Start` 已经建立了新的会话与进程组（`setsid`）。
+**光靠 `kill(-pgid)` 是不够的。** 交互式 bash 开着 job control，**每个作业都在自己的进程组里** —— `sleep 300 &` 的 pgid 不等于 shell 的 pgid，给 shell 的进程组发信号只能打到 shell 自己。
+
+真正干活的是两条：
+
+| 路径 | 靠什么 |
+|---|---|
+| 优雅（绝大多数情况） | SIGHUP 打到 shell，**bash 自己把 SIGHUP 转发给所有作业** |
+| 兜底 | 按【会话】清扫：`pty.Start` 已 `setsid`，shell 的 sid == shell 的 pid，后代都继承它。扫 `/proc` 找 sid 相同的进程逐个 SIGKILL |
+
+兜底那条不能省：宽限期内没退干净时 bash 已经没机会转发了，作业会变成孤儿继续跑。屏蔽了 SIGHUP 的作业（`trap "" HUP`）也只有这条路能收拾。
+
+主动 `setsid` 脱离的进程（`nohup` / `setsid` / `systemd-run`）会逃掉 —— 那是用户明确的意图，符合预期。
 
 ## 自动命名（AC-4.4）
 

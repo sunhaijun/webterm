@@ -531,10 +531,14 @@ func (s *Session) checkIntegrationIdle(now time.Time) {
 
 // ---------- 关闭 ----------
 
-// close 结束会话：SIGHUP → 2 秒 → SIGKILL，杀的是整个进程组。
+// close 结束会话：SIGHUP → 2 秒 → SIGKILL。
 //
-// 必须杀进程组而不是单个进程，否则 shell 的子进程会变成孤儿继续跑。
-// pty.Start 已经建立了新的会话与进程组（setsid）。
+// 优雅路径是给 shell 的进程组发 SIGHUP，让 bash 自己把 SIGHUP 转发给它的
+// 所有作业 —— 交互式 shell 开着 job control，每个作业都在自己的进程组里，
+// 光靠 kill(-pgid) 打不到它们。
+//
+// 兜底路径（宽限期内没退干净）必须按【会话】清扫：那时 bash 已经没机会
+// 转发了，不扫的话作业会变成孤儿继续跑。见 killSession。
 func (s *Session) close() {
 	s.closeOnce.Do(func() {
 		if s.Status() == protocol.StatusRunning && s.cmd.Process != nil {
@@ -543,12 +547,16 @@ func (s *Session) close() {
 			select {
 			case <-s.done:
 			case <-time.After(killGrace):
+				killSession(pid, syscall.SIGKILL)
 				_ = syscall.Kill(-pid, syscall.SIGKILL)
 				select {
 				case <-s.done:
 				case <-time.After(killGrace):
 				}
 			}
+			// shell 退出后再扫一遍：它转发 SIGHUP 之后有作业没死（比如
+			// 忽略 SIGHUP 的程序）时，这是最后一道。
+			killSession(pid, syscall.SIGKILL)
 		}
 		s.ptmx.Close()
 		s.inputQ.close()
