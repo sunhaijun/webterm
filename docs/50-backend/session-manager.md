@@ -15,12 +15,22 @@
 
 ```go
 type Subscriber interface {
-    // 推送输出。实现方必须非阻塞（内部有界队列，满则自行断开）。
-    Push(sid uint16, seq uint64, data []byte)
-    // 控制事件（prompt 状态、cwd、命令生命周期）
-    Event(sid uint16, ev Event)
+    // ClientID 返回订阅者所属标签页的 id。输入记账按 (client_id, sid) 走，
+    // ack 只发给同一个 client。
+    ClientID() string
+
+    // Push 推送一段输出。data 是可安全持有的拷贝。
+    // attrPrefix 为 true 时连接层必须在 data 前插入 ESC[0m 并置 flags bit0 ——
+    // 那 4 个字节不计入 seq。只会在 reset 回放的第一帧上出现。
+    Push(sid uint16, seq uint64, data []byte, attrPrefix bool)
+
+    // Event 推送一条控制消息（*protocol.Prompt、*protocol.CWD、
+    // *protocol.CommandStart、*protocol.SessionUpdated…）。
+    Event(msg any)
 }
 ```
+
+两个方法**都必须非阻塞**（内部有界队列，满则自行断开）。
 
 ## 数据结构
 
@@ -56,17 +66,26 @@ type Session struct {
     curCmdID *int64            // 进行中的 commands 行主键
     curCmdAt time.Time
 
-    inputCh  chan input       // input = {clientID string; data []byte}
-                              // 有界 256 KiB，满则关连接（绝不阻塞，见下）
-    inAck    map[string]uint64 // client_id → 已写入 PTY 的累计字节数（跨重连存活）
+    inputQ   *inputQueue      // 有界 256 KiB，满则关连接（绝不阻塞，见下）
+    inQueued map[string]uint64 // client_id → 已【接受入队】的累计字节数
+    inAck    map[string]uint64 // client_id → 已【写入 PTY】的累计字节数
     done     chan struct{}
 }
 ```
 
+### `inQueued` 与 `inAck` 是两个数
+
+- `inQueued` 用于校验 INPUT 帧的 seq 连续性 —— 拿 `inAck` 校验的话，客户端
+  连着发两帧时第二帧会被误判成空洞（PTY 还没消费完第一帧）
+- `inAck` 用于 `ack` 消息与 `welcome.resumed[].in_ack`
+- 连接断开时 `DetachClient` 丢弃该 client 尚未写入 PTY 的入队数据，并把
+  `inQueued` 回退到 `inAck`，让重连后的重发精确对齐（协议 §5.3）
+- 两者都按 `client_id` 记账，**跨重连存活**，随会话销毁而释放
+
 ### 锁的规则
 
 - **`ring` 的内容与它的 seq 必须在同一把锁下更新。** 否则续传会算错切片位置 —— 这是最容易出错的地方。
-- **`subscribe` 的「取切片 + 加入订阅者集合」必须在同一把锁下完成。** 分开做的话，中间到达的一批输出要么被推送和切片各发一遍（重复），要么两边都漏（空洞）—— 而协议 §3 规定客户端遇到空洞**直接关连接**。
+- **`subscribe` 的「取切片 + 加入订阅者集合 + 推送补齐数据」三步必须在同一把锁下完成。** 前两步分开做，中间到达的一批输出要么被推送和切片各发一遍（重复），要么两边都漏（空洞）—— 而协议 §3 规定客户端遇到空洞**直接关连接**。补齐的那一次 `Push` 也必须在锁内，否则它可能排到后续实时 `Push` 的后面。这是下面那条"不要在锁内 Push"的唯一例外：它是一次性的，而 `Push` 按契约本就非阻塞。
 - `Session.mu` 是读写锁：`readLoop` 写（append），订阅者列表读多写少。
 - **不要在持有 `Session.mu` 时调用 `Subscriber.Push`。** 先在锁内拷出订阅者列表和数据切片，出锁再推。否则一个慢订阅者会卡住 PTY 读取。
 
