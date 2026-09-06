@@ -239,13 +239,25 @@ func (c *Conn) handleHello(h *protocol.Hello) error {
 
 	// welcome 之后立刻按 resume 结果补齐输出。
 	// 只订阅 client 明确要求续传的会话 —— 其余的它会在切过去时 subscribe。
+	want := make(map[uint16]uint64, len(h.Resume))
+	for _, req := range h.Resume {
+		want[req.SID] = req.OutSeq
+	}
 	for _, r := range resumed {
 		if r.Status == protocol.ResumeGone {
 			continue
 		}
-		if s, ok := c.deps.Sessions.Get(r.SID); ok {
-			c.subscribe(s, r.FromSeq)
+		s, ok := c.deps.Sessions.Get(r.SID)
+		if !ok {
+			continue
 		}
+		// 【传 client 原本要的位置，不是钳过的 from_seq】。
+		//
+		// 缓冲被覆盖时 from_seq 已经被钳到 base_seq 上，拿它去 Replay
+		// 会落进"正常增量"分支 —— 于是 ESC[0m 属性修正不发、flags 不置位，
+		// 客户端也就不知道该清屏，会把一段毫不相干的内容接到旧屏幕后面。
+		// 钳位是 ring 自己的事，它比谁都清楚要不要 reset。
+		c.subscribe(s, want[r.SID])
 	}
 	return nil
 }

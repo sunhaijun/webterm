@@ -28,6 +28,15 @@ func (a *Agent) staticHandler() http.Handler {
 	sub := webui.FS()
 	files := http.FileServerFS(sub)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !webui.Built() {
+			// 二进制里没带前端产物。安静地 404 会让人以为是路由坏了，
+			// 直说是构建少了一步。
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("这个二进制没有嵌入前端产物。\n" +
+				"构建顺序是：cd web && npm run build   然后再 go build\n"))
+			return
+		}
 		// SPA 回退：未知路径交给 index.html，由前端路由处理
 		p := r.URL.Path
 		if p != "/" {

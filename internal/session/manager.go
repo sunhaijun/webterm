@@ -65,8 +65,9 @@ type Manager struct {
 	nextSID   uint16
 	observers map[Subscriber]struct{}
 
-	janitorStop chan struct{}
-	janitorDone chan struct{}
+	janitorStop  chan struct{}
+	janitorDone  chan struct{}
+	shutdownOnce sync.Once
 
 	// historyOn 是 UI 开关的当前值，只在 cfg.History 为 true 时有意义。
 	// 用户在做敏感工作时可以一键静默，而不是事后清理。
@@ -395,8 +396,12 @@ func (m *Manager) Resume(clientID, instanceID string, reqs []protocol.ResumeReq)
 	return out
 }
 
-// Shutdown 关闭所有会话并停止巡检。
+// Shutdown 关闭所有会话并停止巡检。幂等 —— SIGTERM 处理和 defer 都会调它。
 func (m *Manager) Shutdown() {
+	m.shutdownOnce.Do(m.shutdown)
+}
+
+func (m *Manager) shutdown() {
 	close(m.janitorStop)
 	<-m.janitorDone
 	m.mu.Lock()

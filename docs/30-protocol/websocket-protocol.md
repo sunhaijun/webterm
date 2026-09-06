@@ -492,23 +492,32 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
     {
       "name": "output_basic",
       "hex": "0100000100000000000000e86869",
-      "decoded": { "type": "OUTPUT", "flags": 0, "sid": 1, "seq": 232, "payload_hex": "6869" }
+      "decoded": { "type": 1, "flags": 0, "sid": 1, "seq": "232", "payload_hex": "6869" },
+      "data_len": 2
     },
     {
       "name": "output_attr_prefix",
       "hex": "0101000100000000000000e81b5b306d6869",
-      "decoded": { "type": "OUTPUT", "flags": 1, "sid": 1, "seq": 232, "payload_hex": "1b5b306d6869" },
+      "decoded": { "type": 1, "flags": 1, "sid": 1, "seq": "232", "payload_hex": "1b5b306d6869" },
+      "data_len": 2,
       "note": "flags bit0：前 4 字节 ESC[0m 不计入 seq，data_len == 2"
     }
+  ],
+  "invalid_frames": [
+    { "name": "too_short_header", "hex": "010000010000", "expect_error": "bad_frame" },
+    { "name": "header_only_empty_payload", "hex": "0100000100000000000000e8", "expect_error": "bad_frame" }
   ],
   "control_messages": [
     { "name": "hello_first_connect", "json": { "t": "hello", "protocol": 1, "client_id": "x", "resume": [] } }
   ],
-  "invalid_frames": [
-    { "name": "too_short", "hex": "010000010000", "expect_error": "bad_frame" },
-    { "name": "empty_payload", "hex": "0100000100000000000000e8", "expect_error": "bad_frame" }
+  "unknown_messages": [
+    { "name": "future_type", "json": { "t": "session.split", "sid": 1 }, "note": "接收方必须忽略，不能关连接" }
   ]
 }
 ```
+
+**`seq` 在 fixture 里是字符串。** 它是 `uint64`，而 JS 的 `JSON.parse` 会把超过 2^53 的整数变成浮点丢精度 —— 一份要给两侧共用的 fixture 不能有一边读不准。Go 侧用 `strconv.ParseUint`，TS 侧用 `BigInt(string)`。
+
+`unknown_messages` 用来钉住前向兼容：两侧都必须【忽略】不认识的 `t` 值，而不是当成错误。
 
 必测项见 [`../70-testing/strategy.md`](../70-testing/strategy.md)。最关键的一条是 **AC-2.1 字节级连续性**。

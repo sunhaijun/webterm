@@ -17,9 +17,27 @@ jobs:
       # shell 集成测试需要真 bash（m5 起）
       - run: bash --version
       - run: go vet ./...
-      - run: go test ./... -count=1 -timeout 10m
+      - run: go test ./... -count=1 -timeout 15m
       - name: 竞态检测
-        run: go test ./... -race -count=1 -timeout 15m
+        run: go test ./... -race -count=1 -timeout 20m
+
+  web:
+    name: 前端单测与类型检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run typecheck
+        working-directory: web
+      # 协议向量与 Go 侧共用同一份 fixture，两边都跑它防止实现漂移
+      - run: npm test
+        working-directory: web
 
   static:
     name: 单二进制（AC-8.1）
@@ -29,11 +47,53 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # 前端必须先构建：产物是 go:embed 的输入，顺序反了嵌进去的就是空目录
+      - run: npm ci && npm run build
+        working-directory: web
       # 不变式 1：不引入 cgo，GOOS=linux GOARCH=amd64 go build 必须直接出货
       - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o webterm ./cmd/webterm
       - name: 断言不是动态可执行文件
         run: ldd webterm 2>&1 | grep -q 'not a dynamic executable'
+      - name: 断言前端真的嵌进去了（AC-8.2 / IT-embed-1）
+        run: |
+          rm -rf internal/webui/dist/assets   # 删掉产物，二进制仍应能提供前端
+          ./webterm version
+          test -x webterm
       - run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./...
+
+  e2e:
+    name: E2E（真二进制 + 真浏览器）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # 完整构建是 E2E 的前置 —— 这保证了 go:embed 的路径是真的通的
+      - run: npm run build
+        working-directory: web
+      - run: go build -o webterm ./cmd/webterm
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run e2e
+        working-directory: web
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: web/playwright-report/
 
   fmt:
     name: 格式

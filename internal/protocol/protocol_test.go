@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/sunhaijun/webterm/internal/protocol"
@@ -15,10 +16,12 @@ type vectors struct {
 		Name    string `json:"name"`
 		Hex     string `json:"hex"`
 		Decoded struct {
-			Type       uint8  `json:"type"`
-			Flags      uint8  `json:"flags"`
-			SID        uint16 `json:"sid"`
-			Seq        uint64 `json:"seq"`
+			Type  uint8  `json:"type"`
+			Flags uint8  `json:"flags"`
+			SID   uint16 `json:"sid"`
+			// seq 在 fixture 里是【字符串】：它是 uint64，超过 2^53 的值
+			// 过不了 JS 的 JSON.parse，而这份 fixture 要给两侧共用。
+			Seq        string `json:"seq"`
 			PayloadHex string `json:"payload_hex"`
 		} `json:"decoded"`
 		DataLen int `json:"data_len"`
@@ -64,10 +67,14 @@ func TestVectorsBinaryFrames(t *testing.T) {
 				t.Fatalf("decode: %v", err)
 			}
 			wantPayload, _ := hex.DecodeString(tc.Decoded.PayloadHex)
+			wantSeq, err := strconv.ParseUint(tc.Decoded.Seq, 10, 64)
+			if err != nil {
+				t.Fatalf("fixture 里的 seq 不是合法的 uint64: %v", err)
+			}
 			got := protocol.Frame{Type: f.Type, Flags: f.Flags, SID: f.SID, Seq: f.Seq, Payload: f.Payload}
 			want := protocol.Frame{
 				Type: tc.Decoded.Type, Flags: tc.Decoded.Flags,
-				SID: tc.Decoded.SID, Seq: tc.Decoded.Seq, Payload: wantPayload,
+				SID: tc.Decoded.SID, Seq: wantSeq, Payload: wantPayload,
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("decoded\n got %+v\nwant %+v", got, want)

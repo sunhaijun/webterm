@@ -1,43 +1,43 @@
 {
-  "_comment": "前后端共用的 fixture。Go 侧 internal/protocol 与 TS 侧 web/src/protocol 都必须跑它，防止实现漂移。契约见 docs/30-protocol/websocket-protocol.md §9。",
+  "_comment": "前后端共用的 fixture。Go 侧 internal/protocol 与 TS 侧 web/src/protocol 都必须跑它，防止实现漂移。契约见 docs/30-protocol/websocket-protocol.md §9。注意 seq 是【字符串】：它是 uint64，超过 2^53 的值过不了 JS 的 JSON.parse。",
   "binary_frames": [
     {
       "name": "output_basic",
       "hex": "0100000100000000000000e86869",
-      "decoded": { "type": 1, "flags": 0, "sid": 1, "seq": 232, "payload_hex": "6869" },
+      "decoded": { "type": 1, "flags": 0, "sid": 1, "seq": "232", "payload_hex": "6869" },
       "data_len": 2
     },
     {
       "name": "output_attr_prefix",
       "hex": "0101000100000000000000e81b5b306d6869",
-      "decoded": { "type": 1, "flags": 1, "sid": 1, "seq": 232, "payload_hex": "1b5b306d6869" },
+      "decoded": { "type": 1, "flags": 1, "sid": 1, "seq": "232", "payload_hex": "1b5b306d6869" },
       "data_len": 2,
       "note": "flags bit0：前 4 字节 ESC[0m 是渲染修正，不计入 seq"
     },
     {
       "name": "input_basic",
       "hex": "020000030000000000000000617364",
-      "decoded": { "type": 2, "flags": 0, "sid": 3, "seq": 0, "payload_hex": "617364" },
+      "decoded": { "type": 2, "flags": 0, "sid": 3, "seq": "0", "payload_hex": "617364" },
       "data_len": 3
     },
     {
       "name": "output_seq_max",
       "hex": "010000ffffffffffffffffff41",
-      "decoded": { "type": 1, "flags": 0, "sid": 255, "seq": 18446744073709551615, "payload_hex": "41" },
+      "decoded": { "type": 1, "flags": 0, "sid": 255, "seq": "18446744073709551615", "payload_hex": "41" },
       "data_len": 1,
       "note": "seq = MaxUint64 边界"
     },
     {
       "name": "output_sid_zero",
       "hex": "0100000000000000000000012a",
-      "decoded": { "type": 1, "flags": 0, "sid": 0, "seq": 1, "payload_hex": "2a" },
+      "decoded": { "type": 1, "flags": 0, "sid": 0, "seq": "1", "payload_hex": "2a" },
       "data_len": 1,
       "note": "sid=0 在帧编解码层是合法的；它作为无效值的语义由会话层负责"
     },
     {
       "name": "output_binary_payload",
       "hex": "0100000700000000000f4240e4b8ade696870aff00fe",
-      "decoded": { "type": 1, "flags": 0, "sid": 7, "seq": 1000000, "payload_hex": "e4b8ade696870aff00fe" },
+      "decoded": { "type": 1, "flags": 0, "sid": 7, "seq": "1000000", "payload_hex": "e4b8ade696870aff00fe" },
       "data_len": 10,
       "note": "payload 可以是任意字节序列，包括非法 UTF-8（ff 00 fe）"
     }
