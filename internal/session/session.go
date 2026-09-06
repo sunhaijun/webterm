@@ -37,13 +37,16 @@ var (
 //
 // 注意：会话不跨 agent 重启存活（ADR-0003）。
 type Session struct {
+	mgr       *Manager
 	sid       uint16
 	ptmx      *os.File
 	cmd       *exec.Cmd
 	rcPath    string // 临时 rcfile，销毁时删除
 	createdAt time.Time
 	store     *store.Store
-	history   bool // 是否记录命令历史
+	// mgrHistory 报告此刻是否记录命令历史。取成函数是因为用户可以在会话
+	// 运行期间从 UI 上关掉它（做敏感工作时一键静默）。
+	mgrHistory func() bool
 
 	mu          sync.RWMutex // 保护以下所有字段
 	name        string
@@ -154,9 +157,8 @@ func (s *Session) Rename(name *string) {
 		Name:         strPtr(s.displayNameLocked()),
 		NameIsManual: boolPtr(s.nameManual),
 	}
-	subs := s.subsLocked()
 	s.mu.Unlock()
-	broadcast(subs, msg)
+	s.emit(msg)
 }
 
 // Resize 调整 PTY 窗口大小。
@@ -223,12 +225,6 @@ func (s *Session) subsLocked() []Subscriber {
 		out = append(out, sub)
 	}
 	return out
-}
-
-func broadcast(subs []Subscriber, msg any) {
-	for _, sub := range subs {
-		sub.Event(msg)
-	}
 }
 
 // ---------- 输入 ----------
@@ -306,6 +302,11 @@ func (s *Session) readLoop() {
 					sub.Push(s.sid, seq, data, false)
 				}
 			}
+			if data != nil {
+				// 未订阅的连接靠 head_seq 推导未读（连接层做 1s 节流）
+				head := seq + uint64(len(data))
+				s.emit(&protocol.SessionUpdated{SID: s.sid, HeadSeq: &head})
+			}
 			for _, ev := range events {
 				s.handleOSCEvent(ev)
 			}
@@ -333,14 +334,9 @@ func (s *Session) writeLoop() {
 			s.mu.Lock()
 			s.inAck[it.clientID] += uint64(n)
 			ack := s.inAck[it.clientID]
-			subs := s.subsLocked()
 			s.mu.Unlock()
 			// ack 只发给同一个 client —— 记账是 per-client 的
-			for _, sub := range subs {
-				if sub.ClientID() == it.clientID {
-					sub.Event(&protocol.Ack{SID: s.sid, InAck: ack})
-				}
-			}
+			s.emitTo(it.clientID, &protocol.Ack{SID: s.sid, InAck: ack})
 		}
 		if err != nil {
 			return
@@ -362,13 +358,12 @@ func (s *Session) waitLoop() {
 	s.mu.Lock()
 	s.status = protocol.StatusExited
 	s.exitCode = &code
-	subs := s.subsLocked()
 	s.mu.Unlock()
 
 	s.inputQ.close() // 停止接受输入
 	close(s.done)
 
-	broadcast(subs, &protocol.SessionUpdated{
+	s.emit(&protocol.SessionUpdated{
 		SID:      s.sid,
 		Status:   strPtr(protocol.StatusExited),
 		ExitCode: &code,
@@ -388,7 +383,7 @@ func (s *Session) handleOSCEvent(ev oscparse.Event) {
 		if e.State == protocol.PromptRunning {
 			s.beginCommand()
 		}
-		s.broadcastEvent(&protocol.Prompt{SID: s.sid, State: e.State})
+		s.emit(&protocol.Prompt{SID: s.sid, State: e.State})
 
 	case oscparse.CommandEndEvent:
 		s.endCommand(e.ExitCode)
@@ -412,10 +407,9 @@ func (s *Session) markIntegrationAlive() {
 	s.lastMark = time.Now()
 	changed := s.integration != protocol.IntegrationActive
 	s.integration = protocol.IntegrationActive
-	subs := s.subsLocked()
 	s.mu.Unlock()
 	if changed {
-		broadcast(subs, &protocol.SessionUpdated{
+		s.emit(&protocol.SessionUpdated{
 			SID: s.sid, Integration: strPtr(protocol.IntegrationActive),
 		})
 	}
@@ -431,9 +425,8 @@ func (s *Session) setIntegration(v string) {
 	if v == protocol.IntegrationActive {
 		s.lastMark = time.Now()
 	}
-	subs := s.subsLocked()
 	s.mu.Unlock()
-	broadcast(subs, &protocol.SessionUpdated{SID: s.sid, Integration: strPtr(v)})
+	s.emit(&protocol.SessionUpdated{SID: s.sid, Integration: strPtr(v)})
 }
 
 func (s *Session) setCWD(path string) {
@@ -449,10 +442,9 @@ func (s *Session) setCWD(path string) {
 	if newName != oldName {
 		upd.Name = strPtr(newName)
 	}
-	subs := s.subsLocked()
 	s.mu.Unlock()
-	broadcast(subs, &protocol.CWD{SID: s.sid, Path: path})
-	broadcast(subs, upd)
+	s.emit(&protocol.CWD{SID: s.sid, Path: path})
+	s.emit(upd)
 }
 
 // beginCommand 在 133;C 时结算命令开始。
@@ -473,7 +465,7 @@ func (s *Session) beginCommand() {
 	now := time.Now()
 	s.curCmdAt = now
 	var cmdID int64
-	if s.history && s.store != nil {
+	if s.historyOn() && s.store != nil {
 		id, err := s.store.BeginCommand(text, name, cwd, now)
 		if err != nil {
 			return
@@ -481,7 +473,7 @@ func (s *Session) beginCommand() {
 		cmdID = id
 		s.curCmdID = &id
 	}
-	s.broadcastEvent(&protocol.CommandStart{
+	s.emit(&protocol.CommandStart{
 		SID: s.sid, CmdID: cmdID, Text: text, CWD: cwd,
 		At: now.UnixMilli(), OutSeq: outSeq,
 	})
@@ -497,7 +489,7 @@ func (s *Session) endCommand(exitCode *int) {
 	s.curCmdID = nil
 	dur := time.Since(s.curCmdAt)
 
-	if s.history && s.store != nil {
+	if s.historyOn() && s.store != nil {
 		if err := s.store.FinishCommand(id, exitCode, dur); err != nil {
 			return
 		}
@@ -505,17 +497,27 @@ func (s *Session) endCommand(exitCode *int) {
 	s.mu.RLock()
 	outSeq := s.ring.HeadSeq()
 	s.mu.RUnlock()
-	s.broadcastEvent(&protocol.CommandEnd{
+	s.emit(&protocol.CommandEnd{
 		SID: s.sid, CmdID: id, ExitCode: exitCode,
 		DurationMS: dur.Milliseconds(), OutSeq: outSeq,
 	})
 }
 
-func (s *Session) broadcastEvent(msg any) {
-	s.mu.RLock()
-	subs := s.subsLocked()
-	s.mu.RUnlock()
-	broadcast(subs, msg)
+// emit 把一条控制消息发给【所有连接】，不只是订阅者。
+//
+// 未订阅的连接也要收 session.updated / cwd / command.* —— 侧栏里的会话名、
+// 未读标记都靠它们。订阅只决定收不收 OUTPUT 字节。
+func (s *Session) emit(msg any) {
+	if s.mgr != nil {
+		s.mgr.fanout(msg)
+	}
+}
+
+// emitTo 只发给某个 client 的连接。
+func (s *Session) emitTo(clientID string, msg any) {
+	if s.mgr != nil {
+		s.mgr.fanoutTo(clientID, msg)
+	}
 }
 
 // checkIntegrationIdle 由 manager 的巡检 goroutine 周期性调用。
@@ -568,6 +570,9 @@ func (s *Session) close() {
 		s.mu.Unlock()
 	})
 }
+
+// historyOn 报告此刻是否记录命令历史。
+func (s *Session) historyOn() bool { return s.mgrHistory != nil && s.mgrHistory() }
 
 func strPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool    { return &b }

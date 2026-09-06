@@ -1,0 +1,39 @@
+# webterm user service —— 配合 setcap 以【普通用户】运行。
+#
+# 安装：
+#   cp deploy/webterm.service ~/.config/systemd/user/
+#   sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm
+#   systemctl --user daemon-reload && systemctl --user enable --now webterm
+#   sudo loginctl enable-linger $USER      # 没有它，退出登录服务就被杀了
+#
+# 完整说明见 docs/80-ops/systemd.md。
+# 注意：每次替换二进制后 setcap 都要重做（capability 附在文件上，不在路径上）。
+
+[Unit]
+Description=webterm — browser terminal agent
+Documentation=https://github.com/sunhaijun/webterm
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/webterm serve --domain term.example.com
+Restart=on-failure
+RestartSec=3
+
+# 优雅关闭：给 agent 时间广播"即将重启"并关闭会话
+KillSignal=SIGTERM
+TimeoutStopSec=15
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=webterm
+
+# 刻意【不】启用 ProtectHome / ProtectSystem / NoNewPrivileges / PrivateTmp：
+# 它们会连会话里的 shell 一起限制，而用户开 webterm 就是为了操作自己的文件；
+# NoNewPrivileges 还会让 sudo 失效。沙箱化 shell 是自欺欺人 —— 用户本来就有
+# 这台机器的 shell 权限。唯一有效的加固是以普通用户运行（见 threat-model.md）。
+
+[Install]
+WantedBy=default.target

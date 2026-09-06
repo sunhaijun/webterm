@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/creack/pty"
@@ -26,7 +27,9 @@ type Config struct {
 	RingBytes   int    // 每会话环形缓冲，默认 1 MiB
 	Shell       string // 默认 bash
 	ShellArgs   []string
-	History     bool // 是否记录命令历史（--no-history 关掉）
+	// History 是否【允许】记录命令历史。false = agent 以 --no-history 启动，
+	// 这是启动态覆盖，UI 上的开关会被锁死置灰。
+	History bool
 
 	// RCFileFor 生成会话的临时 rcfile，返回路径。nil 表示不注入 shell 集成
 	// （--no-shell-integration）。m5 由 internal/shellinit 提供实现。
@@ -57,12 +60,17 @@ type Manager struct {
 	// 的内容，之后接的却是一个毫不相干的新会话的输出，用户无从察觉。
 	instanceID string
 
-	mu       sync.RWMutex
-	sessions map[uint16]*Session
-	nextSID  uint16
+	mu        sync.RWMutex
+	sessions  map[uint16]*Session
+	nextSID   uint16
+	observers map[Subscriber]struct{}
 
 	janitorStop chan struct{}
 	janitorDone chan struct{}
+
+	// historyOn 是 UI 开关的当前值，只在 cfg.History 为 true 时有意义。
+	// 用户在做敏感工作时可以一键静默，而不是事后清理。
+	historyOn atomic.Bool
 }
 
 // NewManager 创建会话管理器。
@@ -75,16 +83,72 @@ func NewManager(cfg Config, st *store.Store) *Manager {
 		store:       st,
 		instanceID:  hex.EncodeToString(b[:]),
 		sessions:    make(map[uint16]*Session),
+		observers:   make(map[Subscriber]struct{}),
 		nextSID:     1, // 0 保留为无效值
 		janitorStop: make(chan struct{}),
 		janitorDone: make(chan struct{}),
 	}
+	m.historyOn.Store(cfg.History)
 	go m.janitor()
 	return m
 }
 
+// HistoryConfigured 报告 agent 是否允许记录历史（--no-history 会让它为 false）。
+func (m *Manager) HistoryConfigured() bool { return m.cfg.History }
+
+// SetHistoryEnabled 切换 UI 侧的历史开关。cfg.History 为 false 时无效。
+func (m *Manager) SetHistoryEnabled(on bool) {
+	m.historyOn.Store(m.cfg.History && on)
+}
+
+// HistoryEnabled 报告当前是否真的在记录历史。
+func (m *Manager) HistoryEnabled() bool { return m.historyOn.Load() }
+
 // InstanceID 返回本次进程启动的实例 id（放进 welcome）。
 func (m *Manager) InstanceID() string { return m.instanceID }
+
+// AddObserver / RemoveObserver 登记一条连接。
+//
+// 【订阅与观察是两件事】：订阅（Session.Subscribe）决定收不收 OUTPUT 字节，
+// 观察决定收不收控制消息。未订阅的连接照样要收 session.updated —— 未读正是
+// 靠它带的 head_seq 推导出来的，只发给订阅者的话永远算不出未读。
+func (m *Manager) AddObserver(sub Subscriber) {
+	m.mu.Lock()
+	m.observers[sub] = struct{}{}
+	m.mu.Unlock()
+}
+
+func (m *Manager) RemoveObserver(sub Subscriber) {
+	m.mu.Lock()
+	delete(m.observers, sub)
+	m.mu.Unlock()
+}
+
+func (m *Manager) observerList() []Subscriber {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Subscriber, 0, len(m.observers))
+	for o := range m.observers {
+		out = append(out, o)
+	}
+	return out
+}
+
+// fanout 把一条控制消息发给所有连接。
+func (m *Manager) fanout(msg any) {
+	for _, o := range m.observerList() {
+		o.Event(msg)
+	}
+}
+
+// fanoutTo 只发给某个 client 的连接（ack 是 per-client 的）。
+func (m *Manager) fanoutTo(clientID string, msg any) {
+	for _, o := range m.observerList() {
+		if o.ClientID() == clientID {
+			o.Event(msg)
+		}
+	}
+}
 
 // Limits 返回给 welcome 用的上限信息。
 func (m *Manager) Limits() protocol.Limits {
@@ -191,13 +255,14 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 	}
 
 	s := &Session{
+		mgr:         m,
 		sid:         sid,
 		ptmx:        ptmx,
 		cmd:         cmd,
 		rcPath:      rcPath,
 		createdAt:   time.Now(),
 		store:       m.store,
-		history:     m.cfg.History,
+		mgrHistory:  m.HistoryEnabled,
 		cwd:         cwd,
 		status:      protocol.StatusRunning,
 		cols:        spec.Cols,

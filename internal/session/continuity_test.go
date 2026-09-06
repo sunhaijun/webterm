@@ -23,7 +23,7 @@ func TestByteLevelContinuity(t *testing.T) {
 		c.RingBytes = 1 << 20 // 足够大，断线窗口内的输出不会溢出 → 不走 reset
 		m := newManager(t, c)
 		s := create(t, m)
-		conn := newConn(t, "tab")
+		conn := newConn(t, m, "tab")
 		s.Subscribe(conn, 0)
 		waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
 
@@ -92,7 +92,7 @@ func TestITQueue1_InputStalledNeverBlocks(t *testing.T) {
 	stuck := create(t, m)
 	other := create(t, m)
 
-	cs, co := newConn(t, "tab"), newConn(t, "tab")
+	cs, co := newConn(t, m, "tab"), newConn(t, m, "tab")
 	stuck.Subscribe(cs, 0)
 	other.Subscribe(co, 0)
 
@@ -145,7 +145,7 @@ func TestITQueue1_InputStalledNeverBlocks(t *testing.T) {
 func TestOutSeqCountsAfterStripping(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	c := newConn(t, "tab")
+	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0)
 	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
 

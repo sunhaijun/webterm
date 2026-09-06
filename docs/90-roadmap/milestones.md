@@ -66,9 +66,11 @@ feat/<docs编号>-<主题>
 | systemd unit + 安装文档 | [systemd.md](../80-ops/systemd.md) |
 | 限速、CSP、HSTS、日志脱敏 | [threat-model.md](../60-security/threat-model.md) |
 
-**测试**：`IT-auth-1..4`、`IT-pair-1..3`、`IT-tls-1..2`、`IT-hb-1`、`IT-sub-1`、`IT-privacy-1..2`
+**测试**：`IT-auth-1..4`、`IT-pair-1..3`、`IT-tls-1..3`、`IT-hb-1`、`IT-sub-1`、`IT-queue-2`、`IT-privacy-1..2`
 
 **出口标准**：能在真服务器上跑起来，拿到真证书，用 `wscat` 之类的工具手工建连、创建会话、跑命令。
+
+"手工建连"这一步已经自动化：进程内起完整 agent（真 store / 真 PTY / 真 HTTP / 真 WebSocket），跑完配对 → 建连 → 建会话 → 敲命令 → 看到输出的全流程。真证书那一步仍然只能上真服务器验（手工清单）。
 
 ---
 
