@@ -362,7 +362,7 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | `--https-port` | 443 | 非 443 时**配对 URL 与启动日志会带上端口**，见[跑在非标准端口上](#跑在非标准端口上) |
 | `--bind` | `0.0.0.0` | 监听地址。设为 `127.0.0.1` 配合隧道/反代 |
 | `--no-tls` | false | 关闭 TLS。**仅允许在 `--bind` 为回环或私有地址时使用** |
-| `--trust-proxy` | false | 信任 `X-Forwarded-For`。**只在七层反代（nginx `http` / Caddy / cloudflared）后面开**；四层 SNI 分流（nginx `stream` + `ssl_preread`）不设这个头，开了等于让客户端伪造它绕过限速 |
+| `--trust-proxy` | false | 信任 `X-Forwarded-For`（**仅在反代后启用**，否则限速可被绕过） |
 | `--max-sessions` | 20 | 会话数上限 |
 | `--max-conns` | 16 | 并发 WebSocket 连接上限（每条连接占一个写队列） |
 | `--ring-bytes` | 1048576 | 每会话输出缓冲（影响能容忍的断线时长） |
@@ -523,12 +523,11 @@ capability 没有必要）：
 | 情况 | 走哪条挑战 | 结果 |
 |---|---|---|
 | 80 空着（常见） | HTTP-01 → 80 | ✅ 照常签发与续期 |
-| 443 前面有 SNI 分流转给 webterm | TLS-ALPN-01 → 443 | ✅ 照常，见[反向代理 / 隧道场景](#反向代理--隧道场景) |
 | 80 和 443 都不通 | 两条都没戏 | ❌ 只能自己塞证书或套反代 |
 
 > autocert 会先试 TLS-ALPN-01（443），失败再试 HTTP-01（80）。所以
 > 「443 被占 + 80 空着」这个组合下会看到第一次尝试失败 —— 那是**预期行为**，
-> 最终仍然会通过 HTTP-01 签出来。真的两条都不通时的诊断见
+> 最终仍然会通过 HTTP-01 签出来。两条都不通时的诊断见
 > [排障](troubleshooting.md#证书--tls)。
 
 ### PWA 还能装吗

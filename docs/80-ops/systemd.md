@@ -127,6 +127,18 @@ KillMode=mixed
 
 `HOME` 与 `XDG_DATA_HOME` 必须显式设置 —— 否则 agent 会去 `/root` 或 `/` 下找数据目录，会话的 shell 也会拿到错误的 `HOME`。
 
+## 换端口（443 被别的服务占了）
+
+```
+ExecStart=/usr/local/bin/webterm serve --domain term.example.com --https-port 8443
+```
+
+`setcap` **仍然需要** —— `--http-port` 默认还是 80，那是特权端口。
+两个端口都换到 1024 以上就不需要了。
+
+`scripts/install.sh` 的 `--https-port` / `--http-port` 会把这些写进单元，
+并按真实端口决定要不要 `setcap`。详见 [`install.md`](install.md#跑在非标准端口上)。
+
 ## 反代/隧道场景
 
 配合 nginx / Caddy / cloudflared 时，`ExecStart` 改成：
