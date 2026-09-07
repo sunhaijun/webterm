@@ -270,7 +270,7 @@ func (s *Store) PrefixHistory(prefix string, limit int) ([]string, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	out := []string{}
 	for rows.Next() {
 		var t string
 		if err := rows.Scan(&t); err != nil {
@@ -282,7 +282,9 @@ func (s *Store) PrefixHistory(prefix string, limit int) ([]string, error) {
 }
 
 func scanCommands(rows *sql.Rows) ([]Command, error) {
-	var out []Command
+	// 【必须是非 nil 的空切片】。nil 切片会被 encoding/json 编成 null，
+	// 而 API 契约说的是数组 —— 客户端拿到 null 之后一个 .length 就崩了。
+	out := []Command{}
 	for rows.Next() {
 		var c Command
 		var sessionName, cwd, label sql.NullString

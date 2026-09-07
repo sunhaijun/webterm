@@ -259,3 +259,73 @@ body {
 .app[data-short='true'] .statusbar .name,
 .app[data-short='true'] .statusbar .cwd,
 .app[data-short='true'] .statusbar .conn { display: none; }
+
+/* ---------- 命令面板 ---------- */
+.palette-backdrop, .panel-backdrop {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex; justify-content: center;
+}
+.palette-backdrop { align-items: flex-start; padding-top: 12vh; }
+.palette {
+  width: min(620px, 92vw); max-height: 60vh; display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.palette-input {
+  font: inherit; font-size: 15px; padding: 12px 14px; border: 0;
+  border-bottom: 1px solid var(--line); background: transparent; color: var(--fg); outline: none;
+}
+.palette-list { overflow-y: auto; }
+.palette-item {
+  display: flex; align-items: center; gap: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px;
+}
+.palette-item[data-active='true'] { background: color-mix(in srgb, var(--fg) 12%, transparent); }
+.palette-icon { width: 14px; flex: none; color: var(--warn); }
+.palette-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-hint { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.palette-empty, .panel-empty { padding: 16px; color: var(--muted); font-size: 12px; }
+.palette-foot { padding: 6px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+
+/* ---------- 历史面板 ---------- */
+.panel-backdrop { align-items: center; }
+.panel {
+  width: min(760px, 94vw); height: min(76vh, 640px); display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  position: relative;
+}
+.panel-head {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-bottom: 1px solid var(--line); font-size: 12px; flex-wrap: wrap;
+}
+.panel-search { flex: 1; min-width: 160px; font: inherit; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--fg); }
+.panel-head button { font: inherit; font-size: 12px; border: 1px solid var(--line);
+  border-radius: 6px; background: transparent; color: var(--fg); padding: 5px 8px; cursor: pointer; }
+.panel-body { overflow-y: auto; flex: 1; }
+.panel-group { padding: 8px 12px 4px; font-size: 11px; color: var(--muted); position: sticky; top: 0;
+  background: var(--bg); }
+.cmd-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; cursor: pointer; font-size: 12px; }
+.cmd-row:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.cmd-star { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0; }
+.cmd-star[data-on='true'] { color: var(--warn); }
+.cmd-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmd-sub { color: var(--muted); }
+/* 退出码 0 用弱色不干扰，非零用警示色 —— "昨天那条失败的命令"极易定位 */
+.cmd-exit { color: var(--muted); width: 3ch; text-align: right; }
+.cmd-exit[data-failed='true'] { color: var(--err); font-weight: 600; }
+.cmd-dur { color: var(--muted); width: 6ch; text-align: right; }
+.cmd-more { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; padding: 0 2px; }
+
+/* ---------- 移动端快捷命令条 ---------- */
+.quickbar {
+  display: flex; gap: 6px; padding: 4px 6px; overflow-x: auto;
+  border-top: 1px solid var(--line); scrollbar-width: none;
+}
+.quickbar::-webkit-scrollbar { display: none; }
+.quick-key {
+  flex: none; min-height: 32px; padding: 4px 10px; font: inherit; font-size: 12px;
+  border: 1px solid var(--line); border-radius: 999px; background: transparent;
+  color: var(--fg); cursor: pointer; white-space: nowrap;
+}
+.privacy-note { margin: 6px 0 0; color: var(--muted); font-size: 11px; }

@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -840,5 +841,45 @@ func TestPromptStateResyncsOnReconnect(t *testing.T) {
 	}
 	if *got == protocol.PromptRunning {
 		t.Fatalf("prompt_state = %q，但命令早就跑完了", *got)
+	}
+}
+
+// 空集合必须序列化成 []，不能是 null。
+//
+// Go 的 nil 切片会被 encoding/json 编成 null，而 http-api.md 的契约说的是
+// 数组 —— 客户端拿到 null 之后一个 .length 就崩了，整个界面白屏。
+func TestEmptyCollectionsSerializeAsArrays(t *testing.T) {
+	h := newHarness(t)
+	c := h.client()
+	h.pair(c).Body.Close()
+
+	for _, path := range []string{"/api/commands", "/api/commands?pinned=true", "/api/devices"} {
+		t.Run(path, func(t *testing.T) {
+			resp := h.do(c, http.MethodGet, path, nil)
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// next_before 为 null 是契约的一部分（表示没有下一页），
+			// 这里只管【集合】不能是 null
+			var probe any
+			if err := json.Unmarshal(body, &probe); err != nil {
+				t.Fatal(err)
+			}
+			switch v := probe.(type) {
+			case []any: // /api/devices
+			case map[string]any: // /api/commands
+				items, ok := v["items"]
+				if !ok {
+					t.Fatal("响应里没有 items")
+				}
+				if _, ok := items.([]any); !ok {
+					t.Fatalf("items = %#v，必须是数组而不是 null —— 客户端一个 .length 就崩了", items)
+				}
+			default:
+				t.Fatalf("响应类型意外: %T", probe)
+			}
+		})
 	}
 }
