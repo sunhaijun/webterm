@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -122,8 +123,79 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 		go func() { errCh <- s.http.Serve(httpLn) }()
 		go func() { errCh <- s.https.ServeTLS(httpsLn, "", "") }()
 		a.log.Info("webterm 已启动", "url", "https://"+cfg.Domain)
+
+		// 主动预热证书。
+		//
+		// autocert 默认是【懒加载】的：证书要等第一次 TLS 握手才去申请。
+		// 那意味着启动时看不出 ACME 通不通 —— 用户得开浏览器才知道，
+		// 而 --acme-staging 那一步"先试通再上正式"也就失去了意义。
+		// 这里主动触发一次，成功打出到期时间，失败给可读诊断（AC-1.13）。
+		go a.warmCertificate(m, cfg.Domain, cfg.ACMEStaging)
 	}
 	return s, errCh, nil
+}
+
+// warmCertificate 启动时主动申请/加载一次证书，把结果打到 stdout。
+func (a *Agent) warmCertificate(m *autocert.Manager, domain string, staging bool) {
+	env := "Let's Encrypt"
+	if staging {
+		env = "Let's Encrypt staging"
+	}
+	cert, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: domain})
+	if err != nil {
+		a.log.Error("证书申请失败 —— HTTPS 还不可用", "domain", domain, "env", env)
+		fmt.Fprint(os.Stderr, describeACMEError(err, domain, staging))
+		return
+	}
+	if len(cert.Certificate) == 0 {
+		return
+	}
+	leaf := cert.Leaf
+	if leaf == nil {
+		parsed, perr := x509.ParseCertificate(cert.Certificate[0])
+		if perr != nil {
+			a.log.Info("证书已就绪", "env", env)
+			return
+		}
+		leaf = parsed
+	}
+	// autocert 在到期前 30 天自动续期，需要 80 端口持续可用
+	fmt.Printf("证书已就绪（%s，到期 %s，自动续期）\n",
+		env, leaf.NotAfter.Local().Format("2006-01-02"))
+}
+
+// describeACMEError 把 ACME 的失败翻译成"原因 + 怎么修"，
+// 而不是甩一行 Go 的 error（US-7.2 / AC-1.13）。
+func describeACMEError(err error, domain string, staging bool) string {
+	msg := err.Error()
+	var b strings.Builder
+	b.WriteString("\n")
+	switch {
+	case strings.Contains(msg, "rateLimited"), strings.Contains(msg, "too many"):
+		b.WriteString("  撞上了 Let's Encrypt 的限流。\n")
+		b.WriteString("  限流窗口是一周（每域名每周 50 次签发），撞上了只能等。\n")
+	case strings.Contains(msg, "Invalid response"), strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "Timeout"), strings.Contains(msg, "timeout"):
+		b.WriteString("  HTTP-01 挑战没能打到本机的 80 端口。按顺序查：\n")
+		b.WriteString("    1. 云安全组 / 防火墙放行了入方向 TCP 80 吗？（最常漏的一步）\n")
+		b.WriteString("         在别的机器上跑：curl -sI http://" + domain + "/\n")
+		b.WriteString("    2. DNS 指向本机吗？\n")
+		b.WriteString("         dig +short " + domain + "   应当等于   curl -s ifconfig.me\n")
+		b.WriteString("    3. 用 Cloudflare 的话，把小云朵关掉（DNS only，不要 Proxied）\n")
+	case strings.Contains(msg, "no such host"), strings.Contains(msg, "NXDOMAIN"):
+		b.WriteString("  " + domain + " 解析不出来。确认 A/AAAA 记录已经加上并且 TTL 过期了：\n")
+		b.WriteString("    dig +short " + domain + "\n")
+	case strings.Contains(msg, "not configured in HostWhitelist"):
+		b.WriteString("  请求的域名与 --domain 不一致。HostPolicy 刻意不允许通配，\n")
+		b.WriteString("  否则会被用来给任意域名申请证书。\n")
+	default:
+		b.WriteString("  " + msg + "\n")
+		b.WriteString("  排障清单见 docs/80-ops/troubleshooting.md 的「证书 / TLS」一节。\n")
+	}
+	if !staging {
+		b.WriteString("\n  提示：先用 --acme-staging 调通，避免撞正式环境的限流。\n")
+	}
+	return b.String()
 }
 
 // Shutdown 优雅关闭监听（不动会话，那由 session.Manager 负责）。

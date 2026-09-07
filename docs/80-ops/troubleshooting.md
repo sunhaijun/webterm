@@ -25,7 +25,8 @@ ss -lntp | grep -E ':(80|443)\b'   # 必须为空（除了 webterm 自己）
 |---|---|---|
 | `bind: address already in use` | 80 或 443 被占（nginx/apache/caddy） | 停掉它，或改用反代模式（[`install.md`](install.md#反向代理--隧道场景)） |
 | `bind: permission denied` | 没有绑特权端口的权限 | `sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm` |
-| `acme: authorization error` + `Invalid response from http://...` | 80 端口的挑战请求没到 webterm | 检查防火墙（`ufw status` / 云厂商安全组）是否放行 80 |
+| `acme: authorization error` + `Invalid response from http://...` | 80 端口的挑战请求没到 webterm | **先查云安全组**（最常漏的一步）：在别的机器上 `curl -sI http://<域名>/`，超时就是没放行。再查本机 `ufw status` |
+| 用 Cloudflare 且开着代理（小云朵） | 挑战被 Cloudflare 截住，`Origin` 也会不对 | 该记录设为 DNS only |
 | `urn:ietf:params:acme:error:rateLimited` | 撞了 Let's Encrypt 限流 | 等（每域名每周 50 次签发）。**先用 `--acme-staging` 调通再上正式** |
 | DNS 解析到别的 IP | 记录没生效或指错了 | 等 TTL 过期；确认改的是 A/AAAA 而不是 CNAME 到别处 |
 
