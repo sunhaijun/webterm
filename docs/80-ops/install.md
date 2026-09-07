@@ -20,20 +20,60 @@ bash 不是硬要求，但版本影响功能完整度：**4.4+** 才有 readline
 
 ## 安装
 
+### 从源码构建（目前唯一的路径）
+
+> **还没有 release。** 下面的下载方式要等 v0.1 打了 tag 之后才可用 ——
+> 在那之前请从源码构建。
+
+构建需要 Go 1.27+ 与 Node 22+（Node 只在构建时需要，产物是单个二进制）。
+
 ```bash
-# 1. 下载（或自己 go build）
+git clone https://github.com/sunhaijun/webterm.git
+cd webterm
+
+# 【顺序不能反】：前端产物是 go:embed 的输入，
+# 反了的话嵌进去的是空目录，二进制跑起来会明说"没有嵌入前端产物"
+cd web && npm ci && npm run build && cd ..
+
+CGO_ENABLED=0 go build -o webterm ./cmd/webterm
+```
+
+得到一个约 21 MB 的静态二进制（`ldd` 显示 not a dynamic executable），
+可以直接 scp 到目标机器。交叉编译加 `GOOS=linux GOARCH=arm64` 即可。
+
+### 下载预编译二进制（v0.1 发布后）
+
+```bash
 curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/webterm-linux-amd64 -o webterm
 chmod +x webterm
+```
 
-# 2. 检查环境
+### 部署
+
+```bash
+# 1. 检查环境
 ./webterm doctor --domain term.example.com
 
-# 3. 试运行（用 ACME staging，避免撞正式环境限流）
+# 2. 试运行（用 ACME staging，避免撞正式环境限流）
 sudo ./webterm serve --domain term.example.com --acme-staging
 
-# 4. 正式运行
+# 3. 正式运行
 sudo ./webterm serve --domain term.example.com
 ```
+
+### 本地先试一下
+
+不需要域名、不需要证书、不需要 root：
+
+```bash
+./webterm serve --dev
+# → http://127.0.0.1:8080
+# stdout 会打出配对 URL 与二维码，浏览器点开就能用
+```
+
+`http://localhost` 本身就是 secure context，所以 PWA、剪贴板、Service Worker
+在 `--dev` 下都能测（[ADR-0004](../20-architecture/adr/0004-acme-only-tls.md)）。
+手机访问局域网 IP 的 http **不是** secure context，装不了 PWA —— 那个必须上正式域名。
 
 ### 关于 sudo
 

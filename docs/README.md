@@ -24,7 +24,7 @@
 | [`50-backend/`](50-backend/) | 会话管理与 PTY 生命周期、环形缓冲、存储模型 |
 | [`60-security/`](60-security/) | 威胁模型、认证与配对、历史隐私 |
 | [`70-testing/`](70-testing/) | 测试策略、E2E 场景清单、手工测试清单 |
-| [`80-ops/`](80-ops/) | 安装、TLS、systemd、排障 |
+| [`80-ops/`](80-ops/) | 安装、开发与测试、TLS、systemd、排障 |
 | [`90-roadmap/`](90-roadmap/) | 里程碑与分支计划 |
 
 ★ = 前后端契约，改动必须先改文档。
