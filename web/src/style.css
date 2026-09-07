@@ -39,7 +39,7 @@ body {
   display: grid;
   /* 高度的唯一真相来源是 visualViewport，不是 100vh（iOS Safari 上 100vh
      不随键盘变化）。m4 接管软键盘适配时会把它接上。 */
-  grid-template-rows: 28px auto 1fr auto auto;
+  grid-template-rows: 28px auto 1fr auto auto auto;
   height: 100%;
 }
 
@@ -119,4 +119,51 @@ body {
   text-decoration: underline;
   cursor: pointer;
   padding: 2px 0;
+}
+
+.keybar {
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--line);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.keybar::-webkit-scrollbar { display: none; }
+.keybar-key {
+  flex: none;
+  /* 触摸设备下命中区最小 44×44 */
+  min-width: 44px;
+  min-height: 44px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+/* 激活态必须有明显反馈 —— 否则用户不知道下一次按键会变成什么 */
+.keybar-key[data-sticky='armed'] { background: var(--warn); color: #111; border-color: var(--warn); }
+.keybar-key[data-sticky='locked'] { background: var(--err); color: #fff; border-color: var(--err); }
+
+/* 组字预览：绝对定位到终端光标处，让用户知道自己在打什么 */
+.ime-preview {
+  position: absolute;
+  z-index: 5;
+  padding: 1px 4px;
+  background: var(--fg);
+  color: var(--bg);
+  border-bottom: 2px solid var(--warn);
+  font: inherit;
+  white-space: pre;
+  pointer-events: none;
+}
+.term { position: relative; }
+
+/* 手机横屏：功能键条压矮，Composer 收起 */
+@media (max-height: 479px) {
+  .keybar { padding: 2px 6px; }
+  .keybar-key { min-height: 32px; }
 }

@@ -215,6 +215,7 @@ func (a *Agent) handleListCommands(w http.ResponseWriter, r *http.Request) {
 	before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
 	f := store.Filter{
 		Q:          q.Get("q"),
+		Prefix:     q.Get("prefix"),
 		CWD:        q.Get("cwd"),
 		FailedOnly: q.Get("failed") == "true",
 		PinnedOnly: q.Get("pinned") == "true",
@@ -227,7 +228,8 @@ func (a *Agent) handleListCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{"items": items, "next_before": nil}
-	if n := len(items); n > 0 && (f.Limit == 0 || n >= f.Limit) && !f.PinnedOnly {
+	// prefix 模式做了去重，不分页
+	if n := len(items); n > 0 && (f.Limit == 0 || n >= f.Limit) && !f.PinnedOnly && f.Prefix == "" {
 		resp["next_before"] = items[n-1].StartedAt
 	}
 	a.writeJSON(w, http.StatusOK, resp)

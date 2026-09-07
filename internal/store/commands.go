@@ -22,7 +22,9 @@ type Command struct {
 
 // Filter 是历史列表的查询条件。
 type Filter struct {
-	Q          string // 命令原文子串匹配
+	Q string // 命令原文子串匹配
+	// Prefix 是前缀匹配并按原文去重，用于 Composer 的历史导航。与 Q 互斥。
+	Prefix     string
 	CWD        string // 精确匹配执行目录
 	FailedOnly bool   // 只看 exit_code != 0（不含未完成的）
 	PinnedOnly bool   // 只看快捷命令，按 pin_order 升序
@@ -86,6 +88,9 @@ func (s *Store) ListCommands(f Filter) ([]Command, error) {
 	if limit > 200 {
 		limit = 200
 	}
+	if f.Prefix != "" {
+		return s.listByPrefix(f.Prefix, limit)
+	}
 	order := `ORDER BY started_at DESC, id DESC`
 	if f.PinnedOnly {
 		order = `ORDER BY pin_order ASC, id ASC`
@@ -103,6 +108,25 @@ func (s *Store) ListCommands(f Filter) ([]Command, error) {
 		f.Q, f.Q, f.CWD, f.CWD, boolInt(f.FailedOnly), boolInt(f.PinnedOnly), f.Before, f.Before, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: 查询历史: %w", err)
+	}
+	defer rows.Close()
+	return scanCommands(rows)
+}
+
+// listByPrefix 是 Composer 里按 ↑ 翻历史用的：前缀匹配 + 按原文去重。
+//
+// 【去重是必须的】—— 否则连按 ↑ 会在同一条命令上原地打转十几次。
+func (s *Store) listByPrefix(prefix string, limit int) ([]Command, error) {
+	rows, err := s.db.Query(`
+		SELECT MAX(id), text, MAX(session_name), MAX(cwd), NULL, MAX(started_at),
+		       NULL, MAX(pinned), MAX(label), NULL
+		FROM commands
+		WHERE text LIKE ? || '%'
+		GROUP BY text
+		ORDER BY MAX(started_at) DESC
+		LIMIT ?`, prefix, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: 前缀查询历史: %w", err)
 	}
 	defer rows.Close()
 	return scanCommands(rows)
