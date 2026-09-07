@@ -6,6 +6,10 @@
 scp webterm user@server:  →  ./webterm serve --domain term.example.com  →  扫码 →  开工
 ```
 
+> 还没有 release，先从源码构建（需要 Go 1.27+ 与 Node 22+）：
+> `cd web && npm ci && npm run build && cd .. && CGO_ENABLED=0 go build -o webterm ./cmd/webterm`
+> 本地试跑：`./webterm serve --dev`。详见 [安装文档](docs/80-ops/install.md)。
+
 ## 它解决什么
 
 | 痛点 | webterm 的答案 |
