@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -64,5 +65,55 @@ func TestDescribeACMEErrorStagingHint(t *testing.T) {
 	}
 	if !strings.Contains(describeACMEError(err, "x.example.com", false), "--acme-staging") {
 		t.Error("正式环境失败时应当提示先用 staging")
+	}
+}
+
+// autocert 的 HostPolicy 必须严格限定为 --domain 的值。
+//
+// 通配的话它会被用来给【任意】域名申请证书（威胁模型 T8）——
+// 别人把自己的域名解析到这台机器，就能借我们的 ACME 账号签证书。
+func TestCertManagerHostPolicyIsStrict(t *testing.T) {
+	m := newCertManager(ServeConfig{Domain: "term.example.com", CertDir: t.TempDir()})
+	if m.HostPolicy == nil {
+		t.Fatal("HostPolicy 是 nil —— 那等于允许任意域名")
+	}
+	ctx := context.Background()
+
+	if err := m.HostPolicy(ctx, "term.example.com"); err != nil {
+		t.Fatalf("配置的域名被拒了: %v", err)
+	}
+	for _, host := range []string{
+		"evil.example.com",
+		"example.com",
+		"sub.term.example.com",
+		"term.example.com.evil.com",
+		"",
+	} {
+		if err := m.HostPolicy(ctx, host); err == nil {
+			t.Errorf("HostPolicy 放过了 %q —— 它能拿我们的账号签证书", host)
+		}
+	}
+}
+
+// RenewBefore 刻意留空，靠 autocert 的 min(30 天, 有效期/3)。
+//
+// 写死 30 天的话，将来换成短周期证书（LE 已在推 6 天期的选项）就会变成
+// "每次都立刻续期"，反而会撞限流。
+func TestCertManagerRenewBeforeUsesLibraryDefault(t *testing.T) {
+	m := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir()})
+	if m.RenewBefore != 0 {
+		t.Fatalf("RenewBefore = %v，应当留空让库按有效期缩放（见 install.md 的「证书续期」）", m.RenewBefore)
+	}
+}
+
+// --acme-staging 才走 staging 目录，默认必须是正式环境。
+func TestCertManagerStagingSwitch(t *testing.T) {
+	prod := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir()})
+	if prod.Client != nil {
+		t.Error("默认不该指定 ACME 目录（用 acme 包的正式默认值）")
+	}
+	staging := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir(), ACMEStaging: true})
+	if staging.Client == nil || !strings.Contains(staging.Client.DirectoryURL, "staging") {
+		t.Errorf("--acme-staging 没有切到 staging 目录: %+v", staging.Client)
 	}
 }

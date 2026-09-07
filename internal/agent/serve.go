@@ -74,16 +74,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 		if cfg.Domain == "" {
 			return nil, nil, errors.New("生产模式必须指定 --domain（ACME 需要它），或用 --dev")
 		}
-		m := &autocert.Manager{
-			Prompt: autocert.AcceptTOS,
-			Cache:  autocert.DirCache(cfg.CertDir),
-			// HostPolicy 严格限定为 --domain 的值，【绝不通配】——
-			// 否则会被用来给任意域名申请证书（威胁模型 T8）
-			HostPolicy: autocert.HostWhitelist(cfg.Domain),
-		}
-		if cfg.ACMEStaging {
-			m.Client = &acme.Client{DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory"}
-		}
+		m := newCertManager(cfg)
 		if err := os.MkdirAll(cfg.CertDir, 0o700); err != nil {
 			return nil, nil, fmt.Errorf("创建证书目录失败: %w", err)
 		}
@@ -135,7 +126,33 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 	return s, errCh, nil
 }
 
+// newCertManager 构造 autocert.Manager。
+//
+// 单独抽出来是为了能单测两条性质：HostPolicy 不通配，以及 RenewBefore 留空。
+func newCertManager(cfg ServeConfig) *autocert.Manager {
+	m := &autocert.Manager{
+		Prompt: autocert.AcceptTOS,
+		Cache:  autocert.DirCache(cfg.CertDir),
+		// HostPolicy 严格限定为 --domain 的值，【绝不通配】——
+		// 否则会被用来给任意域名申请证书（威胁模型 T8）
+		HostPolicy: autocert.HostWhitelist(cfg.Domain),
+
+		// RenewBefore 【刻意留空】。留空时 autocert 用
+		// min(30 天, 有效期/3)，会跟着证书有效期自动缩放。
+		// 写死 30 天的话，将来换成短周期证书（LE 已在推 6 天期）
+		// 就会变成"每次都立刻续期"。
+	}
+	if cfg.ACMEStaging {
+		m.Client = &acme.Client{DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory"}
+	}
+	return m
+}
+
 // warmCertificate 启动时主动申请/加载一次证书，把结果打到 stdout。
+//
+// autocert 的续期定时器是在证书【进入内存状态】时挂上的，而它默认懒加载 ——
+// 证书要等第一次 TLS 握手才加载。也就是说进程重启后一直没人访问的话，
+// 就没有续期定时器。这里主动触发一次，让定时器从启动那一刻就存在。
 func (a *Agent) warmCertificate(m *autocert.Manager, domain string, staging bool) {
 	env := "Let's Encrypt"
 	if staging {
