@@ -54,6 +54,19 @@ export class ModeMachine {
     return this.integration === 'active'
   }
 
+  /**
+   * 重连后按 welcome.sessions[].prompt_state 重新对齐。
+   *
+   * locked 时不动 —— 那是用户的明确选择，不该被重连覆盖。
+   */
+  resync(state: PromptState | null): void {
+    if (state === null) return
+    this.lastPrompt = state
+    if (this.state.locked || !this.autoAvailable) return
+    this.cancelPendingRaw()
+    this.apply({ mode: state === 'running' ? 'raw' : 'composer' })
+  }
+
   /** 收到 prompt{state}。 */
   onPrompt(state: PromptState): void {
     this.lastPrompt = state

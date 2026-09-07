@@ -157,9 +157,14 @@ type SessionInfo struct {
 	Cols         uint16 `json:"cols"`
 	Rows         uint16 `json:"rows"`
 	Integration  string `json:"integration"`
-	BaseSeq      uint64 `json:"base_seq"`
-	HeadSeq      uint64 `json:"head_seq"`
-	CreatedAt    int64  `json:"created_at"`
+	// PromptState 是重连时重新对齐输入模式用的（协议 §4.2）。
+	// prompt 消息只在状态变化时发一次，离线期间的那些就丢了 ——
+	// 断线跨过命令边界的话，客户端会停在 Raw、Composer 收起，用户连字都
+	// 打不了。集成不可用时为 nil。
+	PromptState *string `json:"prompt_state"`
+	BaseSeq     uint64  `json:"base_seq"`
+	HeadSeq     uint64  `json:"head_seq"`
+	CreatedAt   int64   `json:"created_at"`
 }
 
 type ResumeResult struct {

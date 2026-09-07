@@ -68,6 +68,13 @@ export interface SessionInfo {
   cols: number
   rows: number
   integration: Integration
+  /**
+   * 重连时用来重新对齐输入模式（协议 §4.2）。
+   *
+   * prompt 消息只在状态变化时发一次，离线期间的那些就丢了 —— 断线跨过
+   * 命令边界的话，客户端会停在 Raw、Composer 收起，用户连字都打不了。
+   */
+  prompt_state: PromptState | null
   base_seq: number
   head_seq: number
   created_at: number

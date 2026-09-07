@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/sunhaijun/webterm/internal/agent"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/session"
+	"github.com/sunhaijun/webterm/internal/shellinit"
 	"github.com/sunhaijun/webterm/internal/store"
 )
 
@@ -33,8 +35,9 @@ type harness struct {
 
 // harnessOpts 是夹具的可调项。
 type harnessOpts struct {
-	ringBytes int
-	tune      func(*agent.Config)
+	ringBytes        int
+	shellIntegration bool
+	tune             func(*agent.Config)
 }
 
 type lockedBuffer struct {
@@ -79,9 +82,14 @@ func newHarnessWith(t *testing.T, o harnessOpts) *harness {
 	if ring == 0 {
 		ring = 1 << 20
 	}
-	sessions := session.NewManager(session.Config{
-		MaxSessions: 5, RingBytes: ring, Shell: "bash", History: true,
-	}, st)
+	sessCfg := session.Config{MaxSessions: 5, RingBytes: ring, Shell: "bash", History: true}
+	if o.shellIntegration {
+		runD := filepath.Join(t.TempDir(), "run")
+		sessCfg.RCFileFor = func(sid uint16) (string, error) {
+			return shellinit.Render(sid, shellinit.Options{Dir: runD})
+		}
+	}
+	sessions := session.NewManager(sessCfg, st)
 	t.Cleanup(sessions.Shutdown)
 
 	logs := &lockedBuffer{}

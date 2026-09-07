@@ -167,3 +167,95 @@ body {
   .keybar { padding: 2px 6px; }
   .keybar-key { min-height: 32px; }
 }
+
+/* ---------- 会话列表 ---------- */
+
+.sessionlist { display: flex; flex-direction: column; gap: 2px; padding: 6px; overflow-y: auto; }
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  min-height: 36px;
+}
+.session-item:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.session-item[data-active='true'] { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+.session-item[data-status='exited'] .session-name { opacity: 0.6; }
+.session-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.session-dot[data-status='exited'] { background: var(--muted); }
+.session-name { font-weight: 600; white-space: nowrap; }
+.session-cwd, .session-exit {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.session-exit[data-failed='true'] { color: var(--err); }
+.session-unread { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); flex: none; }
+.session-pin, .session-close {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font: inherit; padding: 2px 4px; flex: none; opacity: 0.5;
+}
+.session-pin[data-on='true'] { color: var(--ok); opacity: 1; }
+.session-item:hover .session-pin, .session-item:hover .session-close { opacity: 1; }
+.session-new {
+  margin-top: 4px; padding: 8px; border: 1px dashed var(--line); border-radius: 6px;
+  background: transparent; color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
+}
+.session-new:disabled { color: var(--muted); cursor: not-allowed; border-style: solid; }
+
+.banner.exited { background: color-mix(in srgb, var(--muted) 20%, transparent); }
+
+/* ---------- 三档布局 ---------- */
+
+.app { position: relative; }
+.app[data-bp='desktop'] { display: grid; grid-template-columns: 240px 1fr; }
+.app[data-bp='desktop'][data-sidebar='closed'] { grid-template-columns: 0 1fr; }
+.app[data-bp='desktop'] .sidebar {
+  grid-row: 1 / -1;
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+  min-width: 0;
+}
+.app[data-bp='desktop'] .main { display: grid; grid-template-rows: 28px auto 1fr auto auto auto; min-width: 0; }
+.app:not([data-bp='desktop']) .main { display: grid; grid-template-rows: 28px auto 1fr auto auto auto; height: 100%; }
+
+/* tablet：覆盖式抽屉。打开时终端【不重排】—— 否则每次开关都触发 resize，
+   正在看的位置就跑了 */
+.app:not([data-bp='desktop']) .sidebar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: min(280px, 80vw);
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+  z-index: 20;
+  transform: translateX(-100%);
+  transition: transform 0.18s ease;
+}
+.app:not([data-bp='desktop'])[data-sidebar='open'] .sidebar { transform: none; }
+.scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.4); z-index: 15; }
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+/* phone：底部 sheet */
+.app[data-bp='phone'] .sidebar {
+  inset: auto 0 0 0;
+  width: auto;
+  max-height: 70%;
+  border-right: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 12px 12px 0 0;
+  transform: translateY(100%);
+}
+.app[data-bp='phone'][data-sidebar='open'] .sidebar { transform: none; }
+
+.term-host { height: 100%; }
+.statusbar { cursor: pointer; }
+
+/* short（手机横屏）：功能键条压矮、快捷条隐藏、细条只留圆点 */
+.app[data-short='true'] .statusbar .name,
+.app[data-short='true'] .statusbar .cwd,
+.app[data-short='true'] .statusbar .conn { display: none; }

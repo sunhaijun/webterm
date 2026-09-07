@@ -162,9 +162,10 @@ test.describe('E2E-2c 缓冲溢出', () => {
     await expect(page.getByTestId('conn-text')).toHaveText('在线')
 
     // 每行 2ms，让输出【跨越】整个断线窗口。
-    // 不加延迟的话 3000 行可能在我把线掐掉之前就全送到客户端了 ——
+    // 不加延迟的话几千行可能在我把线掐掉之前就全送到客户端了 ——
     // 那样根本不会溢出，测的就不是 reset 路径。
-    await submit(page, `cd ${process.cwd()} && ${EMIT} 4000 2`)
+    // 1500 行 × 2ms ≈ 3~6s，断线 5s 期间产出远超 64 KiB 的 ring。
+    await submit(page, `cd ${process.cwd()} && ${EMIT} 1500 2`)
     await waitFor(async () => (await terminalText(page)).includes('line 00005'), '输出开始')
 
     await net.goOffline()
@@ -183,6 +184,10 @@ test.describe('E2E-2c 缓冲溢出', () => {
 
     // 明确告诉用户历史被截断了，而不是让他拿着一屏东西猜发生了什么
     await expect(page.getByTestId('truncated')).toBeVisible({ timeout: 30_000 })
+
+    // 命令还在跑的时候是 Raw 模式，Composer 是收起的（ADR-0007）——
+    // 等它跑完切回 Composer 再敲下一条
+    await expect(page.getByTestId('composer')).toBeVisible({ timeout: 60_000 })
 
     // 关键：截断【之后】的内容必须完全正确
     await submit(page, 'printf "AFTER-%s\\n" RESET')

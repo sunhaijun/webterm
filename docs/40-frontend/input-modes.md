@@ -34,8 +34,19 @@
 | 任意 | 用户点击模式切换按钮 / 按 `Ctrl+Shift+M` | 切换 `mode`，`locked=true` |
 | 任意 | 用户点"解锁自动"（或切换会话） | `locked=false`，立即按最近的 `prompt` 状态重算 |
 | 任意 | `integration` 变为 `inactive` | `mode=composer`，自动切换禁用，显示降级提示 |
+| 任意，`locked=false` | 重连后收到 `welcome` | 按 `sessions[].prompt_state` 重新对齐 |
 | Composer | 用户点击终端区并开始打字 | 不切模式。把字符注入 Composer 并聚焦它（避免"点了终端打不出字"的困惑） |
 | Raw | 用户点击 Composer 输入框 | `mode=composer`，`locked=true` |
+
+### 重连之后必须重新对齐
+
+`prompt` 消息只在状态变化时发一次，客户端离线期间的那些就丢了。断线如果
+恰好跨过一个命令边界，客户端手里还是断线前的状态 —— 命令早跑完了它却以为
+还在跑，于是停在 Raw、Composer 收起，**用户连字都打不了**，要等下一条命令
+才自愈。
+
+所以收到 `welcome` 时要用 `sessions[].prompt_state` 重算一次（`locked` 时
+不动，那是用户的明确选择）。
 
 ### `running` 的去抖
 

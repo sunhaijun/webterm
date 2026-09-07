@@ -56,6 +56,7 @@ type Session struct {
 	exitCode    *int
 	cols, rows  uint16
 	integration string
+	promptState string    // 最近一次 prompt 状态，重连时回给客户端
 	lastMark    time.Time // 上一个 OSC 133 标记的时间
 	ring        *ringbuf.Buffer
 	subs        map[Subscriber]struct{}
@@ -97,6 +98,7 @@ func (s *Session) snapshotLocked() protocol.SessionInfo {
 		Cols:         s.cols,
 		Rows:         s.rows,
 		Integration:  s.integration,
+		PromptState:  optStr(s.promptState),
 		BaseSeq:      s.ring.BaseSeq(),
 		HeadSeq:      s.ring.HeadSeq(),
 		CreatedAt:    s.createdAt.UnixMilli(),
@@ -380,6 +382,9 @@ func (s *Session) handleOSCEvent(ev oscparse.Event) {
 	switch e := ev.(type) {
 	case oscparse.PromptEvent:
 		s.markIntegrationAlive()
+		s.mu.Lock()
+		s.promptState = e.State
+		s.mu.Unlock()
 		if e.State == protocol.PromptRunning {
 			s.beginCommand()
 		}
@@ -569,6 +574,14 @@ func (s *Session) close() {
 		s.subs = map[Subscriber]struct{}{}
 		s.mu.Unlock()
 	})
+}
+
+// optStr 把空字符串转成 nil，让 JSON 里出现的是 null 而不是 ""。
+func optStr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // historyOn 报告此刻是否记录命令历史。

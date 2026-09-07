@@ -6,11 +6,13 @@ export interface StatusProps {
   info: StateInfo
   sessionName: string
   cwd: string
+  /** 点细条打开会话列表 —— phone 上没有别的入口。 */
+  onOpenSessions?(): void
 }
 
-export function StatusBar({ state, info, sessionName, cwd }: StatusProps) {
+export function StatusBar({ state, info, sessionName, cwd, onOpenSessions }: StatusProps) {
   return (
-    <div class="statusbar" data-state={state}>
+    <div class="statusbar" data-state={state} data-testid="statusbar" onClick={onOpenSessions}>
       <span class="dot" data-state={state} data-testid="conn-dot" />
       <span class="name">{sessionName}</span>
       <span class="cwd">{cwd}</span>
