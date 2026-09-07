@@ -146,10 +146,14 @@ test('E2E-7 Raw：切过会话之后 IME 仍然生效（每个会话有自己的
     el.dispatchEvent(new InputEvent('input', { data: '你', isComposing: true, bubbles: true }))
   })
 
-  // ★ 这两条就是回归点：IME 没重新挂的话浮层不出现，
-  // 而且 isComposing 恒为 false —— 组字字节会直通 PTY（违反 AC-3.3）
-  await expect(page.getByTestId('ime-preview')).toBeVisible()
+  // ★ 回归点是浮层这条：IME 没重新挂的话它不出现（已用变异验证过）。
+  //
+  // 字节那条留着防回归，但要说清它【测不到本 bug 的要害】：
+  // 合成的 CompositionEvent 不会触发 xterm 的 onData，所以
+  // "isComposing 恒为 false → 组字字节直通 PTY"这个后果只有真输入法
+  // 能演示（见 docs/90-roadmap/milestones.md 的自动化边界）。
   expect((await sent()).length).toBe(before)
+  await expect(page.getByTestId('ime-preview')).toBeVisible()
 
   await page.evaluate(() => {
     const el = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
