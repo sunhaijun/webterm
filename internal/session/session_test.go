@@ -245,8 +245,9 @@ func TestSIDNotImmediatelyReused(t *testing.T) {
 	}
 }
 
-// resize 会真的作用到 PTY 上。
-func TestResizeAppliesToPTY(t *testing.T) {
+// IT-resize-1：resize 消息真的作用到 PTY 上（TIOCSWINSZ），
+// 会话里 stty size 看到的就是前端算出来的尺寸（AC-3.11）。
+func TestITResize1_AppliesToPTY(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")

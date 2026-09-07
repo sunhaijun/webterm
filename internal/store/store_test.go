@@ -336,3 +336,33 @@ func TestPrefixHistoryDeduplicates(t *testing.T) {
 		t.Fatalf("首条 = %q, want 最近执行的 go build", got[0])
 	}
 }
+
+// Composer 的历史导航：前缀匹配 + 去重（http-api.md 的 prefix 模式）。
+func TestListByPrefixDeduplicates(t *testing.T) {
+	s, _ := open(t)
+	seed(t, s,
+		spec{"go test ./...", "/x", 1000, 0},
+		spec{"go test ./...", "/x", 2000, 0},
+		spec{"go test -run X", "/x", 3000, 0},
+		spec{"go build", "/x", 4000, 0},
+		spec{"ls -la", "/x", 5000, 0},
+	)
+	got, err := s.ListCommands(store.Filter{Prefix: "go "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := make([]string, len(got))
+	for i, c := range got {
+		texts[i] = c.Text
+	}
+	// 三条不同的 go 命令，重复的那条只出现一次；按最近执行时间倒序
+	want := []string{"go build", "go test -run X", "go test ./..."}
+	if len(texts) != len(want) {
+		t.Fatalf("命中 %d 条 (%v), want %d 条 —— 不去重的话连按 ↑ 会原地打转", len(texts), texts, len(want))
+	}
+	for i := range want {
+		if texts[i] != want[i] {
+			t.Fatalf("第 %d 条 = %q, want %q（顺序应当按最近执行时间倒序）", i, texts[i], want[i])
+		}
+	}
+}
