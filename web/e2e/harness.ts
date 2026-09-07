@@ -34,6 +34,8 @@ export interface AgentOptions {
   /** 调小可以让 reset 路径可测；默认走 1 MiB，字节级比较才稳定。 */
   ringBytes?: number
   maxSessions?: number
+  /** 不注入 shell 集成，用来测降级路径（E2E-13）。 */
+  noShellIntegration?: boolean
 }
 
 export class Agent {
@@ -63,6 +65,7 @@ export class Agent {
       String(opts.maxSessions ?? 5),
     ]
     if (opts.ringBytes) args.push('--ring-bytes', String(opts.ringBytes))
+    if (opts.noShellIntegration) args.push('--no-shell-integration')
 
     const proc = spawn(BINARY, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     const agent = new Agent(proc, port, dataDir)
@@ -166,6 +169,7 @@ interface WebtermWindow {
     serialize(): string
     outSeq(): number
     size(): { cols: number; rows: number }
+    mode(): { mode: string; locked: boolean }
     welcome(): {
       instance_id: string
       resumed: { sid: number; status: string; from_seq: number; in_ack: number }[]

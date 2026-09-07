@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 
 import { Connection, type ConnState, type StateInfo } from '../conn/connection'
+import { ModeMachine, type ModeState } from '../input/modes'
 import { T, type SessionInfo } from '../protocol/messages'
 import { createTerminal, type TermHandle } from '../term/terminal'
 import { RecoveredToast, StatusBar } from './status'
@@ -35,6 +36,9 @@ export function App() {
   const [recovered, setRecovered] = useState<number | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [fatal, setFatal] = useState<string | null>(null)
+  const [mode, setMode] = useState<ModeState>({ mode: 'composer', locked: false })
+  const [degraded, setDegraded] = useState(false)
+  const modeRef = useRef<ModeMachine | null>(null)
 
   useEffect(() => {
     const host = hostRef.current
@@ -42,6 +46,16 @@ export function App() {
 
     // 最近一次 welcome，E2E 用它直接断言续传结果（reset / ok / gone）
     let lastWelcome: unknown = null
+
+    const modes = new ModeMachine({ onChange: setMode })
+    modeRef.current = modes
+
+    // 集成状态有三个来路：welcome.sessions[]、session.created、session.updated。
+    // 漏掉任何一条，降级提示就会在某条路径上不出现。
+    const applyIntegration = (v: SessionInfo['integration']) => {
+      modes.onIntegration(v)
+      setDegraded(v === 'inactive')
+    }
 
     const handle = createTerminal(14)
     termRef.current = handle
@@ -73,6 +87,7 @@ export function App() {
             if (first) {
               sidRef.current = first.sid
               setSession(first)
+              applyIntegration(first.integration)
               conn.subscribe(first.sid)
             } else {
               conn.send({
@@ -87,9 +102,14 @@ export function App() {
           } else if (msg.t === T.sessionCreated) {
             sidRef.current = msg.session.sid
             setSession(msg.session)
+            applyIntegration(msg.session.integration)
             conn.subscribe(msg.session.sid)
           } else if (msg.t === T.sessionUpdated && msg.sid === sidRef.current) {
             setSession((s) => (s ? { ...s, ...msg } : s))
+            if (msg.integration !== undefined) applyIntegration(msg.integration)
+          } else if (msg.t === T.prompt && msg.sid === sidRef.current) {
+            // 这条消息驱动输入模式自动切换（ADR-0007）
+            modes.onPrompt(msg.state)
           }
         },
         onState(s, i) {
@@ -114,6 +134,15 @@ export function App() {
     }
     document.addEventListener('visibilitychange', onVisible)
 
+    // Raw 模式：按键直通 PTY。xterm 的 onData 已经把控制键映射好了。
+    // m4 会在这上面加 IME composition 处理与内联预览浮层。
+    const dataSub = handle.term.onData((data) => {
+      const sid = sidRef.current
+      if (sid === null) return
+      if (modes.current.mode !== 'raw') return
+      conn.sendInput(sid, new TextEncoder().encode(data))
+    })
+
     // AC-2.1（字节级连续性）是这个项目最重要的一个测试，它必须能拿到
     // xterm 缓冲的序列化结果。这里把把手挂到 window 上。
     //
@@ -131,6 +160,7 @@ export function App() {
       sid: () => sidRef.current,
       size: () => ({ cols: handle.term.cols, rows: handle.term.rows }),
       welcome: () => lastWelcome,
+      mode: () => modes.current,
     }
 
     const ro = new ResizeObserver(() => {
@@ -146,6 +176,8 @@ export function App() {
       removeEventListener('online', kick)
       document.removeEventListener('visibilitychange', onVisible)
       ro.disconnect()
+      dataSub.dispose()
+      modes.dispose()
       conn.close()
       handle.dispose()
     }
@@ -173,6 +205,23 @@ export function App() {
           {fatal}
         </div>
       )}
+      {degraded && (
+        <div class="banner warn" data-testid="degraded">
+          shell 集成未生效 · 命令历史、CWD 与自动切换不可用
+          <button
+            onClick={() =>
+              alert(
+                'agent 没有收到 shell 集成的握手。常见原因：\n' +
+                  '· 会话里执行过 exec / su / 进了容器\n' +
+                  '· agent 以 --no-shell-integration 启动\n\n' +
+                  '在新 shell 里手动接入：eval "$(webterm shell-init bash)"',
+              )
+            }
+          >
+            了解原因
+          </button>
+        </div>
+      )}
       {truncated && (
         <div class="banner warn" data-testid="truncated">
           ── 历史输出已截断 ──
@@ -180,10 +229,28 @@ export function App() {
         </div>
       )}
       <div class="term" ref={hostRef} data-testid="terminal" />
+      <div class="modebar" data-testid="modebar" data-mode={mode.mode} data-locked={mode.locked}>
+        <span>{mode.mode === 'composer' ? 'Composer' : 'Raw（按键直通）'}</span>
+        <button
+          data-testid="mode-toggle"
+          onClick={() => {
+            modeRef.current?.toggleManual()
+            if (modeRef.current?.current.mode === 'raw') hostRef.current?.querySelector('textarea')?.focus()
+          }}
+        >
+          {mode.locked ? '已锁定 · 切换' : '切换'}
+        </button>
+        {mode.locked && (
+          <button data-testid="mode-unlock" onClick={() => modeRef.current?.unlock()}>
+            解锁自动
+          </button>
+        )}
+      </div>
       <textarea
         class="composer"
         ref={inputRef}
         data-testid="composer"
+        hidden={mode.mode === 'raw'}
         rows={1}
         autocorrect="off"
         autocapitalize="off"

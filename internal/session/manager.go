@@ -232,7 +232,9 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 			return nil, fmt.Errorf("session: 生成 rcfile: %w", err)
 		}
 		rcPath = p
-		args = []string{"-i", "--rcfile", rcPath}
+		// 【长选项必须排在短选项前面】：bash -i --rcfile F 会报
+		// "bash: --: invalid option" 然后打一屏用法直接退出。
+		args = []string{"--rcfile", rcPath, "-i"}
 	} else if args == nil {
 		// 没有 shell 集成时不读用户 dotfile，行为才是确定的
 		args = []string{"--norc", "--noprofile", "-i"}

@@ -17,8 +17,11 @@ shell 集成是 v0.1 的必需项（它同时支撑命令历史、CWD 上报、�
 **agent 启动会话时生成一个临时 rcfile，用 `bash --rcfile <path> -i` 启动。用户不需要修改任何 dotfile。**
 
 ```go
-cmd := exec.Command("bash", "-i", "--rcfile", rcPath)
+cmd := exec.Command("bash", "--rcfile", rcPath, "-i")
 ```
+
+> **参数顺序不能反。** bash 的长选项必须排在短选项前面：`bash -i --rcfile <path>`
+> 会报 `bash: --: invalid option`，打一屏用法然后退出，会话根本起不来。
 
 ## 关键细节：正确模拟 bash 的初始化语义
 
