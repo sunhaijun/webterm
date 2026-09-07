@@ -114,6 +114,54 @@ test('E2E-7 Raw：compositionend 时一次性提交，光标处有内联预览',
   await expect(page.getByTestId('ime-preview')).toBeHidden()
 })
 
+test('E2E-7 Raw：切过会话之后 IME 仍然生效（每个会话有自己的 textarea）', async ({ page }) => {
+  const sent = await recordInput(page)
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  const sidA = await page.evaluate(
+    () => (window as unknown as { __webterm: { sid(): number | null } }).__webterm.sid()!,
+  )
+
+  // 建第二个会话并切过去 —— 它有自己的 xterm 实例和自己的 helper textarea，
+  // 而 A 的 host 此刻已经被摘出 DOM
+  await page.getByTestId('new-session').click()
+  await waitFor(async () => {
+    const sid = await page.evaluate(
+      () => (window as unknown as { __webterm: { sid(): number | null } }).__webterm.sid(),
+    )
+    return sid !== null && sid !== sidA
+  }, '切到了新会话')
+
+  await page.getByTestId('mode-toggle').click() // 切到 Raw
+  const before = (await sent()).length
+
+  await page.evaluate(() => {
+    const el = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+    el.focus()
+    el.dispatchEvent(new CompositionEvent('compositionstart', { data: '', bubbles: true }))
+    el.value = '你'
+    el.dispatchEvent(new CompositionEvent('compositionupdate', { data: '你', bubbles: true }))
+    el.dispatchEvent(new InputEvent('input', { data: '你', isComposing: true, bubbles: true }))
+  })
+
+  // ★ 这两条就是回归点：IME 没重新挂的话浮层不出现，
+  // 而且 isComposing 恒为 false —— 组字字节会直通 PTY（违反 AC-3.3）
+  await expect(page.getByTestId('ime-preview')).toBeVisible()
+  expect((await sent()).length).toBe(before)
+
+  await page.evaluate(() => {
+    const el = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+    el.dispatchEvent(new CompositionEvent('compositionend', { data: '你好', bubbles: true }))
+  })
+  await waitFor(async () => {
+    const all = await sent()
+    return all.slice(before).join('') === '你好'
+  }, 'compositionend 时一次性发出 "你好"')
+  await expect(page.getByTestId('ime-preview')).toBeHidden()
+})
+
 test('E2E-8 提交格式：单行不包 bracketed paste，多行包', async ({ page }) => {
   const sent = await recordInput(page)
   await agent.pair(page)

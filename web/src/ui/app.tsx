@@ -172,6 +172,8 @@ export function App() {
 
     const select = (sid: number) => {
       store.activate(sid, area)
+      // activate 里的 term.open() 是同步的，此刻 textarea 已经在 DOM 里
+      attachIme()
       setTruncated(false)
       sendResize()
     }
@@ -280,11 +282,20 @@ export function App() {
     }
     document.addEventListener('visibilitychange', onVisible)
 
-    // Raw 模式的 IME：组字发生在 xterm 的隐藏 textarea 里
+    // Raw 模式的 IME：组字发生在 xterm 的隐藏 textarea 里。
+    //
+    // 【每个会话有自己的 xterm 实例，也就有自己的 helper textarea】，
+    // 而 store.activate() 会把上一个会话的 host 从 DOM 摘掉。所以切会话
+    // 必须重新挂 —— 否则 ime 绑在一个不再接事件的 textarea 上，
+    // onTermData 里的 isComposing 恒为 false，组字期间的字节会直通 PTY
+    // （违反 AC-3.3「组字期间一个字节都不能发」）。
     let ime: RawIme | null = null
+    let imeEl: HTMLTextAreaElement | null = null
     const attachIme = () => {
       const helper = area.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')
-      if (!helper || ime) return
+      if (!helper || helper === imeEl) return
+      ime?.dispose()
+      imeEl = helper
       ime = new RawIme(helper, {
         onCommit: (text) => sendRaw(text),
         onPreview: (text) => {
@@ -304,7 +315,6 @@ export function App() {
         },
       })
     }
-    const imeTimer = setInterval(attachIme, 300)
 
 
     ;(window as unknown as Record<string, unknown>).__webterm = {
@@ -338,7 +348,6 @@ export function App() {
       window.removeEventListener('resize', applyViewport)
       removeEventListener('online', kick)
       document.removeEventListener('visibilitychange', onVisible)
-      clearInterval(imeTimer)
       unwatchViewport()
       sendResize.cancel()
       ro.disconnect()
