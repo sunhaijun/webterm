@@ -85,6 +85,8 @@ export class SessionStore {
     if (existing) {
       existing.info = { ...existing.info, ...info }
       existing.modes.onIntegration(existing.info.integration)
+      // 重连后重新对齐 —— 离线期间的 prompt 变化已经丢了
+      existing.modes.resync(info.prompt_state)
       this.h.onChange()
       return
     }
@@ -95,6 +97,7 @@ export class SessionStore {
 
     const modes = new ModeMachine({ onChange: (s) => this.h.onModeChange(info.sid, s) })
     modes.onIntegration(info.integration)
+    modes.resync(info.prompt_state)
 
     // 每个终端实例创建时就把输入绑好，不用事后轮询去找它
     term.term.onData((data) => this.h.onTermData(info.sid, data))

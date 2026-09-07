@@ -127,3 +127,38 @@ describe('会话切换', () => {
     expect(m.current).toEqual({ mode: 'composer', locked: false })
   })
 })
+
+describe('重连后重新对齐（协议 §4.2 的 prompt_state）', () => {
+  it('离线期间命令跑完了 → 重连后回到 Composer', () => {
+    const { m } = machine()
+    m.onPrompt('running')
+    vi.advanceTimersByTime(RAW_DEBOUNCE_MS)
+    expect(m.current.mode).toBe('raw')
+
+    // 断线期间命令跑完了，那些 prompt 消息发给了零个订阅者就此丢掉。
+    // 没有这次 resync 的话客户端会一直停在 Raw —— Composer 收起，
+    // 用户连字都打不了。
+    m.resync('input')
+    expect(m.current.mode).toBe('composer')
+  })
+
+  it('离线期间命令还在跑 → 重连后仍是 Raw', () => {
+    const { m } = machine()
+    m.resync('running')
+    expect(m.current.mode).toBe('raw')
+  })
+
+  it('prompt_state 为 null（集成不可用）时不动', () => {
+    const { m } = machine()
+    m.setManual('raw')
+    m.resync(null)
+    expect(m.current).toEqual({ mode: 'raw', locked: true })
+  })
+
+  it('locked 时不被重连覆盖 —— 那是用户的明确选择', () => {
+    const { m } = machine()
+    m.setManual('raw')
+    m.resync('input')
+    expect(m.current).toEqual({ mode: 'raw', locked: true })
+  })
+})

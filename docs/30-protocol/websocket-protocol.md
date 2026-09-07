@@ -212,6 +212,7 @@ client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
       "status": "running", "exit_code": null,
       "cols": 80, "rows": 24,
       "integration": "active",
+      "prompt_state": "input",
       "base_seq": 0, "head_seq": 483920,
       "created_at": 1757116000000
     }
@@ -233,6 +234,10 @@ client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
 `resumed[].in_ack` 是 agent 对 **该 `client_id`** 在该会话上已写入 PTY 的累计字节数（§5.3）。**client 必须据此裁剪重发队列，并重发其后的全部输入。**
 
 **未读靠 `head_seq` 推导**，不是服务端状态：`unread = head_seq > 本地 out_seq`。未读天然是 per-client 的，放在服务端会让两个标签页互相清对方的未读。
+
+**`prompt_state` 是给重连用的。** `prompt` 消息只在状态变化的那一刻发一次 —— 客户端离线期间发生的那些【发给了零个订阅者，就此丢掉】。如果断线恰好跨过一个命令边界，客户端手里还是断线前的状态：命令早就跑完了，它却以为还在跑，于是停在 Raw 模式、Composer 收起，用户【连字都打不了】，直到下一条命令才自愈。
+
+所以每次 `welcome` 都要把当前 prompt 状态带回去，让客户端重新对齐。取值与 `prompt` 消息相同；集成不可用时为 `null`。
 
 #### `session.created` / `session.closed` / `session.updated`
 
@@ -286,6 +291,8 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 | `"done"` | OSC `133;D` | 命令结束，即将回到 prompt | **Composer** |
 
 **这条消息驱动输入模式自动切换**（[ADR-0007](../20-architecture/adr/0007-dual-mode-input.md)）。
+
+它【不可续传】—— 离线期间的状态变化就是丢了。重连后靠 `welcome.sessions[].prompt_state` 重新对齐，见 §4.2。
 `133;A`（prompt 开始）不产生消息 —— 对客户端没有用处。
 
 #### `command.start` / `command.end`

@@ -781,3 +781,64 @@ func TestResumeResetCarriesAttrPrefix(t *testing.T) {
 	}
 	waitFor(t, "回放帧带上了属性修正前缀", func() bool { return cl2.sawAttrPrefix(sid) })
 }
+
+// 断线跨过命令边界时，重连后客户端必须能重新对齐 prompt 状态。
+//
+// prompt 消息只在状态变化时发一次，离线期间的那些【发给了零个订阅者，
+// 就此丢掉】。没有 welcome.sessions[].prompt_state 的话，客户端会停在
+// 断线前的状态 —— 命令早跑完了它却以为还在跑，于是停在 Raw 模式、
+// Composer 收起，用户连字都打不了，要等下一条命令才自愈。
+func TestPromptStateResyncsOnReconnect(t *testing.T) {
+	h := newHarnessWith(t, harnessOpts{shellIntegration: true})
+	c := h.client()
+	h.pair(c).Body.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	w := cl.welcome()
+	sid := cl.createSession(t.TempDir())
+	cl.send(&protocol.Subscribe{SID: sid, OutSeq: 0})
+
+	waitFor(t, "集成就绪", func() bool {
+		s, ok := h.sessions.Get(sid)
+		return ok && s.Snapshot().Integration == protocol.IntegrationActive
+	})
+
+	cl.input(sid, "sleep 2; printf 'DONE-%s\\n' X\r")
+	waitFor(t, "命令开始跑", func() bool {
+		for _, m := range cl.messages() {
+			if p, ok := m.(*protocol.Prompt); ok && p.State == protocol.PromptRunning {
+				return true
+			}
+		}
+		return false
+	})
+
+	cl.mu.Lock()
+	at := cl.outSeq[sid]
+	cl.mu.Unlock()
+
+	// 断线，让命令在断线期间跑完
+	cl.ws.CloseNow()
+	waitFor(t, "连接断开", func() bool { return cl.isClosed() })
+	waitFor(t, "命令在断线期间跑完", func() bool {
+		s, ok := h.sessions.Get(sid)
+		return ok && s.Snapshot().PromptState != nil &&
+			*s.Snapshot().PromptState != protocol.PromptRunning
+	})
+
+	cl2 := h.connect(ctx, c, "tab-1", []protocol.ResumeReq{{SID: sid, OutSeq: at}}, w.InstanceID)
+	w2 := cl2.welcome()
+
+	if len(w2.Sessions) == 0 {
+		t.Fatal("welcome 里没有会话")
+	}
+	got := w2.Sessions[0].PromptState
+	if got == nil {
+		t.Fatal("welcome.sessions[].prompt_state 是 null —— 客户端无从得知命令已经跑完，会一直停在 Raw")
+	}
+	if *got == protocol.PromptRunning {
+		t.Fatalf("prompt_state = %q，但命令早就跑完了", *got)
+	}
+}
