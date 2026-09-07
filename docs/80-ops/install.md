@@ -372,7 +372,7 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | `--no-shell-integration` | false | 不注入 shell 集成（排障用） |
 | `--no-login-shell` | false | 用非登录交互 shell（只读 `~/.bashrc`） |
 | `--shell` | `bash` | v0.1 只支持 bash |
-| `--log-level` | `info` | `debug` / `info` / `warn` / `error` |
+| `--log-level` | `info` | `debug` / `info` / `warn` / `error`。公网扫描器制造的 TLS 握手失败记在 `debug`，默认看不到 |
 
 ### 其它子命令
 

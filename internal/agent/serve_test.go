@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -191,4 +192,70 @@ func TestListenRejectsIdenticalPorts(t *testing.T) {
 			t.Errorf("错误信息里缺 %q: %v", want, err)
 		}
 	}
+}
+
+// 握手噪音不该占 INFO：端口对公网开放，扫描器会持续制造这类行，
+// 按 INFO 打会把证书预热结果、绑定失败这些真的要看的行冲掉。
+func TestHTTPErrorLogDemotesHandshakeNoise(t *testing.T) {
+	cases := []struct {
+		name      string
+		line      string
+		wantLevel string
+	}{
+		{
+			"扫描器拿 IP 直连（没有 SNI）",
+			"http: TLS handshake error from 1.2.3.4:5678: acme/autocert: missing server name",
+			"DEBUG",
+		},
+		{
+			"扫描器发纯 HTTP",
+			"http: TLS handshake error from 1.2.3.4:5678: client sent an HTTP request to an HTTPS server",
+			"DEBUG",
+		},
+		{
+			"客户端拒绝我们的证书",
+			"http: TLS handshake error from 1.2.3.4:5678: remote error: tls: unknown certificate",
+			"DEBUG",
+		},
+		{
+			// 不是握手噪音的必须留在 INFO —— 降级不能一刀切
+			"其它 http 错误照常可见",
+			"http: panic serving 1.2.3.4:5678: something broke",
+			"INFO",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf lockedBuf
+			a := &Agent{log: slog.New(slog.NewTextHandler(&buf,
+				&slog.HandlerOptions{Level: slog.LevelDebug}))}
+			a.httpErrorLog().Print(tc.line)
+
+			got := buf.String()
+			if !strings.Contains(got, "level="+tc.wantLevel) {
+				t.Errorf("想要 level=%s，实际:\n%s", tc.wantLevel, got)
+			}
+			// 内容不能丢 —— 降级是为了不刷屏，不是为了藏起来
+			if !strings.Contains(got, "TLS handshake error") && !strings.Contains(got, "panic serving") {
+				t.Errorf("消息内容丢了:\n%s", got)
+			}
+		})
+	}
+}
+
+type lockedBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuf) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
