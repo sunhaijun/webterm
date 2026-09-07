@@ -94,10 +94,6 @@ func runServe(args []string) error {
 	}, st, sessions)
 	a.LoadSettings()
 
-	stopPurge := make(chan struct{})
-	go a.PurgeLoop(stopPurge)
-	defer close(stopPurge)
-
 	servers, errCh, err := a.Listen(agent.ServeConfig{
 		Domain:      c.domain,
 		Dev:         c.dev,
@@ -112,6 +108,14 @@ func runServe(args []string) error {
 		return err
 	}
 
+	// 【必须在 Listen 成功之后】才起清理协程。它启动时会立刻查一次库，
+	// 而 Listen 失败时函数马上返回、defer 里的 st.Close() 就执行了 ——
+	// 那次查询会撞上"database is closed"，两行 WARN 把真正的错误信息盖住。
+	// 反正要退出了，也没必要清理。
+	stopPurge := make(chan struct{})
+	go a.PurgeLoop(stopPurge)
+	defer close(stopPurge)
+
 	// 首次启动若无已授权设备，打配对码 + 二维码（AC-1.3）
 	if has, err := st.HasAnyDevice(); err == nil && !has {
 		code, err := a.Auth().NewPairingCode(time.Now())
@@ -120,7 +124,7 @@ func runServe(args []string) error {
 		}
 		fmt.Println()
 		fmt.Println("尚无已授权设备。配对码 5 分钟内有效：")
-		printPairing(c.baseURL(*httpPort), code)
+		printPairing(c.baseURL(*httpPort, *httpsPort), code)
 	}
 
 	sig := make(chan os.Signal, 1)

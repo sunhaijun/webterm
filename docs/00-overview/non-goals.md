@@ -52,7 +52,7 @@ PTY 的 master fd 由 agent 持有，agent 一死，shell 收到 `SIGHUP` 就没
 
 ### 不做自签证书
 
-TLS 只有一条生产路径：ACME 自动签发（需要域名 + 公网 IP + 80/443 端口）。
+TLS 只有一条生产路径：ACME 自动签发（需要域名 + 公网 IP，且 80 或 443 至少有一个从公网可达 —— HTTP-01 走 80，TLS-ALPN-01 走 443）。
 
 - 自签证书在 iOS 上要装描述文件，体验很差，且会长期成为排障噪音来源。
 - 本地开发不需要它：`http://localhost:PORT` 本身就是 secure context，PWA / Service Worker / 剪贴板 API 全都能用。

@@ -359,7 +359,7 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | `--acme-staging` | false | 用 Let's Encrypt staging 环境（调试部署用） |
 | `--data-dir` | `$XDG_DATA_HOME/webterm` | 数据目录 |
 | `--http-port` | 80 | ACME 挑战 + HTTPS 跳转 |
-| `--https-port` | 443 | |
+| `--https-port` | 443 | 非 443 时**配对 URL 与启动日志会带上端口**，见[跑在非标准端口上](#跑在非标准端口上) |
 | `--bind` | `0.0.0.0` | 监听地址。设为 `127.0.0.1` 配合隧道/反代 |
 | `--no-tls` | false | 关闭 TLS。**仅允许在 `--bind` 为回环或私有地址时使用** |
 | `--trust-proxy` | false | 信任 `X-Forwarded-For`（**仅在反代后启用**，否则限速可被绕过） |
@@ -477,6 +477,63 @@ systemctl --user restart webterm
 agent 收到 `SIGTERM` 时会先向所有客户端广播"agent 即将重启，所有会话将结束"再退出，所以你至少能看到发生了什么，而不是一个莫名的重连失败。
 
 **命令历史存在 SQLite 里，跨重启存活** —— "我刚才在跑什么"这个信息不会丢。
+
+## 跑在非标准端口上
+
+443 被别的服务占了（Xray、别的 web 服务）时，webterm 可以听在别的端口：
+
+```bash
+webterm serve --domain term.example.com --https-port 8443
+```
+
+`--https-port` 一旦不是 443，**对外 URL 的三个地方都会自动带上端口** ——
+配对 URL 与二维码、启动日志、HTTP 跳转的 `Location`。所以扫码就能直接打开，
+不需要手工补 `:8443`。
+
+```
+webterm 已启动  url=https://term.example.com:8443
+
+  https://term.example.com:8443/pair#<配对码>
+```
+
+`webterm pair` 是独立进程，它不知道 serve 用了哪个端口，**要自己带上同一个值**：
+
+```bash
+webterm pair --domain term.example.com --https-port 8443
+```
+
+`--http-port` 和 `--https-port` **不能相同** —— 它们是两个独立监听（ACME 挑战
+与跳转走前者，HTTPS 服务走后者）。写成一样会在启动时直接被拒，
+而不是撞到一句让人误以为端口被别人占了的 `address already in use`。
+
+用 `scripts/install.sh` 装的话，端口会写进 systemd 单元，`setcap` 也会跟着调整 ——
+两个端口都在 1024 以上时**不做 setcap**（普通用户本来就能绑，白给一个
+capability 没有必要）：
+
+```bash
+./install.sh --domain term.example.com --https-port 8443 --http-port 8080
+# → ExecStart=… serve --domain term.example.com --http-port 8080 --https-port 8443
+# → 端口 8080/8443 都不是特权端口，跳过 setcap
+```
+
+### 证书还能自动申请吗
+
+能，但要看 80 和 443 的情况 —— **CA 只会连这两个端口**，不会连 8443：
+
+| 情况 | 走哪条挑战 | 结果 |
+|---|---|---|
+| 80 空着（常见） | HTTP-01 → 80 | ✅ 照常签发与续期 |
+| 80 和 443 都不通 | 两条都没戏 | ❌ 只能自己塞证书或套反代 |
+
+> autocert 会先试 TLS-ALPN-01（443），失败再试 HTTP-01（80）。所以
+> 「443 被占 + 80 空着」这个组合下会看到第一次尝试失败 —— 那是**预期行为**，
+> 最终仍然会通过 HTTP-01 签出来。两条都不通时的诊断见
+> [排障](troubleshooting.md#证书--tls)。
+
+### PWA 还能装吗
+
+能。带端口的 `https://` 仍然是 secure context，Service Worker、`manifest.json`
+（`start_url` 与 `scope` 都是相对路径）、安装到桌面都不受影响。
 
 ## 反向代理 / 隧道场景
 

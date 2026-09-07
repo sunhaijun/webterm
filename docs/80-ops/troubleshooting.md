@@ -49,6 +49,25 @@ ss -lntp | grep -E ':(80|443)\b'   # webterm 应该在监听
 dig +short <域名>                   # 应当等于 curl -s ifconfig.me
 ```
 
+### 443 已经被别的服务占了
+
+启动会拿到 `bind: address already in use`。换个端口就行：
+
+```bash
+webterm serve --domain term.example.com --https-port 8443
+```
+
+**证书照旧自动申请与续期** —— 走 80 上的 HTTP-01（CA 只连 80 和 443，不会连 8443）。
+配对 URL 与二维码会自动带上 `:8443`，扫码就能直接打开。`webterm pair` 是独立进程，
+记得给它带同一个 `--https-port`。
+
+详见 [install.md 的「跑在非标准端口上」](install.md#跑在非标准端口上)。
+
+### 启动时报"`--http-port` 和 `--https-port` 不能相同"
+
+它们是两个独立监听：ACME 挑战与 HTTPS 跳转走 `--http-port`，HTTPS 服务走
+`--https-port`。写成同一个值会被直接拒绝。
+
 ### `certs/` 丢了
 
 会重新申请。注意限流 —— 所以 `certs/` 值得备份（[`install.md`](install.md#数据与备份)）。

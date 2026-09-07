@@ -17,6 +17,7 @@ TLS 代码路径只有两条：
 | 模式 | 命令 | 监听 | 说明 |
 |---|---|---|---|
 | 生产 | `webterm serve --domain X` | `:80`（ACME HTTP-01 + 跳转 HTTPS）、`:443` | 自动签发与续期 |
+| 生产（换端口） | 加 `--https-port 8443` | `:80`、`:8443` | 443 被别的服务占时。签发走 80 上的 HTTP-01；对外 URL 会带上端口 |
 | 开发 | `webterm serve --dev` | `127.0.0.1:8080` 明文 | `localhost` 本身是 secure context |
 
 ## 为什么 TLS 是硬性要求，不是可选项

@@ -13,7 +13,7 @@
 
 | ID | 标准 | 验证 |
 |---|---|---|
-| AC-1.1 | `webterm serve --domain X` 在 80/443 可达且 DNS 正确的环境下，能自动获得证书并在 443 提供服务；启动时主动预热一次证书（把续期定时器挂上，不依赖有没有流量）；到期前 `min(30 天, 有效期/3)` 自动续期 | IT-tls-1（用 pebble/本地 ACME 模拟）|
+| AC-1.1 | `webterm serve --domain X` 在 80/443 可达且 DNS 正确的环境下，能自动获得证书并提供 HTTPS 服务（端口默认 443，可用 `--https-port` 改）；启动时主动预热一次证书（把续期定时器挂上，不依赖有没有流量）；到期前 `min(30 天, 有效期/3)` 自动续期。续期只需 80 或 443 之一从公网可达（HTTP-01 走 80，TLS-ALPN-01 走 443）| IT-tls-1（本地假 ACME CA，见 [strategy.md 的「为什么不用 pebble」](../70-testing/strategy.md#为什么不用-pebble)）|
 | AC-1.2 | `webterm serve --dev` 在 `http://127.0.0.1:8080` 提供服务，不申请证书 | IT-tls-2 |
 | AC-1.3 | 首次启动若无已授权设备，stdout 打印配对 URL 和 ASCII 二维码 | IT-pair-1 |
 | AC-1.4 | 配对码：单次有效，用过即废；5 分钟过期；32 字节熵；比较为常数时间 | UT-pair-1..4 |

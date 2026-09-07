@@ -30,8 +30,20 @@ SETUP_SERVICE=1
 DO_SETCAP=1
 DRY_RUN=0
 BASE_URL=""
+HTTPS_PORT=443
+HTTP_PORT=80
 
 die() { printf '\033[31m错误\033[0m %s\n' "$*" >&2; exit 1; }
+# needs_privileged_port 报告有没有用到 1024 以下的端口 —— 只有那时才需要 setcap
+needs_privileged_port() { [ "$HTTPS_PORT" -lt 1024 ] || [ "$HTTP_PORT" -lt 1024 ]; }
+# check_port 先把值验一遍。不验的话非数字会撞上 [ -lt ]，在 set -e 下
+# 抛出的是一句 bash 内部错误，用户看不出是自己参数写错了。
+check_port() {
+    case "$2" in
+        ''|*[!0-9]*) die "$1 需要一个数字，得到 \"$2\"" ;;
+    esac
+    [ "$2" -ge 1 ] && [ "$2" -le 65535 ] || die "$1 超出范围（1-65535）：$2"
+}
 info() { printf '  %s\n' "$*"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 run() {
@@ -49,8 +61,10 @@ usage() {
   --channel <名字>   latest（默认）或 dev（main 的滚动构建）
   --version <tag>    指定版本，如 v0.1.0
   --prefix <目录>    安装位置，默认 /usr/local/bin
+  --https-port <n>   HTTPS 端口，默认 443（被别的服务占了就换，如 8443）
+  --http-port <n>    ACME 挑战 + 跳转端口，默认 80
   --no-service       装二进制但不配 systemd
-  --no-setcap        不做 setcap（你自己解决 443 端口权限）
+  --no-setcap        不做 setcap（你自己解决特权端口的绑定权限）
   --dry-run          只打印将要执行的命令
   -h, --help         这段说明
 
@@ -72,11 +86,17 @@ while [ $# -gt 0 ]; do
         --no-service) SETUP_SERVICE=0; shift ;;
         --no-setcap) DO_SETCAP=0; shift ;;
         --base-url) BASE_URL="${2:?--base-url 需要一个值}"; shift 2 ;;
+        --https-port) HTTPS_PORT="${2:?--https-port 需要一个值}"; shift 2 ;;
+        --http-port) HTTP_PORT="${2:?--http-port 需要一个值}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "未知选项 $1（--help 看用法）" ;;
     esac
 done
+
+check_port --https-port "$HTTPS_PORT"
+check_port --http-port "$HTTP_PORT"
+[ "$HTTPS_PORT" != "$HTTP_PORT" ] || die "--https-port 和 --http-port 不能相同（都是 $HTTPS_PORT）"
 
 # ---------- 1. 前置检查 ----------
 
@@ -117,6 +137,18 @@ fi
 # ---------- 2. 下载 ----------
 
 step "2/5 下载"
+
+# PORT_ARGS 只在非默认端口时出现 —— 单元文件里写一串默认值是噪音
+PORT_ARGS=""
+[ "$HTTP_PORT" = 80 ] || PORT_ARGS="$PORT_ARGS --http-port $HTTP_PORT"
+[ "$HTTPS_PORT" = 443 ] || PORT_ARGS="$PORT_ARGS --https-port $HTTPS_PORT"
+
+# EXT_URL 是用户实际要访问的地址。443 是默认端口，写出来是噪音；
+# 不是 443 就必须带上，否则给出去的地址打不开。
+if [ "$HTTPS_PORT" = 443 ]; then EXT_URL="https://$DOMAIN"; else EXT_URL="https://$DOMAIN:$HTTPS_PORT"; fi
+# pair 是独立进程，不知道 serve 用了哪个端口，得把同样的值传给它
+PAIR_ARGS=""
+[ "$HTTPS_PORT" = 443 ] || PAIR_ARGS=" --https-port $HTTPS_PORT"
 
 if [ -n "$BASE_URL" ]; then
     URL_BASE="$BASE_URL"
@@ -218,14 +250,19 @@ else
     $SUDO install -m755 "$TMP/$BIN" "$PREFIX/webterm"
 fi
 
+if [ "$DO_SETCAP" = 1 ] && ! needs_privileged_port; then
+    # 端口都在 1024 以上，普通用户本来就能绑 —— 不该白给一个 capability
+    info "端口 $HTTP_PORT/$HTTPS_PORT 都不是特权端口，跳过 setcap"
+    DO_SETCAP=0
+fi
 if [ "$DO_SETCAP" = 1 ]; then
     if command -v setcap >/dev/null 2>&1; then
-        # 让普通用户能绑 80/443，不必以 root 运行。
+        # 让普通用户能绑 1024 以下的端口，不必以 root 运行。
         # 注意：capability 附在文件上，每次替换二进制都要重做。
         run $SUDO setcap 'cap_net_bind_service=+ep' "$PREFIX/webterm"
-        done_msg "已 setcap，可以用普通用户绑 80/443"
+        done_msg "已 setcap，可以用普通用户绑 $HTTP_PORT/$HTTPS_PORT"
     else
-        info "没有 setcap 命令，跳过。你需要自己解决 80/443 的绑定权限"
+        info "没有 setcap 命令，跳过。你需要自己解决 $HTTP_PORT/$HTTPS_PORT 的绑定权限"
     fi
 fi
 
@@ -252,11 +289,12 @@ fi
 
 step "5/5 配置 systemd user service"
 
-UNIT_DIR="$HOME/.config/systemd/user"
+UNIT_DIR="${WEBTERM_UNIT_DIR:-$HOME/.config/systemd/user}"
 run mkdir -p "$UNIT_DIR"
 
 if [ "$DRY_RUN" = 1 ]; then
-    info "将写入 $UNIT_DIR/webterm.service（--domain $DOMAIN）"
+    info "将写入 $UNIT_DIR/webterm.service，其中："
+    info "  ExecStart=$PREFIX/webterm serve --domain $DOMAIN$PORT_ARGS"
 else
     cat > "$UNIT_DIR/webterm.service" <<EOF
 # 由 scripts/install.sh 生成。完整说明见 docs/80-ops/systemd.md。
@@ -273,7 +311,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$PREFIX/webterm serve --domain $DOMAIN
+ExecStart=$PREFIX/webterm serve --domain $DOMAIN$PORT_ARGS
 Restart=on-failure
 RestartSec=3
 
@@ -306,7 +344,18 @@ run systemctl --user enable --now webterm
 
 if [ "$DRY_RUN" = 1 ]; then
     step "完成（dry-run）"
+    info "访问地址将是 $EXT_URL"
+    info "配对命令：webterm pair --domain $DOMAIN$PAIR_ARGS"
     exit 0
+fi
+
+# 只在真的做了 setcap 时才提醒重做 —— 没做过的人看了只会困惑
+if [ "$DO_SETCAP" = 1 ]; then
+    SETCAP_NOTE="⚠  每次替换二进制之后要重做 setcap（capability 附在文件上，不在路径上）：
+     sudo setcap 'cap_net_bind_service=+ep' $PREFIX/webterm
+"
+else
+    SETCAP_NOTE=""
 fi
 
 step "完成"
@@ -314,21 +363,21 @@ cat <<EOF
 
 服务已启动。接下来：
 
+  访问地址：$EXT_URL
+
   1. 检查部署前置条件（DNS、端口）
-       webterm doctor --domain $DOMAIN
+       webterm doctor --domain $DOMAIN$PORT_ARGS
 
   2. 拿配对码（stdout 里有二维码，手机扫一下就完成授权）
-       webterm pair
+       webterm pair --domain $DOMAIN$PAIR_ARGS
 
   3. 看日志
        journalctl --user -u webterm -f
 
 ⚠  第一次部署建议先用 --acme-staging 调通证书：
      systemctl --user stop webterm
-     webterm serve --domain $DOMAIN --acme-staging
+     webterm serve --domain $DOMAIN$PORT_ARGS --acme-staging
    正式环境的 Let's Encrypt 限流窗口是一周，撞上了只能等。
 
-⚠  每次替换二进制之后要重做 setcap（capability 附在文件上，不在路径上）：
-     sudo setcap 'cap_net_bind_service=+ep' $PREFIX/webterm
-
+$SETCAP_NOTE
 EOF

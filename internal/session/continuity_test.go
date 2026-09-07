@@ -156,6 +156,10 @@ func TestOutSeqCountsAfterStripping(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitScreen(t, c, "STRIP-MARK")
+	// 【必须等静默】：标记出现之后 shell 还会吐下一个 prompt（含 OSC 133）。
+	// 下面的 head_seq 子测试拿 screen 快照和 s.HeadSeq() 比，而 HeadSeq 是
+	// 活的 —— 快照之后又来了字节就会 HeadSeq > len(screen)，随机失败。
+	waitQuiet(t, s, 300*time.Millisecond)
 
 	screen := c.Screen()
 

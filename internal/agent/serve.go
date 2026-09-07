@@ -79,6 +79,14 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 		if cfg.Domain == "" {
 			return nil, nil, errors.New("生产模式必须指定 --domain（ACME 需要它），或用 --dev")
 		}
+		// 早点拦住：否则第二个 listener 会撞 "address already in use"，
+		// 而 describeBindError 会让人去查"谁占着这个端口" —— 占着的是它自己。
+		if cfg.HTTPPort == cfg.HTTPSPort {
+			return nil, nil, fmt.Errorf(
+				"--http-port 和 --https-port 不能相同（都是 %d）。\n"+
+					"  ACME 挑战与跳转走 --http-port，HTTPS 服务走 --https-port，是两个监听",
+				cfg.HTTPPort)
+		}
 		m := newCertManager(cfg)
 		if err := os.MkdirAll(cfg.CertDir, 0o700); err != nil {
 			return nil, nil, fmt.Errorf("创建证书目录失败: %w", err)
@@ -118,7 +126,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 
 		go func() { errCh <- s.http.Serve(httpLn) }()
 		go func() { errCh <- s.https.ServeTLS(httpsLn, "", "") }()
-		a.log.Info("webterm 已启动", "url", "https://"+cfg.Domain)
+		a.log.Info("webterm 已启动", "url", externalURL(cfg.Domain, cfg.HTTPSPort))
 
 		// 主动预热证书。
 		//
@@ -256,13 +264,29 @@ func (s *Servers) Shutdown(ctx context.Context) {
 	}
 }
 
+// externalURL 是【对外可见的地址】：域名 + 非默认端口。
+//
+// 443 是默认端口，写出来是噪音；不是 443 就必须带上，否则用户拿到的
+// 地址是打不开的（443 被别的服务占着时会遇到 —— 见
+// docs/80-ops/install.md 的「跑在非标准端口上」）。
+//
+// 启动日志、HTTPS 跳转、配对 URL 三处都要用同一条规则。配对 URL 在
+// cmd/webterm 里（那是独立进程），规则由 flags_test.go 与这里的测试各自钉住。
+func externalURL(domain string, httpsPort int) string {
+	return "https://" + externalHost(domain, httpsPort)
+}
+
+func externalHost(domain string, httpsPort int) string {
+	if httpsPort != 0 && httpsPort != 443 {
+		return fmt.Sprintf("%s:%d", domain, httpsPort)
+	}
+	return domain
+}
+
 // redirectToHTTPS 把 :80 上非 ACME 挑战的请求全部 301 到 HTTPS。
 func redirectToHTTPS(domain string, httpsPort int) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := domain
-		if httpsPort != 443 {
-			host = fmt.Sprintf("%s:%d", domain, httpsPort)
-		}
+		host := externalHost(domain, httpsPort)
 		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusMovedPermanently)
 	})
 }
