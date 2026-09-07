@@ -2,9 +2,165 @@
 
 > 状态：Accepted
 
-## 前置条件（硬要求）
+## 从零到能用（六步）
 
-[ADR-0004](../20-architecture/adr/0004-acme-only-tls.md) 决定 TLS 只走 ACME，所以这些是**硬要求**，不是建议：
+需要：一台有公网 IP 的 Linux 机器 + 一个域名。照下面走完就能用。
+
+### 1. 查这台机器的公网 IP
+
+```bash
+curl -s ifconfig.me
+# → 203.0.113.42
+```
+
+拿不到就换 `curl -s ipinfo.io/ip`。如果它和机器上 `ip addr` 看到的地址不一样，
+说明你在 NAT 后面 —— 跳到[「家宽 / NAT 后面」](#家宽--nat-后面)。
+
+### 2. 加一条 DNS 记录
+
+去域名注册商（阿里云 / 腾讯云 / Cloudflare / Namecheap …）的 DNS 控制台，
+加**一条**记录：
+
+| 字段 | 填什么 |
+|---|---|
+| 类型 | `A`（IPv4）。只有 IPv6 就用 `AAAA` |
+| 主机记录 / Name | `term` —— 得到 `term.example.com`。想用根域就填 `@` |
+| 记录值 / Value | 第 1 步查到的公网 IP |
+| TTL | `600`（10 分钟）。先短一点，填错了改起来快 |
+
+**不要用 CNAME 指到别处。** Let's Encrypt 的 HTTP-01 挑战会打到解析出的那台
+机器上，指错了证书就签不下来。
+
+用 Cloudflare 的话**把小云朵关掉**（DNS only，不要 Proxied）—— 开着代理的话
+挑战会被 Cloudflare 截住，而且 webterm 看到的 `Origin` 也会不对。
+
+验证（刚加完可能要等 TTL）：
+
+```bash
+dig +short term.example.com
+# 输出必须等于第 1 步的公网 IP
+```
+
+### 3. 放行 80 和 443
+
+**这一步最容易漏，而且症状是"DNS 明明对了，证书就是签不下来"。**
+
+- **云服务器**：去控制台的安全组 / 防火墙规则里放行入方向 TCP `80` 和 `443`。
+  阿里云叫「安全组」，腾讯云叫「安全组」，AWS 叫「Security Group」。
+- **机器自己的防火墙**：
+
+  ```bash
+  sudo ufw allow 80,443/tcp        # Debian/Ubuntu
+  sudo firewall-cmd --add-service={http,https} --permanent && sudo firewall-cmd --reload
+  ```
+
+- **确认没有别的东西占着**（nginx/apache/caddy 很常见）：
+
+  ```bash
+  ss -lntp | grep -E ':(80|443)\b'   # 应当为空
+  ```
+
+从外网验证一下（在别的机器上跑，或者用手机流量）：
+
+```bash
+curl -sI http://term.example.com/ | head -1
+# 有任何响应（哪怕是 502/404）就说明 80 通了；超时/拒绝说明没通
+```
+
+### 4. 装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
+  | bash -s -- --domain term.example.com
+```
+
+用**普通用户**跑，不要 sudo —— 脚本会在需要的地方自己调 sudo。
+（agent 跑在哪个用户下，攻破它就等于拿到哪个用户的权限。以 root 跑等于把
+root shell 挂到公网。）
+
+### 5. 自检 + 先用 staging 试证书
+
+```bash
+webterm doctor --domain term.example.com
+```
+
+它会逐项检查 bash、数据目录、DNS 解析、DNS 是否指向本机、80/443 是否可用，
+失败的项会告诉你怎么修。**全绿了再往下走。**
+
+```bash
+systemctl --user stop webterm
+webterm serve --domain term.example.com --acme-staging
+```
+
+看到「证书已就绪」就说明整条链路通了，`Ctrl+C` 停掉。
+
+**为什么一定要先 staging**：正式环境的 Let's Encrypt 限流窗口是**一周**，
+配错了反复重试撞上限流，只能干等。staging 没有这个限制。
+
+### 6. 正式启动 + 配对
+
+```bash
+systemctl --user start webterm
+webterm pair
+```
+
+stdout 会打出一个配对 URL 和终端二维码：
+
+```
+  https://term.example.com/pair#kJ8xR2mQ...
+
+  ▄▄▄▄▄▄▄ ▄  ▄▄ ▄▄▄▄▄▄▄
+  █ ▄▄▄ █ ▀▄▄▀█▄ █ ▄▄▄ █
+  …
+```
+
+**手机扫码** → 自动完成授权 → 直接进终端。这台设备之后再也不用登录。
+
+配对码 5 分钟过期、用过即废。它走 URL fragment，**不会发给服务器**，所以不进
+访问日志、不进 Referer。
+
+### 走通了的样子
+
+```bash
+curl -sI https://term.example.com/healthz | head -1   # HTTP/2 200
+systemctl --user status webterm                        # active (running)
+journalctl --user -u webterm -n 20                     # 有"证书已就绪"
+```
+
+浏览器打开 `https://term.example.com`，应当看到终端、能敲命令。
+手机上可以「添加到主屏幕」装成 PWA。
+
+---
+
+### 家宽 / NAT 后面
+
+公网 IP 不在这台机器上（`ifconfig.me` 与 `ip addr` 不一致）时，有两条路：
+
+1. **路由器端口映射**：把外部 80/443 转发到这台机器。很多运营商**封 80 入方向**，
+   那 HTTP-01 挑战就过不来 —— 这条路走不通。
+2. **套隧道 / 反代**（推荐）：让 Cloudflare Tunnel / frp / nginx 终结 TLS，
+   webterm 只监听回环。见[反向代理 / 隧道场景](#反向代理--隧道场景)。
+
+### 只想本地试试
+
+不需要域名、证书、公网、root：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
+  | bash -s -- --dev
+webterm serve --dev
+# → http://127.0.0.1:8080，stdout 有配对 URL 和二维码
+```
+
+`http://localhost` 本身就是 secure context，PWA、剪贴板、Service Worker 都能测。
+但**手机访问局域网 IP 的 http 不算 secure context**，装不了 PWA —— 那个必须上正式域名。
+
+---
+
+## 前置条件速查
+
+上面第 1–3 步就是在满足这张表。[ADR-0004](../20-architecture/adr/0004-acme-only-tls.md)
+决定 TLS 只走 ACME，所以这些是**硬要求**，不是建议：
 
 | 要求 | 为什么 | 怎么验证 |
 |---|---|---|
@@ -12,6 +168,7 @@
 | 域名 A/AAAA 记录指向本机公网 IP | HTTP-01 挑战需要 | 上面的结果 == `curl -s ifconfig.me` |
 | **80 端口可用** | HTTP-01 挑战走 80 | `ss -lntp \| grep :80` 为空 |
 | **443 端口可用** | 服务本体 | `ss -lntp \| grep :443` 为空 |
+| 80/443 在**云安全组**里放行 | 挑战要从外网打进来 | 在别的机器上 `curl -sI http://<域名>/` |
 | Linux（x86_64 / arm64） | | `uname -m` |
 
 bash 不是硬要求，但版本影响功能完整度：**4.4+** 才有 readline 的 bracketed paste（Composer 的多行提交依赖它）；**4.0+** 才有完整的 shell 集成（更低版本降级为只上报 CWD 与 prompt 状态）。任何版本下终端本身都完全可用。
@@ -20,20 +177,76 @@ bash 不是硬要求，但版本影响功能完整度：**4.4+** 才有 readline
 
 ## 安装
 
-```bash
-# 1. 下载（或自己 go build）
-curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/webterm-linux-amd64 -o webterm
-chmod +x webterm
+### 一条命令（推荐）
 
-# 2. 检查环境
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
+  | bash -s -- --domain term.example.com
+```
+
+脚本会：认架构 → 下载二进制 → **校验 SHA256** → 装到 `/usr/local/bin` →
+`setcap` 让普通用户能绑 443 → 生成 systemd user service → `enable-linger` →
+启动服务。然后跑一次 `webterm pair` 就能扫码开工。
+
+先看它要做什么：加 `--dry-run`。全部选项：`--help`。
+
+**本地试用**（不需要域名、证书、root）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
+  | bash -s -- --dev
+webterm serve --dev      # → http://127.0.0.1:8080
+```
+
+> 正式 `v*` tag 之前 `latest` 是空的 —— 加 `--channel dev` 装 `main` 的滚动构建。
+
+关于 `curl | bash`：装的是一个会把 shell 暴露到公网的东西，所以脚本
+**强制校验 SHA256**，取不到校验和就直接中止。不放心可以先
+`curl -fsSL … -o install.sh` 读一遍再跑，脚本只有两百来行。
+
+### 从源码构建
+
+需要 Go 1.27+ 与 Node 22+（Node 只在构建时需要，产物是单个二进制）。
+
+```bash
+git clone https://github.com/sunhaijun/webterm.git
+cd webterm
+make build          # 前端 + 二进制，顺序已经排好
+```
+
+交叉编译出发布产物：
+
+```bash
+make release        # → release/webterm-linux-{amd64,arm64} + SHA256SUMS
+```
+
+不用 make 的话手写是这样，**顺序不能反** —— 前端产物是 `go:embed` 的输入，
+反了嵌进去的是空目录，二进制跑起来会明说「没有嵌入前端产物」：
+
+```bash
+cd web && npm ci && npm run build && cd ..
+CGO_ENABLED=0 go build -ldflags "-s -w" -o webterm ./cmd/webterm
+```
+
+得到约 15 MB 的静态二进制（`ldd` 显示 not a dynamic executable），
+可以直接 scp 到目标机器。
+
+### 手工部署（不用安装脚本）
+
+```bash
+# 1. 检查环境（DNS、端口、bash）
 ./webterm doctor --domain term.example.com
 
-# 3. 试运行（用 ACME staging，避免撞正式环境限流）
+# 2. 试运行（用 ACME staging，避免撞正式环境限流）
 sudo ./webterm serve --domain term.example.com --acme-staging
 
-# 4. 正式运行
+# 3. 正式运行
 sudo ./webterm serve --domain term.example.com
 ```
+
+`--dev` 下 `http://localhost` 本身就是 secure context，所以 PWA、剪贴板、
+Service Worker 都能测（[ADR-0004](../20-architecture/adr/0004-acme-only-tls.md)）。
+手机访问局域网 IP 的 http **不是** secure context，装不了 PWA —— 那个必须上正式域名。
 
 ### 关于 sudo
 
@@ -61,7 +274,7 @@ webterm serve --domain X --http-port 8080 --https-port 8443
 启动后 stdout 打印：
 
 ```
-webterm 0.1.0 · https://term.example.com
+time=... level=INFO msg="webterm 已启动" url=https://term.example.com
 证书已就绪（Let's Encrypt，到期 2026-12-05，自动续期）
 
 尚无已授权设备。配对码 5 分钟内有效：
@@ -77,6 +290,22 @@ webterm 0.1.0 · https://term.example.com
 ```
 
 之后新设备接入用 `webterm pair` 再生成一个。
+
+**「证书已就绪」这一行是启动时主动申请一次的结果。** autocert 默认懒加载 ——
+证书要等第一次 TLS 握手才去申请，那样启动时根本看不出 ACME 通不通。
+agent 会在监听起来之后主动触发一次，所以 `--acme-staging` 那一步是真的能
+验证整条链路。失败时打出的是「原因 + 怎么修」，不是一行 Go 的 error：
+
+```
+level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.example.com env="Let's Encrypt staging"
+
+  HTTP-01 挑战没能打到本机的 80 端口。按顺序查：
+    1. 云安全组 / 防火墙放行了入方向 TCP 80 吗？（最常漏的一步）
+         在别的机器上跑：curl -sI http://term.example.com/
+    2. DNS 指向本机吗？
+         dig +short term.example.com   应当等于   curl -s ifconfig.me
+    3. 用 Cloudflare 的话，把小云朵关掉（DNS only，不要 Proxied）
+```
 
 ## 命令行参数
 
@@ -117,6 +346,65 @@ webterm 0.1.0 · https://term.example.com
 ## systemd
 
 见 [`systemd.md`](systemd.md)。
+
+## 证书续期
+
+**会自动续期，不需要你做任何事** —— 但有三个前提，缺一条就不会续。
+
+### 续期规则
+
+autocert 在证书到期前 **`min(30 天, 有效期的 1/3)`** 触发续期。
+Let's Encrypt 的证书有效期 90 天，1/3 正好是 30 天，所以实际就是**提前 30 天**。
+
+我们**刻意不显式设置 `RenewBefore`**：库的这条规则会跟着证书有效期自动缩放。
+写死 30 天的话，将来换成短周期证书（Let's Encrypt 已在推 6 天期的选项）
+就会变成"每次都立刻续期"。
+
+### 三个前提
+
+| 前提 | 为什么 | 缺了会怎样 |
+|---|---|---|
+| **进程活着** | 续期定时器在进程内存里 | 进程一直不跑就不会续期 |
+| **80 或 443 从公网可达** | 续期要重新过一次域名验证 | 两个都不通才会失败 |
+| `certs/` 可写 | 新证书要落盘 | 每次重启都重新申请，容易撞限流 |
+
+第二条比想象中宽松：验证有两条路 —— **HTTP-01 走 80**，**TLS-ALPN-01 走 443**，
+autocert 优先试后者，我们的 `NextProtos` 里带了 `acme-tls/1` 所以它是通的。
+443 本来就得开着（不然服务没法用），**所以后来把 80 关掉不会导致续期失败**。
+真正会出事的是把整台机器挪到 NAT 后面、或者给 Cloudflare 开了小云朵 ——
+那时两条路一起断。
+
+### 不依赖"有人访问"
+
+autocert 的续期定时器是在**证书进入内存状态时**挂上的，而它默认是懒加载 ——
+证书要等第一次 TLS 握手才加载。也就是说：**进程重启后如果一直没人访问，
+就没有续期定时器。**
+
+agent 在监听起来之后会**主动预热一次证书**（见[首次配对](#首次配对)），
+所以续期定时器从启动那一刻就存在，不依赖有没有流量。
+
+> 即便定时器缺失也不会立刻出事：过期的缓存证书会被判为 cache miss，
+> 下一次握手时当场重新申请。但那是"用户等着"的时候申请，
+> 撞上限流或验证不通就直接暴露成 TLS 错误 —— 提前 30 天续期才有缓冲。
+
+### 怎么确认它真的在工作
+
+```bash
+# 当前证书的到期时间
+echo | openssl s_client -connect term.example.com:443 -servername term.example.com 2>/dev/null \
+  | openssl x509 -noout -dates
+
+# 启动时那行「证书已就绪」
+journalctl --user -u webterm | grep -i '证书\|acme'
+
+# 80 / 443 还在监听吗（续期要过域名验证）
+ss -lntp | grep -E ':(80|443)\b'
+```
+
+### `certs/` 值得备份
+
+丢了会重新申请 —— 能成功，但 Let's Encrypt 每域名每周只给 50 次签发。
+反复重建容易撞限流，见[数据与备份](#数据与备份)。
 
 ## 数据与备份
 

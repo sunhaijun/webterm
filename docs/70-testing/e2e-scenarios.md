@@ -176,6 +176,25 @@ Playwright 可以派发 composition 事件。
 3. 断言：`compositionend` 之前零 INPUT 帧；`compositionend` 时**一次**发出 `你好`
 4. 组字期间光标位置有内联预览浮层
 
+### Raw 模式 · 切过会话之后（回归）
+
+**每个会话有自己的 xterm 实例，也就有自己的 helper textarea**，而
+`store.activate()` 会把上一个会话的 host 从 DOM 摘掉。所以切会话必须
+重新挂 `RawIme`。
+
+1. 建第二个会话并切过去
+2. 手动切到 Raw，派发 composition 事件
+3. 断言：内联预览浮层可见 —— 没重新挂就不会出现。**这条是有效的回归点**
+   （已用变异验证：还原成"只挂一次"后它失败）
+4. 断言：`compositionend` 之前零 INPUT 帧 —— 留着防回归，但**它测不到本
+   bug 的要害**：合成的 `CompositionEvent` 不会触发 xterm 的 `onData`，
+   所以「`isComposing` 恒为 false → 组字字节直通 PTY，违反 AC-3.3」这个
+   后果只有真输入法能演示（见 [自动化边界](../90-roadmap/milestones.md)）
+
+> 这个 bug 真的存在过（`attachIme` 里的 `if (ime) return` 让它只挂第一个会话），
+> 而且只在 CI 上暴露 —— 原来的实现靠 `setInterval(attachIme, 300)` 轮询挂载，
+> 本机跑得快正好赶上，CI 上就丢事件。轮询已换成在 `select()` 里确定性挂载。
+
 ---
 
 ## E2E-8 Composer 提交格式

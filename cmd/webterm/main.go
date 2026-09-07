@@ -9,7 +9,12 @@ import (
 	"os"
 )
 
-var version = "0.1.0-dev"
+// version 由构建时注入：
+//
+//	go build -ldflags "-X main.version=v0.1.0"
+//
+// 默认值只在从源码直接 go build 时出现。
+var version = "dev"
 
 var usage = "webterm " + version + ` —— 浏览器终端 agent
 

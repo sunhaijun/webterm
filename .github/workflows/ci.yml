@@ -14,6 +14,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # 【前端必须先构建】：Go 侧的 HTTP 测试会请求 GET /，
+      # 而前端是 go:embed 进来的（不变式 2 同源）。不构建的话嵌进去的是
+      # 空目录，静态路由返回 503，IT-auth-1 的「不需要认证的路由 = 200」就挂。
+      - run: npm ci && npm run build
+        working-directory: web
       # shell 集成测试需要真 bash（m5 起）
       - run: bash --version
       - run: go vet ./...
