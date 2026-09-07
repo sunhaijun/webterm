@@ -69,10 +69,16 @@ curl -sI http://term.example.com/ | head -1
 
 ### 4. 装
 
+**仓库现在是私有的**，所以先在目标机器上 `gh auth login`，然后：
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
-  | bash -s -- --domain term.example.com
+gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
+  -H 'Accept: application/vnd.github.raw' \
+  | bash -s -- --domain term.example.com --channel dev
 ```
+
+裸 `curl` 那条（`raw.githubusercontent.com`）要等仓库转公开才能用 ——
+它不带凭据，私有仓库下 404。其它取法见[安装](#安装)。
 
 用**普通用户**跑，不要 sudo —— 脚本会在需要的地方自己调 sudo。
 （agent 跑在哪个用户下，攻破它就等于拿到哪个用户的权限。以 root 跑等于把
@@ -146,8 +152,10 @@ journalctl --user -u webterm -n 20                     # 有"证书已就绪"
 不需要域名、证书、公网、root：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
-  | bash -s -- --dev
+# 私有仓库：需要 gh auth login。公开之后换成 curl -fsSL https://raw.githubusercontent.com/... 即可
+gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
+  -H 'Accept: application/vnd.github.raw' \
+  | bash -s -- --dev --channel dev
 webterm serve --dev
 # → http://127.0.0.1:8080，stdout 有配对 URL 和二维码
 ```
@@ -179,6 +187,34 @@ bash 不是硬要求，但版本影响功能完整度：**4.4+** 才有 readline
 
 ### 一条命令（推荐）
 
+**仓库目前是私有的**，所以下面这两条路要分清 —— `raw.githubusercontent.com`
+和 `releases/download` 都**不带凭据**，私有仓库下一律 404，哪怕这台机器
+本来有权限访问那个仓库。
+
+私有仓库（当前情况）—— 目标机器上先 `gh auth login`：
+
+```bash
+gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
+  -H 'Accept: application/vnd.github.raw' \
+  | bash -s -- --domain term.example.com
+```
+
+没有 `gh` 就用 token（要有 repo 读权限）：
+
+```bash
+export GH_TOKEN=<token>
+curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+  -H 'Accept: application/vnd.github.raw' \
+  https://api.github.com/repos/sunhaijun/webterm/contents/scripts/install.sh \
+  | bash -s -- --domain term.example.com
+```
+
+脚本自己也会用同一套凭据去下二进制：先试匿名，404 就回退到 `gh`，
+再回退到 `GH_TOKEN` / `GITHUB_TOKEN`。三条都不行会明确报错并中止，
+**不会跳过校验**。
+
+仓库转公开之后，这条就够了（脚本不用改）：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
   | bash -s -- --domain term.example.com
@@ -198,7 +234,12 @@ curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/inst
 webterm serve --dev      # → http://127.0.0.1:8080
 ```
 
-> 正式 `v*` tag 之前 `latest` 是空的 —— 加 `--channel dev` 装 `main` 的滚动构建。
+> 正式 `v*` tag 之前 `latest` 是空的（GitHub 的 `latest` 不含预发布）——
+> 加 `--channel dev` 装 `main` 的滚动构建。main 上每次提交都会刷新它。
+
+> **自己的下载源**：`--base-url <地址>` 直接指向放着
+> `webterm-linux-<arch>` 和 `SHA256SUMS` 的任意 HTTP 服务。
+> 走这条时脚本**不会**回退到 GitHub 凭据 —— 你指定了源就以你的源为准。
 
 关于 `curl | bash`：装的是一个会把 shell 暴露到公网的东西，所以脚本
 **强制校验 SHA256**，取不到校验和就直接中止。不放心可以先

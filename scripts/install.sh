@@ -8,6 +8,12 @@
 #
 #   curl -fsSL .../install.sh | bash -s -- --dev
 #
+# 【仓库是私有的时候】raw.githubusercontent 和 releases/download 都会 404
+# （它们不带凭据）。这时候用 gh 取脚本，脚本自己也会用 gh 去下二进制：
+#
+#   gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
+#     -H 'Accept: application/vnd.github.raw' | bash -s -- --domain term.example.com
+#
 # 脚本会：下载对应架构的二进制 → 校验 SHA256 → 装到 /usr/local/bin →
 # setcap 让普通用户能绑 443 → 生成 systemd user service → 启动并打出配对二维码。
 #
@@ -47,6 +53,9 @@ usage() {
   --no-setcap        不做 setcap（你自己解决 443 端口权限）
   --dry-run          只打印将要执行的命令
   -h, --help         这段说明
+
+私有仓库：裸 curl 拿不到 release 产物。脚本会自动改用凭据 ——
+优先 gh（需要 gh auth login），否则读 GH_TOKEN / GITHUB_TOKEN。
 
 生产部署的硬前置：一个域名、A/AAAA 记录指向本机、80 与 443 可用。
 装好之后先跑 webterm doctor --domain <域名> 逐项检查。
@@ -123,16 +132,66 @@ trap 'rm -rf "$TMP"' EXIT
 BIN="webterm-linux-$ARCH"
 info "来源: $URL_BASE/$BIN"
 
+# gh_tag 把 --channel 翻成 release 的 tag（认证下载要指名 tag，没有
+# "latest/download" 这种便利写法）。
+gh_tag() {
+    if [ "$CHANNEL" = "latest" ]; then
+        gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null
+    else
+        printf '%s' "$CHANNEL"
+    fi
+}
+
+# fetch_auth 用凭据下一个 release 产物。
+#
+# 【私有仓库必须走这条】：releases/download 和 raw.githubusercontent 都不带
+# 凭据，私有仓库下一律 404 —— 哪怕这台机器本来有权限访问那个仓库。
+# 优先用 gh（凭据已经在它手里，脚本不碰 token）；没有 gh 就读环境变量里的
+# token，走 API 的 asset 端点。
+fetch_auth() {
+    local name="$1" out="$2" tag
+    tag=$(gh_tag) || true
+    [ -n "$tag" ] || return 1
+
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        gh release download "$tag" --repo "$REPO" --pattern "$name" \
+            --output "$out" --clobber >/dev/null 2>&1 && return 0
+    fi
+
+    local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    [ -n "$token" ] || return 1
+    local id
+    id=$(curl -fsSL -H "Authorization: Bearer $token" \
+        "https://api.github.com/repos/$REPO/releases/tags/$tag" 2>/dev/null \
+        | grep -B 3 "\"name\": *\"$name\"" | grep -m1 '"id":' \
+        | tr -dc '0-9') || return 1
+    [ -n "$id" ] || return 1
+    curl -fsSL -H "Authorization: Bearer $token" -H "Accept: application/octet-stream" \
+        "https://api.github.com/repos/$REPO/releases/assets/$id" -o "$out" 2>/dev/null
+}
+
+# fetch 先试匿名（公开仓库 / --base-url），失败再试凭据。
+fetch() {
+    local name="$1" out="$2"
+    curl -fsSL "$URL_BASE/$name" -o "$out" 2>/dev/null && return 0
+    # --base-url 是用户自己的下载源，跟 GitHub 凭据无关，不做回退
+    [ -z "$BASE_URL" ] || return 1
+    fetch_auth "$name" "$out"
+}
+
 if [ "$DRY_RUN" = 1 ]; then
     info "(dry-run，跳过下载)"
 else
-    curl -fSL --progress-bar "$URL_BASE/$BIN" -o "$TMP/$BIN" || die "下载失败。
-      如果还没有 release，可以用 --channel dev 装 main 的滚动构建，
-      或者从源码构建：见 docs/80-ops/install.md"
+    fetch "$BIN" "$TMP/$BIN" || die "下载失败。按可能性排查：
+      1. 仓库是私有的 —— 裸 curl 拿不到。装个 gh 并 gh auth login，
+         或者 export GH_TOKEN=<有 repo 读权限的 token> 再重跑
+      2. 还没有正式 release —— 用 --channel dev 装 main 的滚动构建
+      3. 自建下载源 —— 用 --base-url
+      都不行就从源码构建：见 docs/80-ops/install.md"
 
     # ---------- 3. 校验 ----------
     step "3/5 校验 SHA256"
-    if curl -fsSL "$URL_BASE/SHA256SUMS" -o "$TMP/SHA256SUMS" 2>/dev/null; then
+    if fetch SHA256SUMS "$TMP/SHA256SUMS"; then
         (cd "$TMP" && grep " $BIN\$" SHA256SUMS | sha256sum -c -) \
             || die "校验和不匹配。下载的文件可能被篡改或损坏，已中止。"
         info "校验通过"
