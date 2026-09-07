@@ -20,38 +20,64 @@ bash 不是硬要求，但版本影响功能完整度：**4.4+** 才有 readline
 
 ## 安装
 
-### 从源码构建（目前唯一的路径）
+### 一条命令（推荐）
 
-> **还没有 release。** 下面的下载方式要等 v0.1 打了 tag 之后才可用 ——
-> 在那之前请从源码构建。
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
+  | bash -s -- --domain term.example.com
+```
 
-构建需要 Go 1.27+ 与 Node 22+（Node 只在构建时需要，产物是单个二进制）。
+脚本会：认架构 → 下载二进制 → **校验 SHA256** → 装到 `/usr/local/bin` →
+`setcap` 让普通用户能绑 443 → 生成 systemd user service → `enable-linger` →
+启动服务。然后跑一次 `webterm pair` 就能扫码开工。
+
+先看它要做什么：加 `--dry-run`。全部选项：`--help`。
+
+**本地试用**（不需要域名、证书、root）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
+  | bash -s -- --dev
+webterm serve --dev      # → http://127.0.0.1:8080
+```
+
+> 正式 `v*` tag 之前 `latest` 是空的 —— 加 `--channel dev` 装 `main` 的滚动构建。
+
+关于 `curl | bash`：装的是一个会把 shell 暴露到公网的东西，所以脚本
+**强制校验 SHA256**，取不到校验和就直接中止。不放心可以先
+`curl -fsSL … -o install.sh` 读一遍再跑，脚本只有两百来行。
+
+### 从源码构建
+
+需要 Go 1.27+ 与 Node 22+（Node 只在构建时需要，产物是单个二进制）。
 
 ```bash
 git clone https://github.com/sunhaijun/webterm.git
 cd webterm
+make build          # 前端 + 二进制，顺序已经排好
+```
 
-# 【顺序不能反】：前端产物是 go:embed 的输入，
-# 反了的话嵌进去的是空目录，二进制跑起来会明说"没有嵌入前端产物"
+交叉编译出发布产物：
+
+```bash
+make release        # → release/webterm-linux-{amd64,arm64} + SHA256SUMS
+```
+
+不用 make 的话手写是这样，**顺序不能反** —— 前端产物是 `go:embed` 的输入，
+反了嵌进去的是空目录，二进制跑起来会明说「没有嵌入前端产物」：
+
+```bash
 cd web && npm ci && npm run build && cd ..
-
-CGO_ENABLED=0 go build -o webterm ./cmd/webterm
+CGO_ENABLED=0 go build -ldflags "-s -w" -o webterm ./cmd/webterm
 ```
 
-得到一个约 21 MB 的静态二进制（`ldd` 显示 not a dynamic executable），
-可以直接 scp 到目标机器。交叉编译加 `GOOS=linux GOARCH=arm64` 即可。
+得到约 15 MB 的静态二进制（`ldd` 显示 not a dynamic executable），
+可以直接 scp 到目标机器。
 
-### 下载预编译二进制（v0.1 发布后）
-
-```bash
-curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/webterm-linux-amd64 -o webterm
-chmod +x webterm
-```
-
-### 部署
+### 手工部署（不用安装脚本）
 
 ```bash
-# 1. 检查环境
+# 1. 检查环境（DNS、端口、bash）
 ./webterm doctor --domain term.example.com
 
 # 2. 试运行（用 ACME staging，避免撞正式环境限流）
@@ -61,18 +87,8 @@ sudo ./webterm serve --domain term.example.com --acme-staging
 sudo ./webterm serve --domain term.example.com
 ```
 
-### 本地先试一下
-
-不需要域名、不需要证书、不需要 root：
-
-```bash
-./webterm serve --dev
-# → http://127.0.0.1:8080
-# stdout 会打出配对 URL 与二维码，浏览器点开就能用
-```
-
-`http://localhost` 本身就是 secure context，所以 PWA、剪贴板、Service Worker
-在 `--dev` 下都能测（[ADR-0004](../20-architecture/adr/0004-acme-only-tls.md)）。
+`--dev` 下 `http://localhost` 本身就是 secure context，所以 PWA、剪贴板、
+Service Worker 都能测（[ADR-0004](../20-architecture/adr/0004-acme-only-tls.md)）。
 手机访问局域网 IP 的 http **不是** secure context，装不了 PWA —— 那个必须上正式域名。
 
 ### 关于 sudo

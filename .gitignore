@@ -37,3 +37,4 @@ internal/webui/dist/*
 
 # 本地构建出来的二进制
 /webterm
+/release/
