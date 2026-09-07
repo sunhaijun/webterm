@@ -3,6 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -124,5 +128,67 @@ func TestCertManagerStagingSwitch(t *testing.T) {
 	staging := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir(), ACMEStaging: true})
 	if staging.Client == nil || !strings.Contains(staging.Client.DirectoryURL, "staging") {
 		t.Errorf("--acme-staging 没有切到 staging 目录: %+v", staging.Client)
+	}
+}
+
+// 对外地址的规则要和 cmd/webterm 的 baseURL 一致：443 不写，其它必须写。
+// 两边各自钉一遍 —— 它们是不同进程，改了一边不会自动带上另一边。
+func TestExternalURLIncludesNonDefaultPort(t *testing.T) {
+	cases := []struct {
+		port int
+		want string
+	}{
+		{443, "https://term.example.com"},
+		{0, "https://term.example.com"}, // 没传就按默认，不能拼出 :0
+		{8443, "https://term.example.com:8443"},
+		{8080, "https://term.example.com:8080"},
+	}
+	for _, tc := range cases {
+		if got := externalURL("term.example.com", tc.port); got != tc.want {
+			t.Errorf("externalURL(_, %d) = %q, 想要 %q", tc.port, got, tc.want)
+		}
+	}
+}
+
+// :80 上的跳转必须跳到真的能打开的地址（含端口）。
+func TestRedirectToHTTPSCarriesPort(t *testing.T) {
+	cases := []struct {
+		port int
+		want string
+	}{
+		{443, "https://term.example.com/a?b=1"},
+		{8443, "https://term.example.com:8443/a?b=1"},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "http://term.example.com/a?b=1", nil)
+		redirectToHTTPS("term.example.com", tc.port).ServeHTTP(rec, req)
+		if rec.Code != http.StatusMovedPermanently {
+			t.Errorf("端口 %d：状态码 = %d, 想要 301", tc.port, rec.Code)
+		}
+		if got := rec.Header().Get("Location"); got != tc.want {
+			t.Errorf("端口 %d：Location = %q, 想要 %q", tc.port, got, tc.want)
+		}
+	}
+}
+
+// 两个端口写成一样时要当场说清，而不是撞到 "address already in use"
+// 然后让人去查"谁占着这个端口"（占着的是它自己）。
+func TestListenRejectsIdenticalPorts(t *testing.T) {
+	a := &Agent{cfg: Config{}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	_, _, err := a.Listen(ServeConfig{
+		Domain:    "term.example.com",
+		Bind:      "127.0.0.1",
+		HTTPPort:  8443,
+		HTTPSPort: 8443,
+		CertDir:   t.TempDir(),
+	}, http.NotFoundHandler())
+	if err == nil {
+		t.Fatal("端口相同却没报错")
+	}
+	for _, want := range []string{"不能相同", "8443", "--http-port", "--https-port"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("错误信息里缺 %q: %v", want, err)
+		}
 	}
 }

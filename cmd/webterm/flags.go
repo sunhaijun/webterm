@@ -20,11 +20,20 @@ func (c *commonFlags) register(fs *flag.FlagSet) {
 }
 
 // baseURL 返回给用户看的服务地址。
-func (c *commonFlags) baseURL(httpPort int) string {
+//
+// 【非默认端口必须带上】：这是用户唯一能拿到的入口，配对 URL 和二维码都
+// 由它拼出来。443 被别的服务占着时（比如 Xray），漏了端口就等于扫码打不开。
+// 443 是默认端口，写出来是噪音，所以只在不等于 443 时附加。
+func (c *commonFlags) baseURL(httpPort, httpsPort int) string {
 	if c.dev {
 		return "http://127.0.0.1:" + itoa(httpPort)
 	}
-	return "https://" + c.domain
+	url := "https://" + c.domain
+	// 0 只可能来自调用方忘了传，当成默认而不是拼出 :0
+	if httpsPort != 0 && httpsPort != 443 {
+		url += ":" + itoa(httpsPort)
+	}
+	return url
 }
 
 // defaultDataDir 遵循 XDG：$XDG_DATA_HOME/webterm，否则 ~/.local/share/webterm。

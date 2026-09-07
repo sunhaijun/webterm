@@ -15,6 +15,9 @@ func runPair(args []string) error {
 	var c commonFlags
 	c.register(fs)
 	httpPort := fs.Int("http-port", 8080, "--dev 下的端口（用于拼出配对 URL）")
+	// pair 是独立进程，不知道 serve 用了哪个端口 —— 换了就得自己带上同一个值，
+	// 否则拼出来的 URL 会漏掉端口，扫码打不开。
+	httpsPort := fs.Int("https-port", 443, "HTTPS 端口（serve 换了就要跟着换）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -35,7 +38,7 @@ func runPair(args []string) error {
 		return err
 	}
 	fmt.Println("配对码已生成，5 分钟内有效：")
-	printPairing(c.baseURL(*httpPort), code)
+	printPairing(c.baseURL(*httpPort, *httpsPort), code)
 	return nil
 }
 
