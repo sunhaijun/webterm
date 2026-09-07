@@ -5,6 +5,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
+import { listCommands, type CommandRecord } from '../commands/api'
+import { HistoryPanel, QuickBar } from '../commands/history'
+import { CommandPalette } from '../commands/palette'
 import { Connection, type ConnState, type StateInfo } from '../conn/connection'
 import { Composer, type ComposerHandle } from '../input/composer'
 import { KeyBar } from '../input/keybar'
@@ -61,6 +64,16 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(readTheme)
   const [fontSize, setFontSize] = useState(readFontSize)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [quick, setQuick] = useState<CommandRecord[]>([])
+
+  const reloadQuick = useCallback(() => {
+    listCommands({ pinned: true, limit: 50 })
+      .then((r) => setQuick(r.items))
+      .catch(() => setQuick([]))
+  }, [])
+  useEffect(reloadQuick, [reloadQuick])
 
   useEffect(() => applyTheme(theme), [theme])
 
@@ -213,6 +226,9 @@ export function App() {
         }
         case 'toggleSidebar':
           setSidebarOpen((v) => !v)
+          break
+        case 'palette':
+          setPaletteOpen((v) => !v)
           break
         case 'settings':
           setSettingsOpen((v) => !v)
@@ -431,6 +447,12 @@ export function App() {
               解锁自动
             </button>
           )}
+          <button data-testid="open-palette" onClick={() => setPaletteOpen(true)}>
+            命令面板
+          </button>
+          <button data-testid="open-history" onClick={() => setHistoryOpen(true)}>
+            历史
+          </button>
           <button data-testid="open-settings" onClick={() => setSettingsOpen((v) => !v)}>
             设置
           </button>
@@ -467,6 +489,10 @@ export function App() {
                 }}
               />
             </label>
+            {/* 用户不知道这条规则的话，它等于不存在（privacy-history.md） */}
+            <p class="privacy-note" data-testid="privacy-note">
+              以空格开头的命令不会被记录。贴 token / 密码时在前面加个空格。
+            </p>
           </div>
         )}
 
@@ -479,6 +505,17 @@ export function App() {
             onRaw={(bytes) => sendRawRef.current(bytes)}
             onHandle={(h) => {
               composerRef.current = h
+            }}
+          />
+        )}
+        {/* 快捷命令条：Composer 上方，横滑；为空时整条不渲染。
+            short 布局（手机横屏）下挤不下，从面板访问 */}
+        {!short && active?.status !== 'exited' && (
+          <QuickBar
+            items={quick}
+            onFill={(text) => composerRef.current?.fill(text)}
+            onRun={(text) => {
+              if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
             }}
           />
         )}
@@ -501,6 +538,42 @@ export function App() {
         >
           {preview.text}
         </div>
+      )}
+      {paletteOpen && (
+        <CommandPalette
+          sessions={sessions.map((s) => ({ sid: s.sid, name: s.name, cwd: s.cwd }))}
+          actions={[
+            { id: 'new', label: '新建会话', run: () => newSessionRef.current() },
+            { id: 'history', label: '打开历史面板', run: () => setHistoryOpen(true) },
+            { id: 'settings', label: '设置', run: () => setSettingsOpen(true) },
+            {
+              id: 'theme',
+              label: '切换主题',
+              run: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')),
+            },
+          ]}
+          onClose={() => setPaletteOpen(false)}
+          onFill={(text) => composerRef.current?.fill(text)}
+          onRun={(text) => {
+            if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
+          }}
+          onSelectSession={(sid) => selectRef.current(sid)}
+        />
+      )}
+      {historyOpen && (
+        <HistoryPanel
+          cwd={active?.cwd ?? ''}
+          onClose={() => setHistoryOpen(false)}
+          onFill={(text) => {
+            composerRef.current?.fill(text)
+            setHistoryOpen(false)
+          }}
+          onRun={(text) => {
+            if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
+            setHistoryOpen(false)
+          }}
+          onPinnedChanged={reloadQuick}
+        />
       )}
       {recovered !== null && <RecoveredToast bytes={recovered} />}
     </div>

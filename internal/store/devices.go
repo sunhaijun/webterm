@@ -67,7 +67,7 @@ func (s *Store) ListDevices() ([]Device, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Device
+	out := []Device{} // 同样不能是 nil，否则 JSON 里是 null
 	for rows.Next() {
 		var d Device
 		var ip sql.NullString

@@ -18,7 +18,13 @@ scp webterm user@server:  →  ./webterm serve --domain term.example.com  →  �
 
 ## 状态
 
-需求已收敛，正在建立文档基线。实现尚未开始。
+v0.1 的七个里程碑（m0–m7）已全部落地：协议与会话核心、agent 服务、前端骨架、
+双模输入、shell 集成、多会话与 PWA、命令历史与快捷命令。
+
+**自动化验证**：Go 单测与集成测试、前端 144 个单测、30 个 Playwright E2E
+（含 ★ 字节级连续性）。**真机部分**（真实输入法、软键盘、真实网络切换、
+真实证书签发、PWA 安装）仍需按 [手工清单](docs/70-testing/manual-checklist.md)
+过一遍。
 
 先读 [`docs/README.md`](docs/README.md)。
 
