@@ -168,7 +168,7 @@ os.Remove(rcPath)
 2. 校验参数          → cols/rows 必须 > 0 且 <= 1000
 3. 生成 rcfile       → shellinit.Render()，0600，运行时目录
 4. 解析 cwd          → 默认继承请求里的值，否则 home；必须存在且是目录
-5. exec.Command("bash", "-i", "--rcfile", rcPath)
+5. exec.Command("bash", "--rcfile", rcPath, "-i")   // 长选项必须在短选项前
    环境：继承 agent 环境 + TERM=xterm-256color + WEBTERM_SESSION=<sid>
    清理：BASH_ENV、ENV
 6. pty.StartWithSize(cmd, &pty.Winsize{...})

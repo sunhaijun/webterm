@@ -39,7 +39,7 @@ body {
   display: grid;
   /* 高度的唯一真相来源是 visualViewport，不是 100vh（iOS Safari 上 100vh
      不随键盘变化）。m4 接管软键盘适配时会把它接上。 */
-  grid-template-rows: 28px auto 1fr auto;
+  grid-template-rows: 28px auto 1fr auto auto;
   height: 100%;
 }
 
@@ -100,3 +100,23 @@ body {
 .gate, .pair { padding: 2rem; max-width: 32rem; margin: 0 auto; }
 .gate pre, .pair pre { background: var(--term-bg); color: #e6e6e6; padding: 8px 12px; border-radius: 6px; }
 .error { color: var(--err); }
+
+.modebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+.modebar[data-mode='raw'] { color: var(--warn); }
+.modebar button {
+  font: inherit;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 2px 0;
+}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/sunhaijun/webterm/internal/agent"
 	"github.com/sunhaijun/webterm/internal/session"
+	"github.com/sunhaijun/webterm/internal/shellinit"
 	"github.com/sunhaijun/webterm/internal/store"
 )
 
@@ -63,16 +64,23 @@ func runServe(args []string) error {
 		return fmt.Errorf("创建运行时目录失败: %w", err)
 	}
 	cleanupStaleRCFiles(runDir, log)
-	_ = noShellIntegration
-	_ = noLoginShell
 
-	sessions := session.NewManager(session.Config{
+	sessCfg := session.Config{
 		MaxSessions: *maxSessions,
 		RingBytes:   *ringBytes,
 		Shell:       *shell,
 		History:     !*noHistory,
-		// RCFileFor 由 m5 的 internal/shellinit 提供；现在为 nil = 没有 shell 集成
-	}, st)
+	}
+	if !*noShellIntegration {
+		// 用临时 rcfile 注入，用户不需要改任何 dotfile（ADR-0010）
+		sessCfg.RCFileFor = func(sid uint16) (string, error) {
+			return shellinit.Render(sid, shellinit.Options{
+				Login: !*noLoginShell,
+				Dir:   runDir,
+			})
+		}
+	}
+	sessions := session.NewManager(sessCfg, st)
 	defer sessions.Shutdown()
 
 	a := agent.New(agent.Config{

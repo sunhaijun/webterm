@@ -21,7 +21,9 @@
 
 ## 1. 注入方式
 
-agent 启动会话时生成临时 rcfile，用 `bash -i --rcfile <path>` 启动。**用户不需要修改任何 dotfile。**
+agent 启动会话时生成临时 rcfile，用 `bash --rcfile <path> -i` 启动。**用户不需要修改任何 dotfile。**
+
+> **长选项必须排在短选项前面。** `bash -i --rcfile <path>` 会报 `bash: --: invalid option`，打一屏用法然后退出 —— 会话根本起不来。
 
 详细的 bash 初始化语义处理（登录 / 非登录、避免重复 source、钩子安装在用户配置之后）见 [ADR-0010](../20-architecture/adr/0010-bash-rcfile-injection.md)。
 

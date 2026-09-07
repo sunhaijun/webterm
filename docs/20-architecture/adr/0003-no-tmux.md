@@ -11,7 +11,7 @@
 **会话由 agent 自己持有 PTY 管理。不套 tmux，连可选开关都不做。**
 
 ```go
-cmd := exec.Command("bash", "-i", "--rcfile", rcPath)
+cmd := exec.Command("bash", "--rcfile", rcPath, "-i")
 ptmx, _ := pty.Start(cmd)   // agent 持有 master fd
 ```
 
