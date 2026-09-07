@@ -21,6 +21,15 @@ func TestDescribeACMEError(t *testing.T) {
 			[]string{"安全组", "curl -sI http://term.example.com/", "dig +short", "Cloudflare"},
 		},
 		{
+			// ★ autocert 会把挑战类型逐个试完才报错，所以【真实现场】
+			// 看到的是这一句，而不是底层的 "Invalid response"。
+			// 漏了它，最常见的故障就会掉进 default 分支甩裸 error。
+			// IT-tls-3 是这条的来源。
+			"挑战类型试完了（autocert 真正抛出的那句）→ 同一套诊断",
+			errors.New(`acme/autocert: unable to satisfy "https://acme-v02.api.letsencrypt.org/authz/123" for domain "term.example.com": no viable challenge type found`),
+			[]string{"安全组", "80", "443", "curl -sI http://term.example.com/", "dig +short", "Cloudflare"},
+		},
+		{
 			"限流 → 说清窗口有多长",
 			errors.New("urn:ietf:params:acme:error:rateLimited: too many certificates"),
 			[]string{"限流", "一周", "--acme-staging"},

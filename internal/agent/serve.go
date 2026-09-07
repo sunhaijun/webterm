@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -30,6 +31,10 @@ type ServeConfig struct {
 	HTTPPort    int
 	HTTPSPort   int
 	CertDir     string
+
+	// ACMEDirectoryURL 只为集成测试而存在：指向本地假 CA
+	// （internal/acmetest）。生产留空，走 Let's Encrypt。
+	ACMEDirectoryURL string
 }
 
 // Servers 是启动后的服务器句柄，用于优雅关闭。
@@ -142,13 +147,30 @@ func newCertManager(cfg ServeConfig) *autocert.Manager {
 		// 写死 30 天的话，将来换成短周期证书（LE 已在推 6 天期）
 		// 就会变成"每次都立刻续期"。
 	}
-	if cfg.ACMEStaging {
+	switch {
+	case cfg.ACMEDirectoryURL != "":
+		m.Client = &acme.Client{DirectoryURL: cfg.ACMEDirectoryURL}
+	case cfg.ACMEStaging:
 		m.Client = &acme.Client{DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory"}
 	}
 	return m
 }
 
-// warmCertificate 启动时主动申请/加载一次证书，把结果打到 stdout。
+// certReport 是证书预热结果的输出目标。
+//
+// 生产分开走（成功 stdout、失败 stderr），测试里 Config.CertReport
+// 把两者收到同一个 buffer，好断言。
+func (a *Agent) certReport(failed bool) io.Writer {
+	if a.cfg.CertReport != nil {
+		return a.cfg.CertReport
+	}
+	if failed {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+// warmCertificate 启动时主动申请/加载一次证书，把结果报给用户。
 //
 // autocert 的续期定时器是在证书【进入内存状态】时挂上的，而它默认懒加载 ——
 // 证书要等第一次 TLS 握手才加载。也就是说进程重启后一直没人访问的话，
@@ -161,7 +183,7 @@ func (a *Agent) warmCertificate(m *autocert.Manager, domain string, staging bool
 	cert, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: domain})
 	if err != nil {
 		a.log.Error("证书申请失败 —— HTTPS 还不可用", "domain", domain, "env", env)
-		fmt.Fprint(os.Stderr, describeACMEError(err, domain, staging))
+		fmt.Fprint(a.certReport(true), describeACMEError(err, domain, staging))
 		return
 	}
 	if len(cert.Certificate) == 0 {
@@ -176,8 +198,9 @@ func (a *Agent) warmCertificate(m *autocert.Manager, domain string, staging bool
 		}
 		leaf = parsed
 	}
-	// autocert 在到期前 30 天自动续期，需要 80 端口持续可用
-	fmt.Printf("证书已就绪（%s，到期 %s，自动续期）\n",
+	// autocert 在到期前 min(30 天, 有效期/3) 自动续期。
+	// 续期要重新过域名验证，80（HTTP-01）或 443（TLS-ALPN-01）通一个就够。
+	fmt.Fprintf(a.certReport(false), "证书已就绪（%s，到期 %s，自动续期）\n",
 		env, leaf.NotAfter.Local().Format("2006-01-02"))
 }
 
@@ -187,24 +210,32 @@ func describeACMEError(err error, domain string, staging bool) string {
 	msg := err.Error()
 	var b strings.Builder
 	b.WriteString("\n")
+	// 【窄的分支放前面】：下面"连不上"那条匹配得很宽，会盖住这几个。
 	switch {
 	case strings.Contains(msg, "rateLimited"), strings.Contains(msg, "too many"):
 		b.WriteString("  撞上了 Let's Encrypt 的限流。\n")
 		b.WriteString("  限流窗口是一周（每域名每周 50 次签发），撞上了只能等。\n")
-	case strings.Contains(msg, "Invalid response"), strings.Contains(msg, "connection refused"),
-		strings.Contains(msg, "Timeout"), strings.Contains(msg, "timeout"):
-		b.WriteString("  HTTP-01 挑战没能打到本机的 80 端口。按顺序查：\n")
-		b.WriteString("    1. 云安全组 / 防火墙放行了入方向 TCP 80 吗？（最常漏的一步）\n")
-		b.WriteString("         在别的机器上跑：curl -sI http://" + domain + "/\n")
-		b.WriteString("    2. DNS 指向本机吗？\n")
-		b.WriteString("         dig +short " + domain + "   应当等于   curl -s ifconfig.me\n")
-		b.WriteString("    3. 用 Cloudflare 的话，把小云朵关掉（DNS only，不要 Proxied）\n")
 	case strings.Contains(msg, "no such host"), strings.Contains(msg, "NXDOMAIN"):
 		b.WriteString("  " + domain + " 解析不出来。确认 A/AAAA 记录已经加上并且 TTL 过期了：\n")
 		b.WriteString("    dig +short " + domain + "\n")
 	case strings.Contains(msg, "not configured in HostWhitelist"):
 		b.WriteString("  请求的域名与 --domain 不一致。HostPolicy 刻意不允许通配，\n")
 		b.WriteString("  否则会被用来给任意域名申请证书。\n")
+	case strings.Contains(msg, "no viable challenge type"),
+		strings.Contains(msg, "Invalid response"),
+		strings.Contains(msg, "authorization error"),
+		strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "Timeout"), strings.Contains(msg, "timeout"):
+		// 这是最常见的失败。注意 autocert 会把挑战类型逐个试完，
+		// 最后抛出来的是 "no viable challenge type found" ——
+		// 【真实故障现场看到的就是这一句】，不是底层的 "Invalid response"。
+		b.WriteString("  CA 没能连上本机做域名验证。挑战走 80（HTTP-01）或 443（TLS-ALPN-01），\n")
+		b.WriteString("  两个都没通过。按顺序查：\n")
+		b.WriteString("    1. 云安全组 / 防火墙放行了入方向 TCP 80 和 443 吗？（最常漏的一步）\n")
+		b.WriteString("         在别的机器上跑：curl -sI http://" + domain + "/\n")
+		b.WriteString("    2. DNS 指向本机吗？\n")
+		b.WriteString("         dig +short " + domain + "   应当等于   curl -s ifconfig.me\n")
+		b.WriteString("    3. 用 Cloudflare 的话，把小云朵关掉（DNS only，不要 Proxied）\n")
 	default:
 		b.WriteString("  " + msg + "\n")
 		b.WriteString("  排障清单见 docs/80-ops/troubleshooting.md 的「证书 / TLS」一节。\n")

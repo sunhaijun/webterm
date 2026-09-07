@@ -103,7 +103,7 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 | `IT-shell-1..7` | 命令记录、空格跳过、rcfile 注入、不覆盖用户配置、登录/非登录 profile 链、握手超时、脚本出错不影响 shell |
 | `IT-auth-1..4` | 路由认证矩阵（**含 `/ws`**）、Origin 校验、Cookie 属性、吊销即时生效 |
 | `IT-pair-1..3` | 二维码输出、配对码不进日志、限速 |
-| `IT-tls-1..3` | 用 [pebble](https://github.com/letsencrypt/pebble) 本地 ACME 验证签发；`--dev` 不申请证书；失败时的可读诊断（AC-1.13） |
+| `IT-tls-1..3` | 用本地假 ACME CA（`internal/acmetest`）验证：真的签出证书并能握手；`--dev` 一次都不找 CA；挑战打不进来时给可读诊断（AC-1.13）。见下方「为什么不用 pebble」 |
 | `IT-privacy-1..2` | canary 字符串不出现在数据目录 / 日志中 |
 | `IT-embed-1` | 删掉 `web/dist` 后二进制仍能提供前端（证明真的嵌入了） |
 | `IT-resize-1` | `resize` 消息导致 PTY 的 `TIOCSWINSZ` 生效（在会话内跑 `stty size` 验证） |
@@ -111,6 +111,26 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 | `IT-queue-1` | 会话输入队列满 → `input_stalled`，入队非阻塞，其它会话不受影响（m1） |
 | `IT-queue-2` | 连接写队列满 → 关闭该连接而不是阻塞 Session（m2，需要连接层） |
 | `IT-sub-1` | 未订阅会话继续缓冲，`subscribe{out_seq}` 补齐正确 |
+
+### 为什么不用 pebble
+
+这一条原本写的是用 [pebble](https://github.com/letsencrypt/pebble)。实际动手时有两个障碍：
+
+1. pebble 会带进来一整棵新的模块依赖（gorilla/mux、miekg/dns…）。它是测试专用的，但仍然进 `go.sum`。
+2. **pebble 的 VA 会做真实 DNS 解析**去验证 HTTP-01。测试域名得能解析到本机，绕它要么改 `/etc/hosts`、要么给 pebble 挂自定义 DNS —— 两条都依赖 CI 环境。
+
+`internal/acmetest` 是一个约 300 行的进程内 RFC 8555 服务器：零新依赖、不碰网络、不需要 DNS（验证目标地址由测试直接指定），三条测试合计跑 1 秒出头。
+
+它**刻意不校验 JWS 签名** —— 那对下面要证明的东西没有贡献。
+
+它证明的是**我们这边的接线**：autocert 配置正确、`:80` 上的挑战 handler 真的能被取到（包括 `HostPolicy` 对 `Host` 头的校验）、启动预热真的拿到证书并落盘 0700、证书真的能用来完成 TLS 握手、失败时给出可读诊断。
+
+它**不**证明我们与 Let's Encrypt 的协议兼容性 —— 那是 `golang.org/x/crypto/acme` 的职责，上游有自己的测试。真实签发仍然只能靠 [手动检查清单](manual-checklist.md)。
+
+> 这三条测试上线当天就抓到一个真 bug：autocert 会把挑战类型逐个试完，最终抛的是
+> `no viable challenge type found`，而诊断只匹配 `Invalid response` ——
+> 也就是说**最常见的真实故障（安全组没放行）根本走不到那段诊断**。
+> 这正是"只有手动验证"覆盖不到的东西。
 
 **shell 集成测试需要真 bash。** CI 里确保有 bash 4.4+；测试跑一个受控的 `.bashrc`（通过 `HOME` 指向临时目录）以获得确定性。
 

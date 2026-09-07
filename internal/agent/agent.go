@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -24,9 +25,12 @@ type Config struct {
 	Version    string
 	Logger     *slog.Logger
 
-	// 下面两个只为集成测试而存在，生产走默认值。
+	// 下面几个只为集成测试而存在，生产走默认值。
 	WSIdleTimeout   time.Duration
 	WSWriteQueueMax int
+	// CertReport 把证书预热的结果重定向到这里。生产留空：
+	// 成功走 stdout、失败走 stderr。测试里给一个 buffer，两者都能断言。
+	CertReport io.Writer
 }
 
 // Agent 把 store / auth / session / 连接层缝成一个 HTTP 服务。
