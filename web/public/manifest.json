@@ -1,9 +1,19 @@
 {
   "name": "webterm",
   "short_name": "webterm",
+  "description": "一个 Go 单二进制的浏览器终端",
   "display": "standalone",
   "start_url": "/",
+  "scope": "/",
   "background_color": "#111111",
   "theme_color": "#111111",
-  "icons": []
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
 }

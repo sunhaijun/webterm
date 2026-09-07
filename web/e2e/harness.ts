@@ -45,8 +45,11 @@ export class Agent {
   private pairURL = ''
   private log = ''
 
+  private readonly port: number
+
   private constructor(proc: ChildProcess, port: number, dataDir: string) {
     this.proc = proc
+    this.port = port
     this.baseURL = `http://127.0.0.1:${port}`
     this.dataDir = dataDir
   }
@@ -92,6 +95,21 @@ export class Agent {
   /** 配对链接（fragment 里带着一次性配对码）。 */
   pairLink(): string {
     return this.pairURL
+  }
+
+  /** 现生成一个新的配对码，用于第二台设备。 */
+  async newPairLink(): Promise<string> {
+    const before = this.pairURL
+    const proc = spawn(BINARY, ['pair', '--dev', '--data-dir', this.dataDir, '--http-port', String(this.port)], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let out = ''
+    proc.stdout?.on('data', (c: Buffer) => (out += c.toString()))
+    proc.stderr?.on('data', (c: Buffer) => (out += c.toString()))
+    await new Promise<void>((res) => proc.on('exit', () => res()))
+    const m = out.match(/http:\/\/127\.0\.0\.1:\d+\/pair#[A-Za-z0-9_-]+/)
+    if (!m) throw new Error(`webterm pair 没有打出配对链接:\n${out}\n（上一个是 ${before}）`)
+    return m[0]
   }
 
   /** 让 page 完成配对，之后它就带着会话 Cookie 了。 */

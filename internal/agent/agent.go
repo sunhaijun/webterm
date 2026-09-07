@@ -78,6 +78,10 @@ func (a *Agent) routes() {
 	// 不需要认证：静态资源、配对页与配对接口、健康检查
 	a.mux.Handle("GET /", a.staticHandler())
 	a.mux.Handle("GET /pair", a.staticHandler())
+	// Service Worker 与 manifest 必须免认证：它们是静态壳的一部分，
+	// 而且 SW 的注册发生在页面还没拿到任何数据之前
+	a.mux.Handle("GET /sw.js", a.staticHandler())
+	a.mux.Handle("GET /manifest.json", a.staticHandler())
 	a.mux.HandleFunc("POST /auth/pair", a.handlePair)
 	a.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
