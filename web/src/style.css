@@ -459,3 +459,7 @@ body {
 
 /* 视图切换按钮：和模式条其它按钮同款，但 44px 命中区 */
 .modebar .view-toggle { min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; text-decoration: none; font-weight: 500; }
+
+/* 键条上下文标签：谁在占屏（ADR-0011 ②）*/
+.keybar-ctx { flex: none; align-self: center; padding: 0 6px 0 2px; font: 11px var(--font-mono); letter-spacing: .04em; color: var(--warn); font-weight: 600; }
+.keybar[data-context]:not([data-context='shell']) .keybar-key { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }

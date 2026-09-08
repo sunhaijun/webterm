@@ -72,6 +72,7 @@
 
 - **xterm 仍在，只是不可见**：`.term[data-hidden="true"]` 绝对定位铺满主区、`visibility: hidden`。它必须保持真实尺寸 —— `FitAddon` 据此算 cols/rows 发给 PTY，shell 按它折行。**不能 `display: none`**（尺寸归零，cols/rows 会算错）
 - 点「终端」切到终端视图（即下面 short 之前描述的传统布局），点「读」切回。选择记在 `localStorage['webterm.view']`
+- **控（分片 ②）**：程序切到备用屏幕缓冲（vim / top / less）时自动切到终端视图，退出后自动回读。自动切换**不写偏好**；用户手动切过之后就不再自动回。键条按前台程序换内容（见 [input-modes.md](input-modes.md#上下文键条adr-0011-分片-②)）
 - 没有 OSC 133 标记时（ssh 出去、集成不可用），最后一个块之后的输出作为一个**尾块** live-tail —— 降级就是块数变少，不是另一种界面
 - **没有标题栏**。会话名、CWD、连接状态挤在 28px 细条里，点击展开会话切换 sheet
 - `env(safe-area-inset-*)` 用于刘海与 Home 指示条

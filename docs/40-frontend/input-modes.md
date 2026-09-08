@@ -168,6 +168,22 @@ Esc  Tab  Ctrl  Alt  ↑  ↓  ←  →  |  ~  /  -  _  Home  End  PgUp  PgDn
 
 激活态必须有明显视觉反馈 —— 否则用户不知道下一次按键会变成什么。
 
+### 上下文键条（ADR-0011 分片 ②）
+
+有程序占屏时（xterm 备用屏幕缓冲激活），键条**按前台程序换内容**，而不是永远那一排通用键：
+
+| 程序 | 键 |
+|---|---|
+| `less` / `more` / `man` / `most` / `bat` | `q 退出` `/ 搜索` `n` `N` `␣ 翻页` `b 上页` `g 顶` `G 底` `^C` `Esc` |
+| `top` / `htop` / `btop` | `q 退出` `k 杀` `P CPU` `M 内存` `/ 找` `↑` `↓` `Enter` `^C` `Esc` |
+| `vim` / `vi` / `nvim` | `Esc` `:w` `:q` `:q!` `:wq` `i` `u 撤销` `h` `j` `k` `l` `^C` |
+| `nano` | `^X 退出` `^O 保存` `^W 搜索` `^K` `^U` `Y` `N` `Enter` 方向键 |
+| 不认识的 | `Esc` `^C` `q` `Enter` `Tab` 方向键 `Ctrl` |
+
+程序名取自正在跑的块的命令原文（`programOf`：跳过 `FOO=1` 与 `sudo` 之类包装，管道取末端）。选错也只是少几个快捷键 —— `^C` 与 `Esc` 每一套都有。vim 的 `:q` 发的是 `Esc :q Enter`，避免停在插入模式。
+
+键条左侧显示当前占屏的程序名（`data-testid="keybar-context"`），`data-context` 属性给测试用。
+
 ### 在 Composer 模式下的行为
 
 功能键条在两个模式下都显示，但语义不同：

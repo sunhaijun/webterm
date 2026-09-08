@@ -165,7 +165,14 @@ export const CTRL_KEYS: Readonly<Record<string, string>> = {
  * 【^C 必须在前 8 个里】：它是唯一的通用脱困键，要它的时候多半已经
  * 卡住了，不能还要求先横向滚动一下。Alt 让位 —— 手机上它比 ^C 罕见得多。
  */
-export const KEY_BAR: readonly { label: string; key: string }[] = [
+/** 功能键条上的一个键。有 bytes 就直接发这些字节，不走 KEY_BYTES / chord。 */
+export interface KeyDef {
+  label: string
+  key: string
+  bytes?: string
+}
+
+export const KEY_BAR: readonly KeyDef[] = [
   { label: 'Esc', key: 'Escape' },
   { label: '^C', key: 'CtrlC' },
   { label: 'Tab', key: 'Tab' },
@@ -188,3 +195,105 @@ export const KEY_BAR: readonly { label: string; key: string }[] = [
   { label: 'PgUp', key: 'PageUp' },
   { label: 'PgDn', key: 'PageDown' },
 ]
+
+/**
+ * 从命令原文里取前台程序名（ADR-0011 分片 ②，上下文键条用）。
+ *
+ * 跳过环境变量赋值、sudo / nohup / time / exec 这类包装，取第一个词的
+ * basename。管道 / 分号取【最后】一段 —— 占屏的是管道末端的那个（`git log | less`）。
+ * 拿不到就 null。这是启发式，只用来选键条布局，选错也只是少几个快捷键。
+ */
+export function programOf(cmd: string): string | null {
+  const last = cmd.split(/\s*(?:\|\||&&|;|\|)\s*/).filter(Boolean).pop() ?? ''
+  const words = last.trim().split(/\s+/).filter(Boolean)
+  const wrappers = new Set(['sudo', 'doas', 'nohup', 'time', 'exec', 'env', 'command', 'builtin', 'nice', 'ionice'])
+  for (const w of words) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue // FOO=bar 前缀
+    if (wrappers.has(w) || w.startsWith('-')) continue
+    const base = w.split('/').pop() ?? w
+    return base.replace(/^["']|["']$/g, '') || null
+  }
+  return null
+}
+
+const ESC_KEY: KeyDef = { label: 'Esc', key: 'Escape' }
+const CTRL_C: KeyDef = { label: '^C', key: 'CtrlC' }
+const ARROWS: KeyDef[] = [
+  { label: '↑', key: 'ArrowUp' },
+  { label: '↓', key: 'ArrowDown' },
+  { label: '←', key: 'ArrowLeft' },
+  { label: '→', key: 'ArrowRight' },
+]
+
+/** 备用屏幕激活时，按前台程序给键条换内容。 */
+const CONTEXT_KEYS: Record<string, readonly KeyDef[]> = {
+  pager: [
+    { label: 'q 退出', key: 'pager-quit', bytes: 'q' },
+    { label: '/ 搜索', key: 'pager-search', bytes: '/' },
+    { label: 'n', key: 'pager-next', bytes: 'n' },
+    { label: 'N', key: 'pager-prev', bytes: 'N' },
+    { label: '␣ 翻页', key: 'pager-page', bytes: ' ' },
+    { label: 'b 上页', key: 'pager-back', bytes: 'b' },
+    { label: 'g 顶', key: 'pager-top', bytes: 'g' },
+    { label: 'G 底', key: 'pager-bottom', bytes: 'G' },
+    CTRL_C,
+    ESC_KEY,
+  ],
+  top: [
+    { label: 'q 退出', key: 'top-quit', bytes: 'q' },
+    { label: 'k 杀', key: 'top-kill', bytes: 'k' },
+    { label: 'P CPU', key: 'top-cpu', bytes: 'P' },
+    { label: 'M 内存', key: 'top-mem', bytes: 'M' },
+    { label: '/ 找', key: 'top-search', bytes: '/' },
+    ...ARROWS.slice(0, 2),
+    { label: 'Enter', key: 'Enter' },
+    CTRL_C,
+    ESC_KEY,
+  ],
+  vim: [
+    ESC_KEY,
+    { label: ':w', key: 'vim-write', bytes: '\x1b:w\r' },
+    { label: ':q', key: 'vim-quit', bytes: '\x1b:q\r' },
+    { label: ':q!', key: 'vim-force-quit', bytes: '\x1b:q!\r' },
+    { label: ':wq', key: 'vim-write-quit', bytes: '\x1b:wq\r' },
+    { label: 'i', key: 'vim-insert', bytes: 'i' },
+    { label: 'u 撤销', key: 'vim-undo', bytes: '\x1bu' },
+    { label: 'h', key: 'vim-h', bytes: 'h' },
+    { label: 'j', key: 'vim-j', bytes: 'j' },
+    { label: 'k', key: 'vim-k', bytes: 'k' },
+    { label: 'l', key: 'vim-l', bytes: 'l' },
+    CTRL_C,
+  ],
+  nano: [
+    { label: '^X 退出', key: 'nano-exit', bytes: '\x18' },
+    { label: '^O 保存', key: 'nano-save', bytes: '\x0f' },
+    { label: '^W 搜索', key: 'nano-search', bytes: '\x17' },
+    { label: '^K 剪行', key: 'nano-cut', bytes: '\x0b' },
+    { label: '^U 粘贴', key: 'nano-paste', bytes: '\x15' },
+    { label: 'Y', key: 'nano-yes', bytes: 'y' },
+    { label: 'N', key: 'nano-no', bytes: 'n' },
+    { label: 'Enter', key: 'Enter' },
+    ...ARROWS,
+  ],
+  tui: [ESC_KEY, CTRL_C, { label: 'q', key: 'tui-q', bytes: 'q' }, { label: 'Enter', key: 'Enter' }, { label: 'Tab', key: 'Tab' }, ...ARROWS, { label: 'Ctrl', key: 'Ctrl' }],
+}
+
+const PROGRAM_CONTEXT: Record<string, keyof typeof CONTEXT_KEYS> = {
+  less: 'pager', more: 'pager', most: 'pager', man: 'pager', bat: 'pager',
+  top: 'top', htop: 'top', btop: 'top', atop: 'top',
+  vim: 'vim', vi: 'vim', nvim: 'vim', view: 'vim',
+  nano: 'nano', pico: 'nano',
+}
+
+/**
+ * 键条内容由【谁在占屏】决定（ADR-0011 分片 ②）。
+ *
+ * 没有程序占屏 → 默认那一排（Esc ^C Tab Ctrl 方向键…）。
+ * 备用缓冲激活 → 按前台程序换：less 要 q / 搜索 / 翻页，top 要 q / k / 排序，
+ * vim 要 Esc / :w / :q，不认识的给一套通用 TUI 键。
+ */
+export function keyBarFor(ctx: { altScreen: boolean; program: string | null }): readonly KeyDef[] {
+  if (!ctx.altScreen) return KEY_BAR
+  const kind = ctx.program ? PROGRAM_CONTEXT[ctx.program] : undefined
+  return CONTEXT_KEYS[kind ?? 'tui']!
+}

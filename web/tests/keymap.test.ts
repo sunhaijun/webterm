@@ -1,7 +1,7 @@
 /** UT-keymap-1：控制键映射表，对照 docs/40-frontend/keymap.md。 */
 import { describe, expect, it } from 'vitest'
 
-import { CTRL_KEYS, KEY_BAR, KEY_BYTES, appAction, chord } from '../src/input/keymap'
+import { CTRL_KEYS, KEY_BAR, KEY_BYTES, appAction, chord, keyBarFor, programOf } from '../src/input/keymap'
 
 const ESC = '\x1b'
 
@@ -144,5 +144,58 @@ describe('功能键条的排布', () => {
   it('按键不重复', () => {
     const keys = KEY_BAR.map((k) => k.key)
     expect(new Set(keys).size).toBe(keys.length)
+  })
+})
+
+/**
+ * 上下文键条（ADR-0011 分片 ②）：键条内容由"谁在占屏"决定。
+ */
+describe('programOf：从命令原文取前台程序名', () => {
+  it('取第一个词的 basename', () => {
+    expect(programOf('vim foo.txt')).toBe('vim')
+    expect(programOf('/usr/bin/htop')).toBe('htop')
+  })
+  it('跳过环境变量赋值与 sudo 之类的包装', () => {
+    expect(programOf('FOO=1 BAR=2 top')).toBe('top')
+    expect(programOf('sudo vim /etc/hosts')).toBe('vim')
+    expect(programOf('nohup less x')).toBe('less')
+  })
+  it('管道取末端 —— 占屏的是管道最后那个', () => {
+    expect(programOf('git log --oneline | less')).toBe('less')
+    expect(programOf('cat a | grep b | most')).toBe('most')
+  })
+  it('拿不到就 null', () => {
+    expect(programOf('')).toBeNull()
+    expect(programOf('FOO=1')).toBeNull()
+  })
+})
+
+describe('keyBarFor：按占屏程序换键', () => {
+  it('没有程序占屏 → 默认那一排', () => {
+    expect(keyBarFor({ altScreen: false, program: 'vim' })).toBe(KEY_BAR)
+  })
+  it('less → 分页器键：q 退出直接发 q', () => {
+    const keys = keyBarFor({ altScreen: true, program: 'less' })
+    expect(keys.find((k) => k.key === 'pager-quit')?.bytes).toBe('q')
+    expect(keys.some((k) => k.key === 'CtrlC')).toBe(true) // 脱困键永远在
+  })
+  it('vim → :q 要先 Esc 再 :q 回车，避免停在插入模式', () => {
+    const keys = keyBarFor({ altScreen: true, program: 'vim' })
+    expect(keys.find((k) => k.key === 'vim-quit')?.bytes).toBe('\x1b:q\r')
+    expect(keys[0]?.key).toBe('Escape')
+  })
+  it('top / htop 同一套', () => {
+    expect(keyBarFor({ altScreen: true, program: 'htop' })).toBe(keyBarFor({ altScreen: true, program: 'top' }))
+  })
+  it('不认识的占屏程序 → 通用 TUI 键，Esc 在最前', () => {
+    const keys = keyBarFor({ altScreen: true, program: 'some-tui' })
+    expect(keys[0]?.key).toBe('Escape')
+    expect(keys.some((k) => k.key === 'CtrlC')).toBe(true)
+  })
+  it('所有上下文键的 key 不重复', () => {
+    for (const program of ['less', 'top', 'vim', 'nano', null]) {
+      const keys = keyBarFor({ altScreen: true, program }).map((k) => k.key)
+      expect(new Set(keys).size).toBe(keys.length)
+    }
   })
 })

@@ -38,3 +38,6 @@ internal/webui/dist/*
 # 本地构建出来的二进制
 /webterm
 /release/
+
+# python 字节码（scripts/ 里的检查脚本）
+__pycache__/

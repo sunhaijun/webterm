@@ -22,6 +22,16 @@ export interface TermHandle {
   attachWebgl(): void
   /** 卸掉 WebGL —— 切走的会话必须放掉上下文，见下面的注释。 */
   detachWebgl(): void
+  /**
+   * 备用屏幕缓冲是否激活（ADR-0011 分片 ②）。
+   *
+   * vim / top / less / htop 都会 DECSET 1049 切到备用缓冲，普通流式命令
+   * 不会 —— 这是"有程序占屏"的机械信号，比 prompt_state=running 精确：
+   * sleep 100 和 top 都是 running，只有 top 切了备用缓冲。
+   */
+  altScreen(): boolean
+  /** 备用缓冲切换时通知。返回取消订阅函数。 */
+  onAltScreen(cb: (on: boolean) => void): () => void
   dispose(): void
 }
 
@@ -83,6 +93,11 @@ export function createTerminal(fontSize: number): TermHandle {
     serialize,
     attachWebgl,
     detachWebgl,
+    altScreen: () => term.buffer.active.type === 'alternate',
+    onAltScreen(cb) {
+      const d = term.buffer.onBufferChange((buf) => cb(buf.type === 'alternate'))
+      return () => d.dispose()
+    },
     dispose() {
       detachWebgl()
       term.dispose()
