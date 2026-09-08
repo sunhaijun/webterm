@@ -36,11 +36,24 @@ body {
 }
 
 .app {
-  display: grid;
-  /* 高度的唯一真相来源是 visualViewport，不是 100vh（iOS Safari 上 100vh
-     不随键盘变化）。m4 接管软键盘适配时会把它接上。 */
-  grid-template-rows: 28px auto 1fr auto auto auto;
+  /* 只是 JS 起来之前的兜底。真正的高度由 app.tsx 的 applyViewport()
+     直接写成 inline style —— 唯一真相来源是 visualViewport，不是 100vh
+     （iOS Safari 上 100vh 不随键盘变化）。 */
   height: 100%;
+
+  /* 【这里不能设 grid-template-rows】。
+     那六行（statusbar / banner / term / composer / modebar / keybar）属于
+     .main —— 见下面 data-bp 那几条规则。
+     .app 历史上确实是那六行的直接父级，sidebar 重构之后它的子元素变成
+     了 sidebar + main 两个，遗留的行定义会把 .main auto-place 进第一行，
+     也就是 28px 那行 —— 于是 .main 只有 28px、.term 8px、
+     .xterm-viewport 0，终端整个不渲染。桌面和手机一样中招。 */
+
+  /* 【根容器不该滚动】。手机上 sidebar 是底部 sheet，靠
+     translateY(100%) 收到视口下面 —— 而 transform 【不会】把元素从可滚动
+     区域里去掉，于是页面能往下多滚 91px（正好是那个 sheet 的高度），
+     露出本该藏起来的抽屉。它是个定高的 app 外壳，根本不该有滚动。 */
+  overflow: hidden;
 }
 
 .statusbar {
