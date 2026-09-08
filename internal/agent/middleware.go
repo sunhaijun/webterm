@@ -87,13 +87,27 @@ func (a *Agent) checkOrigin(r *http.Request) bool {
 		// 它们仍然要过 Cookie 认证，所以这不是一条旁路。
 		return true
 	}
-	if a.cfg.Domain != "" && origin == "https://"+a.cfg.Domain {
+	if a.cfg.Domain != "" && origin == a.allowedOrigin() {
 		return true
 	}
 	if a.cfg.Dev {
 		return isLocalOrigin(origin)
 	}
 	return false
+}
+
+// allowedOrigin 是浏览器该发过来的那个 Origin。
+//
+// 【必须带上非默认端口】。页面在 https://域名:8443 上时浏览器发的
+// Origin 就是 https://域名:8443，拿不带端口的去比必然不等 ——
+// 于是 /ws 被 403，手机端表现为"一直在重试连接"，而且服务端
+// 什么日志都没有。--https-port 那个特性让对外 URL 带上了端口，
+// 这里当时漏了。
+//
+// 复用 externalURL：配对二维码、301 跳转、启动日志都走它，
+// 一处定义就不会再漂。
+func (a *Agent) allowedOrigin() string {
+	return externalURL(a.cfg.Domain, a.cfg.HTTPSPort)
 }
 
 // isLocalOrigin 报告 origin 是不是本机地址（仅 --dev 下允许）。

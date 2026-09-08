@@ -126,6 +126,7 @@ func runServe(args []string) error {
 
 	a := agent.New(agent.Config{
 		Domain:     c.domain,
+		HTTPSPort:  o.httpsPort,
 		Dev:        c.dev,
 		TrustProxy: o.trustProxy,
 		MaxConns:   o.maxConns,
