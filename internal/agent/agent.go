@@ -17,7 +17,10 @@ import (
 
 // Config 是 agent 的运行配置。
 type Config struct {
-	Domain     string
+	Domain string
+	// HTTPSPort 是【对外】的 HTTPS 端口。Origin 校验要用它 ——
+	// 浏览器在非 443 端口上发的 Origin 带着端口号。
+	HTTPSPort  int
 	Dev        bool
 	TrustProxy bool
 	MaxConns   int

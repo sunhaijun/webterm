@@ -96,6 +96,11 @@ func (a *Agent) handlePair(w http.ResponseWriter, r *http.Request) {
 
 func (a *Agent) handleWS(w http.ResponseWriter, r *http.Request) {
 	if !a.checkOrigin(r) {
+		// 【一定要记下来】。走到这儿的请求已经过了认证，不是扫描器噪声，
+		// 而是自己的设备被拒了。以前这里悄无声息，客户端表现成
+		// "一直重试连接"，服务端日志一片空白，没法查。
+		a.log.Warn("WebSocket 被拒：Origin 不符",
+			"origin", r.Header.Get("Origin"), "expected", a.allowedOrigin())
 		a.writeError(w, http.StatusForbidden, "forbidden", "Origin 与配置的域名不符")
 		return
 	}
