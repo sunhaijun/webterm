@@ -5,7 +5,7 @@
  */
 import { useState } from 'preact/hooks'
 
-import { KEY_BAR, KEY_BYTES, chord } from './keymap'
+import { CTRL_KEYS, KEY_BAR, KEY_BYTES, chord } from './keymap'
 import type { Mode } from './modes'
 
 /** 粘滞修饰键的三个状态。 */
@@ -32,6 +32,14 @@ export function KeyBar({ mode, onRaw, onComposerKey }: KeyBarProps) {
   }
 
   const press = (key: string) => {
+    // 控制码【两种模式下都直接发】。^C 的意义就是打断正在跑的东西，
+    // 停在 Composer 里等用户再按一次回车是没有意义的。
+    const ctl = CTRL_KEYS[key]
+    if (ctl !== undefined) {
+      onRaw(ctl)
+      consume()
+      return
+    }
     const mods = { ctrl: ctrl !== 'off', alt: alt !== 'off' }
     if (mode === 'raw') {
       const bytes = KEY_BYTES[key]

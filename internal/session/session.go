@@ -58,6 +58,7 @@ type Session struct {
 	integration string
 	promptState string        // 最近一次 prompt 状态，重连时回给客户端
 	lastMark    time.Time     // 上一个 OSC 133 标记的时间
+	lastInput   time.Time     // 上一次收到用户输入的时间，判定集成是否真的失效要用
 	sink        func(msg any) // 测试观察钩子，生产为 nil
 	ring        *ringbuf.Buffer
 	subs        map[Subscriber]struct{}
@@ -259,6 +260,7 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 		data = data[skip:]
 	}
 	s.inQueued[clientID] = queued + uint64(len(data))
+	s.lastInput = time.Now()
 	s.mu.Unlock()
 
 	cp := make([]byte, len(data))
@@ -541,8 +543,22 @@ func (s *Session) emitTo(clientID string, msg any) {
 // checkIntegrationIdle 由 manager 的巡检 goroutine 周期性调用。
 func (s *Session) checkIntegrationIdle(now time.Time) {
 	s.mu.Lock()
+	// 【"多久没标记"不是存活信号】。OSC 133 只在 prompt 前后发，
+	// 所以没有标记只说明"什么都没发生"，不说明集成坏了。
+	// 原来只看时间差，于是两种完全正常的情况会被误判成失效：
+	//
+	//   1. 前台跑着长命令 —— top / tail -f / 一次长构建期间一个标记都没有。
+	//      真踩到了：用户在 top 里待了几分钟，UI 就弹出"shell 集成未生效"。
+	//   2. 停在 prompt 前发呆 —— 没有新 prompt 被画出来，自然没有新标记。
+	//
+	// 真正说明集成坏了的是【用户敲了东西、命令跑过了，却一个标记都没来】
+	// （比如 exec bash / su 之后 PROMPT_COMMAND 被换掉）。所以两个前提：
+	// 不在跑命令，且上次标记之后有过输入。
+	running := s.promptState == protocol.PromptRunning
+	typedSinceMark := s.lastInput.After(s.lastMark)
 	stale := s.integration == protocol.IntegrationActive &&
-		!s.lastMark.IsZero() && now.Sub(s.lastMark) > integrationIdleTimeout
+		!s.lastMark.IsZero() && !running && typedSinceMark &&
+		now.Sub(s.lastMark) > integrationIdleTimeout
 	s.mu.Unlock()
 	if stale {
 		s.setIntegration(protocol.IntegrationInactive)

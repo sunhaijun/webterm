@@ -231,8 +231,9 @@ Playwright 可以派发 composition 事件。
 
 在 `viewport: { width: 390, height: 844 }`（iPhone 14）下：
 
-1. 功能键条可见，前 8 个键无需滚动
+1. 功能键条可见，前 8 个键无需滚动，且【`^C` 在其中】
 2. 点 `Ctrl` → 激活态有视觉反馈；再按 `c` → 发出 `0x03`；`Ctrl` 自动取消激活
+2b. 直接点 `^C` → 发出 `0x03`，不需要先点 `Ctrl`；Composer 模式下同样直发
 3. 长按 `Ctrl` → 锁定态；连续两次组合都带 `Ctrl`；再点解锁
 4. 聚焦 Composer（模拟 `visualViewport` 收缩）→ 终端区收缩，功能键条与 Composer 仍完全可见，布局无跳动
 5. 断言：`resize` 消息发出，cols/rows 更新

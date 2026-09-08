@@ -62,7 +62,7 @@
 | AC-3.6 | 用户手动切换模式后进入"锁定"状态，自动切换暂停，直到用户解锁 | UT-mode-2 |
 | AC-3.7 | shell 集成不可用时，模式默认为 Composer 且自动切换禁用，UI 显示降级提示 | E2E-13 |
 | AC-3.8 | 软键盘弹出时（`visualViewport` resize），终端可视区与功能键条不被遮挡，布局无跳动 | E2E-10 |
-| AC-3.9 | 功能键条包含 `Esc Tab Ctrl Alt ↑ ↓ ← → \| ~ / -` 且可横向滚动；`Ctrl`/`Alt` 为粘滞修饰键 | E2E-10 |
+| AC-3.9 | 功能键条包含 `Esc ^C Tab Ctrl ↑ ↓ ← → Alt ^D ^Z ^L \| ~ / - _ Home End PgUp PgDn` 且可横向滚动；`Ctrl`/`Alt` 为粘滞修饰键，`^C`/`^D`/`^Z`/`^L` 一按直发控制码。**`^C` 必须在免滚动的前 8 个里** —— 它是唯一的通用脱困键，而粘滞 `Ctrl` 在软键盘没弹出时（Raw 模式看 top）根本按不出组合 | E2E-10 |
 | AC-3.10 | 输入元素禁用 `autocorrect` / `autocapitalize` / `spellcheck` | UT-input-3 |
 | AC-3.11 | 终端尺寸变化时向 agent 发 `resize`，agent 对 PTY 执行 `TIOCSWINSZ`；resize 消息做 100ms 防抖 | IT-resize-1, UT-resize-1 |
 
