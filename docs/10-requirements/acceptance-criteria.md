@@ -92,6 +92,7 @@
 | AC-5.3 | 字号可调，设置持久化到 localStorage；各断点有独立默认值 | E2E-12 |
 | AC-5.4 | 选中文本时自动滚动暂停，选择不被破坏 | E2E-12 |
 | AC-5.5 | 渲染使用 WebGL addon；WebGL 不可用时回退到 canvas 且不报错 | UT-render-1 |
+| AC-5.6 | 块的「在终端里看」切到终端视图并**滚到该块输出的第一行**：agent 发 `command.start/end` 先于对应输出帧（IT-order-1），client 写入时按 `out_seq` 切帧、切口处登记 xterm marker；marker 已滚出 scrollback 时退回按命令原文搜索，再不行滚到底 | UT-marks-1, IT-order-1, E2E-20 |
 
 ---
 

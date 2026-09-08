@@ -362,6 +362,13 @@ Playwright 可以派发 composition 事件。
 3. **chips**：`mktemp -d` 造 `src/commands`、`docs`、`src/a.go` 并 `cd` 进去；空输入出现同目录历史、没有路径 chip；敲 `cd s` 出现 `src/`（没有 `docs`），点一下变 `cd src/` 且焦点不丢；`Tab` 编辑键补成 `cd src/commands/`；`|` 插 ` | `，`⌫词` 删词；发送键提交并收起
 4. **⋯ 菜单**：历史面板、输入模式切换与解锁、点外面收起
 
+## E2E-20 在终端里看 → 定位到该块（ADR-0011 ④）
+
+`web/e2e/locate.spec.ts`，Pixel 5 视口。
+
+1. 跑 `seq 1 150; echo ALPHA-END`、`seq 200 350; echo BETA-END`、`echo GAMMA-LAST` 三块；读视图里展开块 A 点「在终端里看」→ 视图切到终端，**视口顶行正是 `1`**（块 A 输出的第一行），且不是滚到顶；回读再看块 B → 顶行 `200`，且比 A 更靠下
+2. 终端视图的「块」面板（⋯ → 块）里点同一动作 → 面板关掉、终端滚到块首行
+
 ## 不在 E2E 覆盖范围（放手工清单）
 
 - 真机中文输入法的实际候选框行为

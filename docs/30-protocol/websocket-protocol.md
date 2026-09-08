@@ -307,6 +307,7 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 - `out_seq` 标记该命令的输出在流中的起止偏移。**v0.1 不使用这个字段**，它是为 v0.2 的命令块视图预留的（[ADR-0006](../20-architecture/adr/0006-agent-side-osc-parsing.md)）
 - 以空格开头的命令不上报（隐私，AC-6.2）
 - 有 `command.start` 但 shell 在命令结束前就死了 → 不会有 `command.end`。client 需要容忍悬空的 start
+- **顺序承诺**：`command.start` / `command.end`（以及同一次 PTY 读里产生的 `prompt` / `cwd`）**先于**包含其 `out_seq` 位置的 OUTPUT 帧到达。事件与帧走同一条按序写队列，agent 在推帧之前先发事件。client 据此能在写入 xterm 时把帧在 `out_seq` 处切开、登记行锚点 ——「在终端里看」才能定位到块（[ADR-0011](../20-architecture/adr/0011-read-first-layout.md) ④）。不保证这一点的旧 agent 只是让 client 登记不了锚点，定位退回按命令原文搜索
 - **`out_seq` 是该标记在剥离后输出流里的精确位置**，不是发消息那一刻的 head。`[start.out_seq, end.out_seq)` 恰好是这条命令的输出字节 —— 命令块视图靠它切块。同一次 PTY 读里可能同时到达 `133;C`、输出、`133;D`，每个标记各有各的位置（解析器为每个事件报告它在本块干净输出里的偏移，见 [shell-integration.md §5](shell-integration.md#5-agent-侧-osc-解析器要求)）。**用整块 append 之后的 head 盖戳是错的**：快命令的 start 和 end 会相等，块为空
 
 #### `pong`

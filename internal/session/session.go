@@ -333,6 +333,14 @@ func (s *Session) consume(chunk []byte) {
 	subs = s.subsLocked()
 	s.mu.Unlock()
 
+	// 【先发事件，再推帧】（协议 §4 command.start/end 的顺序承诺）。
+	// 事件与帧走同一条按序写队列（wsconn.Conn.enqueue），所以这里的先后就是
+	// 客户端收到的先后。client 靠它在写入 xterm 时把帧在 out_seq 处切开、
+	// 登记行锚点 ——「在终端里看」才能定位到块（ADR-0011 ④）。反过来的话，
+	// 帧先到，锚点就只能是事后估的。
+	for i, ev := range events {
+		s.handleOSCEvent(ev, seq+uint64(offs[i]))
+	}
 	for _, sub := range subs {
 		if data != nil {
 			sub.Push(s.sid, seq, data, false)
@@ -342,9 +350,6 @@ func (s *Session) consume(chunk []byte) {
 		// 未订阅的连接靠 head_seq 推导未读（连接层做 1s 节流）
 		head := seq + uint64(len(data))
 		s.emit(&protocol.SessionUpdated{SID: s.sid, HeadSeq: &head})
-	}
-	for i, ev := range events {
-		s.handleOSCEvent(ev, seq+uint64(offs[i]))
 	}
 }
 

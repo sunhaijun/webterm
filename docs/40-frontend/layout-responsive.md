@@ -85,6 +85,7 @@
 - 点「终端」切到终端视图：xterm 铺满画布，底栏仍是那 56px 的槽（停在 prompt 一行输入 +「读」+ ⋯；命令在跑时键条独占，「读」与 ⋯ 是键条的前导键）—— **两种视图画布几何完全一致，切换不 resize**。点「读」切回。选择记在 `localStorage['webterm.view']`。桌面（`≥ 1024px`）两种视图都用经典底栏（模式条 + 输入框 + 快捷条 + 键条）
 - **控（分片 ②）**：程序切到备用屏幕缓冲（vim / top / less）时自动切到终端视图，退出后自动回读。自动切换**不写偏好**；用户手动切过之后就不再自动回。键条按前台程序换内容（见 [input-modes.md](input-modes.md#上下文键条adr-0011-分片-②)）
 - **写（分片 ③）**：底栏是三档 sheet（收起 / 半屏 / 全屏），绝对定位在 56px 定高的槽里往上长 —— 盖住块流、不挤画布，三档之间 xterm 尺寸不变、PTY 不收 SIGWINCH；块流按 `--sheet-inset` 让位。详见 [input-modes.md](input-modes.md#写态-sheet-的三档)
+- **块动作（分片 ④）**：展开的块底部有 重跑 / 填入命令 / 复制输出 / 在终端里看。「在终端里看」切到终端视图并**滚到该块输出的第一行**、高亮 1.6s —— client 在写入 xterm 时按 `out_seq` 把帧切开、切口处登记 marker（agent 保证 `command.*` 先于对应帧到达，见 [websocket-protocol.md](../30-protocol/websocket-protocol.md)）
 - 没有 OSC 133 标记时（ssh 出去、集成不可用），最后一个块之后的输出作为一个**尾块** live-tail —— 降级就是块数变少，不是另一种界面
 - **没有标题栏**。会话名、CWD、连接状态挤在 28px 细条里，点击展开会话切换 sheet
 - `env(safe-area-inset-*)` 用于刘海与 Home 指示条
