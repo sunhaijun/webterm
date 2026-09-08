@@ -56,8 +56,9 @@ type Session struct {
 	exitCode    *int
 	cols, rows  uint16
 	integration string
-	promptState string    // 最近一次 prompt 状态，重连时回给客户端
-	lastMark    time.Time // 上一个 OSC 133 标记的时间
+	promptState string        // 最近一次 prompt 状态，重连时回给客户端
+	lastMark    time.Time     // 上一个 OSC 133 标记的时间
+	sink        func(msg any) // 测试观察钩子，生产为 nil
 	ring        *ringbuf.Buffer
 	subs        map[Subscriber]struct{}
 	// inAck/inQueued 按 client_id 记账，【跨重连存活】（协议 §5.3）。
@@ -278,40 +279,51 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 //
 // 关键顺序（ADR-0006）：Feed 剥离 → Append 计数。out_seq 永远等于剥离后
 // 字节的累计数 —— 先计数再剥离的话，续传时按 out_seq 切片就会错位。
+// consume 处理一次 PTY 读到的字节：剥离 OSC、进环形缓冲、推给订阅者、
+// 再按【精确位置】处理事件。单独抽出来是为了不起 PTY 也能测盖戳逻辑。
+func (s *Session) consume(chunk []byte) {
+	clean, events := s.osc.Feed(chunk)
+	// 事件在本块干净输出里的偏移，与 events 一一对应（见 oscparse.Offsets）
+	offs := s.osc.Offsets()
+
+	var data []byte
+	var seq uint64
+	var subs []Subscriber
+	s.mu.Lock()
+	// Append 返回本块【首字节】的 seq（空块是 no-op，返回当前 head）。
+	// 事件的精确位置 = seq + 偏移 —— 不能用 append 之后的 head，
+	// 否则同一块里的 133;C 与 133;D 会拿到同一个值，块区间为空。
+	seq = s.ring.Append(clean)
+	if len(clean) > 0 {
+		// 必须拷贝：clean 可能指向 Feed 复用的缓冲或 buf 本身，
+		// 而订阅者的写队列会持有它到下一次 Read 之后。
+		data = make([]byte, len(clean))
+		copy(data, clean)
+	}
+	subs = s.subsLocked()
+	s.mu.Unlock()
+
+	for _, sub := range subs {
+		if data != nil {
+			sub.Push(s.sid, seq, data, false)
+		}
+	}
+	if data != nil {
+		// 未订阅的连接靠 head_seq 推导未读（连接层做 1s 节流）
+		head := seq + uint64(len(data))
+		s.emit(&protocol.SessionUpdated{SID: s.sid, HeadSeq: &head})
+	}
+	for i, ev := range events {
+		s.handleOSCEvent(ev, seq+uint64(offs[i]))
+	}
+}
+
 func (s *Session) readLoop() {
 	buf := make([]byte, ptyReadBuf)
 	for {
 		n, err := s.ptmx.Read(buf)
 		if n > 0 {
-			clean, events := s.osc.Feed(buf[:n])
-
-			var data []byte
-			var seq uint64
-			var subs []Subscriber
-			s.mu.Lock()
-			if len(clean) > 0 {
-				seq = s.ring.Append(clean)
-				// 必须拷贝：clean 可能指向 Feed 复用的缓冲或 buf 本身，
-				// 而订阅者的写队列会持有它到下一次 Read 之后。
-				data = make([]byte, len(clean))
-				copy(data, clean)
-			}
-			subs = s.subsLocked()
-			s.mu.Unlock()
-
-			for _, sub := range subs {
-				if data != nil {
-					sub.Push(s.sid, seq, data, false)
-				}
-			}
-			if data != nil {
-				// 未订阅的连接靠 head_seq 推导未读（连接层做 1s 节流）
-				head := seq + uint64(len(data))
-				s.emit(&protocol.SessionUpdated{SID: s.sid, HeadSeq: &head})
-			}
-			for _, ev := range events {
-				s.handleOSCEvent(ev)
-			}
+			s.consume(buf[:n])
 		}
 		if err != nil {
 			return // EIO = shell 退出
@@ -378,7 +390,8 @@ func (s *Session) waitLoop() {
 
 // ---------- OSC 事件处理 ----------
 
-func (s *Session) handleOSCEvent(ev oscparse.Event) {
+// at 是该标记在输出流里的精确 out_seq（块首 seq + 事件偏移）。
+func (s *Session) handleOSCEvent(ev oscparse.Event, at uint64) {
 	switch e := ev.(type) {
 	case oscparse.PromptEvent:
 		s.markIntegrationAlive()
@@ -386,12 +399,12 @@ func (s *Session) handleOSCEvent(ev oscparse.Event) {
 		s.promptState = e.State
 		s.mu.Unlock()
 		if e.State == protocol.PromptRunning {
-			s.beginCommand()
+			s.beginCommand(at)
 		}
 		s.emit(&protocol.Prompt{SID: s.sid, State: e.State})
 
 	case oscparse.CommandEndEvent:
-		s.endCommand(e.ExitCode)
+		s.endCommand(e.ExitCode, at)
 
 	case oscparse.CommandTextEvent:
 		// 连续两个 1701;cmd 中间没有 133;C → 后者覆盖前者
@@ -456,7 +469,7 @@ func (s *Session) setCWD(path string) {
 //
 // 没有前置的 1701;cmd（空回车，或以空格开头被跳过）时不记录命令，
 // 但 prompt 状态照常上报。
-func (s *Session) beginCommand() {
+func (s *Session) beginCommand(at uint64) {
 	if s.pendCmd == "" {
 		return
 	}
@@ -464,7 +477,7 @@ func (s *Session) beginCommand() {
 	s.pendCmd = ""
 
 	s.mu.RLock()
-	cwd, name, outSeq := s.cwd, s.displayNameLocked(), s.ring.HeadSeq()
+	cwd, name := s.cwd, s.displayNameLocked()
 	s.mu.RUnlock()
 
 	now := time.Now()
@@ -480,13 +493,13 @@ func (s *Session) beginCommand() {
 	}
 	s.emit(&protocol.CommandStart{
 		SID: s.sid, CmdID: cmdID, Text: text, CWD: cwd,
-		At: now.UnixMilli(), OutSeq: outSeq,
+		At: now.UnixMilli(), OutSeq: at,
 	})
 }
 
 // endCommand 在 133;D 时补齐退出码与耗时。
 // 没有进行中的命令（133;D 没有前置的 133;C）时只发 prompt 状态，不结算。
-func (s *Session) endCommand(exitCode *int) {
+func (s *Session) endCommand(exitCode *int, at uint64) {
 	if s.curCmdID == nil {
 		return
 	}
@@ -499,12 +512,9 @@ func (s *Session) endCommand(exitCode *int) {
 			return
 		}
 	}
-	s.mu.RLock()
-	outSeq := s.ring.HeadSeq()
-	s.mu.RUnlock()
 	s.emit(&protocol.CommandEnd{
 		SID: s.sid, CmdID: id, ExitCode: exitCode,
-		DurationMS: dur.Milliseconds(), OutSeq: outSeq,
+		DurationMS: dur.Milliseconds(), OutSeq: at,
 	})
 }
 
@@ -513,6 +523,9 @@ func (s *Session) endCommand(exitCode *int) {
 // 未订阅的连接也要收 session.updated / cwd / command.* —— 侧栏里的会话名、
 // 未读标记都靠它们。订阅只决定收不收 OUTPUT 字节。
 func (s *Session) emit(msg any) {
+	if s.sink != nil {
+		s.sink(msg) // 仅测试用：不经过 manager 也能观察到发出的消息
+	}
 	if s.mgr != nil {
 		s.mgr.fanout(msg)
 	}

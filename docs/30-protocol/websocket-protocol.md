@@ -306,6 +306,7 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 - `out_seq` 标记该命令的输出在流中的起止偏移。**v0.1 不使用这个字段**，它是为 v0.2 的命令块视图预留的（[ADR-0006](../20-architecture/adr/0006-agent-side-osc-parsing.md)）
 - 以空格开头的命令不上报（隐私，AC-6.2）
 - 有 `command.start` 但 shell 在命令结束前就死了 → 不会有 `command.end`。client 需要容忍悬空的 start
+- **`out_seq` 是该标记在剥离后输出流里的精确位置**，不是发消息那一刻的 head。`[start.out_seq, end.out_seq)` 恰好是这条命令的输出字节 —— 命令块视图靠它切块。同一次 PTY 读里可能同时到达 `133;C`、输出、`133;D`，每个标记各有各的位置（解析器为每个事件报告它在本块干净输出里的偏移，见 [shell-integration.md §5](shell-integration.md#5-agent-侧-osc-解析器要求)）。**用整块 append 之后的 head 盖戳是错的**：快命令的 start 和 end 会相等，块为空
 
 #### `pong`
 

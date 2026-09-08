@@ -42,6 +42,11 @@ type Parser struct {
 	pay    []byte // 正在缓冲的负载
 	out    []byte // Feed 的输出缓冲，跨调用复用
 	events []Event
+	// offs[i] 是 events[i] 在【本次 Feed 的干净输出】里的偏移：该序列前面
+	// 已经吐出了多少个字节。session 用"块首 seq + 偏移"给 command.start/end
+	// 盖戳 —— 不能用整块 append 之后的 head：一条快命令的 133;C、输出、133;D
+	// 常在同一次 PTY 读里到达，用同一个 head 会让块的字节区间为空。
+	offs []int
 }
 
 // New 创建一个解析器。
@@ -60,6 +65,7 @@ func New() *Parser {
 // （比如立刻 ring.Append，那里会拷贝）。
 func (p *Parser) Feed(in []byte) (out []byte, events []Event) {
 	p.events = p.events[:0]
+	p.offs = p.offs[:0]
 
 	// 快路径：绝大多数字节里没有 ESC，直接透传，不产生任何分配。
 	if p.st == stNormal && bytes.IndexByte(in, esc) < 0 {
@@ -167,6 +173,19 @@ func (p *Parser) Feed(in []byte) (out []byte, events []Event) {
 	return p.out, p.events
 }
 
+// Offsets 返回上一次 Feed 产生的每个事件在【那次 Feed 的干净输出】里的偏移，
+// 与 events 一一对应。偏移是相对本次 Feed 的，跨 Feed 由调用方加上块首 seq。
+//
+// 单独一个方法而不是改事件类型：事件类型是对外契约，且大量测试用
+// DeepEqual 比较它们；偏移是 session 才关心的附带信息。
+func (p *Parser) Offsets() []int { return p.offs }
+
+// emit 记一个事件，同时记下它在干净输出里的位置。
+func (p *Parser) emit(ev Event) {
+	p.events = append(p.events, ev)
+	p.offs = append(p.offs, len(p.out))
+}
+
 // isOurs 报告当前编号是不是 webterm 关心的那三个之一。
 func (p *Parser) isOurs() bool {
 	switch string(p.id) {
@@ -206,9 +225,9 @@ func (p *Parser) finish133() {
 	case 'A':
 		// prompt 开始：剥离，不产生消息
 	case 'B':
-		p.events = append(p.events, PromptEvent{State: "input"})
+		p.emit(PromptEvent{State: "input"})
 	case 'C':
-		p.events = append(p.events, PromptEvent{State: "running"})
+		p.emit(PromptEvent{State: "running"})
 	case 'D':
 		var code *int
 		if rest, ok := strings.CutPrefix(string(p.pay), "D;"); ok {
@@ -217,10 +236,8 @@ func (p *Parser) finish133() {
 				code = &n
 			}
 		}
-		p.events = append(p.events,
-			PromptEvent{State: "done"},
-			CommandEndEvent{ExitCode: code},
-		)
+		p.emit(PromptEvent{State: "done"})
+		p.emit(CommandEndEvent{ExitCode: code})
 	}
 }
 
@@ -230,7 +247,7 @@ func (p *Parser) finish7() {
 	if err != nil || u.Scheme != "file" || u.Path == "" {
 		return // 解析失败 → 忽略这条，不发消息，不报错
 	}
-	p.events = append(p.events, CWDEvent{Path: u.Path})
+	p.emit(CWDEvent{Path: u.Path})
 }
 
 func (p *Parser) finish1701() {
@@ -240,7 +257,7 @@ func (p *Parser) finish1701() {
 	}
 	switch kind {
 	case "hello":
-		p.events = append(p.events, IntegrationHelloEvent{Version: rest})
+		p.emit(IntegrationHelloEvent{Version: rest})
 	case "cmd":
 		// base64（标准字母表带填充）：命令原文可以包含 BEL/ESC/换行等会破坏
 		// OSC 结构的字节，所以必须编码
@@ -248,7 +265,7 @@ func (p *Parser) finish1701() {
 		if err != nil {
 			return // 畸形 base64 → 剥离但无事件
 		}
-		p.events = append(p.events, CommandTextEvent{Text: string(text)})
+		p.emit(CommandTextEvent{Text: string(text)})
 	}
 }
 
