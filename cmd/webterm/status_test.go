@@ -1,6 +1,18 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -163,5 +175,111 @@ func TestColorEnabled(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	if colorEnabled(os.Stdin) {
 		t.Error("设了 NO_COLOR（哪怕是空值）就不该上色")
+	}
+}
+
+// 探活必须带 SNI。
+//
+// autocert 的 HostPolicy 只认 --domain 那个名字：拿 IP 直连、不带 SNI 时
+// 服务端【不给证书】，握手直接断 —— 那是服务端的拒绝，客户端
+// InsecureSkipVerify 救不了。漏了 SNI 就会把活着的服务判成"未运行"。
+//
+// 【不能用 httptest.StartTLS】：它会无条件往 Certificates 里塞一张 localhost
+// 证书，而 Go 在 len(Certificates)>0 且 ServerName 为空时根本不调
+// GetCertificate —— 握手会用那张兜底证书成功，测试就失去意义了
+// （这个坑真踩到了：撤掉修复测试照样绿）。所以自己起一个只有
+// GetCertificate、没有兜底证书的服务器。
+func TestHealthzOKSendsSNI(t *testing.T) {
+	const domain = "t.example.com"
+	cert := selfSigned(t, domain)
+
+	var sawSNI []string
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, "ok")
+		}),
+		TLSConfig: &tls.Config{
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				sawSNI = append(sawSNI, hello.ServerName)
+				if hello.ServerName != domain {
+					// autocert 在 HostPolicy 不匹配时就是这么拒的
+					return nil, fmt.Errorf("acme/autocert: host %q not configured in HostWhitelist", hello.ServerName)
+				}
+				return &cert, nil
+			},
+		},
+	}
+	go srv.ServeTLS(ln, "", "") //nolint:errcheck // 关闭时必然返回 ErrServerClosed
+	defer srv.Close()
+
+	url := "https://" + ln.Addr().String() + "/healthz"
+	if !healthzOK(url, domain) {
+		t.Errorf("带上 SNI 应该探得通（服务端看到的 SNI: %q）", sawSNI)
+	}
+	if healthzOK(url, "") {
+		t.Error("不带 SNI 时这个服务端会拒绝握手，不该报成功")
+	}
+	if len(sawSNI) == 0 || sawSNI[0] != domain {
+		t.Errorf("服务端没收到期望的 SNI: %q", sawSNI)
+	}
+}
+
+// 返回体不是 "ok" 就不算活着 —— 端口上是别的服务时靠这条区分。
+func TestHealthzOKChecksBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "<html>nginx</html>")
+	}))
+	defer srv.Close()
+	if healthzOK(srv.URL+"/healthz", "") {
+		t.Error("返回体不是 ok，不该判成 webterm")
+	}
+}
+
+func selfSigned(t *testing.T, domain string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: domain},
+		DNSNames:     []string{domain},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// 探活不跟随重定向 —— 跟下去等于让别的地方替本机回答。
+//
+// 真实场景：生产的 :80 只有 ACME 挑战和跳转，/healthz 拿到的是 301，
+// 指向公网域名。跟下去会绕出这台机器再回来，正确性就依赖 DNS 和
+// 公网 IP 自反了；--bind 127.0.0.1 时更是直接指向一个本进程没在服务的地址。
+func TestHealthzOKDoesNotFollowRedirect(t *testing.T) {
+	real := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	}))
+	defer real.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, real.URL+"/healthz", http.StatusMovedPermanently)
+	}))
+	defer redirector.Close()
+
+	if healthzOK(redirector.URL+"/healthz", "") {
+		t.Error("301 跟到别处拿到 ok，不该算本机活着")
+	}
+	// 对照：目标本身直接答 ok 时要判成活着
+	if !healthzOK(real.URL+"/healthz", "") {
+		t.Error("直接返回 ok 的应该判成活着")
 	}
 }
