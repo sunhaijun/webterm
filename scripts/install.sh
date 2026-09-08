@@ -465,7 +465,31 @@ else
 fi
 
 run systemctl --user daemon-reload
-run systemctl --user enable --now webterm
+run systemctl --user enable webterm
+
+# 【必须 restart，不能用 enable --now】。
+#
+# --now 只在服务【没在跑】时才启动它 —— 升级时它是个 no-op：
+# 磁盘上换成了新二进制，内存里还是旧进程，而脚本照常报"完成"。
+# 这个坑真踩到了：修好的 Origin 校验装上了却没生效，
+# 客户端继续连不上，日志里连新加的诊断都没有（那也在新二进制里）。
+#
+# restart 对没在跑的服务等于 start，所以首装和升级共用这一条。
+run systemctl --user restart webterm
+
+# 【确认真的起来了】。新二进制可能根本起不来 —— 比如 capability 丢了
+# 绑不上 80，systemd 就会每 3 秒重启一次。那种情况下脚本不该报成功：
+# 装完看着好、其实在崩溃循环，是最难往回追的一类失败。
+if [ "$DRY_RUN" != 1 ]; then
+    ok=0
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if systemctl --user is-active --quiet webterm; then ok=1; break; fi
+        sleep 0.5
+    done
+    [ "$ok" = 1 ] || die "服务重启后没起来（5 秒内没到 active）。看日志：
+      journalctl --user -u webterm -n 30 --no-pager"
+    done_msg "服务已重启：$("$PREFIX/webterm" version)"
+fi
 
 if [ "$DRY_RUN" = 1 ]; then
     step "完成（dry-run）"
