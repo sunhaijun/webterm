@@ -66,7 +66,7 @@
         "limits": { "max_sessions": 20, "ring_bytes": 1048576, "max_frame_bytes": 262144 },
         "sessions": [{
           "sid": 1, "name": "webterm", "name_is_manual": false, "cwd": "/home/sun/github/webterm",
-          "status": "running", "exit_code": null, "cols": 80, "rows": 24, "integration": "active", "prompt_state": "input",
+          "status": "running", "exit_code": null, "cols": 80, "rows": 24, "integration": "active", "unmarked_input": false, "prompt_state": "input",
           "base_seq": 0, "head_seq": 483920, "created_at": 1757116000000
         }],
         "resumed": [{ "sid": 1, "status": "ok", "from_seq": 483920, "in_ack": 1204 }]

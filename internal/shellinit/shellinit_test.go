@@ -130,3 +130,37 @@ func TestNoNamespacePollution(t *testing.T) {
 		}
 	}
 }
+
+// hello 必须发在用户配置【之前】—— 一个慢的 .bash_profile 不能把集成判成
+// 不可用。它的含义是"脚本开始加载"，钩子是否装好由之后的 133 标记证明。
+func TestHelloBeforeUserConfig(t *testing.T) {
+	cases := []struct {
+		login bool
+		first string // 该模式下最先出现的用户配置引用
+	}{
+		{true, ".bash_profile"},
+		{false, "/etc/bash.bashrc"},
+	}
+	for _, tc := range cases {
+		rc := shellinit.RCFile(tc.login)
+		hello := strings.Index(rc, "1701;hello")
+		cfg := strings.Index(rc, tc.first)
+		if hello < 0 || cfg < 0 {
+			t.Fatalf("login=%v：找不到 hello(%d) 或用户配置(%d)", tc.login, hello, cfg)
+		}
+		if hello > cfg {
+			t.Errorf("login=%v：hello 发在了用户配置之后（hello@%d, cfg@%d）", tc.login, hello, cfg)
+		}
+	}
+}
+
+// 提前的 hello 是 Go 里拼的字符串，版本号必须和脚本里的 __webterm_version 一致。
+func TestHelloVersionMatchesScript(t *testing.T) {
+	want := "__webterm_version=" + shellinit.Version + "\n"
+	if !strings.Contains(shellinit.Script(), want) {
+		t.Fatalf("bash.sh 里没有 %q —— Go 侧 Version 与脚本漂移了", strings.TrimSpace(want))
+	}
+	if !strings.Contains(shellinit.RCFile(true), "1701;hello;"+shellinit.Version) {
+		t.Fatal("rcfile 提前的 hello 没带上版本号")
+	}
+}

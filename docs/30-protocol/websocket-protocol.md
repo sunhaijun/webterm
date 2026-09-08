@@ -212,6 +212,7 @@ client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
       "status": "running", "exit_code": null,
       "cols": 80, "rows": 24,
       "integration": "active",
+      "unmarked_input": false,
       "prompt_state": "input",
       "base_seq": 0, "head_seq": 483920,
       "created_at": 1757116000000
@@ -447,9 +448,12 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 `integration` 字段：`pending` → `active` | `inactive`
 
 - 会话创建时为 `pending`
-- 收到 `OSC 1701;hello` → `active`
-- 10 秒内未收到 → `inactive`，并发 `session.updated{integration:"inactive"}`
-- `active` → `inactive`（如用户 `exec zsh`）：**距上一个 OSC 133 标记超过 5 分钟**。这是个宽松启发（用户可能只是没敲命令），所以误判代价必须低 —— 只影响降级提示与自动切换，不影响终端可用性。再收到 133 标记立即转回 `active`
+- 收到 `OSC 1701;hello` → 仍 `pending`，但取消握手超时（hello 现在发在用户 dotfile **之前**，只表示脚本开始加载）
+- 收到第一个 `OSC 133` 标记 → `active`
+- 10 秒内**连 hello 都没收到** → `inactive`，并发 `session.updated{integration:"inactive"}`
+- `active` → `inactive`（钩子被摘掉，如 `trap - DEBUG` / `exec bash`）：**在 prompt 前连续 2 次 Enter 有输出却零标记**（[shell-integration.md §4.7](shell-integration.md#47-活性探测按命令)）。不再靠"多久没标记"猜 —— 长命令和发呆都不产生标记。再收到 133 标记立即转回 `active`
+
+`unmarked_input` 字段（bool）：命令**在跑**时连续 2 次 Enter 有输出却零标记 → `true`。说明输入正去往一个没有集成的子程序（ssh / su / 容器 / REPL）；**`integration` 不受影响**，因为外层 shell 没坏。子程序退出、外层标记回来 → `false`。客户端据此提示"当前程序里没有 shell 集成"，命令块在此期间自然合并为一个。
 
 ### 6.3 节流规则汇总
 

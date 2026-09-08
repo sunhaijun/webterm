@@ -69,6 +69,12 @@ export interface SessionInfo {
   rows: number
   integration: Integration
   /**
+   * 输入正去往一个没有 shell 集成的子程序（ssh / su / 容器 / REPL）。
+   * 由 agent 的按命令活性探测得出（协议 §4.7）。外层 integration 不受影响。
+   * 老 agent 不发这个字段，所以可选。
+   */
+  unmarked_input?: boolean
+  /**
    * 重连时用来重新对齐输入模式（协议 §4.2）。
    *
    * prompt 消息只在状态变化时发一次，离线期间的那些就丢了 —— 断线跨过
@@ -122,6 +128,7 @@ export interface SessionUpdated {
   cols?: number
   rows?: number
   integration?: Integration
+  unmarked_input?: boolean
   head_seq?: number
 }
 

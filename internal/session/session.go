@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -25,6 +26,12 @@ const (
 	integrationIdleTimeout = 5 * time.Minute
 	// killGrace 是 SIGHUP 到 SIGKILL 之间的宽限。
 	killGrace = 2 * time.Second
+
+	// probeGrace：一次 Enter 之后等这么久还没有任何 133 标记，就算一次
+	// "未标记往返"。有钩子的 shell 里 133;C 在几十毫秒内就到，2 秒非常宽松。
+	probeGrace = 2 * time.Second
+	// probeMisses：连续几次未标记往返才下结论 —— 单次可能是巧合。
+	probeMisses = 2
 )
 
 var (
@@ -56,12 +63,27 @@ type Session struct {
 	exitCode    *int
 	cols, rows  uint16
 	integration string
-	promptState string        // 最近一次 prompt 状态，重连时回给客户端
-	lastMark    time.Time     // 上一个 OSC 133 标记的时间
-	lastInput   time.Time     // 上一次收到用户输入的时间，判定集成是否真的失效要用
-	sink        func(msg any) // 测试观察钩子，生产为 nil
-	ring        *ringbuf.Buffer
-	subs        map[Subscriber]struct{}
+	promptState string    // 最近一次 prompt 状态，重连时回给客户端
+	lastMark    time.Time // 上一个 OSC 133 标记的时间
+	lastInput   time.Time // 上一次收到用户输入的时间，判定集成是否真的失效要用
+	helloSeen   bool      // 收到过 1701;hello —— 脚本已开始加载（不等于钩子已装好）
+
+	// ---- 按命令的活性探测（协议 §4.7）----
+	//
+	// 一次 Enter 之后有没有等到【任何】133 标记。有钩子的 shell 里，非空
+	// 命令几十毫秒内发 133;C，空 Enter 重画 prompt 发 133;A/B ——
+	// 所以【有输出却零标记】才说明这次输入去了一个没有钩子的 shell。
+	// "多久没标记"不是存活信号（见 checkIntegrationIdle 的注释）。
+	probeArmed    bool
+	probeGen      int           // 每次装探针 +1；到期定时器只认自己那一代
+	probeAt       time.Time     // 那次 Enter 的时间
+	probeOutput   bool          // 那次 Enter 之后有过输出
+	probeState    string        // Enter 时的 promptState —— 决定结论归谁
+	unmarkedRuns  int           // 连续未标记往返计数
+	unmarkedInput bool          // 对外报告：输入正去往一个没有集成的子程序
+	sink          func(msg any) // 测试观察钩子，生产为 nil
+	ring          *ringbuf.Buffer
+	subs          map[Subscriber]struct{}
 	// inAck/inQueued 按 client_id 记账，【跨重连存活】（协议 §5.3）。
 	// inQueued 是已接受入队的字节数（用于校验 seq 连续性），
 	// inAck 是已真正写进 PTY 的字节数（用于 ack 与重连后的重发起点）。
@@ -91,19 +113,20 @@ func (s *Session) Snapshot() protocol.SessionInfo {
 
 func (s *Session) snapshotLocked() protocol.SessionInfo {
 	return protocol.SessionInfo{
-		SID:          s.sid,
-		Name:         s.displayNameLocked(),
-		NameIsManual: s.nameManual,
-		CWD:          s.cwd,
-		Status:       s.status,
-		ExitCode:     s.exitCode,
-		Cols:         s.cols,
-		Rows:         s.rows,
-		Integration:  s.integration,
-		PromptState:  optStr(s.promptState),
-		BaseSeq:      s.ring.BaseSeq(),
-		HeadSeq:      s.ring.HeadSeq(),
-		CreatedAt:    s.createdAt.UnixMilli(),
+		SID:           s.sid,
+		Name:          s.displayNameLocked(),
+		NameIsManual:  s.nameManual,
+		CWD:           s.cwd,
+		Status:        s.status,
+		ExitCode:      s.exitCode,
+		Cols:          s.cols,
+		Rows:          s.rows,
+		Integration:   s.integration,
+		UnmarkedInput: s.unmarkedInput,
+		PromptState:   optStr(s.promptState),
+		BaseSeq:       s.ring.BaseSeq(),
+		HeadSeq:       s.ring.HeadSeq(),
+		CreatedAt:     s.createdAt.UnixMilli(),
 	}
 }
 
@@ -260,7 +283,9 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 		data = data[skip:]
 	}
 	s.inQueued[clientID] = queued + uint64(len(data))
-	s.lastInput = time.Now()
+	now := time.Now()
+	s.lastInput = now
+	s.armProbeLocked(data, now)
 	s.mu.Unlock()
 
 	cp := make([]byte, len(data))
@@ -297,6 +322,9 @@ func (s *Session) consume(chunk []byte) {
 	// 否则同一块里的 133;C 与 133;D 会拿到同一个值，块区间为空。
 	seq = s.ring.Append(clean)
 	if len(clean) > 0 {
+		if s.probeArmed {
+			s.probeOutput = true
+		}
 		// 必须拷贝：clean 可能指向 Feed 复用的缓冲或 buf 本身，
 		// 而订阅者的写队列会持有它到下一次 Read 之后。
 		data = make([]byte, len(clean))
@@ -416,7 +444,12 @@ func (s *Session) handleOSCEvent(ev oscparse.Event, at uint64) {
 		s.setCWD(e.Path)
 
 	case oscparse.IntegrationHelloEvent:
-		s.setIntegration(protocol.IntegrationActive)
+		// 【hello 不再直接置 active】。它现在发在 rcfile 最前面、用户 dotfile
+		// 之前，意思只是"脚本开始加载"——这样一个慢的 .bash_profile 不会让
+		// 握手超时误判。钩子真的装好了，由之后第一个 133 标记来证明。
+		s.mu.Lock()
+		s.helloSeen = true
+		s.mu.Unlock()
 	}
 }
 
@@ -427,7 +460,11 @@ func (s *Session) markIntegrationAlive() {
 	s.lastMark = time.Now()
 	changed := s.integration != protocol.IntegrationActive
 	s.integration = protocol.IntegrationActive
+	unmarkedChanged := s.probeMarkSeenLocked()
 	s.mu.Unlock()
+	if unmarkedChanged {
+		s.emitUnmarked()
+	}
 	if changed {
 		s.emit(&protocol.SessionUpdated{
 			SID: s.sid, Integration: strPtr(protocol.IntegrationActive),
@@ -538,6 +575,95 @@ func (s *Session) emitTo(clientID string, msg any) {
 	if s.mgr != nil {
 		s.mgr.fanoutTo(clientID, msg)
 	}
+}
+
+// onHelloTimeout 在握手期结束时由 manager 调用。
+//
+// 只有【连 hello 都没收到】才判 inactive —— 那说明 rcfile 根本没被加载
+// （比如 bash 太老、被别的东西接管）。收到了 hello 但还没有标记，多半是
+// 用户 dotfile 慢，等它就是。
+func (s *Session) onHelloTimeout() {
+	s.mu.Lock()
+	stale := s.integration == protocol.IntegrationPending && !s.helloSeen
+	s.mu.Unlock()
+	if stale {
+		s.setIntegration(protocol.IntegrationInactive)
+	}
+}
+
+// armProbeLocked 在输入里含 Enter 时装一个探针（须持锁）。
+//
+// 已有探针在等就不重复装 —— 一次结论要连续几次 Enter 各自到期才成立，
+// 快速连按不能被合并成一次。到期靠定时器，不靠下一次输入或巡检，
+// 否则结论会拖到用户下次敲键才出来。
+func (s *Session) armProbeLocked(data []byte, now time.Time) {
+	if !bytes.ContainsAny(data, "\r\n") || s.probeArmed {
+		return
+	}
+	s.probeArmed = true
+	s.probeGen++
+	s.probeAt = now
+	s.probeOutput = false
+	s.probeState = s.promptState
+	gen := s.probeGen
+	time.AfterFunc(probeGrace, func() { s.resolveProbe(gen) })
+}
+
+// resolveProbe 在探针到期时结算：有输出却没有任何标记 → 记一次未标记往返。
+func (s *Session) resolveProbe(gen int) {
+	s.mu.Lock()
+	if !s.probeArmed || s.probeGen != gen {
+		s.mu.Unlock()
+		return // 标记到了（已清零）或已经是下一代探针
+	}
+	s.probeArmed = false
+	if !s.probeOutput {
+		s.mu.Unlock()
+		return // 没输出就不算：命令可能只是安静（sleep）
+	}
+	s.unmarkedRuns++
+	setInactive, unmarkedChanged := false, false
+	if s.unmarkedRuns >= probeMisses {
+		if s.probeState == protocol.PromptRunning {
+			// 在跑的命令里 Enter 有回应却无标记 —— 输入去了一个没有钩子的
+			// 子程序（ssh / su / 容器 / REPL）。外层 shell 本身没坏，
+			// 所以【不动 integration】，只报告这个事实。
+			if !s.unmarkedInput {
+				s.unmarkedInput = true
+				unmarkedChanged = true
+			}
+		} else if s.integration == protocol.IntegrationActive {
+			// 停在 prompt 前 Enter，有输出却零标记：这个 shell 自己的钩子没了
+			// （trap - DEBUG / PROMPT_COMMAND= / exec bash 之类）。
+			setInactive = true
+		}
+	}
+	s.mu.Unlock()
+	if setInactive {
+		s.setIntegration(protocol.IntegrationInactive)
+	}
+	if unmarkedChanged {
+		s.emitUnmarked()
+	}
+}
+
+// probeMarkSeenLocked：任何 133 标记到达 → 探针与计数清零（须持锁）。
+// 返回 unmarkedInput 是否因此变化。
+func (s *Session) probeMarkSeenLocked() bool {
+	s.probeArmed = false
+	s.unmarkedRuns = 0
+	if s.unmarkedInput {
+		s.unmarkedInput = false
+		return true
+	}
+	return false
+}
+
+func (s *Session) emitUnmarked() {
+	s.mu.Lock()
+	v := s.unmarkedInput
+	s.mu.Unlock()
+	s.emit(&protocol.SessionUpdated{SID: s.sid, UnmarkedInput: &v})
 }
 
 // checkIntegrationIdle 由 manager 的巡检 goroutine 周期性调用。

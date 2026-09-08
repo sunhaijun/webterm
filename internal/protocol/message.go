@@ -157,6 +157,10 @@ type SessionInfo struct {
 	Cols         uint16 `json:"cols"`
 	Rows         uint16 `json:"rows"`
 	Integration  string `json:"integration"`
+	// UnmarkedInput：输入正去往一个没有 shell 集成的子程序（ssh / su /
+	// 容器 / REPL）。由按命令的活性探测得出（shell-integration.md §4.7）。
+	// 外层 shell 的 integration 不受影响；子程序退出、标记恢复即清零。
+	UnmarkedInput bool `json:"unmarked_input"`
 	// PromptState 是重连时重新对齐输入模式用的（协议 §4.2）。
 	// prompt 消息只在状态变化时发一次，离线期间的那些就丢了 ——
 	// 断线跨过命令边界的话，客户端会停在 Raw、Composer 收起，用户连字都
@@ -199,17 +203,18 @@ type SessionClosed struct {
 
 // SessionUpdated 只携带发生变化的字段 + sid，client 做增量合并。
 type SessionUpdated struct {
-	T            string  `json:"t"`
-	SID          uint16  `json:"sid"`
-	Name         *string `json:"name,omitempty"`
-	NameIsManual *bool   `json:"name_is_manual,omitempty"`
-	CWD          *string `json:"cwd,omitempty"`
-	Status       *string `json:"status,omitempty"`
-	ExitCode     *int    `json:"exit_code,omitempty"`
-	Cols         *uint16 `json:"cols,omitempty"`
-	Rows         *uint16 `json:"rows,omitempty"`
-	Integration  *string `json:"integration,omitempty"`
-	HeadSeq      *uint64 `json:"head_seq,omitempty"`
+	T             string  `json:"t"`
+	SID           uint16  `json:"sid"`
+	Name          *string `json:"name,omitempty"`
+	NameIsManual  *bool   `json:"name_is_manual,omitempty"`
+	CWD           *string `json:"cwd,omitempty"`
+	Status        *string `json:"status,omitempty"`
+	ExitCode      *int    `json:"exit_code,omitempty"`
+	Cols          *uint16 `json:"cols,omitempty"`
+	Rows          *uint16 `json:"rows,omitempty"`
+	Integration   *string `json:"integration,omitempty"`
+	UnmarkedInput *bool   `json:"unmarked_input,omitempty"`
+	HeadSeq       *uint64 `json:"head_seq,omitempty"`
 }
 
 type Ack struct {
