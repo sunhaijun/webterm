@@ -21,6 +21,9 @@ func runDoctor(args []string) error {
 	c.register(fs)
 	httpPort := fs.Int("http-port", 80, "ACME 挑战端口")
 	httpsPort := fs.Int("https-port", 443, "HTTPS 端口")
+	if err := applyConfig(fs, args); err != nil {
+		return err
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

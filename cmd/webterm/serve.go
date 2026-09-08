@@ -17,38 +17,79 @@ import (
 	"github.com/sunhaijun/webterm/internal/store"
 )
 
+// serveOpts 是 serve 独有的参数。
+//
+// 抽成结构体 + 一处注册，是为了让 serveFlagSet() 能被配置文件的白名单测试
+// 复用（TestConfigKeysAllExistOnServe / TestServeFlagsAreConfigurable），
+// 而不需要维护第二份 flag 清单 —— 两份必然漂移。
+type serveOpts struct {
+	acmeStaging        bool
+	httpPort           int
+	httpsPort          int
+	bind               string
+	noTLS              bool
+	trustProxy         bool
+	maxSessions        int
+	maxConns           int
+	ringBytes          int
+	maxHistory         int
+	noHistory          bool
+	noShellIntegration bool
+	noLoginShell       bool
+	shell              string
+	logLevel           string
+}
+
+func (o *serveOpts) register(fs *flag.FlagSet) {
+	fs.BoolVar(&o.acmeStaging, "acme-staging", false, "用 Let's Encrypt staging 环境（调试部署用）")
+	fs.IntVar(&o.httpPort, "http-port", 80, "ACME 挑战 + HTTPS 跳转")
+	fs.IntVar(&o.httpsPort, "https-port", 443, "HTTPS 端口")
+	fs.StringVar(&o.bind, "bind", "0.0.0.0", "监听地址。设为 127.0.0.1 配合隧道/反代")
+	fs.BoolVar(&o.noTLS, "no-tls", false, "关闭 TLS（仅允许 --bind 为回环或私有地址）")
+	fs.BoolVar(&o.trustProxy, "trust-proxy", false, "信任 X-Forwarded-For（仅在反代后启用，否则限速可被绕过）")
+	fs.IntVar(&o.maxSessions, "max-sessions", 20, "会话数上限")
+	fs.IntVar(&o.maxConns, "max-conns", 16, "并发 WebSocket 连接上限")
+	fs.IntVar(&o.ringBytes, "ring-bytes", 1<<20, "每会话输出缓冲（影响能容忍的断线时长）")
+	fs.IntVar(&o.maxHistory, "max-history", 50000, "命令历史条数上限")
+	fs.BoolVar(&o.noHistory, "no-history", false, "完全关闭命令历史记录")
+	fs.BoolVar(&o.noShellIntegration, "no-shell-integration", false, "不注入 shell 集成（排障用）")
+	fs.BoolVar(&o.noLoginShell, "no-login-shell", false, "用非登录交互 shell（只读 ~/.bashrc）")
+	fs.StringVar(&o.shell, "shell", "bash", "shell（v0.1 只支持 bash）")
+	fs.StringVar(&o.logLevel, "log-level", "info", "debug / info / warn / error")
+}
+
+// serveFlagSet 是 serve 的完整 flag 集合。serve 的 flag 是所有子命令的超集，
+// 所以配置文件的白名单只需对着它校验。
+func serveFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	var c commonFlags
+	var o serveOpts
+	c.register(fs)
+	o.register(fs)
+	return fs
+}
+
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	var c commonFlags
+	var o serveOpts
 	c.register(fs)
-
-	acmeStaging := fs.Bool("acme-staging", false, "用 Let's Encrypt staging 环境（调试部署用）")
-	httpPort := fs.Int("http-port", 80, "ACME 挑战 + HTTPS 跳转")
-	httpsPort := fs.Int("https-port", 443, "HTTPS 端口")
-	bind := fs.String("bind", "0.0.0.0", "监听地址。设为 127.0.0.1 配合隧道/反代")
-	noTLS := fs.Bool("no-tls", false, "关闭 TLS（仅允许 --bind 为回环或私有地址）")
-	trustProxy := fs.Bool("trust-proxy", false, "信任 X-Forwarded-For（仅在反代后启用，否则限速可被绕过）")
-	maxSessions := fs.Int("max-sessions", 20, "会话数上限")
-	maxConns := fs.Int("max-conns", 16, "并发 WebSocket 连接上限")
-	ringBytes := fs.Int("ring-bytes", 1<<20, "每会话输出缓冲（影响能容忍的断线时长）")
-	maxHistory := fs.Int("max-history", 50000, "命令历史条数上限")
-	noHistory := fs.Bool("no-history", false, "完全关闭命令历史记录")
-	noShellIntegration := fs.Bool("no-shell-integration", false, "不注入 shell 集成（排障用）")
-	noLoginShell := fs.Bool("no-login-shell", false, "用非登录交互 shell（只读 ~/.bashrc）")
-	shell := fs.String("shell", "bash", "shell（v0.1 只支持 bash）")
-	logLevel := fs.String("log-level", "info", "debug / info / warn / error")
+	o.register(fs)
+	if err := applyConfig(fs, args); err != nil {
+		return err
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	// --dev 默认监听 8080（AC-1.2），除非用户显式指定了端口
 	if c.dev && !isFlagSet(fs, "http-port") {
-		*httpPort = 8080
+		o.httpPort = 8080
 	}
 
-	log := newLogger(*logLevel)
+	log := newLogger(o.logLevel)
 	slog.SetDefault(log)
 
-	if !c.dev && !*noTLS && c.domain == "" {
+	if !c.dev && !o.noTLS && c.domain == "" {
 		return fmt.Errorf("生产模式必须指定 --domain（ACME 与 Origin 校验都要用它），本地开发用 --dev")
 	}
 
@@ -66,16 +107,16 @@ func runServe(args []string) error {
 	cleanupStaleRCFiles(runDir, log)
 
 	sessCfg := session.Config{
-		MaxSessions: *maxSessions,
-		RingBytes:   *ringBytes,
-		Shell:       *shell,
-		History:     !*noHistory,
+		MaxSessions: o.maxSessions,
+		RingBytes:   o.ringBytes,
+		Shell:       o.shell,
+		History:     !o.noHistory,
 	}
-	if !*noShellIntegration {
+	if !o.noShellIntegration {
 		// 用临时 rcfile 注入，用户不需要改任何 dotfile（ADR-0010）
 		sessCfg.RCFileFor = func(sid uint16) (string, error) {
 			return shellinit.Render(sid, shellinit.Options{
-				Login: !*noLoginShell,
+				Login: !o.noLoginShell,
 				Dir:   runDir,
 			})
 		}
@@ -86,9 +127,9 @@ func runServe(args []string) error {
 	a := agent.New(agent.Config{
 		Domain:     c.domain,
 		Dev:        c.dev,
-		TrustProxy: *trustProxy,
-		MaxConns:   *maxConns,
-		MaxHistory: *maxHistory,
+		TrustProxy: o.trustProxy,
+		MaxConns:   o.maxConns,
+		MaxHistory: o.maxHistory,
 		Version:    version,
 		Logger:     log,
 	}, st, sessions)
@@ -97,11 +138,11 @@ func runServe(args []string) error {
 	servers, errCh, err := a.Listen(agent.ServeConfig{
 		Domain:      c.domain,
 		Dev:         c.dev,
-		NoTLS:       *noTLS,
-		ACMEStaging: *acmeStaging,
-		Bind:        *bind,
-		HTTPPort:    *httpPort,
-		HTTPSPort:   *httpsPort,
+		NoTLS:       o.noTLS,
+		ACMEStaging: o.acmeStaging,
+		Bind:        o.bind,
+		HTTPPort:    o.httpPort,
+		HTTPSPort:   o.httpsPort,
 		CertDir:     agent.CertDirDefault(c.dataDir),
 	}, a.Handler())
 	if err != nil {
@@ -124,7 +165,7 @@ func runServe(args []string) error {
 		}
 		fmt.Println()
 		fmt.Println("尚无已授权设备。配对码 5 分钟内有效：")
-		printPairing(c.baseURL(*httpPort, *httpsPort), code)
+		printPairing(c.baseURL(o.httpPort, o.httpsPort), code)
 	}
 
 	sig := make(chan os.Signal, 1)

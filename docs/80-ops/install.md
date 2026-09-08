@@ -478,6 +478,73 @@ agent 收到 `SIGTERM` 时会先向所有客户端广播"agent 即将重启，�
 
 **命令历史存在 SQLite 里，跨重启存活** —— "我刚才在跑什么"这个信息不会丢。
 
+## 看一眼现在正不正常
+
+不带子命令直接跑：
+
+```bash
+webterm
+```
+
+```
+webterm v0.1.0
+
+  服务      运行中（systemd）
+  地址      https://term.example.com:8443
+  证书      有效，到 2026-12-06（还有 89 天，自动续期）
+  设备      2 台已授权
+  配置      /home/you/.config/webterm/config
+
+  webterm pair       拿配对码 + 二维码
+  webterm devices    看已授权的设备 / 吊销
+  webterm doctor     检查部署前置条件
+```
+
+证书剩不到 10 天会标黄，过期会标红 —— 那是唯一会**静默**变成事故的东西。
+没有授权设备时会在 `webterm pair` 后面标出「← 下一步」。
+
+「服务在不在跑」先问 systemd，没有 user service 时退化成探 `/healthz`
+（**不是**看端口有没有人听 —— 443 上很可能是别的服务）。
+
+## 配置文件
+
+装完之后不用每次都敲 `--domain`、`--https-port`：
+
+```bash
+webterm pair
+webterm doctor
+webterm devices list
+```
+
+参数从 `~/.config/webterm/config` 读（`$XDG_CONFIG_HOME/webterm/config`；
+`--config <路径>` 可指定别的位置）。`scripts/install.sh` 会替你写好。
+
+```ini
+# 键名【就是 flag 名】，去掉前面的 --
+domain     = term.example.com
+https-port = 8443
+log-level  = info
+```
+
+- 命令行参数**覆盖**配置文件，临时改一次不用动文件
+- `#` 开头是注释，空行忽略
+- 键名写错会**当场报错并指出行号**，不会安静地忽略
+- 布尔项写 `no-history = true`，或者只写键名也算 true
+
+刻意不用 TOML/YAML：那要引依赖，而配置只有十来个平铺的键。
+键名与 flag 名共用同一套，所以 `webterm serve --help` 就是配置文件的文档，
+两者不可能漂移（有测试钉住）。
+
+可以放进配置文件的键，就是 `webterm serve --help` 列出的那些：
+
+`domain` · `data-dir` · `bind` · `http-port` · `https-port` · `no-tls` ·
+`trust-proxy` · `acme-staging` · `shell` · `max-sessions` · `max-conns` ·
+`max-history` · `no-history` · `ring-bytes` · `no-shell-integration` ·
+`no-login-shell` · `log-level`
+
+> `--dev` 与 `--config` 【不能】写进配置文件：前者是"临时本地跑一下"的开关，
+> 写进文件等于把生产配置永久降级；后者会自我循环。
+
 ## 跑在非标准端口上
 
 443 被别的服务占了（Xray、别的 web 服务）时，webterm 可以听在别的端口：

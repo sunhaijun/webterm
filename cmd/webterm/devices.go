@@ -14,6 +14,9 @@ func runDevices(args []string) error {
 	fs := flag.NewFlagSet("devices", flag.ExitOnError)
 	var c commonFlags
 	c.register(fs)
+	if err := applyConfig(fs, args); err != nil {
+		return err
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
