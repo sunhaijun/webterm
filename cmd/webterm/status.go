@@ -81,7 +81,7 @@ func collectStatus() status {
 		}
 	}
 
-	st.running, st.runningVia = probeRunning(*httpPort, *httpsPort)
+	st.running, st.runningVia = probeRunning(c.domain, *httpPort, *httpsPort)
 
 	if c.domain != "" {
 		if exp, ok := certExpiryFromCache(agent.CertDirDefault(c.dataDir), c.domain); ok {
@@ -104,29 +104,49 @@ func collectStatus() status {
 // 没有 systemd 单元时退化成探 /healthz。【不能只看端口有没有人听】——
 // 443 上很可能是别的服务（这个坑真踩过：探到的是 Xray），
 // 而 /healthz 返回 "ok" 是 webterm 特有的。
-func probeRunning(httpPort, httpsPort int) (bool, string) {
+func probeRunning(domain string, httpPort, httpsPort int) (bool, string) {
 	if out, err := exec.Command("systemctl", "--user", "is-active", "webterm").Output(); err == nil {
 		if strings.TrimSpace(string(out)) == "active" {
 			return true, "systemd"
 		}
 		return false, "systemd"
 	}
-	// 生产：HTTPS 端口跑完整路由（:80 只有挑战和跳转）。证书是给域名签的，
-	// 从回环连必然对不上名字，所以这里【只为了探活】跳过校验。
-	if healthzOK("https://127.0.0.1:"+itoa(httpsPort)+"/healthz", true) {
+	// 生产：HTTPS 端口跑完整路由（:80 只有挑战和跳转）。
+	//
+	// 【必须带上 SNI】—— autocert 的 HostPolicy 只认 --domain 那个名字，
+	// 拿 IP 直连不带 SNI 的话服务端【根本不给证书】，握手就断了。
+	// 那是服务端的拒绝，客户端 InsecureSkipVerify 救不了，
+	// 探针会把活得好好的服务判成"未运行"。
+	//
+	// 校验仍然跳过：staging 证书、自签、链不全都不该影响"在不在跑"这个判断。
+	if domain != "" && healthzOK("https://127.0.0.1:"+itoa(httpsPort)+"/healthz", domain) {
 		return true, ""
 	}
 	// --dev / --no-tls：明文，在 http 端口上
-	if healthzOK("http://127.0.0.1:"+itoa(httpPort)+"/healthz", false) {
+	if healthzOK("http://127.0.0.1:"+itoa(httpPort)+"/healthz", "") {
 		return true, ""
 	}
 	return false, ""
 }
 
-func healthzOK(url string, skipVerify bool) bool {
-	c := &http.Client{Timeout: time.Second}
-	if skipVerify {
-		c.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // 只探活，不传数据
+// healthzOK 探一次 /healthz。sni 非空时按它发 SNI 并跳过证书校验。
+func healthzOK(url, sni string) bool {
+	c := &http.Client{
+		Timeout: time.Second,
+		// 【不跟随重定向】。:80 只有 ACME 挑战和跳转，跟下去就等于
+		// 让【别的地方】替本机回答"我在不在跑" —— 那正是这个探针
+		// 要防的误报（最早的版本探端口，把 443 上的 Xray 认成了 webterm）。
+		// 而且跳转目标是公网域名，跟下去会绕出这台机器再回来：
+		// --bind 127.0.0.1、NAT 不自反、DNS 不通时都会塌。
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	if sni != "" {
+		c.Transport = &http.Transport{TLSClientConfig: &tls.Config{
+			ServerName:         sni,
+			InsecureSkipVerify: true, //nolint:gosec // 只探活，不传数据
+		}}
 	}
 	resp, err := c.Get(url)
 	if err != nil {
