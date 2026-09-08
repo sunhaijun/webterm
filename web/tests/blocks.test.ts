@@ -144,3 +144,36 @@ describe('BlockStore', () => {
     expect(s.retained(1)).toBe(0)
   })
 })
+
+  // 读视图的降级形态：没有任何块认领的输出落在尾块里。
+  describe('尾块（降级）', () => {
+    it('没有块时，全部输出都是尾块', () => {
+      const s = new BlockStore()
+      feed(s, 1, ['raw shell output\n'])
+      expect(dec.decode(s.tailBytes(1)!.bytes)).toBe('raw shell output\n')
+    })
+
+    it('最后一个块结束之后的输出是尾块；块在跑时尾块为空', () => {
+      const s = new BlockStore()
+      let seq = 0
+      s.cmdStart(1, start(1, seq)); seq = feed(s, 1, ['out\n'], seq)
+      expect(s.hasRunning(1)).toBe(true)
+      expect(s.tailBytes(1)!.bytes.length).toBe(0) // 归运行中的块
+      s.cmdEnd(1, end(1, seq))
+      seq = feed(s, 1, ['$ '], seq) // 新 prompt：谁都不认领
+      expect(s.hasRunning(1)).toBe(false)
+      expect(dec.decode(s.tailBytes(1)!.bytes)).toBe('$ ')
+    })
+
+    it('ssh 出去之后的输出全进尾块，回来后新块从标记处重新切', () => {
+      const s = new BlockStore()
+      let seq = 0
+      s.cmdStart(1, start(1, seq, 'ssh host')); seq = feed(s, 1, ['remote$ ls\nfile\n'], seq)
+      // ssh 还在跑：这些都是 ssh 那个块的输出
+      expect(dec.decode(s.bytesOf(1, s.blocks(1)[0]!)!.bytes)).toBe('remote$ ls\nfile\n')
+      s.cmdEnd(1, end(1, seq)) // exit 回来，外层 133;D
+      seq = feed(s, 1, ['$ '], seq)
+      s.cmdStart(1, start(2, seq, 'echo back')); seq = feed(s, 1, ['back\n'], seq); s.cmdEnd(1, end(2, seq))
+      expect(dec.decode(s.bytesOf(1, s.blocks(1)[1]!)!.bytes)).toBe('back\n')
+    })
+  })

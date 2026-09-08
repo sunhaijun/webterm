@@ -205,6 +205,17 @@ visualViewport.addEventListener('scroll', onViewportChange)
 - 键盘弹出时 iOS 会把整个页面向上"推"（`visualViewport.offsetTop` 非 0），需要用 `transform: translateY(-offsetTop)` 抵消
 - 输入框聚焦时 iOS 可能自动滚动页面，需要 `overscroll-behavior: none` 并在容器上禁止滚动
 
+## 读视图下的输入（ADR-0011）
+
+手机默认是读视图（块流），xterm 不可见。两个模式的落点变成：
+
+| 模式 | 读视图里的输入 |
+|---|---|
+| Composer | 和原来一样：底部多行 `textarea`，提交走 bracketed paste |
+| Raw | **直发输入行**（`data-testid="rawline"`）：单行 `input`，Enter 把整行 + `\r` 送进 PTY。用于 `[Y/n]`、密码、REPL 这类"命令在跑但要输入"的场景 |
+
+直发输入行是**按行**发的，不是按键直通 —— 组字期间自然不会有半个字节出去（AC-3.3 的另一种满足方式）。要真正按键直通（vim / less 的单键操作）就切到终端视图，或者等分片 ② 让备用缓冲自动切过去。功能键条在两种视图里都直接发字节。
+
 ## 降级（AC-3.7 / US-7.1）
 
 `integration === "inactive"` 时：

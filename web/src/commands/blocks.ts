@@ -137,8 +137,34 @@ export class BlockStore {
   bytesOf(sid: number, b: Block): BlockBytes | null {
     const st = this.sessions.get(sid)
     if (!st) return null
-    const to = b.endSeq ?? st.headSeq
-    const wantFrom = b.startSeq
+    return this.slice(st, b.startSeq, b.endSeq ?? st.headSeq)
+  }
+
+  /**
+   * 尾块：最后一个块结束之后（没有块时从保留窗口起点）到当前的字节 ——
+   * 没有被任何块认领的输出。
+   *
+   * 这是读视图的降级形态：没有 OSC 133 标记时（ssh 出去、集成不可用），
+   * 所有输出都落在这里，块流退化成一个块。标记回来从那儿重新切块。
+   * 有块在跑时尾块为空（那些字节归运行中的块）。
+   */
+  tailBytes(sid: number): BlockBytes | null {
+    const st = this.sessions.get(sid)
+    if (!st) return null
+    const last = st.blocks[st.blocks.length - 1]
+    const from = last ? (last.endSeq ?? st.headSeq) : st.baseSeq
+    return this.slice(st, from, st.headSeq)
+  }
+
+  /** 有没有还在跑的块。 */
+  hasRunning(sid: number): boolean {
+    const st = this.sessions.get(sid)
+    if (!st) return false
+    const last = st.blocks[st.blocks.length - 1]
+    return !!last && last.endSeq === null
+  }
+
+  private slice(st: SessionState, wantFrom: number, to: number): BlockBytes {
     const from = Math.max(wantFrom, st.baseSeq)
     const truncated = from > wantFrom
     if (to <= from) return { bytes: new Uint8Array(0), truncated }

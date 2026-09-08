@@ -38,6 +38,7 @@ test('手机视口：终端拿到真实高度，页面不滚动，命令能往�
       appH: h('.app'),
       mainH: h('.main'),
       termH: h('.term'),
+      streamH: h('.stream'),
       xtermViewportH: h('.xterm-viewport'),
       scrollH: document.documentElement.scrollHeight,
       scrollW: document.documentElement.scrollWidth,
@@ -48,7 +49,9 @@ test('手机视口：终端拿到真实高度，页面不滚动，命令能往�
   // .main 必须铺满 app 外壳；被塞进 28px 那行就是这里先炸
   expect(geo.mainH, `.main 应当铺满（app ${geo.appH}px）`).toBeGreaterThan(geo.appH! - 8)
 
-  // 终端要占到视口的一半以上 —— 它是这个产品的主体
+  // 读视图（ADR-0011）：占空间的主体是块流；xterm 不可见但【保持真实尺寸】——
+  // FitAddon 据它算 cols/rows 发给 PTY，所以它的高度也不能塌。
+  expect(geo.streamH, `.stream 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.6)
   expect(geo.termH, `.term 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.6)
   expect(geo.xtermViewportH, '.xterm-viewport 不能是 0').toBeGreaterThan(0)
 
@@ -59,7 +62,7 @@ test('手机视口：终端拿到真实高度，页面不滚动，命令能往�
   // 所以这里改成【逐条卡住非终端的条不许变胖】。
   const strips = await page.evaluate(() =>
     [...document.querySelectorAll('.main > *')]
-      .filter((e) => !e.classList.contains('term'))
+      .filter((e) => !e.classList.contains('canvas'))
       .map((e) => ({
         cls: e.className || e.tagName.toLowerCase(),
         h: Math.round(e.getBoundingClientRect().height),
@@ -94,10 +97,12 @@ test('更窄的手机（360×640）同样不塌', async ({ page }) => {
     return {
       viewportH: window.innerHeight,
       termH: h('.term'),
+      streamH: h('.stream'),
       xtermViewportH: h('.xterm-viewport'),
       scrollH: document.documentElement.scrollHeight,
     }
   })
+  expect(geo.streamH, `.stream 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.6)
   expect(geo.termH, `.term 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.6)
   expect(geo.xtermViewportH, '.xterm-viewport 不能是 0').toBeGreaterThan(0)
   expect(geo.scrollH, '页面不该纵向滚动').toBeLessThanOrEqual(geo.viewportH + 1)
@@ -106,7 +111,7 @@ test('更窄的手机（360×640）同样不塌', async ({ page }) => {
   // 就可能碰巧还在阈值内，所以逐条卡住非终端的条。
   const strips = await page.evaluate(() =>
     [...document.querySelectorAll('.main > *')]
-      .filter((e) => !e.classList.contains('term'))
+      .filter((e) => !e.classList.contains('canvas'))
       .map((e) => ({
         cls: e.className || e.tagName.toLowerCase(),
         h: Math.round(e.getBoundingClientRect().height),
