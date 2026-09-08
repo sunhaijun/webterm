@@ -23,6 +23,8 @@ interface Entry {
   modes: ModeMachine
   pinnedSubscription: boolean
   opened: boolean
+  /** 备用屏幕缓冲是否激活（有程序占屏）。 */
+  altScreen: boolean
 }
 
 export interface SessionStoreHandlers {
@@ -32,6 +34,8 @@ export interface SessionStoreHandlers {
   onTermData(sid: number, data: string): void
   /** 应用级快捷键：返回 false 表示拦下来，不让它进 PTY。 */
   allowKey(e: KeyboardEvent): boolean
+  /** 备用屏幕缓冲切换（ADR-0011 分片 ②：驱动读 ⇄ 控的自动切换）。 */
+  onAltScreen(sid: number, on: boolean): void
 }
 
 export class SessionStore {
@@ -103,15 +107,27 @@ export class SessionStore {
     term.term.onData((data) => this.h.onTermData(info.sid, data))
     term.term.attachCustomKeyEventHandler((e) => e.type !== 'keydown' || this.h.allowKey(e))
 
-    this.entries.set(info.sid, {
+    const entry: Entry = {
       info,
       term,
       host,
       modes,
       pinnedSubscription: false,
       opened: false,
+      altScreen: false,
+    }
+    // 备用缓冲切换：vim / top / less 进出的机械信号
+    term.onAltScreen((on) => {
+      entry.altScreen = on
+      this.h.onAltScreen(info.sid, on)
     })
+    this.entries.set(info.sid, entry)
     this.h.onChange()
+  }
+
+  /** 该会话是否有程序占屏（备用缓冲激活）。 */
+  altScreenOf(sid: number): boolean {
+    return this.entries.get(sid)?.altScreen ?? false
   }
 
   patch(sid: number, patch: Partial<SessionInfo>): void {

@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
 import { listCommands, type CommandRecord } from '../commands/api'
-import { BlockStore } from '../commands/blocks'
+import { BlockStore, type Block } from '../commands/blocks'
 import { BlocksPanel } from '../commands/blockspanel'
 import { ReadView, TAIL_NOISE_BYTES } from '../commands/readview'
 import { HistoryPanel, QuickBar } from '../commands/history'
@@ -14,7 +14,7 @@ import { CommandPalette } from '../commands/palette'
 import { Connection, type ConnState, type StateInfo } from '../conn/connection'
 import { Composer, type ComposerHandle } from '../input/composer'
 import { KeyBar } from '../input/keybar'
-import { appAction } from '../input/keymap'
+import { appAction, programOf } from '../input/keymap'
 import type { ModeState } from '../input/modes'
 import { RawIme, cursorPosition } from '../input/raw'
 import { T } from '../protocol/messages'
@@ -102,7 +102,14 @@ export function App() {
   const changeView = useCallback((next: View) => {
     writeView(next)
     setView(next)
+    // 用户亲手切了，之前的自动切换就不再"自动回去"
+    autoTermRef.current = false
   }, [])
+  // 备用屏幕（有程序占屏）驱动的自动切换（ADR-0011 分片 ②）：
+  // 读视图里 vim / top 一进备用缓冲就切到终端，退出后自动回读。
+  // 【自动切换不持久化】—— 它是临时的，用户的偏好还是读。
+  const autoTermRef = useRef(false)
+  const [altScreen, setAltScreen] = useState(false)
   const [rawLine, setRawLine] = useState('')
   const [quick, setQuick] = useState<CommandRecord[]>([])
 
@@ -215,6 +222,10 @@ export function App() {
       onModeChange: (sid, s) => {
         if (store.active === sid) setMode(s)
       },
+      onAltScreen: (sid, on) => {
+        if (store.active !== sid) return
+        applyAltScreen(on)
+      },
       onTermData: (sid, data) => {
         if (store.active !== sid) return
         if (store.modesOf(sid)?.current.mode !== 'raw') return
@@ -226,12 +237,25 @@ export function App() {
     })
     storeRef.current = store
 
+    // 备用缓冲进出 → 读 ⇄ 控。手动切过就不再自动回去（changeView 会清标记）。
+    const applyAltScreen = (on: boolean) => {
+      setAltScreen(on)
+      if (on && viewRef.current === 'read') {
+        autoTermRef.current = true
+        setView('term')
+      } else if (!on && autoTermRef.current) {
+        autoTermRef.current = false
+        setView(readView())
+      }
+    }
     const select = (sid: number) => {
       store.activate(sid, area)
       // activate 里的 term.open() 是同步的，此刻 textarea 已经在 DOM 里
       attachIme()
       setTruncated(false)
       sendResize()
+      // 切到的会话如果正有程序占屏，视图要跟着它
+      applyAltScreen(store.altScreenOf(sid))
     }
     const newSession = () => {
       const cur = store.active !== null ? store.get(store.active) : undefined
@@ -398,6 +422,7 @@ export function App() {
       mode: () => (store.active === null ? { mode: 'composer', locked: false } : store.modesOf(store.active)!.current),
       unread: (sid: number) => store.isUnread(sid),
       view: () => viewRef.current,
+      altScreen: () => (store.active === null ? false : store.altScreenOf(store.active)),
       // 测试/诊断：读视图块流的内部状态
       blocks: () => {
         const sid = store.active
@@ -445,6 +470,10 @@ export function App() {
 
   const active = activeSid === null ? undefined : sessions.find((s) => s.sid === activeSid)
   const atLimit = sessions.length >= maxSessions
+  // 键条按"谁在占屏"换内容：程序名取自正在跑的块的命令原文
+  const runningBlock: Block | undefined =
+    activeSid === null ? undefined : blocksRef.current?.blocks(activeSid).find((b) => b.endSeq === null)
+  const program = runningBlock ? programOf(runningBlock.text) : null
 
   return (
     <div class="app" data-bp={bp} data-short={short} data-sidebar={sidebarOpen ? 'open' : 'closed'}>
@@ -676,6 +705,7 @@ export function App() {
         {coarse && (
           <KeyBar
             mode={mode.mode}
+            context={{ altScreen, program }}
             onRaw={(bytes) => sendRawRef.current(bytes)}
             onComposerKey={(key) => {
               if (key === 'Escape') composerRef.current?.focus()

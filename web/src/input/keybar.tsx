@@ -5,7 +5,7 @@
  */
 import { useState } from 'preact/hooks'
 
-import { CTRL_KEYS, KEY_BAR, KEY_BYTES, chord } from './keymap'
+import { CTRL_KEYS, KEY_BYTES, chord, keyBarFor } from './keymap'
 import type { Mode } from './modes'
 
 /** 粘滞修饰键的三个状态。 */
@@ -17,9 +17,13 @@ export interface KeyBarProps {
   onRaw(bytes: string): void
   /** Composer 模式下的语义动作（翻历史、移动光标等）。 */
   onComposerKey(key: string, mods: { ctrl: boolean; alt: boolean }): void
+  /** 谁在占屏：备用缓冲是否激活 + 前台程序名。决定键条内容（ADR-0011 ②）。 */
+  context?: { altScreen: boolean; program: string | null }
 }
 
-export function KeyBar({ mode, onRaw, onComposerKey }: KeyBarProps) {
+export function KeyBar({ mode, onRaw, onComposerKey, context }: KeyBarProps) {
+  const ctx = context ?? { altScreen: false, program: null }
+  const keys = keyBarFor(ctx)
   const [ctrl, setCtrl] = useState<Sticky>('off')
   const [alt, setAlt] = useState<Sticky>('off')
 
@@ -31,7 +35,13 @@ export function KeyBar({ mode, onRaw, onComposerKey }: KeyBarProps) {
     if (alt === 'armed') setAlt('off')
   }
 
-  const press = (key: string) => {
+  const press = (key: string, bytes?: string) => {
+    // 上下文键（vim 的 :q、less 的 q…）带着要发的字节，直接送 PTY
+    if (bytes !== undefined) {
+      onRaw(bytes)
+      consume()
+      return
+    }
     // 控制码【两种模式下都直接发】。^C 的意义就是打断正在跑的东西，
     // 停在 Composer 里等用户再按一次回车是没有意义的。
     const ctl = CTRL_KEYS[key]
@@ -51,8 +61,13 @@ export function KeyBar({ mode, onRaw, onComposerKey }: KeyBarProps) {
   }
 
   return (
-    <div class="keybar" data-testid="keybar" role="toolbar" aria-label="功能键">
-      {KEY_BAR.map((k) => {
+    <div class="keybar" data-testid="keybar" role="toolbar" aria-label="功能键" data-context={ctx.altScreen ? (ctx.program ?? 'tui') : 'shell'}>
+      {ctx.altScreen && (
+        <span class="keybar-ctx" data-testid="keybar-context" title="正在占屏的程序，键条按它换了内容">
+          {ctx.program ?? 'TUI'}
+        </span>
+      )}
+      {keys.map((k) => {
         if (k.key === 'Ctrl' || k.key === 'Alt') {
           const [state, set] = k.key === 'Ctrl' ? [ctrl, setCtrl] : [alt, setAlt]
           return (
@@ -78,7 +93,7 @@ export function KeyBar({ mode, onRaw, onComposerKey }: KeyBarProps) {
             key={k.key}
             class="keybar-key"
             data-testid={`key-${k.key}`}
-            onClick={() => press(k.key)}
+            onClick={() => press(k.key, k.bytes)}
           >
             {k.label}
           </button>
