@@ -25,6 +25,7 @@ ss -lntp | grep -E ':(80|443)\b'   # 必须为空（除了 webterm 自己）
 |---|---|---|
 | `bind: address already in use` | 80 或 443 被占（nginx/apache/caddy） | 停掉它，或改用反代模式（[`install.md`](install.md#反向代理--隧道场景)） |
 | `bind: permission denied` | 没有绑特权端口的权限 | `sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm` |
+| `install.sh` 说「找不到 setcap」 | 没装 libcap（`setcap` 在 `/usr/sbin`，普通用户 PATH 里没有 sbin，但脚本会去那儿找） | `sudo apt install libcap2-bin`，或换成 1024 以上的端口 |
 | `no viable challenge type found`（最常见）或 `Invalid response from http://...` | CA 连不上本机 —— 80 和 443 上的挑战都没过 | **先查云安全组**（最常漏的一步）：在别的机器上 `curl -sI http://<域名>/`，超时就是没放行。再查本机 `ufw status` |
 | 用 Cloudflare 且开着代理（小云朵） | 挑战被 Cloudflare 截住，`Origin` 也会不对 | 该记录设为 DNS only |
 | `urn:ietf:params:acme:error:rateLimited` | 撞了 Let's Encrypt 限流 | 等（每域名每周 50 次签发）。**先用 `--acme-staging` 调通再上正式** |

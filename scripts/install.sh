@@ -37,6 +37,19 @@ HTTP_PORT=80
 die() { printf '\033[31m错误\033[0m %s\n' "$*" >&2; exit 1; }
 # needs_privileged_port 报告有没有用到 1024 以下的端口 —— 只有那时才需要 setcap
 needs_privileged_port() { [ "$HTTPS_PORT" -lt 1024 ] || [ "$HTTP_PORT" -lt 1024 ]; }
+# find_cap_tool 找 setcap / getcap。
+#
+# 【不能只查 PATH】：它们装在 /usr/sbin，而 Debian/Ubuntu 的普通用户 PATH
+# 里没有 sbin。只用 command -v 会把"装了但不在 PATH 上"误判成"没装"，
+# 于是静默跳过 setcap —— 装完看着成功，服务却绑不上 80，ACME 挑战过不去，
+# 证书永远签不下来。这个失败很难往回追到这里。
+find_cap_tool() {
+    if command -v "$1" >/dev/null 2>&1; then command -v "$1"; return 0; fi
+    for d in /usr/sbin /sbin; do
+        [ -x "$d/$1" ] && { printf '%s' "$d/$1"; return 0; }
+    done
+    return 1
+}
 # check_port 先把值验一遍。不验的话非数字会撞上 [ -lt ]，在 set -e 下
 # 抛出的是一句 bash 内部错误，用户看不出是自己参数写错了。
 check_port() {
@@ -281,14 +294,25 @@ if [ "$DO_SETCAP" = 1 ] && ! needs_privileged_port; then
     DO_SETCAP=0
 fi
 if [ "$DO_SETCAP" = 1 ]; then
-    if command -v setcap >/dev/null 2>&1; then
-        # 让普通用户能绑 1024 以下的端口，不必以 root 运行。
-        # 注意：capability 附在文件上，每次替换二进制都要重做。
-        run $SUDO setcap 'cap_net_bind_service=+ep' "$PREFIX/webterm"
-        done_msg "已 setcap，可以用普通用户绑 $HTTP_PORT/$HTTPS_PORT"
-    else
-        info "没有 setcap 命令，跳过。你需要自己解决 $HTTP_PORT/$HTTPS_PORT 的绑定权限"
+    SETCAP="$(find_cap_tool setcap)" || die "用到了特权端口（$HTTP_PORT/$HTTPS_PORT）但找不到 setcap。
+      装上：  sudo apt install libcap2-bin   （或 dnf install libcap）
+      或换成 1024 以上的端口：  --http-port 8080 --https-port 8443
+      或 --no-setcap 自己解决绑定权限（authbind、iptables 转发之类）
+      【不能就这么装下去】—— 普通用户绑不上 $HTTP_PORT，ACME 挑战过不去，
+      证书签不下来，而服务看着是起来了。"
+    # 让普通用户能绑 1024 以下的端口，不必以 root 运行。
+    # 注意：capability 附在文件上，每次替换二进制都要重做。
+    run $SUDO "$SETCAP" 'cap_net_bind_service=+ep' "$PREFIX/webterm"
+    # 【验一下真落到文件上了】—— setcap 在不支持 xattr 的文件系统上
+    # （某些 NFS、overlayfs）会成功返回却什么都没写。
+    # 等到服务起不来才发现就太晚了。
+    if [ "$DRY_RUN" != 1 ] && GETCAP="$(find_cap_tool getcap)"; then
+        "$GETCAP" "$PREFIX/webterm" 2>/dev/null | grep -q cap_net_bind_service \
+            || die "setcap 执行成功了，但 capability 没落到文件上 —— $PREFIX 所在的
+      文件系统可能不支持 xattr。换个前缀（--prefix ~/.local/bin）或者
+      改用 1024 以上的端口。"
     fi
+    done_msg "已 setcap，可以用普通用户绑 $HTTP_PORT/$HTTPS_PORT"
 fi
 
 [ "$DRY_RUN" = 1 ] || info "版本: $("$PREFIX/webterm" version)"
@@ -399,8 +423,9 @@ fi
 
 # 只在真的做了 setcap 时才提醒重做 —— 没做过的人看了只会困惑
 if [ "$DO_SETCAP" = 1 ]; then
-    SETCAP_NOTE="⚠  每次替换二进制之后要重做 setcap（capability 附在文件上，不在路径上）：
-     sudo setcap 'cap_net_bind_service=+ep' $PREFIX/webterm
+    SETCAP_NOTE="⚠  每次替换二进制之后要重做 setcap（capability 附在文件上，不在路径上）。
+     重跑一次 install.sh 就会自动重做；手动的话：
+     sudo $SETCAP 'cap_net_bind_service=+ep' $PREFIX/webterm
 "
 else
     SETCAP_NOTE=""
