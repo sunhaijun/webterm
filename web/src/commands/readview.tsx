@@ -30,13 +30,15 @@ export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, ...actio
   const el = useRef<HTMLDivElement>(null)
   // 失败的块默认展开；用户手动折叠/展开的记在这里
   const [open, setOpen] = useState<Set<number>>(() => new Set(blocks.filter(failed).map((b) => b.cmdId)))
-  const seen = useRef<Set<number>>(new Set(blocks.map((b) => b.cmdId)))
-
-  // 新出现的失败块也要默认展开
+  // 【按"变成失败"那一刻判断，不是按"首次出现"】：块刚出现时还在跑、退出码
+  // 未知；跑完才知道失败。只在首次出现时判会让每个失败块都保持折叠 ——
+  // 真踩到了。用一个"已处理过失败态"的集合，保证只自动展开一次，
+  // 用户之后手动折叠不会被再次撑开。
+  const autoOpened = useRef<Set<number>>(new Set(blocks.filter(failed).map((b) => b.cmdId)))
   for (const b of blocks) {
-    if (!seen.current.has(b.cmdId)) {
-      seen.current.add(b.cmdId)
-      if (failed(b) && !open.has(b.cmdId)) {
+    if (failed(b) && !autoOpened.current.has(b.cmdId)) {
+      autoOpened.current.add(b.cmdId)
+      if (!open.has(b.cmdId)) {
         const next = new Set(open)
         next.add(b.cmdId)
         setOpen(next)

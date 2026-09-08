@@ -57,6 +57,33 @@ test.describe('手机：读视图是默认', () => {
     await expect(block.locator('.block-out')).toContainText('READ-ONE')
   })
 
+  test('失败的块在【跑完那一刻】自动展开，成功的保持折叠', async ({ page }) => {
+    await agent.pair(page)
+    await page.goto(agent.baseURL)
+    await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+    await submit(page, 'printf "GOOD-OUT\\n"')
+    await waitFor(async () => (await terminalText(page)).includes('GOOD-OUT'), '成功命令跑完')
+    await submit(page, 'printf "BAD-OUT\\n"; false')
+    await waitFor(async () => (await terminalText(page)).includes('BAD-OUT'), '失败命令跑完')
+
+    const stream = page.getByTestId('stream')
+    const good = stream.locator('.block', { hasText: 'GOOD-OUT' }).first()
+    const bad = stream.locator('.block', { hasText: 'BAD-OUT' }).first()
+    await expect(bad).toHaveAttribute('data-failed', 'true')
+    // 块出现时还在跑、退出码未知 —— 展开必须发生在拿到 exit 1 之后
+    await expect(bad).toHaveAttribute('data-open', 'true', { timeout: 10_000 })
+    await expect(bad.locator('.block-out')).toContainText('BAD-OUT')
+    await expect(good).toHaveAttribute('data-open', 'false')
+
+    // 用户手动折叠失败块后，后续重渲染不能把它再撑开
+    await bad.locator('.block-head').click()
+    await expect(bad).toHaveAttribute('data-open', 'false')
+    await submit(page, 'printf "LATER\\n"')
+    await waitFor(async () => (await terminalText(page)).includes('LATER'), '又跑了一条')
+    await expect(bad).toHaveAttribute('data-open', 'false')
+  })
+
   test('运行中的块 live-tail，底栏变成直发输入行', async ({ page }) => {
     await agent.pair(page)
     await page.goto(agent.baseURL)
@@ -90,9 +117,15 @@ test.describe('手机：读视图是默认', () => {
     await page.goto(agent.baseURL)
     await expect(page.getByTestId('conn-text')).toHaveText('在线')
 
+    const sizeOf = () => page.evaluate(() => (window as unknown as { __webterm: { size(): { cols: number; rows: number } } }).__webterm.size())
+    const before = await sizeOf()
     await page.getByTestId('view-toggle').click()
     expect(await view(page)).toBe('term')
     await expect(page.getByTestId('terminal')).toHaveAttribute('data-hidden', 'false')
+    // 【切视图不能改 PTY 尺寸】：读与终端共用同一个几何盒，否则每次切换
+    // 都给正在跑的程序发 SIGWINCH、折行全变
+    await page.waitForTimeout(300)
+    expect(await sizeOf()).toEqual(before)
     await expect(page.getByTestId('stream')).toHaveCount(0)
     // 终端视图里才有「块」面板入口
     await expect(page.getByTestId('open-blocks')).toBeVisible()

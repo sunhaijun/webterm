@@ -62,7 +62,7 @@ test('手机视口：终端拿到真实高度，页面不滚动，命令能往�
   // 所以这里改成【逐条卡住非终端的条不许变胖】。
   const strips = await page.evaluate(() =>
     [...document.querySelectorAll('.main > *')]
-      .filter((e) => !e.classList.contains('term') && !e.classList.contains('stream'))
+      .filter((e) => !e.classList.contains('canvas'))
       .map((e) => ({
         cls: e.className || e.tagName.toLowerCase(),
         h: Math.round(e.getBoundingClientRect().height),
@@ -111,7 +111,7 @@ test('更窄的手机（360×640）同样不塌', async ({ page }) => {
   // 就可能碰巧还在阈值内，所以逐条卡住非终端的条。
   const strips = await page.evaluate(() =>
     [...document.querySelectorAll('.main > *')]
-      .filter((e) => !e.classList.contains('term') && !e.classList.contains('stream'))
+      .filter((e) => !e.classList.contains('canvas'))
       .map((e) => ({
         cls: e.className || e.tagName.toLowerCase(),
         h: Math.round(e.getBoundingClientRect().height),

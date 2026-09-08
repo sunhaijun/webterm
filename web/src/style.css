@@ -267,12 +267,14 @@ body {
 .main > .statusbar { flex: 0 0 28px; }
 /* 终端吃掉剩下的全部空间。min-height:0 不能少，否则 flex 子元素
    的最小尺寸是内容高度，终端就压不下去、反而把别人挤出去。 */
-.main > .term { flex: 1 1 0; min-height: 0; }
-/* 读视图（ADR-0011）：xterm 不可见但【保持真实尺寸】。FitAddon 据它算 cols/rows
-   发给 PTY，shell 按它折行 —— 用 display:none 尺寸归零，cols/rows 会算错。
-   绝对定位铺满 .main，从 flex 流里拿掉，把空间让给 .stream。 */
-.main > .term[data-hidden='true'] { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
-.main > .stream { flex: 1 1 0; min-height: 0; }
+/* 读与终端共用一个几何盒（ADR-0011）。.canvas 是 flex 里唯一伸缩的那个，
+   .term 与 .stream 都绝对铺满它 —— 两个视图下 xterm 尺寸完全一致，
+   切换不会给 PTY 发 resize。xterm 不可见时【保持真实尺寸】：FitAddon 据它算
+   cols/rows，shell 按它折行；用 display:none 尺寸归零，cols/rows 会算错。 */
+.main > .canvas { flex: 1 1 0; min-height: 0; position: relative; }
+.canvas > .term { position: absolute; inset: 0; min-height: 0; }
+.canvas > .term[data-hidden='true'] { visibility: hidden; pointer-events: none; }
+.canvas > .stream { position: absolute; inset: 0; }
 
 /* tablet：覆盖式抽屉。打开时终端【不重排】—— 否则每次开关都触发 resize，
    正在看的位置就跑了 */

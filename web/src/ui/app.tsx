@@ -512,32 +512,37 @@ export function App() {
           />
         )}
 
-        {view === 'read' && activeSid !== null && (
-          <ReadView
-            /* blocksTick：命令事件与 live-tail 节流都会 +1 */
-            tick={blocksTick}
-            blocks={blocksRef.current?.blocks(activeSid) ?? []}
-            bytesOf={(b) => blocksRef.current?.bytesOf(activeSid, b) ?? null}
-            tail={blocksRef.current?.tailBytes(activeSid) ?? null}
-            showTail={
-              // 尾块只在"确实有未切分输出"时显示：没有集成、输入去了子程序、
-              // 或者尾巴大到不像是 prompt 重画
-              active?.integration !== 'active' ||
-              !!active?.unmarked_input ||
-              (blocksRef.current?.tailBytes(activeSid)?.bytes.length ?? 0) > TAIL_NOISE_BYTES
-            }
-            cols={active?.cols ?? 80}
-            onFill={(text) => composerRef.current?.fill(text)}
-            onRun={(text) => {
-              if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
-            }}
-            onCopy={(text) => {
-              navigator.clipboard?.writeText(text).catch(() => {})
-            }}
-            onViewTerm={() => setView('term')}
-          />
-        )}
-        <div class="term" ref={termAreaRef} data-testid="terminal" data-hidden={view === 'read'} />
+        {/* 读与终端共用同一个几何盒（ADR-0011）：两者都绝对铺满 .canvas，
+            切视图不改变 xterm 的尺寸 —— 否则每次切换都给 PTY 发 resize，
+            正在跑的程序收到 SIGWINCH、折行位置全变。 */}
+        <div class="canvas" data-testid="canvas">
+          {view === 'read' && activeSid !== null && (
+            <ReadView
+              /* blocksTick：命令事件与 live-tail 节流都会 +1 */
+              tick={blocksTick}
+              blocks={blocksRef.current?.blocks(activeSid) ?? []}
+              bytesOf={(b) => blocksRef.current?.bytesOf(activeSid, b) ?? null}
+              tail={blocksRef.current?.tailBytes(activeSid) ?? null}
+              showTail={
+                // 尾块只在"确实有未切分输出"时显示：没有集成、输入去了子程序、
+                // 或者尾巴大到不像是 prompt 重画
+                active?.integration !== 'active' ||
+                !!active?.unmarked_input ||
+                (blocksRef.current?.tailBytes(activeSid)?.bytes.length ?? 0) > TAIL_NOISE_BYTES
+              }
+              cols={active?.cols ?? 80}
+              onFill={(text) => composerRef.current?.fill(text)}
+              onRun={(text) => {
+                if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
+              }}
+              onCopy={(text) => {
+                navigator.clipboard?.writeText(text).catch(() => {})
+              }}
+              onViewTerm={() => setView('term')}
+            />
+          )}
+          <div class="term" ref={termAreaRef} data-testid="terminal" data-hidden={view === 'read'} />
+        </div>
 
         <div class="modebar" data-testid="modebar" data-mode={mode.mode} data-locked={mode.locked}>
           <span>{mode.mode === 'composer' ? 'Composer' : 'Raw（按键直通）'}</span>

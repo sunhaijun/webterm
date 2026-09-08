@@ -80,20 +80,33 @@ function BlockRow({ block, bytes, cols, open, onToggle, actions }: RowProps) {
   // 结束后的精确渲染【只做一次】。展开/折叠会反复触发 render，每次都开
   // 一遍模拟器的话，长输出上会明显卡。
   const done = useRef(false)
+  // 用"是否已卸载"判断结果还要不要，【不能用 effect 的 cleanup】：live-tail
+  // 每 120ms 重渲染一次、bytes 每次都是新对象，effect 若依赖它就会反复重跑，
+  // cleanup 把在途的渲染标成作废，回来时被丢弃，而 done 又不让再发 ——
+  // 块永远停在"渲染中…"（真踩到了：失败块自动展开那一刻恰好撞上节流重渲染）。
+  const mounted = useRef(true)
+  useEffect(() => () => {
+    mounted.current = false
+  }, [])
 
+  const len = bytes?.bytes.length ?? -1
+  const truncated = bytes?.truncated ?? false
   useEffect(() => {
     if (running || !open || done.current || !bytes) return
+    // 【字节没齐就不渲染】。command.end 是 JSON 消息，可能先于最后一帧二进制
+    // 到达 —— 那一刻 bytesOf 切出来的不完整甚至为空。等下一次重渲染再看。
+    const expected = block.endSeq === null ? 0 : block.endSeq - block.startSeq
+    if (!truncated && len < expected) return
     done.current = true
-    let alive = true
-    renderBlockHTML(bytes.bytes, cols).then((h) => {
-      if (!alive) return
+    const data = bytes.bytes
+    renderBlockHTML(data, cols).then((h) => {
+      if (!mounted.current) return
       if (h) setHtml(h)
-      else setText(plainText(bytes.bytes)) // 渲染器不可用时的兜底
+      else setText(plainText(data)) // 渲染器不可用时的兜底
     })
-    return () => {
-      alive = false
-    }
-  }, [running, open, bytes, cols])
+    // 依赖只放原始值：同样内容的新 bytes 对象不该让 effect 重跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, open, len, truncated, cols, block.startSeq, block.endSeq])
 
   // 运行中：纯文本 live-tail，随每次输出重算（便宜）
   const live = useMemo(() => (running && bytes ? plainText(bytes.bytes) : null), [running, bytes?.bytes.length, bytes])

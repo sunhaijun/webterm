@@ -66,6 +66,11 @@ export function renderBlockHTML(bytes: Uint8Array, cols: number): Promise<string
       return
     }
     o.term.reset()
+    if (bytes.length === 0) {
+      // xterm 对空写入【不回调】—— 不处理这条，promise 会永远挂着，UI 停在"渲染中…"
+      resolve('')
+      return
+    }
     o.term.write(bytes, () => {
       try {
         resolve(o.ser.serializeAsHTML({ scrollback: MAX_RENDER_ROWS }))
