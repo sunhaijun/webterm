@@ -1,0 +1,98 @@
+/**
+ * 把一个命令块的原始字节渲染成 HTML。
+ *
+ * 【用真的模拟器，不手写 ANSI 解析】。命令输出里什么都有：SGR 颜色、
+ * \r 覆盖写的进度条（npm / pip 都这么干）、光标移动、擦除。手写一个
+ * "够用"的解析器，早晚会在某个进度条上吐出一屏乱码 —— 而那恰恰是
+ * 用户最想折叠起来的那类输出。
+ *
+ * 所以开一个离屏 xterm 当渲染器：把字节喂进去，让它按终端语义算出
+ * 最终屏幕内容，再用 serialize addon 导出 HTML。一次渲一个块，
+ * 复用同一个实例。
+ */
+import { SerializeAddon } from '@xterm/addon-serialize'
+import { Terminal } from '@xterm/xterm'
+
+/** 单个块最多渲染多少行 —— 再多也没人看，还拖慢页面。 */
+export const MAX_RENDER_ROWS = 2000
+
+interface Offscreen {
+  term: Terminal
+  ser: SerializeAddon
+}
+
+let off: Offscreen | null = null
+
+function offscreen(cols: number): Offscreen {
+  if (!off) {
+    const host = document.createElement('div')
+    host.style.cssText = 'position:absolute;left:-99999px;top:0;width:1px;height:1px;overflow:hidden'
+    document.body.appendChild(host)
+    const term = new Terminal({
+      cols,
+      // 【rows 取 1】。serializeAsHTML 会把【整个视口】都导出来，
+      // 24 行的视口意味着一行输出也要拖着 23 行空白 —— 在手机上
+      // 一个块就占满整屏。把视口压到 1 行，输出全部落进 scrollback，
+      // 导出的行数就等于真实产出的行数。
+      rows: 1,
+      scrollback: MAX_RENDER_ROWS,
+      allowProposedApi: true,
+      // 主题必须和真终端一致，否则导出的 HTML 自带一套配色，
+      // 贴进面板里就是白底黑字的一块。
+      theme: { background: '#111111', foreground: '#e6e6e6' },
+    })
+    const ser = new SerializeAddon()
+    term.loadAddon(ser)
+    term.open(host)
+    off = { term, ser }
+  }
+  if (off.term.cols !== cols) off.term.resize(cols, off.term.rows)
+  return off
+}
+
+/**
+ * 渲染一段输出。
+ *
+ * cols 必须和产生这段输出时的终端宽度一致 —— 不一致的话换行位置会错，
+ * 表格和进度条都会散。
+ */
+export function renderBlockHTML(bytes: Uint8Array, cols: number): Promise<string> {
+  return new Promise((resolve) => {
+    let o: Offscreen
+    try {
+      o = offscreen(Math.max(cols, 20))
+    } catch {
+      resolve('') // 渲染器起不来，交给调用方走纯文本兜底
+      return
+    }
+    o.term.reset()
+    o.term.write(bytes, () => {
+      try {
+        resolve(o.ser.serializeAsHTML({ scrollback: MAX_RENDER_ROWS }))
+      } catch {
+        resolve('')
+      }
+    })
+  })
+}
+
+const CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g
+const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
+const OTHER_ESC = /\x1b[@-Z\\-_]/g
+
+/**
+ * 纯文本兜底：剥掉转义序列，按 \r 覆盖写。
+ *
+ * 只在离屏渲染器不可用时使用（比如 WebGL/DOM 都起不来的环境）。
+ */
+export function plainText(bytes: Uint8Array): string {
+  const raw = new TextDecoder().decode(bytes)
+  const noEsc = raw.replace(OSC, '').replace(CSI, '').replace(OTHER_ESC, '')
+  return noEsc
+    .split('\n')
+    .map((line) => {
+      const parts = line.split('\r')
+      return parts[parts.length - 1] ?? ''
+    })
+    .join('\n')
+}
