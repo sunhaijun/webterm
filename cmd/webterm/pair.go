@@ -17,7 +17,10 @@ func runPair(args []string) error {
 	httpPort := fs.Int("http-port", 8080, "--dev 下的端口（用于拼出配对 URL）")
 	// pair 是独立进程，不知道 serve 用了哪个端口 —— 换了就得自己带上同一个值，
 	// 否则拼出来的 URL 会漏掉端口，扫码打不开。
-	httpsPort := fs.Int("https-port", 443, "HTTPS 端口（serve 换了就要跟着换）")
+	httpsPort := fs.Int("https-port", 443, "HTTPS 端口（默认从配置文件读）")
+	if err := applyConfig(fs, args); err != nil {
+		return err
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

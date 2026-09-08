@@ -478,6 +478,45 @@ agent 收到 `SIGTERM` 时会先向所有客户端广播"agent 即将重启，�
 
 **命令历史存在 SQLite 里，跨重启存活** —— "我刚才在跑什么"这个信息不会丢。
 
+## 配置文件
+
+装完之后不用每次都敲 `--domain`、`--https-port`：
+
+```bash
+webterm pair
+webterm doctor
+webterm devices list
+```
+
+参数从 `~/.config/webterm/config` 读（`$XDG_CONFIG_HOME/webterm/config`；
+`--config <路径>` 可指定别的位置）。`scripts/install.sh` 会替你写好。
+
+```ini
+# 键名【就是 flag 名】，去掉前面的 --
+domain     = term.example.com
+https-port = 8443
+log-level  = info
+```
+
+- 命令行参数**覆盖**配置文件，临时改一次不用动文件
+- `#` 开头是注释，空行忽略
+- 键名写错会**当场报错并指出行号**，不会安静地忽略
+- 布尔项写 `no-history = true`，或者只写键名也算 true
+
+刻意不用 TOML/YAML：那要引依赖，而配置只有十来个平铺的键。
+键名与 flag 名共用同一套，所以 `webterm serve --help` 就是配置文件的文档，
+两者不可能漂移（有测试钉住）。
+
+可以放进配置文件的键，就是 `webterm serve --help` 列出的那些：
+
+`domain` · `data-dir` · `bind` · `http-port` · `https-port` · `no-tls` ·
+`trust-proxy` · `acme-staging` · `shell` · `max-sessions` · `max-conns` ·
+`max-history` · `no-history` · `ring-bytes` · `no-shell-integration` ·
+`no-login-shell` · `log-level`
+
+> `--dev` 与 `--config` 【不能】写进配置文件：前者是"临时本地跑一下"的开关，
+> 写进文件等于把生产配置永久降级；后者会自我循环。
+
 ## 跑在非标准端口上
 
 443 被别的服务占了（Xray、别的 web 服务）时，webterm 可以听在别的端口：

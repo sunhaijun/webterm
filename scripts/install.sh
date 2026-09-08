@@ -29,6 +29,7 @@ DEV=0
 SETUP_SERVICE=1
 DO_SETCAP=1
 DRY_RUN=0
+FORCE=0
 BASE_URL=""
 HTTPS_PORT=443
 HTTP_PORT=80
@@ -65,6 +66,7 @@ usage() {
   --http-port <n>    ACME 挑战 + 跳转端口，默认 80
   --no-service       装二进制但不配 systemd
   --no-setcap        不做 setcap（你自己解决特权端口的绑定权限）
+  --force            前置自检不通过也继续装
   --dry-run          只打印将要执行的命令
   -h, --help         这段说明
 
@@ -88,6 +90,7 @@ while [ $# -gt 0 ]; do
         --base-url) BASE_URL="${2:?--base-url 需要一个值}"; shift 2 ;;
         --https-port) HTTPS_PORT="${2:?--https-port 需要一个值}"; shift 2 ;;
         --http-port) HTTP_PORT="${2:?--http-port 需要一个值}"; shift 2 ;;
+        --force) FORCE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "未知选项 $1（--help 看用法）" ;;
@@ -100,7 +103,7 @@ check_port --http-port "$HTTP_PORT"
 
 # ---------- 1. 前置检查 ----------
 
-step "1/5 检查环境"
+step "1/6 检查环境"
 
 [ "$(uname -s)" = "Linux" ] || die "webterm 目前只支持 Linux（当前 $(uname -s)）"
 
@@ -136,7 +139,7 @@ fi
 
 # ---------- 2. 下载 ----------
 
-step "2/5 下载"
+step "2/6 下载"
 
 # PORT_ARGS 只在非默认端口时出现 —— 单元文件里写一串默认值是噪音
 PORT_ARGS=""
@@ -146,10 +149,6 @@ PORT_ARGS=""
 # EXT_URL 是用户实际要访问的地址。443 是默认端口，写出来是噪音；
 # 不是 443 就必须带上，否则给出去的地址打不开。
 if [ "$HTTPS_PORT" = 443 ]; then EXT_URL="https://$DOMAIN"; else EXT_URL="https://$DOMAIN:$HTTPS_PORT"; fi
-# pair 是独立进程，不知道 serve 用了哪个端口，得把同样的值传给它
-PAIR_ARGS=""
-[ "$HTTPS_PORT" = 443 ] || PAIR_ARGS=" --https-port $HTTPS_PORT"
-
 if [ -n "$BASE_URL" ]; then
     URL_BASE="$BASE_URL"
 elif [ "$CHANNEL" = "latest" ]; then
@@ -222,7 +221,7 @@ else
       都不行就从源码构建：见 docs/80-ops/install.md"
 
     # ---------- 3. 校验 ----------
-    step "3/5 校验 SHA256"
+    step "3/6 校验 SHA256"
     if fetch SHA256SUMS "$TMP/SHA256SUMS"; then
         (cd "$TMP" && grep " $BIN\$" SHA256SUMS | sha256sum -c -) \
             || die "校验和不匹配。下载的文件可能被篡改或损坏，已中止。"
@@ -233,9 +232,35 @@ else
     fi
 fi
 
-# ---------- 4. 安装 ----------
+# ---------- 4. 前置自检 ----------
+#
+# 【装之前就查】。以前只在装完提示"你可以跑一下 doctor"，等于没查 ——
+# 用户装完启动失败才发现 DNS 没配、端口被占。这里用刚下载下来的二进制
+# 直接跑，不通过就中止。
+step "4/6 前置自检"
 
-step "4/5 安装到 $PREFIX"
+if [ "$DRY_RUN" = 1 ]; then
+    info "(dry-run，跳过)"
+elif [ "$DEV" = 1 ] || [ -z "$DOMAIN" ]; then
+    info "本地模式，无需检查域名与端口"
+elif systemctl --user is-active --quiet webterm 2>/dev/null; then
+    # 升级路径：端口正被运行中的自己占着，doctor 的端口检查必然误报
+    info "webterm 已在运行（这是一次升级），跳过 —— 端口正被它自己占着"
+elif chmod +x "$TMP/$BIN" && "$TMP/$BIN" doctor --domain "$DOMAIN" $PORT_ARGS; then
+    :
+elif [ "$FORCE" = 1 ]; then
+    info "有检查未通过，但指定了 --force，继续"
+else
+    die "前置条件未满足（见上面标 ✗ 的项）。修好之后重跑，或用 --force 强行继续。
+
+      注意：「云安全组有没有放行 80」在机器内部【检查不出来】——
+      要在别的机器上跑：  curl -sI http://$DOMAIN/
+      超时就是没放行，那样证书签不下来。"
+fi
+
+# ---------- 5. 安装 ----------
+
+step "5/6 安装到 $PREFIX"
 
 SUDO=""
 if [ ! -w "$PREFIX" ]; then
@@ -268,10 +293,33 @@ fi
 
 [ "$DRY_RUN" = 1 ] || info "版本: $("$PREFIX/webterm" version)"
 
-# ---------- 5. 服务 ----------
+# ---------- 写配置文件 ----------
+#
+# 有了它，pair / doctor / devices 都不用再重复 --domain --https-port。
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/webterm"
+if [ -n "$DOMAIN" ]; then
+    run mkdir -p "$CONFIG_DIR"
+    if [ "$DRY_RUN" = 1 ]; then
+        info "将写入 $CONFIG_DIR/config（domain=$DOMAIN$PORT_ARGS）"
+    elif [ -f "$CONFIG_DIR/config" ]; then
+        # 不覆盖用户改过的配置
+        info "已存在 $CONFIG_DIR/config，保留不动"
+    else
+        {
+            echo "# 由 scripts/install.sh 生成。键名就是 flag 名，去掉前面的 --。"
+            echo "# 完整可用键见：webterm serve --help"
+            echo "domain = $DOMAIN"
+            [ "$HTTP_PORT" = 80 ] || echo "http-port = $HTTP_PORT"
+            [ "$HTTPS_PORT" = 443 ] || echo "https-port = $HTTPS_PORT"
+        } > "$CONFIG_DIR/config"
+        info "已写入 $CONFIG_DIR/config"
+    fi
+fi
+
+# ---------- 6. 服务 ----------
 
 if [ "$SETUP_SERVICE" = 0 ]; then
-    step "5/5 完成"
+    step "6/6 完成"
     cat <<EOF
 
 已安装: $PREFIX/webterm
@@ -287,7 +335,7 @@ EOF
     exit 0
 fi
 
-step "5/5 配置 systemd user service"
+step "6/6 配置 systemd user service"
 
 UNIT_DIR="${WEBTERM_UNIT_DIR:-$HOME/.config/systemd/user}"
 run mkdir -p "$UNIT_DIR"
@@ -345,7 +393,7 @@ run systemctl --user enable --now webterm
 if [ "$DRY_RUN" = 1 ]; then
     step "完成（dry-run）"
     info "访问地址将是 $EXT_URL"
-    info "配对命令：webterm pair --domain $DOMAIN$PAIR_ARGS"
+    info "配对命令：webterm pair（参数从配置文件读）"
     exit 0
 fi
 
@@ -365,19 +413,12 @@ cat <<EOF
 
   访问地址：$EXT_URL
 
-  1. 检查部署前置条件（DNS、端口）
-       webterm doctor --domain $DOMAIN$PORT_ARGS
+  webterm pair       拿配对码 + 二维码，手机扫一下完成授权
+  webterm devices    看已授权的设备 / 吊销
+  webterm doctor     再查一遍前置条件
 
-  2. 拿配对码（stdout 里有二维码，手机扫一下就完成授权）
-       webterm pair --domain $DOMAIN$PAIR_ARGS
-
-  3. 看日志
-       journalctl --user -u webterm -f
-
-⚠  第一次部署建议先用 --acme-staging 调通证书：
-     systemctl --user stop webterm
-     webterm serve --domain $DOMAIN$PORT_ARGS --acme-staging
-   正式环境的 Let's Encrypt 限流窗口是一周，撞上了只能等。
+  参数已写进 $CONFIG_DIR/config，上面的命令都不用带 --domain。
+  看日志： journalctl --user -u webterm -f
 
 $SETCAP_NOTE
 EOF
