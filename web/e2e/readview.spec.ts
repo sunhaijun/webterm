@@ -134,8 +134,9 @@ test.describe('手机：读视图是默认', () => {
     expect(await view(page)).toBe('read')
     await expect(page.getByTestId('stream')).toBeVisible()
 
-    // 选择要记住
+    // 选择要记住 —— 而且是【立刻】记住：切完马上刷新也不能丢
     await page.getByTestId('view-toggle').click()
+    expect(await view(page)).toBe('term')
     await page.reload()
     await expect(page.getByTestId('conn-text')).toHaveText('在线')
     expect(await view(page)).toBe('term')

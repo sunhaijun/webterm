@@ -97,7 +97,12 @@ export function App() {
   const [view, setView] = useState<View>(readView)
   const viewRef = useRef<View>(view)
   viewRef.current = view
-  useEffect(() => writeView(view), [view])
+  // 【同步写入，不放 useEffect】。effect 在 paint 之后才跑，用户切完视图立刻
+  // 刷新或关页，写入就丢了（CI 上稳定复现：toggle 后马上 reload，选择没记住）。
+  const changeView = useCallback((next: View) => {
+    writeView(next)
+    setView(next)
+  }, [])
   const [rawLine, setRawLine] = useState('')
   const [quick, setQuick] = useState<CommandRecord[]>([])
 
@@ -538,7 +543,7 @@ export function App() {
               onCopy={(text) => {
                 navigator.clipboard?.writeText(text).catch(() => {})
               }}
-              onViewTerm={() => setView('term')}
+              onViewTerm={() => changeView('term')}
             />
           )}
           <div class="term" ref={termAreaRef} data-testid="terminal" data-hidden={view === 'read'} />
@@ -564,7 +569,7 @@ export function App() {
             class="view-toggle"
             data-testid="view-toggle"
             data-view={view}
-            onClick={() => setView((v) => (v === 'read' ? 'term' : 'read'))}
+            onClick={() => changeView(view === 'read' ? 'term' : 'read')}
           >
             {view === 'read' ? '终端' : '读'}
           </button>
