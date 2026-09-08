@@ -388,6 +388,7 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | 命令 | 说明 |
 |---|---|
 | `webterm doctor [--domain X]` | 检查部署前置条件 |
+| `webterm update` | 升级到最新版（按上次的安装参数重装） |
 | `webterm pair` | 生成新的配对码（打印 URL + 二维码） |
 | `webterm devices [list\|revoke <id>\|revoke-all]` | 设备管理（CLI 侧，UI 里也有） |
 | `webterm shell-init bash` | 输出 shell 集成脚本（手动接入的降级路径） |
@@ -514,6 +515,48 @@ webterm v0.1.0
 
 「服务在不在跑」先问 systemd，没有 user service 时退化成探 `/healthz`
 （**不是**看端口有没有人听 —— 443 上很可能是别的服务）。
+
+## 升级
+
+```bash
+webterm update
+```
+
+按 **上次装成功时那套参数** 重跑一遍安装 —— 参数记在
+`~/.config/webterm/install-state`，`install.sh` 装完时写的。
+
+```
+webterm dev-2-g8cb0cdf
+
+  按上次的安装参数升级：
+    --domain t.awtto.com --https-port 8443 --channel dev
+
+  安装脚本来源：gh api（私有仓库凭据）
+
+  有新版本
+    当前  webterm dev-2-g8cb0cdf
+    最新  webterm dev-2-g10fd2c8
+  …
+```
+
+**版本没变就什么都不做**，服务不会重启 —— 重启会把正在用的会话踢掉，
+对"顺手跑一下"的命令来说代价太大。
+
+它是个**薄壳**：取最新的 `install.sh` 用记下的参数重跑，而不是自己实现
+一遍下载、校验、`setcap`、重启。升级路径上的知识都在那个脚本里
+（私有仓库凭据回退、SHA256 校验、**替换二进制会丢掉 file capability
+所以必须重做 setcap**、systemd 单元跟着端口走），照抄一份必然漂移。
+
+选项：
+
+| | |
+|---|---|
+| `--dry-run` | 只打印将要执行的命令 |
+| `--script <路径>` | 用本地的 `install.sh`，不去下载（离线、自建源） |
+| `--state <路径>` | 指定安装参数文件 |
+
+没有 `install-state` 时会明说这台机器还没用 `install.sh` 装过 ——
+手工装的二进制不知道当初的参数，只能先正常装一次。
 
 ## 配置文件
 
