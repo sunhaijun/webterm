@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func TestRenderStatus(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderStatus(tc.st, "v0.1.0", now)
+			got := renderStatus(tc.st, "v0.1.0", now, false)
 			for _, w := range tc.want {
 				if !strings.Contains(got, w) {
 					t.Errorf("缺 %q：\n%s", w, got)
@@ -106,5 +107,61 @@ func TestDaysLeft(t *testing.T) {
 		if got := daysLeft(tc.expiry, now); got != tc.want {
 			t.Errorf("daysLeft(+%v) = %d, 想要 %d", tc.expiry.Sub(now), got, tc.want)
 		}
+	}
+}
+
+// 颜色只在接着终端时才该出现 —— 重定向到文件里不能躺着转义序列。
+func TestRenderStatusColor(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	// 快到期和已过期是仅有的两处上色
+	for _, st := range []status{
+		{running: true, url: "https://x.example.com", certOK: true, certExpiry: now.AddDate(0, 0, 5)},
+		{running: true, url: "https://x.example.com", certOK: true, certExpiry: now.AddDate(0, 0, -1)},
+	} {
+		plain := renderStatus(st, "v0.1.0", now, false)
+		if strings.Contains(plain, "\033[") {
+			t.Errorf("关了颜色还有转义序列：\n%q", plain)
+		}
+		colored := renderStatus(st, "v0.1.0", now, true)
+		if !strings.Contains(colored, "\033[") {
+			t.Errorf("开了颜色却没上色：\n%q", colored)
+		}
+		// 关掉颜色不能丢信息
+		if stripANSI(colored) != plain {
+			t.Errorf("上色改变了文字内容：\n%q\n%q", stripANSI(colored), plain)
+		}
+	}
+}
+
+func stripANSI(s string) string {
+	for {
+		i := strings.Index(s, "\033[")
+		if i < 0 {
+			return s
+		}
+		j := strings.Index(s[i:], "m")
+		if j < 0 {
+			return s
+		}
+		s = s[:i] + s[i+j+1:]
+	}
+}
+
+// NO_COLOR 一设就不上色，不管值是什么；TERM=dumb 同理。
+func TestColorEnabled(t *testing.T) {
+	// 非终端（普通文件）永远不上色
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	t.Setenv("TERM", "xterm-256color")
+	os.Unsetenv("NO_COLOR")
+	if colorEnabled(f) {
+		t.Error("重定向到文件时不该上色")
+	}
+	t.Setenv("NO_COLOR", "")
+	if colorEnabled(os.Stdin) {
+		t.Error("设了 NO_COLOR（哪怕是空值）就不该上色")
 	}
 }

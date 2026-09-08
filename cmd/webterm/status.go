@@ -38,8 +38,24 @@ type status struct {
 }
 
 func runStatus() error {
-	fmt.Print(renderStatus(collectStatus(), version, time.Now()))
+	fmt.Print(renderStatus(collectStatus(), version, time.Now(), colorEnabled(os.Stdout)))
 	return nil
+}
+
+// colorEnabled 决定要不要上色。
+//
+// 只在【真的接着终端】时上色 —— `webterm > status.log` 或者管道给别的程序
+// 时，文件里不该躺着 \033[33m。另外认 NO_COLOR（no-color.org 的约定：
+// 只要设了就不上色，值是什么无所谓）和 TERM=dumb。
+func colorEnabled(f *os.File) bool {
+	if _, ok := os.LookupEnv("NO_COLOR"); ok {
+		return false
+	}
+	if os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // collectStatus 尽力而为：任何一项取不到就留空，不让整张表失败。
@@ -160,7 +176,14 @@ func daysLeft(expiry, now time.Time) int {
 	return int(d / (24 * time.Hour))
 }
 
-func renderStatus(st status, ver string, now time.Time) string {
+func renderStatus(st status, ver string, now time.Time, color bool) string {
+	// 颜色只是强调 —— 关掉之后"已过期""只剩 N 天"这些字仍然把话说全了。
+	paint := func(code, s string) string {
+		if !color {
+			return s
+		}
+		return "\033[" + code + "m" + s + "\033[0m"
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "webterm %s\n\n", ver)
 
@@ -189,10 +212,11 @@ func renderStatus(st status, ver string, now time.Time) string {
 		date := st.certExpiry.Local().Format("2006-01-02")
 		switch {
 		case d < 0:
-			row("证书", fmt.Sprintf("\033[31m已过期\033[0m（%s）—— 重启服务会重新申请", date))
+			row("证书", fmt.Sprintf("%s（%s）—— 重启服务会重新申请", paint("31", "已过期"), date))
 		case d <= 10:
 			// 到期是唯一会静默变成事故的东西，剩得少就说明白
-			row("证书", fmt.Sprintf("\033[33m只剩 %d 天\033[0m（%s）—— 自动续期需要 80 或 443 从公网可达", d, date))
+			row("证书", fmt.Sprintf("%s（%s）—— 自动续期需要 80 或 443 从公网可达",
+				paint("33", fmt.Sprintf("只剩 %d 天", d)), date))
 		default:
 			row("证书", fmt.Sprintf("有效，到 %s（还有 %d 天，自动续期）", date, d))
 		}
