@@ -19,8 +19,19 @@ test.afterEach(() => agent.stop())
 
 const rawTextarea = (page: import('@playwright/test').Page) => page.locator('.xterm-helper-textarea')
 
-/** 在 Raw 模式下把一行敲进 PTY。 */
+/**
+ * 在 Raw 模式下把一行敲进 PTY。
+ *
+ * 读视图（ADR-0011，手机默认）里 xterm 不可见，Raw 的落点是直发输入行；
+ * 终端视图里才是 xterm 的隐藏 textarea。两条路都覆盖。
+ */
 async function typeRaw(page: import('@playwright/test').Page, text: string) {
+  const line = page.getByTestId('raw-input')
+  if (await line.isVisible().catch(() => false)) {
+    await line.fill(text)
+    await line.press('Enter')
+    return
+  }
   const ta = rawTextarea(page)
   await ta.focus()
   for (const ch of text) await ta.press(ch === ' ' ? 'Space' : ch)

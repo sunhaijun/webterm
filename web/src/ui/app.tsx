@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { listCommands, type CommandRecord } from '../commands/api'
 import { BlockStore } from '../commands/blocks'
 import { BlocksPanel } from '../commands/blockspanel'
+import { ReadView, TAIL_NOISE_BYTES } from '../commands/readview'
 import { HistoryPanel, QuickBar } from '../commands/history'
 import { CommandPalette } from '../commands/palette'
 import { Connection, type ConnState, type StateInfo } from '../conn/connection'
@@ -30,6 +31,26 @@ import {
   watchViewport,
   type Breakpoint,
 } from './viewport'
+
+type View = 'read' | 'term'
+
+/** 视图选择：手机/平板默认读，桌面默认终端（ADR-0011）；用户切过就记住。 */
+function readView(): View {
+  try {
+    const v = localStorage.getItem('webterm.view')
+    if (v === 'read' || v === 'term') return v
+  } catch {
+    /* 私密模式等取不到就走默认 */
+  }
+  return breakpoint(window.innerWidth) === 'desktop' ? 'term' : 'read'
+}
+function writeView(v: View): void {
+  try {
+    localStorage.setItem('webterm.view', v)
+  } catch {
+    /* 写不进去就算 */
+  }
+}
 
 /** client_id 每个标签页一个，存 sessionStorage —— localStorage 是同源共享的。 */
 function clientID(): string {
@@ -72,6 +93,12 @@ export function App() {
   // 块存储活在 ref 里（它不参与渲染），用一个计数器把它的变化推给 UI。
   const blocksRef = useRef<BlockStore>()
   const [blocksTick, setBlocksTick] = useState(0)
+  // 读视图 / 终端视图（ADR-0011）。手机、平板默认读；桌面默认终端。选择持久化。
+  const [view, setView] = useState<View>(readView)
+  const viewRef = useRef<View>(view)
+  viewRef.current = view
+  useEffect(() => writeView(view), [view])
+  const [rawLine, setRawLine] = useState('')
   const [quick, setQuick] = useState<CommandRecord[]>([])
 
   const reloadQuick = useCallback(() => {
@@ -102,6 +129,7 @@ export function App() {
     blocksRef.current = blocks
     // 命令事件是低频的（一条命令一两次），直接 bump 不会有性能问题。
     const bumpBlocks = () => setBlocksTick((n) => n + 1)
+    const tailBump = debounce(bumpBlocks, 120)
 
     const conn = new Connection({
       url,
@@ -110,6 +138,9 @@ export function App() {
         onOutput(sid, data, attrPrefix, startSeq) {
           store.write(sid, data)
           blocks.write(sid, data, attrPrefix, startSeq)
+          // live-tail：读视图里正在跑的块 / 尾块要跟着输出长。输出可能很密，
+          // 120ms 节流一次重渲染 —— 运行中的块是纯文本渲染，便宜。
+          if (viewRef.current === 'read' && sid === store.active) tailBump()
         },
         onMessage(msg) {
           switch (msg.t) {
@@ -361,6 +392,20 @@ export function App() {
       welcome: () => lastWelcome,
       mode: () => (store.active === null ? { mode: 'composer', locked: false } : store.modesOf(store.active)!.current),
       unread: (sid: number) => store.isUnread(sid),
+      view: () => viewRef.current,
+      // 测试/诊断：读视图块流的内部状态
+      blocks: () => {
+        const sid = store.active
+        if (sid === null) return []
+        return blocks.blocks(sid).map((b) => ({
+          cmdId: b.cmdId, text: b.text, startSeq: b.startSeq, endSeq: b.endSeq,
+          len: blocks.bytesOf(sid, b)?.bytes.length ?? -1,
+        }))
+      },
+      tailLen: () => {
+        const sid = store.active
+        return sid === null ? -1 : (blocks.tailBytes(sid)?.bytes.length ?? -1)
+      },
     }
 
     return () => {
@@ -370,6 +415,7 @@ export function App() {
       document.removeEventListener('visibilitychange', onVisible)
       unwatchViewport()
       sendResize.cancel()
+      tailBump.cancel()
       ro.disconnect()
       ime?.dispose()
       conn.close()
@@ -466,7 +512,32 @@ export function App() {
           />
         )}
 
-        <div class="term" ref={termAreaRef} data-testid="terminal" />
+        {view === 'read' && activeSid !== null && (
+          <ReadView
+            /* blocksTick：命令事件与 live-tail 节流都会 +1 */
+            tick={blocksTick}
+            blocks={blocksRef.current?.blocks(activeSid) ?? []}
+            bytesOf={(b) => blocksRef.current?.bytesOf(activeSid, b) ?? null}
+            tail={blocksRef.current?.tailBytes(activeSid) ?? null}
+            showTail={
+              // 尾块只在"确实有未切分输出"时显示：没有集成、输入去了子程序、
+              // 或者尾巴大到不像是 prompt 重画
+              active?.integration !== 'active' ||
+              !!active?.unmarked_input ||
+              (blocksRef.current?.tailBytes(activeSid)?.bytes.length ?? 0) > TAIL_NOISE_BYTES
+            }
+            cols={active?.cols ?? 80}
+            onFill={(text) => composerRef.current?.fill(text)}
+            onRun={(text) => {
+              if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
+            }}
+            onCopy={(text) => {
+              navigator.clipboard?.writeText(text).catch(() => {})
+            }}
+            onViewTerm={() => setView('term')}
+          />
+        )}
+        <div class="term" ref={termAreaRef} data-testid="terminal" data-hidden={view === 'read'} />
 
         <div class="modebar" data-testid="modebar" data-mode={mode.mode} data-locked={mode.locked}>
           <span>{mode.mode === 'composer' ? 'Composer' : 'Raw（按键直通）'}</span>
@@ -484,9 +555,19 @@ export function App() {
               解锁自动
             </button>
           )}
-          <button data-testid="open-blocks" onClick={() => setBlocksOpen(true)}>
-            块
+          <button
+            class="view-toggle"
+            data-testid="view-toggle"
+            data-view={view}
+            onClick={() => setView((v) => (v === 'read' ? 'term' : 'read'))}
+          >
+            {view === 'read' ? '终端' : '读'}
           </button>
+          {view === 'term' && (
+            <button data-testid="open-blocks" onClick={() => setBlocksOpen(true)}>
+              块
+            </button>
+          )}
           <button data-testid="open-palette" onClick={() => setPaletteOpen(true)}>
             命令面板
           </button>
@@ -536,6 +617,29 @@ export function App() {
           </div>
         )}
 
+        {view === 'read' && mode.mode === 'raw' && active?.status !== 'exited' && (
+          // 读视图里 xterm 不可见，Raw 模式的输入要有地方落：一条直发输入行，
+          // Enter 把整行 + \r 送进 PTY。按行发 —— 组字期间自然不会有半个字节出去。
+          <div class="rawline" data-testid="rawline">
+            <span class="rawlabel">直发</span>
+            <input
+              data-testid="raw-input"
+              value={rawLine}
+              placeholder="命令在跑 · 敲什么立刻送进去"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck={false}
+              autocomplete="off"
+              onInput={(e) => setRawLine(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' || e.isComposing) return
+                e.preventDefault()
+                sendRawRef.current(rawLine + '\r')
+                setRawLine('')
+              }}
+            />
+          </div>
+        )}
         {active?.status !== 'exited' && (
           <Composer
             hidden={mode.mode === 'raw'}

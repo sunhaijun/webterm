@@ -81,18 +81,31 @@ const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
 const OTHER_ESC = /\x1b[@-Z\\-_]/g
 
 /**
- * 纯文本兜底：剥掉转义序列，按 \r 覆盖写。
+ * 纯文本渲染：剥掉转义序列，按 \r 覆盖写。
  *
- * 只在离屏渲染器不可用时使用（比如 WebGL/DOM 都起不来的环境）。
+ * 运行中的块和尾块用它（便宜，随每次输出重画）；结束后的块走离屏 xterm。
+ *
+ * 【行尾的 \r 不是覆盖写，是换行的一半】。PTY 吐出来的是 CRLF：
+ * "AAA\r\nBBB\r\n"。先按 \n 切行再按 \r 取最后一段，每行都会变成空串 ——
+ * 整块内容凭空消失（真踩到了：live-tail 一直是空白）。所以先把 \r\n
+ * 归一成 \n，只有行【内】的 \r 才是进度条那种回到行首重画。
+ *
+ * 行内 \r 取最后一个【非空】段：进度条刚打出 \r 还没重画的瞬间，最后一段
+ * 是空的，这时该显示上一帧而不是一片空白。
  */
 export function plainText(bytes: Uint8Array): string {
   const raw = new TextDecoder().decode(bytes)
   const noEsc = raw.replace(OSC, '').replace(CSI, '').replace(OTHER_ESC, '')
   return noEsc
+    .replace(/\r\n/g, '\n')
     .split('\n')
     .map((line) => {
+      if (!line.includes('\r')) return line
       const parts = line.split('\r')
-      return parts[parts.length - 1] ?? ''
+      for (let i = parts.length - 1; i >= 0; i--) {
+        if (parts[i] !== '') return parts[i] ?? ''
+      }
+      return ''
     })
     .join('\n')
 }

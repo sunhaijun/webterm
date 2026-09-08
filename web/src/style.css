@@ -5,6 +5,9 @@
   --fg: #1a1a1a;
   --muted: #6b6b6b;
   --line: #e3e3e3;
+  --surface: #ffffff;
+  --line-strong: #cfcfd4;
+  --ring: rgba(26, 26, 26, 0.35);
   --term-bg: #111111;
   --ok: #2ea043;
   --warn: #d29922;
@@ -18,6 +21,9 @@
     --fg: #e6edf3;
     --muted: #8b949e;
     --line: #21262d;
+    --surface: #161b22;
+    --line-strong: #30363d;
+    --ring: rgba(230, 237, 243, 0.35);
   }
 }
 :root[data-theme='dark'] {
@@ -25,6 +31,9 @@
   --fg: #e6edf3;
   --muted: #8b949e;
   --line: #21262d;
+  --surface: #161b22;
+  --line-strong: #30363d;
+  --ring: rgba(230, 237, 243, 0.35);
 }
 
 * { box-sizing: border-box; }
@@ -251,6 +260,7 @@ body {
  * 【按位置分配空间就会这样】。flex 只认 flex 属性，不数子元素，
  * 增删 banner 都不会错位。 */
 .app[data-bp='desktop'] .main { display: flex; flex-direction: column; min-width: 0; }
+.main { position: relative; }
 .app:not([data-bp='desktop']) .main { display: flex; flex-direction: column; height: 100%; }
 /* 除终端外都按内容高度，不许被压缩 */
 .main > * { flex: none; }
@@ -258,6 +268,11 @@ body {
 /* 终端吃掉剩下的全部空间。min-height:0 不能少，否则 flex 子元素
    的最小尺寸是内容高度，终端就压不下去、反而把别人挤出去。 */
 .main > .term { flex: 1 1 0; min-height: 0; }
+/* 读视图（ADR-0011）：xterm 不可见但【保持真实尺寸】。FitAddon 据它算 cols/rows
+   发给 PTY，shell 按它折行 —— 用 display:none 尺寸归零，cols/rows 会算错。
+   绝对定位铺满 .main，从 flex 流里拿掉，把空间让给 .stream。 */
+.main > .term[data-hidden='true'] { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
+.main > .stream { flex: 1 1 0; min-height: 0; }
 
 /* tablet：覆盖式抽屉。打开时终端【不重排】—— 否则每次开关都触发 resize，
    正在看的位置就跑了 */
@@ -416,3 +431,29 @@ body {
   border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--fg); cursor: pointer;
 }
+
+/* ---------- 读视图：块流 ---------- */
+
+.stream { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  padding: 8px 0 10px; display: flex; flex-direction: column; gap: 6px; background: var(--bg); }
+.stream .block { margin: 0 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.stream .block[data-failed='true'] { border-left: 3px solid var(--err); }
+.stream .block-head { min-height: 48px; padding: 8px 12px; }
+.stream .block-body { border-top: 1px solid var(--line); }
+.stream-empty { margin: 40px 24px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.block-mark[data-running='true'] { color: var(--warn); }
+.block[data-running='true'] .block-mark { display: inline-block; animation: block-spin 1.2s linear infinite; }
+@keyframes block-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .block[data-running='true'] .block-mark { animation: none; } }
+.block-live { max-height: 60vh; overflow: auto; }
+.block-tail .block-cmd-muted { color: var(--muted); font-style: italic; }
+
+/* 直发输入行：命令在跑时替换 Composer（读视图） */
+.rawline { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--bg); }
+.rawline .rawlabel { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--warn); }
+.rawline input { flex: 1; min-height: 40px; padding: 0 12px; border: 1px solid var(--warn); border-radius: 999px;
+  background: var(--bg); color: var(--fg); font: 14px var(--font-mono); }
+.rawline input:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+
+/* 视图切换按钮：和模式条其它按钮同款，但 44px 命中区 */
+.modebar .view-toggle { min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; text-decoration: none; font-weight: 500; }
