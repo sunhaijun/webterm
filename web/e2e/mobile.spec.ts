@@ -49,8 +49,25 @@ test('手机视口：终端拿到真实高度，页面不滚动，命令能往�
   expect(geo.mainH, `.main 应当铺满（app ${geo.appH}px）`).toBeGreaterThan(geo.appH! - 8)
 
   // 终端要占到视口的一半以上 —— 它是这个产品的主体
-  expect(geo.termH, `.term 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.4)
+  expect(geo.termH, `.term 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.6)
   expect(geo.xtermViewportH, '.xterm-viewport 不能是 0').toBeGreaterThan(0)
+
+  // 【伸缩空间必须落在终端上，不能落到别的条上】。
+  // .main 曾经用固定行数的 grid（28px auto 1fr auto auto auto）按位置分配，
+  // 而 banner 是条件渲染的 —— 少一个子元素就整体错位，1fr 跑到 modebar 上，
+  // 模式条白占 153px。当时"终端 > 40% 视口"这条断言仍然是绿的，
+  // 所以这里改成【逐条卡住非终端的条不许变胖】。
+  const strips = await page.evaluate(() =>
+    [...document.querySelectorAll('.main > *')]
+      .filter((e) => !e.classList.contains('term'))
+      .map((e) => ({
+        cls: e.className || e.tagName.toLowerCase(),
+        h: Math.round(e.getBoundingClientRect().height),
+      })),
+  )
+  for (const s of strips) {
+    expect(s.h, `.main > .${s.cls} 是条状 chrome，不该占这么高`).toBeLessThanOrEqual(80)
+  }
 
   // 【根容器不该滚动】。手机上 sidebar 是靠 translateY 收到视口下面的
   // 底部 sheet，而 transform 不会把它从可滚动区域里去掉 —— 少了
@@ -81,9 +98,23 @@ test('更窄的手机（360×640）同样不塌', async ({ page }) => {
       scrollH: document.documentElement.scrollHeight,
     }
   })
-  expect(geo.termH, `.term 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.4)
+  expect(geo.termH, `.term 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.6)
   expect(geo.xtermViewportH, '.xterm-viewport 不能是 0').toBeGreaterThan(0)
   expect(geo.scrollH, '页面不该纵向滚动').toBeLessThanOrEqual(geo.viewportH + 1)
+
+  // 和上面一条同理：伸缩空间必须落在终端上。按比例卡不够 —— 换个屏幕尺寸
+  // 就可能碰巧还在阈值内，所以逐条卡住非终端的条。
+  const strips = await page.evaluate(() =>
+    [...document.querySelectorAll('.main > *')]
+      .filter((e) => !e.classList.contains('term'))
+      .map((e) => ({
+        cls: e.className || e.tagName.toLowerCase(),
+        h: Math.round(e.getBoundingClientRect().height),
+      })),
+  )
+  for (const s of strips) {
+    expect(s.h, `.main > .${s.cls} 是条状 chrome，不该占这么高`).toBeLessThanOrEqual(80)
+  }
 })
 
 /**

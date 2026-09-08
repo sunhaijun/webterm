@@ -234,8 +234,30 @@ body {
   overflow: hidden;
   min-width: 0;
 }
-.app[data-bp='desktop'] .main { display: grid; grid-template-rows: 28px auto 1fr auto auto auto; min-width: 0; }
-.app:not([data-bp='desktop']) .main { display: grid; grid-template-rows: 28px auto 1fr auto auto auto; height: 100%; }
+/* .main 用 flex 而【不是】固定行数的 grid。
+ *
+ * 原来是 grid-template-rows: 28px auto 1fr auto auto auto —— 六行按位置
+ * 对应 statusbar / banner / term / composer / modebar / keybar。
+ * 可是 banner 是【条件渲染】的：没有 banner 时只有五个子元素，auto-place
+ * 整体前移一格，1fr 就落到了 modebar 身上：
+ *
+ *     声明   28px   auto    1fr     auto      auto    auto
+ *     实际   28px   392px   153px   38px      53px    0px
+ *            statusbar term  modebar composer keybar  （空）
+ *
+ * 于是模式条在手机上白占 153px，而终端拿不到本该属于它的伸缩空间。
+ * 这个布局只在"恰好显示一条 banner"时才是对的。
+ *
+ * 【按位置分配空间就会这样】。flex 只认 flex 属性，不数子元素，
+ * 增删 banner 都不会错位。 */
+.app[data-bp='desktop'] .main { display: flex; flex-direction: column; min-width: 0; }
+.app:not([data-bp='desktop']) .main { display: flex; flex-direction: column; height: 100%; }
+/* 除终端外都按内容高度，不许被压缩 */
+.main > * { flex: none; }
+.main > .statusbar { flex: 0 0 28px; }
+/* 终端吃掉剩下的全部空间。min-height:0 不能少，否则 flex 子元素
+   的最小尺寸是内容高度，终端就压不下去、反而把别人挤出去。 */
+.main > .term { flex: 1 1 0; min-height: 0; }
 
 /* tablet：覆盖式抽屉。打开时终端【不重排】—— 否则每次开关都触发 resize，
    正在看的位置就跑了 */
