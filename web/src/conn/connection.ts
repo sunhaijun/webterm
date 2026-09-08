@@ -43,7 +43,12 @@ interface SessionState {
 
 export interface ConnectionHandlers {
   /** 收到一段输出。attrPrefix 为 true 时调用方应当先清屏（reset 回放）。 */
-  onOutput(sid: number, data: Uint8Array, attrPrefix: boolean): void
+  /**
+   * startSeq 是【计入 seq 的第一个字节】的 out_seq。
+   * attrPrefix 为真时 data 的前 4 字节是渲染修正、不计数 —— 消费方要按
+   * 这个约定跳过，否则整条流的记账会偏 4 字节（命令块就切错位置）。
+   */
+  onOutput(sid: number, data: Uint8Array, attrPrefix: boolean, startSeq: number): void
   onMessage(msg: ServerMessage): void
   onState(state: ConnState, info: StateInfo): void
   /** 出现无法自行修补的错误（如 seq 空洞）。 */
@@ -273,7 +278,7 @@ export class Connection {
       st.outSeq = seq + data.length
       st.headSeq = Math.max(st.headSeq, st.outSeq)
       this.replayedBytes += data.length
-      this.opts.handlers.onOutput(f.sid, withPrefix(data), true)
+      this.opts.handlers.onOutput(f.sid, withPrefix(data), true, seq)
       return
     }
 
@@ -288,10 +293,11 @@ export class Connection {
     // 部分重叠：只取没收过的那一段
     const skip = st.outSeq - seq
     const fresh = skip > 0 ? data.subarray(skip) : data
+    const freshSeq = st.outSeq
     st.outSeq += fresh.length
     st.headSeq = Math.max(st.headSeq, st.outSeq)
     this.replayedBytes += fresh.length
-    this.opts.handlers.onOutput(f.sid, fresh, false)
+    this.opts.handlers.onOutput(f.sid, fresh, false, freshSeq)
   }
 
   private handleControl(msg: ServerMessage): void {

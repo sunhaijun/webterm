@@ -364,3 +364,55 @@ body {
   color: var(--fg); cursor: pointer; white-space: nowrap;
 }
 .privacy-note { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+
+/* ---------- 命令块 ---------- */
+
+.blocks-empty { padding: 24px 12px; color: var(--muted); font-size: 12px; text-align: center; }
+
+.block { border-bottom: 1px solid var(--line); }
+.block-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; cursor: pointer; font-size: 12px;
+  /* 触摸命中区。和功能键条一个标准 —— 同一屏里别两套。 */
+  min-height: 44px;
+}
+.block-head:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.block-mark { flex: none; width: 1em; text-align: center; color: var(--ok); }
+.block-mark[data-failed='true'] { color: var(--err); }
+.block-mark[data-running='true'] { color: var(--warn); }
+/* 失败的块整条留一道红边 —— 折叠状态下也要一眼看见 */
+.block[data-failed='true'] { border-left: 3px solid var(--err); }
+.block-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block-exit { flex: none; color: var(--err); font-size: 11px; }
+.block-dur, .block-lines { flex: none; color: var(--muted); font-size: 11px; }
+
+.block-body { background: var(--term-bg); }
+.block-truncated {
+  padding: 6px 12px; font-size: 11px;
+  color: #111; background: color-mix(in srgb, var(--warn) 60%, transparent);
+}
+.block-out {
+  margin: 0; padding: 8px 12px; font: inherit; font-size: 12px; line-height: 1.35;
+  color: #e6e6e6; white-space: pre;
+  /* 长行横向自己滚，别把面板撑宽 */
+  overflow-x: auto; overscroll-behavior-x: contain;
+}
+.block-pending { color: var(--muted); }
+
+/* serializeAsHTML 把 color / background-color / font-family / font-size
+   【硬编码】成白底黑字 courier 15px，完全不看终端主题（见它的实现）。
+   那是它唯一的输出形态，只能在这儿盖掉 —— 否则每个块里都是一条白底带。 */
+.block-out > pre { margin: 0; }
+.block-out > pre > div {
+  color: inherit !important;
+  background-color: transparent !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+}
+.block-actions { padding: 6px 12px 10px; }
+.block-actions button {
+  font: inherit; font-size: 12px; min-height: 36px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg); cursor: pointer;
+}

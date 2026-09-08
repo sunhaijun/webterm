@@ -6,6 +6,8 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
 import { listCommands, type CommandRecord } from '../commands/api'
+import { BlockStore } from '../commands/blocks'
+import { BlocksPanel } from '../commands/blockspanel'
 import { HistoryPanel, QuickBar } from '../commands/history'
 import { CommandPalette } from '../commands/palette'
 import { Connection, type ConnState, type StateInfo } from '../conn/connection'
@@ -66,6 +68,10 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [blocksOpen, setBlocksOpen] = useState(false)
+  // 块存储活在 ref 里（它不参与渲染），用一个计数器把它的变化推给 UI。
+  const blocksRef = useRef<BlockStore>()
+  const [blocksTick, setBlocksTick] = useState(0)
   const [quick, setQuick] = useState<CommandRecord[]>([])
 
   const reloadQuick = useCallback(() => {
@@ -92,13 +98,18 @@ export function App() {
     const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
     let store: SessionStore
     let lastWelcome: unknown = null
+    const blocks = new BlockStore()
+    blocksRef.current = blocks
+    // 命令事件是低频的（一条命令一两次），直接 bump 不会有性能问题。
+    const bumpBlocks = () => setBlocksTick((n) => n + 1)
 
     const conn = new Connection({
       url,
       clientID: clientID(),
       handlers: {
-        onOutput(sid, data) {
+        onOutput(sid, data, attrPrefix, startSeq) {
           store.write(sid, data)
+          blocks.write(sid, data, attrPrefix, startSeq)
         },
         onMessage(msg) {
           switch (msg.t) {
@@ -124,12 +135,21 @@ export function App() {
               break
             case T.sessionClosed:
               store.remove(msg.sid)
+              blocks.forget(msg.sid) // 别攒着已关会话的输出
               break
             case T.sessionUpdated: {
               const { t: _t, sid, ...patch } = msg
               store.patch(sid, patch)
               break
             }
+            case T.commandStart:
+              blocks.cmdStart(msg.sid, msg)
+              bumpBlocks()
+              break
+            case T.commandEnd:
+              blocks.cmdEnd(msg.sid, msg)
+              bumpBlocks()
+              break
             case T.prompt:
               // 这条消息驱动输入模式自动切换（ADR-0007）
               store.modesOf(msg.sid)?.onPrompt(msg.state)
@@ -456,6 +476,9 @@ export function App() {
               解锁自动
             </button>
           )}
+          <button data-testid="open-blocks" onClick={() => setBlocksOpen(true)}>
+            块
+          </button>
           <button data-testid="open-palette" onClick={() => setPaletteOpen(true)}>
             命令面板
           </button>
@@ -582,6 +605,20 @@ export function App() {
             setHistoryOpen(false)
           }}
           onPinnedChanged={reloadQuick}
+        />
+      )}
+      {blocksOpen && activeSid !== null && (
+        <BlocksPanel
+          /* blocksTick 只是为了让块变化能触发重渲染 —— 存储本身在 ref 里 */
+          key={`blocks-${activeSid}-${blocksTick}`}
+          blocks={blocksRef.current?.blocks(activeSid) ?? []}
+          bytesOf={(b) => blocksRef.current?.bytesOf(activeSid, b) ?? null}
+          cols={active?.cols ?? 80}
+          onClose={() => setBlocksOpen(false)}
+          onFill={(text) => {
+            composerRef.current?.fill(text)
+            setBlocksOpen(false)
+          }}
         />
       )}
       {recovered !== null && <RecoveredToast bytes={recovered} />}
