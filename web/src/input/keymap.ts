@@ -143,16 +143,41 @@ export function chord(ch: string, mods: { ctrl?: boolean; alt?: boolean }): stri
   return out
 }
 
-/** 功能键条上的按键集合（AC-3.9）。前 8 个在最窄屏幕下必须无需滚动即可见。 */
+/**
+ * 一按就发出去的控制码。
+ *
+ * 【粘滞 Ctrl 不够用】。它要求"点 Ctrl，再从软键盘打 c" —— 而在 Raw
+ * 模式下看 top 的时候软键盘根本没弹出来，于是没有任何办法发出 ^C。
+ * 真卡住过：进了 top 退不出来。
+ *
+ * 所以这几个最常用的组合各给一个独立按键，一次点击直达。
+ */
+export const CTRL_KEYS: Readonly<Record<string, string>> = {
+  CtrlC: '\x03', // 中断 —— 通用的脱困键
+  CtrlD: '\x04', // EOF / 退出 shell
+  CtrlZ: '\x1a', // 挂起
+  CtrlL: '\x0c', // 清屏
+}
+
+/**
+ * 功能键条上的按键集合（AC-3.9）。前 8 个在最窄屏幕下必须无需滚动即可见。
+ *
+ * 【^C 必须在前 8 个里】：它是唯一的通用脱困键，要它的时候多半已经
+ * 卡住了，不能还要求先横向滚动一下。Alt 让位 —— 手机上它比 ^C 罕见得多。
+ */
 export const KEY_BAR: readonly { label: string; key: string }[] = [
   { label: 'Esc', key: 'Escape' },
+  { label: '^C', key: 'CtrlC' },
   { label: 'Tab', key: 'Tab' },
   { label: 'Ctrl', key: 'Ctrl' },
-  { label: 'Alt', key: 'Alt' },
   { label: '↑', key: 'ArrowUp' },
   { label: '↓', key: 'ArrowDown' },
   { label: '←', key: 'ArrowLeft' },
   { label: '→', key: 'ArrowRight' },
+  { label: 'Alt', key: 'Alt' },
+  { label: '^D', key: 'CtrlD' },
+  { label: '^Z', key: 'CtrlZ' },
+  { label: '^L', key: 'CtrlL' },
   { label: '|', key: '|' },
   { label: '~', key: '~' },
   { label: '/', key: '/' },

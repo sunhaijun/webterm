@@ -206,8 +206,11 @@ test('E2E-10 移动端：功能键条、粘滞修饰键、输入框属性', asyn
   // 触摸设备才显示功能键条
   await expect(page.getByTestId('keybar')).toBeVisible()
 
-  // 前 8 个键无需滚动即可见
-  for (const k of ['Escape', 'Tab', 'Ctrl', 'Alt', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']) {
+  // 前 8 个键无需滚动即可见。
+  // 【Alt 让位给 ^C】：手机上 Alt 远比 ^C 罕见，而要 ^C 的时候通常已经
+  // 卡住了（真发生过：误进 top 退不出来 —— 粘滞 Ctrl 需要软键盘配合，
+  // 而 Raw 模式下软键盘根本没弹出来）。
+  for (const k of ['Escape', 'CtrlC', 'Tab', 'Ctrl', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']) {
     await expect(page.getByTestId(`key-${k}`)).toBeInViewport()
   }
 
