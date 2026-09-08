@@ -26,13 +26,20 @@ var usage = "webterm " + version + ` —— 浏览器终端 agent
   webterm shell-init bash        输出 shell 集成脚本（手动接入的降级路径）
   webterm version                版本信息
 
+不带子命令直接跑 webterm，会打印一张状态总览（服务、证书、设备、地址）。
+
 "webterm serve --help" 查看 serve 的全部选项。
 `
 
 func main() {
+	// 裸跑给一张状态总览而不是用法 —— 日常要问的是"现在正常吗"。
+	// 用法用 --help 拿。
 	if len(os.Args) < 2 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		if err := runStatus(); err != nil {
+			fmt.Fprintf(os.Stderr, "\n错误：%v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 	var err error
 	switch os.Args[1] {

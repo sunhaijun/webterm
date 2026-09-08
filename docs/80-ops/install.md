@@ -478,6 +478,34 @@ agent 收到 `SIGTERM` 时会先向所有客户端广播"agent 即将重启，�
 
 **命令历史存在 SQLite 里，跨重启存活** —— "我刚才在跑什么"这个信息不会丢。
 
+## 看一眼现在正不正常
+
+不带子命令直接跑：
+
+```bash
+webterm
+```
+
+```
+webterm v0.1.0
+
+  服务      运行中（systemd）
+  地址      https://term.example.com:8443
+  证书      有效，到 2026-12-06（还有 89 天，自动续期）
+  设备      2 台已授权
+  配置      /home/you/.config/webterm/config
+
+  webterm pair       拿配对码 + 二维码
+  webterm devices    看已授权的设备 / 吊销
+  webterm doctor     检查部署前置条件
+```
+
+证书剩不到 10 天会标黄，过期会标红 —— 那是唯一会**静默**变成事故的东西。
+没有授权设备时会在 `webterm pair` 后面标出「← 下一步」。
+
+「服务在不在跑」先问 systemd，没有 user service 时退化成探 `/healthz`
+（**不是**看端口有没有人听 —— 443 上很可能是别的服务）。
+
 ## 配置文件
 
 装完之后不用每次都敲 `--domain`、`--https-port`：
