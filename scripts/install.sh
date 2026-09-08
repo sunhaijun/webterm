@@ -28,6 +28,7 @@ DOMAIN=""
 DEV=0
 SETUP_SERVICE=1
 DO_SETCAP=1
+IF_NEWER=0
 DRY_RUN=0
 FORCE=0
 BASE_URL=""
@@ -79,6 +80,7 @@ usage() {
   --http-port <n>    ACME 挑战 + 跳转端口，默认 80
   --no-service       装二进制但不配 systemd
   --no-setcap        不做 setcap（你自己解决特权端口的绑定权限）
+  --if-newer         版本和已装的一样就什么都不做（webterm update 用）
   --force            前置自检不通过也继续装
   --dry-run          只打印将要执行的命令
   -h, --help         这段说明
@@ -100,6 +102,7 @@ while [ $# -gt 0 ]; do
         --prefix) PREFIX="${2:?--prefix 需要一个值}"; shift 2 ;;
         --no-service) SETUP_SERVICE=0; shift ;;
         --no-setcap) DO_SETCAP=0; shift ;;
+        --if-newer) IF_NEWER=1; shift ;;
         --base-url) BASE_URL="${2:?--base-url 需要一个值}"; shift 2 ;;
         --https-port) HTTPS_PORT="${2:?--https-port 需要一个值}"; shift 2 ;;
         --http-port) HTTP_PORT="${2:?--http-port 需要一个值}"; shift 2 ;;
@@ -245,6 +248,25 @@ else
     fi
 fi
 
+# ---------- 版本比对（--if-newer）----------
+#
+# 【不能无条件重装】。重装会重启服务，把正在用的会话踢掉 —— 对
+# webterm update 这种"顺手跑一下"的命令来说代价太大。
+# 放在校验之后：只有拿到可信产物才谈得上比版本。
+if [ "$IF_NEWER" = 1 ] && [ "$DRY_RUN" != 1 ] && [ -x "$PREFIX/webterm" ]; then
+    chmod +x "$TMP/$BIN"
+    NEW_VER="$("$TMP/$BIN" version 2>/dev/null || echo unknown-new)"
+    OLD_VER="$("$PREFIX/webterm" version 2>/dev/null || echo unknown-old)"
+    if [ "$NEW_VER" = "$OLD_VER" ] && [ "$NEW_VER" != unknown-new ]; then
+        step "已经是最新"
+        info "$OLD_VER —— 什么都没动，服务没有重启"
+        exit 0
+    fi
+    step "有新版本"
+    info "当前  $OLD_VER"
+    info "最新  $NEW_VER"
+fi
+
 # ---------- 4. 前置自检 ----------
 #
 # 【装之前就查】。以前只在装完提示"你可以跑一下 doctor"，等于没查 ——
@@ -338,6 +360,37 @@ if [ -n "$DOMAIN" ]; then
         } > "$CONFIG_DIR/config"
         info "已写入 $CONFIG_DIR/config"
     fi
+fi
+
+# ---------- 记下安装参数 ----------
+#
+# webterm update 拿它重跑安装 —— 【把当初那次成功的安装，用新产物再做一遍】。
+#
+# 一行一个参数，和命令行写法逐字对应：update 原样 replay，不需要理解内容，
+# 也就不会有"键怎么翻回 flag"这种会漂的映射。
+#
+# 【写的是解析后的有效参数，不是原始 argv】：--dry-run / --force / --if-newer
+# 是一次性开关，不该被记住并反复重放。--dev 也不记，它等价于展开后的
+# --no-service --no-setcap，记展开式更不容易误解。
+#
+# 【在 DOMAIN 判断之外】：本地安装（没有域名）同样要能 update。
+if [ "$DRY_RUN" = 1 ]; then
+    info "将写入 $CONFIG_DIR/install-state（供 webterm update 用）"
+else
+    mkdir -p "$CONFIG_DIR"
+    {
+        echo "# 由 scripts/install.sh 生成。webterm update 用这些参数重跑安装。"
+        echo "# 一行一个参数。手工改也行。"
+        [ -n "$DOMAIN" ] && printf -- '--domain\n%s\n' "$DOMAIN"
+        [ "$HTTPS_PORT" = 443 ] || printf -- '--https-port\n%s\n' "$HTTPS_PORT"
+        [ "$HTTP_PORT" = 80 ] || printf -- '--http-port\n%s\n' "$HTTP_PORT"
+        [ "$PREFIX" = /usr/local/bin ] || printf -- '--prefix\n%s\n' "$PREFIX"
+        [ "$CHANNEL" = latest ] || printf -- '--channel\n%s\n' "$CHANNEL"
+        [ "$SETUP_SERVICE" = 1 ] || echo "--no-service"
+        [ "$DO_SETCAP" = 1 ] || echo "--no-setcap"
+        true
+    } > "$CONFIG_DIR/install-state"
+    info "已写入 $CONFIG_DIR/install-state（webterm update 会用它）"
 fi
 
 # ---------- 6. 服务 ----------
