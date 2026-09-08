@@ -1,7 +1,7 @@
 /** UT-keymap-1：控制键映射表，对照 docs/40-frontend/keymap.md。 */
 import { describe, expect, it } from 'vitest'
 
-import { CTRL_KEYS, KEY_BAR, KEY_BYTES, appAction, chord, keyBarFor, programOf } from '../src/input/keymap'
+import { CTRL_KEYS, EDIT_INSERT, EDIT_KEYS, KEY_BAR, KEY_BYTES, appAction, chord, keyBarFor, programOf } from '../src/input/keymap'
 
 const ESC = '\x1b'
 
@@ -197,5 +197,17 @@ describe('keyBarFor：按占屏程序换键', () => {
       const keys = keyBarFor({ altScreen: true, program }).map((k) => k.key)
       expect(new Set(keys).size).toBe(keys.length)
     }
+  })
+})
+
+describe('EDIT_KEYS：写态编辑键条（ADR-0011 ③）', () => {
+  it('key 不重复；每个键要么是编辑动作要么有字面可插', () => {
+    const keys = EDIT_KEYS.map((k) => k.key)
+    expect(new Set(keys).size).toBe(keys.length)
+    const actions = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'DeleteWord', 'Home', 'End'])
+    for (const k of keys) expect(actions.has(k) || k in EDIT_INSERT, `${k} 没有对应动作`).toBe(true)
+  })
+  it('软键盘上难打的符号都在：| ~ / - _ " \' $', () => {
+    expect(Object.values(EDIT_INSERT).map((s) => s.trim())).toEqual(expect.arrayContaining(['|', '~', '/', '-', '_', '"', "'", '$']))
   })
 })

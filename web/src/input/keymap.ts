@@ -292,6 +292,41 @@ const PROGRAM_CONTEXT: Record<string, keyof typeof CONTEXT_KEYS> = {
  * 备用缓冲激活 → 按前台程序换：less 要 q / 搜索 / 翻页，top 要 q / k / 排序，
  * vim 要 Esc / :w / :q，不认识的给一套通用 TUI 键。
  */
+/**
+ * 写态编辑键条（ADR-0011 ③）：面向"写"，不是终端键。
+ * 软键盘上要切好几层才打得出的符号 + 光标 / 历史 / 删词。Tab 有路径 chip 时补路径。
+ */
+export const EDIT_KEYS: KeyDef[] = [
+  { label: 'Tab', key: 'Tab' },
+  { label: '↑', key: 'ArrowUp' },
+  { label: '↓', key: 'ArrowDown' },
+  { label: '←', key: 'ArrowLeft' },
+  { label: '→', key: 'ArrowRight' },
+  { label: '⌫词', key: 'DeleteWord' },
+  { label: '|', key: 'Pipe' },
+  { label: '~', key: 'Tilde' },
+  { label: '/', key: 'Slash' },
+  { label: '-', key: 'Minus' },
+  { label: '_', key: 'Underscore' },
+  { label: '"', key: 'DQuote' },
+  { label: "'", key: 'Quote' },
+  { label: '$', key: 'Dollar' },
+  { label: '⇤', key: 'Home' },
+  { label: '⇥', key: 'End' },
+]
+
+/** 编辑键里"插入字面"的那些。管道两边带空格 —— 命令行的习惯写法。 */
+export const EDIT_INSERT: Record<string, string> = {
+  Pipe: ' | ',
+  Tilde: '~',
+  Slash: '/',
+  Minus: '-',
+  Underscore: '_',
+  DQuote: '"',
+  Quote: "'",
+  Dollar: '$',
+}
+
 export function keyBarFor(ctx: { altScreen: boolean; program: string | null }): readonly KeyDef[] {
   if (!ctx.altScreen) return KEY_BAR
   const kind = ctx.program ? PROGRAM_CONTEXT[ctx.program] : undefined

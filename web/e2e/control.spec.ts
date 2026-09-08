@@ -42,7 +42,8 @@ test('进备用缓冲自动切到终端，退出自动回读；自动切换不�
 
   await waitFor(async () => (await alt(page)) === false, '备用缓冲退出', 10_000)
   await waitFor(async () => (await view(page)) === 'read', '自动回到读', 5_000)
-  await expect(page.getByTestId('keybar')).toHaveAttribute('data-context', 'shell')
+  // 回到 prompt：功能键条退场（写态的编辑键在 sheet 里，ADR-0011 ③）
+  await expect(page.getByTestId('keybar')).toHaveCount(0, { timeout: 5_000 })
   // 自动切换是临时的，不能把用户偏好改成 term
   expect(await stored(page)).not.toBe('term')
 })

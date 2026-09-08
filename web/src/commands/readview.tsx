@@ -21,12 +21,14 @@ export interface ReadViewProps extends BlockActions {
   cols: number
   /** 任何会改变内容的变化都让它 +1，用来触发贴底跟随 */
   tick: number
+  /** 底部被写态 sheet 盖住的像素数（ADR-0011 ③）。变了要重新贴底。 */
+  inset?: number
 }
 
 /** prompt 重画通常几十个字节；超过这个就不只是 prompt 了。 */
 export const TAIL_NOISE_BYTES = 256
 
-export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, ...actions }: ReadViewProps) {
+export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, inset = 0, ...actions }: ReadViewProps) {
   const el = useRef<HTMLDivElement>(null)
   // 失败的块默认展开；用户手动折叠/展开的记在这里
   const [open, setOpen] = useState<Set<number>>(() => new Set(blocks.filter(failed).map((b) => b.cmdId)))
@@ -55,7 +57,7 @@ export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, ...actio
   useLayoutEffect(() => {
     const n = el.current
     if (n && atBottom.current) n.scrollTop = n.scrollHeight
-  }, [tick, blocks.length])
+  }, [tick, blocks.length, inset])
 
   const toggle = (id: number) =>
     setOpen((prev) => {

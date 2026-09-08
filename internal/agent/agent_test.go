@@ -86,6 +86,7 @@ func TestITAuth1_RouteMatrix(t *testing.T) {
 			{"GET", "/api/devices"},
 			{"GET", "/api/commands"},
 			{"GET", "/api/settings"},
+			{"GET", "/api/fs?cwd=/"},
 			{"POST", "/api/devices/revoke-all"},
 			{"DELETE", "/api/commands?pinned=false"},
 		} {

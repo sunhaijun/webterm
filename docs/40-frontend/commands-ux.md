@@ -136,6 +136,7 @@ Composer 上方一行，40px 高，横向滚动。
 - 长按拖动 = 排序
 - 为空时整条隐藏（不占空间，也不显示"暂无快捷命令"这种废话）
 - `short` 布局（手机横屏）下隐藏，从 sheet 访问
+- 读视图（手机默认，ADR-0011）里没有这一条：快捷命令作为写态 sheet 顶上的 chips（★ 标）出现，见 [input-modes.md](input-modes.md#chips分片-③)
 
 ## 历史导航（Composer 里的 `↑`）
 

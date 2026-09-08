@@ -463,3 +463,95 @@ body {
 /* 键条上下文标签：谁在占屏（ADR-0011 ②）*/
 .keybar-ctx { flex: none; align-self: center; padding: 0 6px 0 2px; font: 11px var(--font-mono); letter-spacing: .04em; color: var(--warn); font-weight: 600; }
 .keybar[data-context]:not([data-context='shell']) .keybar-key { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+
+/* ── 写态：底栏 + sheet（ADR-0011 ③）──
+ * .bottom 绝对定位在定高的 .bottom-slot 里：往上长只盖块流，不挤画布 ——
+ * 画布几何不变，xterm 不 resize，PTY 收不到 SIGWINCH。块流按 --sheet-inset 让位。 */
+.bottom-slot { position: relative; flex: none; height: 56px; }
+.bottom {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 10;
+  display: flex; flex-direction: column;
+  background: var(--bg); border-top: 1px solid var(--line);
+  transition: height 180ms ease;
+}
+.bottom[data-dragging='true'] { transition: none; }
+.bottom:not([data-sheet='closed']) {
+  border-top-left-radius: 12px; border-top-right-radius: 12px;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.08);
+}
+@media (prefers-reduced-motion: reduce) { .bottom { transition: none; } }
+.sheet-head { flex: none; display: flex; align-items: center; height: 24px; padding: 0 4px 0 12px; }
+.bottom[data-sheet='closed'] .sheet-head { display: none; }
+.handle { flex: 1; height: 24px; display: grid; place-items: center; touch-action: none; cursor: ns-resize; }
+.handle span { width: 40px; height: 4px; border-radius: 2px; background: var(--line-strong); }
+.sheet-close { flex: none; font: inherit; font-size: 12px; border: 0; background: transparent; color: var(--muted); padding: 0 8px; min-height: 24px; cursor: pointer; }
+.chips {
+  flex: none; display: flex; gap: 8px; padding: 2px 10px 6px;
+  overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
+}
+.chips::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; height: 34px; max-width: 72vw; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--fg); font: 13px var(--font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.chip[data-kind='path'] { color: var(--muted); border-style: dashed; }
+.chip[data-kind='pin']::before { content: '★ '; color: var(--warn); }
+.chip:active { background: var(--line); }
+.bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 10px; }
+.bottom:not([data-sheet='closed']) .bar { flex: 1 1 0; min-height: 0; align-items: stretch; padding: 0 10px 6px; }
+.bottom:not([data-sheet='closed']) .bar-btn { display: none; }
+.bar-btn {
+  flex: none; min-height: 42px; min-width: 44px; padding: 0 14px;
+  border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+}
+.bar-more { padding: 0; font-size: 18px; line-height: 1; }
+/* 收起态：一行、药丸；打开态：吃掉 sheet 剩余高度，字号 16 免得 iOS 聚焦时放大页面 */
+.bar .composer {
+  flex: 1 1 auto; min-width: 0; height: 42px !important; overflow: hidden;
+  padding: 10px 14px; border: 1px solid var(--line-strong); border-top: 1px solid var(--line-strong); border-radius: 21px;
+  background: var(--bg); line-height: 20px;
+}
+.bottom:not([data-sheet='closed']) .bar .composer {
+  height: auto !important; flex: 1 1 0; min-height: 0; overflow: auto;
+  border-radius: 10px; font-size: 16px; line-height: 1.5;
+}
+.bar .composer:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.bar .rawline { flex: 1 1 auto; min-width: 0; padding: 0; border-top: 0; background: transparent; }
+.editkeys { flex: none; display: flex; gap: 6px; padding: 0 10px 8px; }
+.editkeys-scroll { flex: 1 1 0; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+.editkeys-scroll::-webkit-scrollbar { display: none; }
+.editkey {
+  flex: none; min-width: 44px; min-height: 44px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); color: var(--fg); font: 13px var(--font-mono); cursor: pointer;
+}
+.editkey:active, .bar-btn:active { background: var(--line); }
+.editkey-send {
+  flex: none; min-width: 72px; min-height: 44px;
+  border: 1px solid var(--fg); border-radius: 6px;
+  background: var(--fg); color: var(--bg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+/* ⋯ 菜单：模式条上那些次要入口在读视图里的家 */
+.more-backdrop { position: absolute; inset: 0; z-index: 11; }
+.more-menu {
+  position: absolute; right: 8px; bottom: 62px; z-index: 12; min-width: 200px; padding: 4px;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+.more-menu button {
+  font: inherit; font-size: 14px; text-align: left; border: 0; background: transparent; color: var(--fg);
+  padding: 0 12px; min-height: 40px; border-radius: 6px; cursor: pointer;
+}
+.more-menu button:hover, .more-menu button:focus-visible { background: var(--surface); outline: none; }
+.more-menu .more-sub { color: var(--muted); font-size: 12px; margin-left: 6px; }
+/* 块流让出被 sheet / 功能键条盖住的那段（.term 不动 —— 它是 PTY 尺寸的来源） */
+.canvas > .stream { bottom: var(--sheet-inset, 0px); }
+/* 槽里的键条：正好 56px（44 + 6×2），终端视图里它独占槽、不盖终端；读视图里挂在直发输入行下面 */
+.bottom > .keybar { padding: 6px; border-top: 0; }
+.bottom > .bar + .keybar { border-top: 1px solid var(--line); }
+.keybar-lead { font-family: inherit; font-weight: 500; }
+.bar-hint { flex: 1; color: var(--muted); font-size: 12px; padding-left: 6px; }

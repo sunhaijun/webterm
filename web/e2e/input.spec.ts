@@ -203,7 +203,17 @@ test('E2E-10 移动端：功能键条、粘滞修饰键、输入框属性', asyn
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
 
-  // 触摸设备才显示功能键条
+  // AC-3.10：移动端会把 cd 自动大写成 Cd，这些必须全关
+  const composer = page.getByTestId('composer')
+  await expect(composer).toHaveAttribute('autocorrect', 'off')
+  await expect(composer).toHaveAttribute('autocapitalize', 'off')
+  await expect(composer).toHaveAttribute('spellcheck', 'false')
+
+  // 手机读视图里功能键条只在 Raw（命令在跑 / 手动切）时出现，停在 prompt 是写态的
+  // 编辑键（ADR-0011 ③）。手动切到 Raw：模式切换在底栏的 ⋯ 菜单里
+  await expect(page.getByTestId('keybar')).toHaveCount(0)
+  await page.getByTestId('open-more').click()
+  await page.getByTestId('mode-toggle').click() // 切到 Raw 才直通
   await expect(page.getByTestId('keybar')).toBeVisible()
 
   // 前 8 个键无需滚动即可见。
@@ -214,14 +224,7 @@ test('E2E-10 移动端：功能键条、粘滞修饰键、输入框属性', asyn
     await expect(page.getByTestId(`key-${k}`)).toBeInViewport()
   }
 
-  // AC-3.10：移动端会把 cd 自动大写成 Cd，这些必须全关
-  const composer = page.getByTestId('composer')
-  await expect(composer).toHaveAttribute('autocorrect', 'off')
-  await expect(composer).toHaveAttribute('autocapitalize', 'off')
-  await expect(composer).toHaveAttribute('spellcheck', 'false')
-
   // 粘滞修饰键：点 Ctrl → 激活态；再按 c → 发出 0x03；Ctrl 自动取消
-  await page.getByTestId('mode-toggle').click() // 切到 Raw 才直通
   await page.getByTestId('key-Ctrl').click()
   await expect(page.getByTestId('key-Ctrl')).toHaveAttribute('data-sticky', 'armed')
 

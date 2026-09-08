@@ -131,6 +131,9 @@ test('功能键条横向可滚，且不撑破页面', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  // 读视图里功能键条只在命令跑着时出现（ADR-0011 ③：prompt 态是写态的编辑键）
+  await submit(page, 'sleep 30')
+  await expect(page.getByTestId('keybar')).toBeVisible({ timeout: 10_000 })
 
   const kb = await page.evaluate(() => {
     const el = document.querySelector('.keybar')
