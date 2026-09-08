@@ -284,3 +284,60 @@ func eventsEqual(a, b []oscparse.Event) bool {
 	}
 	return true
 }
+
+// UT-osc-9：每个事件都要带上它在干净输出里的偏移。
+//
+// 这是命令块的地基：session 用"块首 seq + 偏移"给 command.start/end 盖戳。
+// 一条快命令的 133;C、输出、133;D 常在同一次 PTY 读里到达 —— 用整块 append
+// 之后的 head 盖戳，start 和 end 就相等，块的字节区间为空（CI 上反复复现）。
+func TestOSC9_EventOffsets(t *testing.T) {
+	p := oscparse.New()
+	out, ev := p.Feed([]byte("AB\x1b]133;C\x07out\x1b]133;D;0\x07P"))
+	offs := p.Offsets()
+	if string(out) != "ABoutP" {
+		t.Fatalf("out = %q", out)
+	}
+	if len(ev) != 3 || len(offs) != 3 {
+		t.Fatalf("events=%d offs=%d，想要 3/3：%#v", len(ev), len(offs), ev)
+	}
+	// C 前面吐了 "AB"（2 字节）；D 前面吐了 "ABout"（5 字节）；D 产生两个事件，偏移相同
+	if want := []int{2, 5, 5}; !reflect.DeepEqual(offs, want) {
+		t.Fatalf("offs = %v, want %v", offs, want)
+	}
+	// 块 = [offC, offD) = "out"
+	if got := out[offs[0]:offs[2]]; string(got) != "out" {
+		t.Fatalf("按偏移切出的块 = %q，想要 %q", got, "out")
+	}
+}
+
+// 偏移是相对【本次 Feed】的 —— 序列被切在两次 Feed 之间时，事件归到完成它的那次。
+func TestOSC9_EventOffsetsAcrossFeeds(t *testing.T) {
+	p := oscparse.New()
+	out1, ev1 := p.Feed([]byte("AB\x1b]133;"))
+	offs1 := p.Offsets()
+	if string(out1) != "AB" || len(ev1) != 0 || len(offs1) != 0 {
+		t.Fatalf("第一片：out=%q ev=%d offs=%d", out1, len(ev1), len(offs1))
+	}
+	out2, ev2 := p.Feed([]byte("C\x07out"))
+	offs2 := p.Offsets()
+	if string(out2) != "out" || len(ev2) != 1 {
+		t.Fatalf("第二片：out=%q ev=%d", out2, len(ev2))
+	}
+	// 序列在第二片开头完成，它前面没吐任何干净字节 → 偏移 0
+	if offs2[0] != 0 {
+		t.Fatalf("跨片事件偏移 = %d，想要 0（相对第二片）", offs2[0])
+	}
+}
+
+// 快路径（没有 ESC）不产生事件，Offsets 也必须是空的 —— 不能残留上一次的。
+func TestOSC9_OffsetsResetOnFastPath(t *testing.T) {
+	p := oscparse.New()
+	p.Feed([]byte("\x1b]133;B\x07"))
+	if len(p.Offsets()) != 1 {
+		t.Fatal("第一次应有 1 个偏移")
+	}
+	p.Feed([]byte("plain"))
+	if len(p.Offsets()) != 0 {
+		t.Fatalf("快路径后 Offsets 残留了 %d 个", len(p.Offsets()))
+	}
+}
