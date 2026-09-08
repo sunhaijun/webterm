@@ -65,6 +65,8 @@
 | AC-3.9 | 功能键条包含 `Esc ^C Tab Ctrl ↑ ↓ ← → Alt ^D ^Z ^L \| ~ / - _ Home End PgUp PgDn` 且可横向滚动；`Ctrl`/`Alt` 为粘滞修饰键，`^C`/`^D`/`^Z`/`^L` 一按直发控制码。**`^C` 必须在免滚动的前 8 个里** —— 它是唯一的通用脱困键，而粘滞 `Ctrl` 在软键盘没弹出时（Raw 模式看 top）根本按不出组合 | E2E-10 |
 | AC-3.10 | 输入元素禁用 `autocorrect` / `autocapitalize` / `spellcheck` | UT-input-3 |
 | AC-3.11 | 终端尺寸变化时向 agent 发 `resize`，agent 对 PTY 执行 `TIOCSWINSZ`；resize 消息做 100ms 防抖 | IT-resize-1, UT-resize-1 |
+| AC-3.12 | 读视图的底栏是三档写态 sheet（收起 / 半屏 / 全屏）：碰输入框升半屏，把手点一下到全屏，拖到底、提交或空输入时 `Esc` 收起且输入框失焦；**三档之间 `.canvas` 几何与 PTY 尺寸不变**（sheet 盖在块流上，不挤画布） | E2E-19 |
+| AC-3.13 | sheet 打开时有面向"写"的编辑键条 `Tab ↑ ↓ ← → ⌫词 \| ~ / - _ " ' $ ⇤ ⇥` + 发送；`Tab` 有路径 chip 时补第一个；按键不抢输入框焦点 | UT-keymap-2, E2E-19 |
 
 ---
 
@@ -107,6 +109,7 @@
 | AC-6.8 | 命令面板（`Ctrl/Cmd+K`）可模糊搜索会话、快捷命令、历史，回车执行对应动作 | E2E-14 |
 | AC-6.9 | 可删除单条历史；可清空全部历史（需二次确认） | UT-store-3, E2E-14 |
 | AC-6.10 | 历史记录数超过上限（默认 50000）时按时间淘汰最旧的**非置顶**记录；置顶记录永不淘汰 | UT-store-4 |
+| AC-6.11 | 写态 sheet 的 chips：空输入 = 快捷命令 + 同目录历史；有输入 = 光标 token 的真实路径补全（`GET /api/fs`：目录在前、隐藏项按需、目录不存在即空列表、与 shell 同权限）+ 前缀历史；点路径 chip 只替换光标所在 token | UT-fs-1, IT-fs-1, UT-complete-1, E2E-19 |
 
 ---
 

@@ -12,11 +12,14 @@ import { ReadView, TAIL_NOISE_BYTES } from '../commands/readview'
 import { HistoryPanel, QuickBar } from '../commands/history'
 import { CommandPalette } from '../commands/palette'
 import { Connection, type ConnState, type StateInfo } from '../conn/connection'
+import { useChips } from '../input/chips'
+import { type Chip, tokenAt } from '../input/complete'
 import { Composer, type ComposerHandle } from '../input/composer'
 import { KeyBar } from '../input/keybar'
-import { appAction, programOf } from '../input/keymap'
+import { EDIT_INSERT, appAction, programOf } from '../input/keymap'
 import type { ModeState } from '../input/modes'
 import { RawIme, cursorPosition } from '../input/raw'
+import { SLOT_HEIGHT, WriteSheet, type SheetSize } from '../input/sheet'
 import { T } from '../protocol/messages'
 import { SessionStore, type SessionView } from '../sessions/store'
 import { ExitedBar, SessionList } from './sessionlist'
@@ -112,6 +115,30 @@ export function App() {
   const [altScreen, setAltScreen] = useState(false)
   const [rawLine, setRawLine] = useState('')
   const [quick, setQuick] = useState<CommandRecord[]>([])
+  // 写态 sheet（ADR-0011 ③）：读视图里输入框升起的那块。三档：收起 / 半屏 / 全屏。
+  const [sheet, setSheet] = useState<SheetSize>('closed')
+  const sheetRef = useRef<SheetSize>('closed')
+  sheetRef.current = sheet
+  // 上次打开时的档位 —— 下次碰输入框还回到那一档
+  const lastOpenRef = useRef<Exclude<SheetSize, 'closed'>>('half')
+  // .bottom 实际多高：超出收起态的部分是盖在块流上的，块流据此让位
+  const [bottomH, setBottomH] = useState(SLOT_HEIGHT)
+  const [draft, setDraft] = useState({ value: '', cursor: 0 })
+  const [moreOpen, setMoreOpen] = useState(false)
+  const changeSheet = useCallback((next: SheetSize) => {
+    setSheet(next)
+    // 收起就收键盘 —— sheet 收了键盘还占着半屏，等于没收
+    if (next === 'closed') composerRef.current?.blur()
+    else lastOpenRef.current = next
+  }, [])
+  const openSheet = useCallback(() => {
+    // 只有读视图有 sheet：终端视图里输入框就是一行，不能盖住终端的最后几行
+    if (viewRef.current === 'read' && sheetRef.current === 'closed') changeSheet(lastOpenRef.current)
+  }, [changeSheet])
+  // 命令一跑起来（raw）sheet 就收：这时候该看的是输出
+  useEffect(() => {
+    if (mode.mode === 'raw') setSheet('closed')
+  }, [mode.mode])
 
   const reloadQuick = useCallback(() => {
     listCommands({ pinned: true, limit: 50 })
@@ -423,6 +450,7 @@ export function App() {
       unread: (sid: number) => store.isUnread(sid),
       view: () => viewRef.current,
       altScreen: () => (store.active === null ? false : store.altScreenOf(store.active)),
+      sheet: () => sheetRef.current,
       // 测试/诊断：读视图块流的内部状态
       blocks: () => {
         const sid = store.active
@@ -475,6 +503,97 @@ export function App() {
     activeSid === null ? undefined : blocksRef.current?.blocks(activeSid).find((b) => b.endSeq === null)
   const program = runningBlock ? programOf(runningBlock.text) : null
 
+  const runText = (text: string) => {
+    if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
+  }
+  // 桌面（≥1024px）保留经典底栏：模式条 + 输入框 + 快捷条 + 键条，两种视图一样。
+  // 手机 / 平板两种视图共用同一个 56px 的槽（ADR-0011 ③）：读视图里它是写态 sheet 的
+  // 收起态，终端视图里停在 prompt 是一行输入、命令在跑是键条 —— 【槽高不变，切视图
+  // 画布几何不变，PTY 不 resize】。
+  const classic = bp === 'desktop'
+  // 写态 chips：sheet 开着才拉数据（ADR-0011 ③）
+  const chips = useChips({
+    open: !classic && view === 'read' && sheet !== 'closed' && mode.mode === 'composer',
+    cwd: active?.cwd ?? '',
+    pinned: quick,
+    value: draft.value,
+    cursor: draft.cursor,
+    tick: blocksTick,
+  })
+  const applyChip = (c: Chip) => {
+    const h = composerRef.current
+    if (!h) return
+    if (c.kind === 'path') {
+      // 只替换光标所在的 token —— 用点击那一刻的内容算，不用渲染时的快照
+      const t = tokenAt(h.value(), h.cursor())
+      h.replace(t.start, t.end, c.text)
+    } else {
+      h.fill(c.text)
+    }
+  }
+  const editKey = (key: string) => {
+    const h = composerRef.current
+    if (!h) return
+    switch (key) {
+      case 'Tab': {
+        // 有路径 chip 就补第一个 —— 这就是触屏上的 Tab 补全
+        const first = chips.find((c) => c.kind === 'path')
+        if (first) applyChip(first)
+        else h.insert('  ')
+        break
+      }
+      case 'ArrowUp':
+        h.history('older')
+        break
+      case 'ArrowDown':
+        h.history('newer')
+        break
+      case 'ArrowLeft':
+        h.move('left')
+        break
+      case 'ArrowRight':
+        h.move('right')
+        break
+      case 'Home':
+        h.move('home')
+        break
+      case 'End':
+        h.move('end')
+        break
+      case 'DeleteWord':
+        h.deleteWord()
+        break
+      default: {
+        const lit = EDIT_INSERT[key]
+        if (lit !== undefined) h.insert(lit)
+      }
+    }
+  }
+  const sheetInset = !classic && view === 'read' ? Math.max(0, bottomH - SLOT_HEIGHT) : 0
+  // 读视图里 xterm 不可见，Raw 模式的输入要有地方落：一条直发输入行，
+  // Enter 把整行 + \r 送进 PTY。按行发 —— 组字期间自然不会有半个字节出去。
+  const rawLineEl = (
+      <div class="rawline" data-testid="rawline">
+        <span class="rawlabel">直发</span>
+    <input
+      data-testid="raw-input"
+      value={rawLine}
+      placeholder="命令在跑 · 敲什么立刻送进去"
+      autocapitalize="off"
+      autocorrect="off"
+      spellcheck={false}
+      autocomplete="off"
+      onInput={(e) => setRawLine(e.currentTarget.value)}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' || e.isComposing) return
+        e.preventDefault()
+        sendRawRef.current(rawLine + '\r')
+        setRawLine('')
+      }}
+    />
+      </div>
+  )
+
   return (
     <div class="app" data-bp={bp} data-short={short} data-sidebar={sidebarOpen ? 'open' : 'closed'}>
       {bp !== 'desktop' && sidebarOpen && (
@@ -497,7 +616,7 @@ export function App() {
         />
       </aside>
 
-      <div class="main">
+      <div class="main" style={{ '--sheet-inset': `${sheetInset}px` }}>
         <StatusBar
           state={connState}
           info={info}
@@ -565,6 +684,7 @@ export function App() {
                 (blocksRef.current?.tailBytes(activeSid)?.bytes.length ?? 0) > TAIL_NOISE_BYTES
               }
               cols={active?.cols ?? 80}
+              inset={sheetInset}
               onFill={(text) => composerRef.current?.fill(text)}
               onRun={(text) => {
                 if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
@@ -578,6 +698,7 @@ export function App() {
           <div class="term" ref={termAreaRef} data-testid="terminal" data-hidden={view === 'read'} />
         </div>
 
+        {classic && (
         <div class="modebar" data-testid="modebar" data-mode={mode.mode} data-locked={mode.locked}>
           <span>{mode.mode === 'composer' ? 'Composer' : 'Raw（按键直通）'}</span>
           <button
@@ -617,6 +738,7 @@ export function App() {
             设置
           </button>
         </div>
+        )}
 
         {settingsOpen && (
           <div class="banner" data-testid="settings">
@@ -656,35 +778,165 @@ export function App() {
           </div>
         )}
 
-        {view === 'read' && mode.mode === 'raw' && active?.status !== 'exited' && (
-          // 读视图里 xterm 不可见，Raw 模式的输入要有地方落：一条直发输入行，
-          // Enter 把整行 + \r 送进 PTY。按行发 —— 组字期间自然不会有半个字节出去。
-          <div class="rawline" data-testid="rawline">
-            <span class="rawlabel">直发</span>
-            <input
-              data-testid="raw-input"
-              value={rawLine}
-              placeholder="命令在跑 · 敲什么立刻送进去"
-              autocapitalize="off"
-              autocorrect="off"
-              spellcheck={false}
-              autocomplete="off"
-              onInput={(e) => setRawLine(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key !== 'Enter' || e.isComposing) return
-                e.preventDefault()
-                sendRawRef.current(rawLine + '\r')
-                setRawLine('')
+        {!classic && active?.status !== 'exited' && (
+          // 写态 sheet（ADR-0011 ③）：收起是一行，碰输入框升起半屏 / 全屏。
+          // 命令在跑（raw）时读视图里是直发输入行 + 功能键条；终端视图里只有键条。
+          <WriteSheet
+            size={view === 'read' && mode.mode === 'composer' ? sheet : 'closed'}
+            barHidden={view === 'term' && mode.mode === 'raw' && coarse}
+            onSize={changeSheet}
+            onHeight={setBottomH}
+            chips={chips}
+            onChip={applyChip}
+            editKeys={coarse}
+            onEditKey={editKey}
+            onSend={() => composerRef.current?.submit()}
+            bar={
+              <>
+                <button
+                  class="bar-btn view-toggle"
+                  data-testid="view-toggle"
+                  data-view={view}
+                  onClick={() => changeView(view === 'read' ? 'term' : 'read')}
+                >
+                  {view === 'read' ? '终端' : '读'}
+                </button>
+                <button
+                  class="bar-btn bar-more"
+                  data-testid="open-more"
+                  aria-label="更多"
+                  aria-expanded={moreOpen}
+                  onClick={() => setMoreOpen((v) => !v)}
+                >
+                  ⋯
+                </button>
+              </>
+            }
+            below={
+              mode.mode === 'raw' && coarse ? (
+                <KeyBar
+                  mode="raw"
+                  context={{ altScreen, program }}
+                  onRaw={(bytes) => sendRawRef.current(bytes)}
+                  onComposerKey={() => {}}
+                  leading={
+                    // 终端视图里键条独占那 56px：回「读」与 ⋯ 做成键条的前导键
+                    view === 'term' ? (
+                      <>
+                        <button class="keybar-key keybar-lead" data-testid="view-toggle" data-view={view} onClick={() => changeView('read')}>
+                          读
+                        </button>
+                        <button class="keybar-key keybar-lead" data-testid="open-more" aria-label="更多" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
+                          ⋯
+                        </button>
+                      </>
+                    ) : undefined
+                  }
+                />
+              ) : null
+            }
+          >
+            {view === 'read' && mode.mode === 'raw' && rawLineEl}
+            {view === 'term' && mode.mode === 'raw' && <span class="bar-hint">按键直通终端</span>}
+            <Composer
+              hidden={mode.mode === 'raw'}
+              placeholder="输入命令…"
+              onSubmit={(text) => {
+                runText(text)
+                // 发出去就收起：这时候该看的是输出
+                changeSheet('closed')
               }}
+              onRaw={(bytes) => sendRawRef.current(bytes)}
+              onHandle={(h) => {
+                composerRef.current = h
+              }}
+              onChange={(value, cursor) => setDraft({ value, cursor })}
+              onFocus={openSheet}
+              onEscapeEmpty={() => changeSheet('closed')}
             />
-          </div>
+          </WriteSheet>
         )}
-        {active?.status !== 'exited' && (
+        {!classic && moreOpen && (
+          // 读视图里模式条那些次要入口收进 ⋯ 菜单 —— 底栏只留输入、「终端」、⋯ 三样
+          <>
+            <div class="more-backdrop" data-testid="more-backdrop" onClick={() => setMoreOpen(false)} />
+            <div class="more-menu" data-testid="more-menu" role="menu">
+              <button
+                role="menuitem"
+                data-testid="open-history"
+                onClick={() => {
+                  setMoreOpen(false)
+                  setHistoryOpen(true)
+                }}
+              >
+                历史
+              </button>
+              {view === 'term' && (
+                <button
+                  role="menuitem"
+                  data-testid="open-blocks"
+                  onClick={() => {
+                    setMoreOpen(false)
+                    setBlocksOpen(true)
+                  }}
+                >
+                  块
+                </button>
+              )}
+              <button
+                role="menuitem"
+                data-testid="open-palette"
+                onClick={() => {
+                  setMoreOpen(false)
+                  setPaletteOpen(true)
+                }}
+              >
+                命令面板
+              </button>
+              <button
+                role="menuitem"
+                data-testid="mode-toggle"
+                onClick={() => {
+                  setMoreOpen(false)
+                  if (activeSid !== null) storeRef.current?.modesOf(activeSid)?.toggleManual()
+                }}
+              >
+                输入模式
+                <span class="more-sub">
+                  {mode.mode === 'composer' ? 'Composer' : 'Raw'}
+                  {mode.locked ? ' · 已锁定' : ''} · 切换
+                </span>
+              </button>
+              {mode.locked && (
+                <button
+                  role="menuitem"
+                  data-testid="mode-unlock"
+                  onClick={() => {
+                    setMoreOpen(false)
+                    if (activeSid !== null) storeRef.current?.modesOf(activeSid)?.unlock()
+                  }}
+                >
+                  解锁自动切换
+                </button>
+              )}
+              <button
+                role="menuitem"
+                data-testid="open-settings"
+                onClick={() => {
+                  setMoreOpen(false)
+                  setSettingsOpen((v) => !v)
+                }}
+              >
+                设置
+              </button>
+            </div>
+          </>
+        )}
+        {classic && view === 'read' && mode.mode === 'raw' && active?.status !== 'exited' && rawLineEl}
+        {classic && active?.status !== 'exited' && (
           <Composer
             hidden={mode.mode === 'raw'}
-            onSubmit={(text) => {
-              if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
-            }}
+            onSubmit={runText}
             onRaw={(bytes) => sendRawRef.current(bytes)}
             onHandle={(h) => {
               composerRef.current = h
@@ -692,17 +944,11 @@ export function App() {
           />
         )}
         {/* 快捷命令条：Composer 上方，横滑；为空时整条不渲染。
-            short 布局（手机横屏）下挤不下，从面板访问 */}
-        {!short && active?.status !== 'exited' && (
-          <QuickBar
-            items={quick}
-            onFill={(text) => composerRef.current?.fill(text)}
-            onRun={(text) => {
-              if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
-            }}
-          />
+            short 布局（手机横屏）下挤不下，从面板访问。读视图里它以 chips 的形式在 sheet 里 */}
+        {classic && !short && active?.status !== 'exited' && (
+          <QuickBar items={quick} onFill={(text) => composerRef.current?.fill(text)} onRun={runText} />
         )}
-        {coarse && (
+        {classic && coarse && (
           <KeyBar
             mode={mode.mode}
             context={{ altScreen, program }}
@@ -738,9 +984,7 @@ export function App() {
           ]}
           onClose={() => setPaletteOpen(false)}
           onFill={(text) => composerRef.current?.fill(text)}
-          onRun={(text) => {
-            if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
-          }}
+          onRun={runText}
           onSelectSession={(sid) => selectRef.current(sid)}
         />
       )}

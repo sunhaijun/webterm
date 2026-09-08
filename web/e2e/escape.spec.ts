@@ -25,7 +25,7 @@ test('卡在全屏程序里能靠 ^C 退出来', async ({ page }) => {
   // 一个不吃 q、只能靠信号打断的前台程序 —— 比 top 更能说明问题
   await submit(page, 'while :; do sleep 1; done')
   await waitFor(
-    async () => (await page.getByTestId('modebar').getAttribute('data-mode')) === 'raw',
+    async () => (await page.evaluate(() => (window as unknown as { __webterm: { mode(): { mode: string } } }).__webterm.mode().mode)) === 'raw',
     '自动切到 Raw（有命令在跑）',
   )
 
@@ -33,7 +33,7 @@ test('卡在全屏程序里能靠 ^C 退出来', async ({ page }) => {
   await page.getByTestId('key-CtrlC').click()
 
   await waitFor(
-    async () => (await page.getByTestId('modebar').getAttribute('data-mode')) === 'composer',
+    async () => (await page.evaluate(() => (window as unknown as { __webterm: { mode(): { mode: string } } }).__webterm.mode().mode)) === 'composer',
     '打断之后回到 Composer',
     15_000,
   )
@@ -46,6 +46,10 @@ test('^C 在免滚动的前 8 个里', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  // 读视图里功能键条只在命令跑着的时候出现（停在 prompt 时是写态的编辑键）——
+  // ^C 要用的正是这个时刻
+  await submit(page, 'sleep 30')
+  await expect(page.getByTestId('keybar')).toBeVisible({ timeout: 10_000 })
 
   const geo = await page.evaluate(() => {
     const bar = document.querySelector('.keybar')!
@@ -65,9 +69,14 @@ test('^D / ^Z / ^L 也能一按直发', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-
+  // 清屏是终端视图里的事。终端视图停在 prompt 时是一行输入框；手动切到 Raw
+  // 键条才独占底栏 —— 这正是"看 top 时按 ^C"那种使用方式
+  await page.getByTestId('view-toggle').click()
   await submit(page, 'printf "BEFORE-CLEAR\\n"')
   await waitFor(async () => (await terminalText(page)).includes('BEFORE-CLEAR'), '先有点内容')
+  await page.getByTestId('open-more').click()
+  await page.getByTestId('mode-toggle').click()
+  await expect(page.getByTestId('keybar')).toBeVisible()
 
   await page.getByTestId('key-CtrlL').click() // 清屏
   await waitFor(async () => {

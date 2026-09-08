@@ -80,7 +80,9 @@ test('E2E-14 历史面板：记录、退出码、空格前缀、置顶、label�
   await waitFor(async () => (await rows.count()) === countBefore, '撤销之后记录回来了')
 })
 
-test('E2E-14 快捷命令条：点击填入，长按执行', async ({ browser }) => {
+test('E2E-14 快捷命令：手机读视图里是写态 sheet 顶上的 ★ chip，点击填入', async ({ browser }) => {
+  // 手机默认读视图（ADR-0011）：没有快捷命令条，pinned 作为 chips 出现在 sheet 里；
+  // 历史面板从底栏的 ⋯ 菜单进。桌面上的快捷命令条走经典布局，另有测试。
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
   const page = await ctx.newPage()
   await agent.pair(page)
@@ -91,20 +93,25 @@ test('E2E-14 快捷命令条：点击填入，长按执行', async ({ browser })
   await waitFor(async () => (await terminalText(page)).includes('quick-CMD'), '命令执行了')
   await page.waitForTimeout(400)
 
-  // 为空时整条隐藏，不占空间
+  // 还没置顶：sheet 里没有 ★ chip（同目录历史 chip 可以有）
   await expect(page.getByTestId('quickbar')).toHaveCount(0)
+  await page.getByTestId('composer').click()
+  await expect(page.getByTestId('chips')).toBeVisible()
+  await expect(page.getByTestId('chips').locator('[data-kind="pin"]')).toHaveCount(0)
+  await page.getByTestId('sheet-close').click()
 
+  await page.getByTestId('open-more').click()
   await page.getByTestId('open-history').click()
   await page.locator('[data-testid$="-star"]').first().click()
   await page.getByTestId('close-history').click()
 
-  // 置顶之后按钮条出现
-  await expect(page.getByTestId('quickbar')).toBeVisible()
-  const key = page.locator('.quick-key').first()
-
-  // 点击 = 填入
-  await key.click()
+  // 置顶之后 ★ chip 出现；点击 = 填入
+  await page.getByTestId('composer').click()
+  const pin = page.getByTestId('chips').locator('[data-kind="pin"]').first()
+  await expect(pin).toBeVisible()
+  await pin.click()
   await waitFor(async () => (await composerValue(page)).includes('quick-'), '点击填入 Composer')
+  await expect(page.getByTestId('composer'), '点 chip 不抢焦点').toBeFocused()
 
   await ctx.close()
 })

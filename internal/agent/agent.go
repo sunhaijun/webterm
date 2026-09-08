@@ -109,6 +109,9 @@ func (a *Agent) routes() {
 	a.mux.Handle("DELETE /api/commands/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteCommand)))
 	a.mux.Handle("DELETE /api/commands", a.requireAuth(http.HandlerFunc(a.handleClearCommands)))
 
+	// 写态路径补全（ADR-0011 ③）：与 shell 同权限，见 fs.go
+	a.mux.Handle("GET /api/fs", a.requireAuth(http.HandlerFunc(a.handleFS)))
+
 	a.mux.Handle("GET /api/settings", a.requireAuth(http.HandlerFunc(a.handleGetSettings)))
 	a.mux.Handle("PATCH /api/settings", a.requireAuth(http.HandlerFunc(a.handlePatchSettings)))
 }

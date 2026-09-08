@@ -3,6 +3,7 @@
  *
  * 软键盘上没有 Esc / Tab / Ctrl / 方向键，这一排补上它们（AC-3.9）。
  */
+import type { ComponentChildren } from 'preact'
 import { useState } from 'preact/hooks'
 
 import { CTRL_KEYS, KEY_BYTES, chord, keyBarFor } from './keymap'
@@ -19,9 +20,11 @@ export interface KeyBarProps {
   onComposerKey(key: string, mods: { ctrl: boolean; alt: boolean }): void
   /** 谁在占屏：备用缓冲是否激活 + 前台程序名。决定键条内容（ADR-0011 ②）。 */
   context?: { altScreen: boolean; program: string | null }
+  /** 排在最前面的前导键（终端视图里回「读」与 ⋯）。 */
+  leading?: ComponentChildren
 }
 
-export function KeyBar({ mode, onRaw, onComposerKey, context }: KeyBarProps) {
+export function KeyBar({ mode, onRaw, onComposerKey, context, leading }: KeyBarProps) {
   const ctx = context ?? { altScreen: false, program: null }
   const keys = keyBarFor(ctx)
   const [ctrl, setCtrl] = useState<Sticky>('off')
@@ -62,6 +65,7 @@ export function KeyBar({ mode, onRaw, onComposerKey, context }: KeyBarProps) {
 
   return (
     <div class="keybar" data-testid="keybar" role="toolbar" aria-label="功能键" data-context={ctx.altScreen ? (ctx.program ?? 'tui') : 'shell'}>
+      {leading}
       {ctx.altScreen && (
         <span class="keybar-ctx" data-testid="keybar-context" title="正在占屏的程序，键条按它换了内容">
           {ctx.program ?? 'TUI'}
