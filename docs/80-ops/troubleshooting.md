@@ -32,6 +32,35 @@ ss -lntp | grep -E ':(80|443)\b'   # 必须为空（除了 webterm 自己）
 
 > **教训**：第一次部署**永远先用 `--acme-staging`**。正式环境的限流窗口是一周，撞上了只能等。
 
+### 日志里一堆 `TLS handshake error`
+
+**默认不会再出现了**（会记到 DEBUG）。webterm 的端口对整个互联网开放，
+扫描器会持续制造这类行 —— 拿 IP 直连没有 SNI、发纯 HTTP、连上不说话到超时，
+每一种都是一行。要看就加 `--log-level debug`。
+
+判断是不是自己的问题：看 IP。反复用不同方式探同一个端口的、云厂商网段的
+（GCP / DigitalOcean 之类），都是扫描器。
+
+其中 `remote error: tls: unknown certificate` 里的 `remote error` 表示
+**警告是对端发来的**，也就是客户端拒绝了我们的证书。来自扫描器可以无视；
+如果是你自己的设备，在别的机器上跑这条看服务的到底是什么证书：
+
+```bash
+echo | openssl s_client -connect <域名>:<端口> -servername <域名> 2>/dev/null \
+  | openssl x509 -noout -issuer -subject -dates
+```
+
+`issuer` 里带 `STAGING` 说明还在用 `--acme-staging` 签出来的证书（没有客户端
+信任它）。**去掉 `--acme-staging` 重启不会自动换掉它** —— autocert 判断缓存
+证书是否可用时只看有效期、域名、私钥匹配，**不看签发者**，而 staging 与正式
+用的是同一个缓存 key。必须手工删掉：
+
+```bash
+systemctl --user stop webterm
+rm -f <data-dir>/certs/<域名>*
+systemctl --user start webterm
+```
+
 ### 证书没自动续期
 
 autocert 在到期前 `min(30 天, 有效期/3)` 自动续期（LE 的 90 天证书就是提前 30 天），

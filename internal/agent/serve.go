@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -51,7 +53,8 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 	switch {
 	case cfg.Dev:
 		addr := fmt.Sprintf("127.0.0.1:%d", cfg.HTTPPort)
-		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second,
+			ErrorLog: a.httpErrorLog()}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			return nil, nil, describeBindError(err, cfg.HTTPPort)
@@ -67,7 +70,8 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 					"把 webterm 明文暴露到公网等于把 shell 送人", cfg.Bind)
 		}
 		addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.HTTPPort)
-		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second,
+			ErrorLog: a.httpErrorLog()}
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			return nil, nil, describeBindError(err, cfg.HTTPPort)
@@ -105,6 +109,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 				NextProtos:     []string{"h2", "http/1.1", acme.ALPNProto},
 			},
 			ReadHeaderTimeout: 10 * time.Second,
+			ErrorLog:          a.httpErrorLog(),
 		}
 		httpsLn, err := net.Listen("tcp", httpsAddr)
 		if err != nil {
@@ -117,6 +122,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 			Addr:              httpAddr,
 			Handler:           m.HTTPHandler(redirectToHTTPS(cfg.Domain, cfg.HTTPSPort)),
 			ReadHeaderTimeout: 10 * time.Second,
+			ErrorLog:          a.httpErrorLog(),
 		}
 		httpLn, err := net.Listen("tcp", httpAddr)
 		if err != nil {
@@ -188,7 +194,7 @@ func (a *Agent) warmCertificate(m *autocert.Manager, domain string, staging bool
 	if staging {
 		env = "Let's Encrypt staging"
 	}
-	cert, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: domain})
+	cert, err := m.GetCertificate(warmupHello(domain))
 	if err != nil {
 		a.log.Error("证书申请失败 —— HTTPS 还不可用", "domain", domain, "env", env)
 		fmt.Fprint(a.certReport(true), describeACMEError(err, domain, staging))
@@ -210,6 +216,60 @@ func (a *Agent) warmCertificate(m *autocert.Manager, domain string, staging bool
 	// 续期要重新过域名验证，80（HTTP-01）或 443（TLS-ALPN-01）通一个就够。
 	fmt.Fprintf(a.certReport(false), "证书已就绪（%s，到期 %s，自动续期）\n",
 		env, leaf.NotAfter.Local().Format("2006-01-02"))
+}
+
+// httpErrorLog 把 net/http 的内部错误接进 slog，并【把握手噪音降到 DEBUG】。
+//
+// webterm 的端口对整个互联网开放（威胁模型 T-net），扫描器会持续制造
+// "http: TLS handshake error from ..." —— 拿 IP 直连没有 SNI、发纯 HTTP、
+// 连上不说话到超时，每一种都是一行。而 slog.SetDefault 会把 net/http 默认用的
+// log.Logger 输出按 INFO 打出来，于是这些噪音会把真正要看的行冲掉：
+// 证书预热的结果、绑定失败、会话错误。
+//
+// 降到 DEBUG 而不是丢掉：排查"我自己连不上"的时候还得看它，
+// 加 --log-level debug 就有。
+func (a *Agent) httpErrorLog() *log.Logger {
+	return log.New(httpLogWriter{log: a.log}, "", 0)
+}
+
+type httpLogWriter struct{ log *slog.Logger }
+
+func (w httpLogWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimRight(string(p), "\n")
+	if strings.HasPrefix(msg, "http: TLS handshake error") {
+		w.log.Debug(msg)
+	} else {
+		// 其它的（比如 panic 恢复、超时）是真的要看的
+		w.log.Info(msg)
+	}
+	return len(p), nil
+}
+
+// warmupHello 造一个"像真实浏览器"的 ClientHelloInfo 给预热用。
+//
+// 【不能传空的 ClientHelloInfo】。autocert 的缓存 key 里含
+// isRSA = !supportsECDSA(hello)，而 supportsECDSA 对空 hello 返回 false ——
+// 于是预热会签一张 RSA 证书存到 "<域名>+rsa"。真实浏览器都声明 ECDSA，
+// 它们的 key 是 "<域名>"，必然 miss，autocert 就在【TLS 握手里】现场再签
+// 一张。后果有三个，都很难查：
+//
+//  1. 每次重启都多签一张，很快撞满 Let's Encrypt 的"重复证书"限额
+//     （每周 5 张），之后 HTTPS 直接不可用
+//  2. 握手要等整个 ACME 流程走完，ACME 一抖就变成握手失败
+//     （日志里是 "missing certificate" 和 ACME 的 4xx）
+//  3. "证书已就绪"报的是一张真实客户端根本不用的证书 —— 假的成功
+//
+// 只预热 ECDSA 这一个槽：那是现代客户端唯一会用的。两个都预热等于
+// 主动多签一张，白烧限额。
+//
+// 回归测试：TestWarmupHitsTheCacheSlotRealClientsUse。
+func warmupHello(domain string) *tls.ClientHelloInfo {
+	return &tls.ClientHelloInfo{
+		ServerName:       domain,
+		CipherSuites:     []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
+		SupportedCurves:  []tls.CurveID{tls.CurveP256},
+		SignatureSchemes: []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256},
+	}
 }
 
 // describeACMEError 把 ACME 的失败翻译成"原因 + 怎么修"，

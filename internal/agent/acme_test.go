@@ -156,8 +156,9 @@ func TestACMEIssuesRealCertificate(t *testing.T) {
 		t.Errorf("预热报告缺续期说明: %q", report)
 	}
 
-	// 假 CA 侧确认签发的域名就是 --domain
-	if issued := f.ca.Issued(); len(issued) != 1 || issued[0] != testDomain {
+	// 假 CA 侧确认签发的域名就是 --domain。
+	// 【数量的断言故意留到握手之后】—— 见文件末尾那条回归测试。
+	if issued := f.ca.Issued(); len(issued) == 0 || issued[0] != testDomain {
 		t.Errorf("签发的域名 = %v, 想要 [%s]", issued, testDomain)
 	}
 
@@ -290,5 +291,40 @@ func TestACMEFailureIsDiagnosable(t *testing.T) {
 		if strings.Contains(e.Name(), testDomain) {
 			t.Errorf("签发失败却落了证书文件 %s", e.Name())
 		}
+	}
+}
+
+// 预热必须命中【真实客户端会用的那个缓存槽】。
+//
+// autocert 的缓存 key 含 isRSA = !supportsECDSA(hello)，而 supportsECDSA
+// 对一个空的 ClientHelloInfo 返回 false。所以预热时传空 hello 会签一张 RSA
+// 证书存到 "<域名>+rsa"；真实浏览器声明 ECDSA，key 是 "<域名>"，必然 miss
+// → 在 TLS 握手里现场再签一张。后果：
+//
+//   - 每次重启都多签一张，很快撞满 LE 的"重复证书"限额（每周 5 张）
+//   - 握手要等 ACME 走完，ACME 一抖就是握手失败
+//   - "证书已就绪"报的是一张真实客户端根本不用的证书 —— 假的成功
+//
+// 所以这里断言【握手之后】签发总数仍然是 1。
+func TestWarmupHitsTheCacheSlotRealClientsUse(t *testing.T) {
+	f := newACMEFixture(t, fixtureOpts{})
+	f.waitReport(t, "证书已就绪")
+
+	if n := len(f.ca.Issued()); n != 1 {
+		t.Fatalf("预热后签发了 %d 张，应当是 1", n)
+	}
+
+	// 真实客户端（Go 的 TLS 客户端声明 ECDSA，和浏览器一样）
+	conn, err := tls.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", f.httpsPort),
+		f.ca.TLSClientConfig(testDomain))
+	if err != nil {
+		t.Fatalf("TLS 握手失败: %v", err)
+	}
+	defer conn.Close()
+
+	// ★ 回归点：握手不该触发第二次签发
+	if issued := f.ca.Issued(); len(issued) != 1 {
+		t.Errorf("握手之后签发了 %d 张（%v）—— 预热存错了缓存槽，"+
+			"真实客户端在握手里又签了一张", len(issued), issued)
 	}
 }
