@@ -76,12 +76,13 @@ func newACMEFixture(t *testing.T, o fixtureOpts) *acmeFixture {
 		CertReport: report,
 	}, st, sessions)
 
+	ports := freePorts(t, 2)
 	f := &acmeFixture{
 		ca:        ca,
 		report:    report,
 		certDir:   filepath.Join(dir, "certs"),
-		httpPort:  freePort(t),
-		httpsPort: freePort(t),
+		httpPort:  ports[0],
+		httpsPort: ports[1],
 	}
 
 	cfg := agent.ServeConfig{
@@ -130,14 +131,36 @@ func (f *acmeFixture) waitReport(t *testing.T, want string) string {
 	return ""
 }
 
+// freePorts 一次分配 n 个【互不相同】的空闲端口。
+//
+// 以前是 freePort() 调两次：每次 Listen(:0) 拿到端口就 Close。内核会把刚释放
+// 的临时端口再发一次，于是 http 和 https 偶尔拿到同一个端口，serve 直接拒绝
+// （"--http-port 和 --https-port 不能相同"），测试随机红。把所有 listener
+// 拿在手里直到全部分配完，再一起关，就不会撞。
+// freePort 取一个空闲端口。只要一个时没有撞车问题；要两个以上用 freePorts。
 func freePort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	return freePorts(t, 1)[0]
+}
+
+func freePorts(t *testing.T, n int) []int {
+	t.Helper()
+	lns := make([]net.Listener, 0, n)
+	defer func() {
+		for _, ln := range lns {
+			ln.Close()
+		}
+	}()
+	ports := make([]int, 0, n)
+	for len(ports) < n {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		lns = append(lns, ln)
+		ports = append(ports, ln.Addr().(*net.TCPAddr).Port)
 	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
+	return ports
 }
 
 // IT-tls-1：走完整 ACME 流程真的拿到证书，落盘、能握手、报出到期时间。
