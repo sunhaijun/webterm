@@ -435,6 +435,14 @@ export function App() {
             shell 集成未生效 · 命令历史、CWD 与自动切换不可用
           </div>
         )}
+        {active?.unmarked_input && active.integration !== 'inactive' && (
+          // 输入去了一个没有集成的地方：ssh / su / 容器 / exec bash / 摘了钩子 ——
+          // 这些在字节流里【完全同形】，所以措辞不能承诺"退出后恢复"（exec bash
+          // 没有可退出的东西），只说事实和恢复的条件。
+          <div class="banner warn" data-testid="unmarked">
+            当前 shell 里没有 webterm 集成（ssh / su / 容器 / exec bash 都会这样）· 命令块暂停切分，回到有集成的 shell 后自动恢复
+          </div>
+        )}
         {truncated && (
           <div class="banner warn" data-testid="truncated">
             ── 历史输出已截断 ──

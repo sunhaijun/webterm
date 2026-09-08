@@ -293,15 +293,8 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 	go s.waitLoop()
 
 	if m.cfg.RCFileFor != nil {
-		// 集成握手超时（AC-7.6）
-		time.AfterFunc(integrationHelloTimeout, func() {
-			s.mu.Lock()
-			pending := s.integration == protocol.IntegrationPending
-			s.mu.Unlock()
-			if pending {
-				s.setIntegration(protocol.IntegrationInactive)
-			}
-		})
+		// 集成握手超时（AC-7.6）：只有连 hello 都没收到才判 inactive
+		time.AfterFunc(integrationHelloTimeout, s.onHelloTimeout)
 	}
 	return s, nil
 }

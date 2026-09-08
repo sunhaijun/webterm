@@ -13,6 +13,10 @@ import (
 	"strings"
 )
 
+// Version 是集成脚本的协议版本，随 1701;hello 一起发。
+// 必须与 bash.sh 里的 __webterm_version 一致（有测试钉住）。
+const Version = "1"
+
 // Script 返回集成脚本本体（不含 profile 链）。
 //
 // 它同时是两条路径的内容：rcfile 的后半段，以及
@@ -67,6 +71,15 @@ func RCFile(login bool) string {
 	var b strings.Builder
 	b.WriteString("# webterm 自动生成的临时 rcfile —— 会话结束即删除。\n")
 	b.WriteString("# 见 docs/20-architecture/adr/0010-bash-rcfile-injection.md\n\n")
+
+	// 【握手放在用户配置之前】。hello 的意思是"rcfile 开始加载了"，必须在
+	// dotfile 之前发 —— 否则一个慢的 .bash_profile（里面等网络之类）会让
+	// agent 等过 10 秒握手期，把好好的集成判成不可用。
+	// 钩子是否真的装好，由之后的第一个 133 标记证明（两级判定，协议 §4.6）。
+	// 脚本末尾还会再发一次 hello（供 shell-init 手动接入那条路用），
+	// agent 侧对 hello 是幂等的。
+	b.WriteString("# 握手：告诉 agent 脚本开始加载了（在用户配置之前，见协议 §4.6）\n")
+	b.WriteString("printf '\\033]1701;hello;" + Version + "\\a'\n\n")
 
 	if login {
 		b.WriteString(`# 登录模式：走 profile 链，取第一个存在的。
