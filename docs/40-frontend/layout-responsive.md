@@ -143,7 +143,12 @@ xterm 的主题（前景/背景/16 色）从同一组 CSS 变量读取并在切�
 
 ## 字体
 
+**界面 chrome 用比例字体，命令 / 输出用等宽**（精致终端区分 chrome 与内容的做法）。`body` 默认 `--font-ui`；命令原文（`.block-cmd` / 历史 / 快捷命令）、命令输出（`.block-out`）、Composer 与直发输入行、CWD、chips 显式回到 `--font-mono`。xterm 自己用等宽（`term/terminal.ts`）。
+
 ```css
+--font-ui:
+  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+  Arial, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
 --font-mono:
   ui-monospace, "SF Mono", "Cascadia Mono", "Menlo", "Consolas",
   "Liberation Mono", "Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace;

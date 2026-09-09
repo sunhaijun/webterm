@@ -394,15 +394,40 @@ export function App() {
 
     // 软键盘：高度的唯一真相来源是 visualViewport（iOS 上 100vh 不随键盘变化）。
     // 【不在这个回调里直接 fit()】—— 布局还没稳定，交给上面的 ResizeObserver。
+    // 【viewport 补偿不能跟着滚动跑】。它本是给软键盘用的（iOS 弹键盘会把页面
+    // 上推、100vh 不变），可 visualViewport 的 resize/scroll 在手机上【拖动时也
+    // 连续触发】（地址栏滑入滑出改 height、边缘回弹改 offsetTop）。原来每个事件
+    // 都同步重写 .app 的 height 和 translateY —— 容器一动、里面滚动的内容跟着移位、
+    // 又触发下一个事件，被甩动惯性驱动成反馈环：拖一下抖一会儿才停。
+    //
+    // 两道闸：① rAF 合帧，一帧最多写一次；② 只有可视高度明显小于窗口（键盘真的
+    // 占了地方）才写 translateY 补偿，普通滚动 / 回弹一律不写 —— 从根上断开那个环。
+    let vpRaf = 0
+    let lastVH = -1
+    let lastVTop = -1
     const applyViewport = () => {
-      const vp = readViewport()
-      const root = area.closest('.app') as HTMLElement | null
-      if (root) {
-        root.style.height = `${vp.height}px`
-        root.style.transform = vp.offsetTop ? `translateY(${vp.offsetTop}px)` : ''
-      }
-      setBp(breakpoint(window.innerWidth))
-      setShort(isShort(vp.height))
+      if (vpRaf) return
+      vpRaf = requestAnimationFrame(() => {
+        vpRaf = 0
+        const vp = readViewport()
+        const root = area.closest('.app') as HTMLElement | null
+        if (root) {
+          const h = Math.round(vp.height)
+          if (h !== lastVH) {
+            root.style.height = `${h}px`
+            lastVH = h
+          }
+          // 键盘弹起 = 可视高度比窗口矮一大截；普通滚动 / 回弹的 offsetTop 不追
+          const keyboardUp = vp.height < window.innerHeight - 80
+          const top = keyboardUp ? Math.round(vp.offsetTop) : 0
+          if (top !== lastVTop) {
+            root.style.transform = top ? `translateY(${top}px)` : ''
+            lastVTop = top
+          }
+        }
+        setBp(breakpoint(window.innerWidth))
+        setShort(isShort(vp.height))
+      })
     }
     applyViewport()
     const unwatchViewport = watchViewport(applyViewport)
@@ -509,6 +534,7 @@ export function App() {
       removeEventListener('online', kick)
       document.removeEventListener('visibilitychange', onVisible)
       unwatchViewport()
+      if (vpRaf) cancelAnimationFrame(vpRaf)
       sendResize.cancel()
       tailBump.cancel()
       ro.disconnect()
