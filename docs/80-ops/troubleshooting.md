@@ -296,3 +296,8 @@ journalctl --user -u webterm -n 200 --no-pager
 外加浏览器控制台的报错、机型/OS/浏览器版本。
 
 日志里不含敏感数据（配对码、Cookie、命令原文、终端输出均已脱敏），可以直接贴。
+
+## 底栏盖住终端 / 拖动到底变空白（读态布局）
+
+- 给元素设 `display`（如 `.bar{display:flex}`）会压过 `hidden` 属性的 UA `display:none` —— 隐藏的直发提示行仍占 56px，把终端最后几行盖住。用全局 `[hidden]{display:none!important}` 兜住。
+- xterm 的内部滚动容器 `.xterm-viewport` 要 `overscroll-behavior: contain`，否则手机上拖到底再拖会把整页橡皮筋拽成空白。

@@ -101,6 +101,61 @@ test('less 占屏：键条换成分页器键，按 q 退出后回读', async ({ 
   )
 })
 
+test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；直发逐字立即送；底栏不盖终端', async ({ page }) => {
+  const sent: string[] = []
+  await page.exposeFunction('__rec', (x: string) => sent.push(x))
+  await page.addInitScript(() => {
+    const send = WebSocket.prototype.send
+    WebSocket.prototype.send = function (d: unknown) {
+      try {
+        const buf = d instanceof ArrayBuffer ? d : (d as { buffer?: ArrayBuffer })?.buffer
+        if (buf) {
+          const u = new Uint8Array(buf)
+          let x = ''
+          for (let i = 0; i < u.length; i++) { const c = u[i]!; x += c >= 32 && c < 127 ? String.fromCharCode(c) : '.' }
+          ;(window as unknown as { __rec(s: string): void }).__rec(x)
+        }
+      } catch {
+        /* ignore */
+      }
+      return send.call(this, d as never)
+    }
+  })
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  // 合成占屏程序：藏光标 + 反复上移重写（不切备用缓冲）
+  await submit(page, "printf '\\033[?25l'; for i in $(seq 1 80); do printf 'F %s\\n' $i; printf '\\033[1A'; sleep 0.15; done")
+  await waitFor(async () => (await interactive(page)) === true, '占屏被识别', 10_000)
+  await waitFor(async () => (await view(page)) === 'term', '自动进终端', 5_000)
+
+  // 终端视图底栏正好一行、不侵入 canvas（曾经隐藏的直发提示行仍占 56px，盖住终端最后几行）
+  const geo = await page.evaluate(() => {
+    const b = document.querySelector('.bottom')!.getBoundingClientRect()
+    const c = document.querySelector('.canvas')!.getBoundingClientRect()
+    return { bottomH: Math.round(b.height), bottomTop: Math.round(b.top), canvasBottom: Math.round(c.bottom) }
+  })
+  expect(geo.bottomH, '底栏≈键条一行').toBeLessThanOrEqual(58)
+  expect(geo.bottomTop, '底栏顶不侵入 canvas').toBeGreaterThanOrEqual(geo.canvasBottom - 1)
+
+  // 手动回读：运行块显示"交互式"门，不是 plainText 拍扁
+  await page.getByTestId('keybar').getByTestId('view-toggle').click()
+  await waitFor(async () => (await view(page)) === 'read', '回读')
+  await expect(page.locator('[data-testid$="-interactive"]')).toBeVisible()
+  expect(await page.locator('.block-live').count(), '不再 plainText 拍扁').toBe(0)
+
+  // 直发逐字：输入数字立即送进 PTY（对得起"敲什么立刻送进去"）
+  sent.length = 0
+  const inp = page.getByTestId('raw-input')
+  await inp.click()
+  await inp.pressSequentially('2', { delay: 60 })
+  await waitFor(async () => sent.some((x) => x.endsWith('2')), '数字 2 立即送出', 3_000)
+
+  // 门可点进终端
+  await page.locator('[data-testid$="-interactive"]').click()
+  await waitFor(async () => (await view(page)) === 'term', '门进终端')
+})
+
 test('用户手动选了终端视图：备用缓冲进出都不改它', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)

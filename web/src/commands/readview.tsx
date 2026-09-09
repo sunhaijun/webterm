@@ -23,12 +23,14 @@ export interface ReadViewProps extends BlockActions {
   tick: number
   /** 底部被写态 sheet 盖住的像素数（ADR-0011 ③）。变了要重新贴底。 */
   inset?: number
+  /** 活动会话是否有程序占屏（运行中的块改提示去终端，不拍扁）。 */
+  interactive?: boolean
 }
 
 /** prompt 重画通常几十个字节；超过这个就不只是 prompt 了。 */
 export const TAIL_NOISE_BYTES = 256
 
-export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, inset = 0, ...actions }: ReadViewProps) {
+export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, inset = 0, interactive = false, ...actions }: ReadViewProps) {
   const el = useRef<HTMLDivElement>(null)
   // 最大化的块 id（铺满整屏细看）；null 无
   const [maximized, setMaximized] = useState<number | null>(null)
@@ -86,6 +88,7 @@ export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, inset = 
         onToggle={toggle}
         maximized={maximized}
         onMaximize={setMaximized}
+        interactive={interactive}
         tail={showTail ? tail : null}
         tailLabel="没有命令边界的输出"
         {...actions}

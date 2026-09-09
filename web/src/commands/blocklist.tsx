@@ -45,9 +45,11 @@ export interface BlockListProps extends BlockActions {
   tailLabel?: string
   /** 当前最大化的块 id（null 无）。 */
   maximized?: number | null
+  /** 活动会话是否有程序占屏（claude/codex/vim…）：运行中的块不再用 plainText 拍扁，改提示去终端。 */
+  interactive?: boolean
 }
 
-export function BlockList({ blocks, bytesOf, cols, order, open, onToggle, tail, tailLabel, maximized, ...actions }: BlockListProps) {
+export function BlockList({ blocks, bytesOf, cols, order, open, onToggle, tail, tailLabel, maximized, interactive, ...actions }: BlockListProps) {
   const ordered = order === 'newest-first' ? blocks.slice().reverse() : blocks
   return (
     <>
@@ -60,6 +62,7 @@ export function BlockList({ blocks, bytesOf, cols, order, open, onToggle, tail, 
           cols={cols}
           open={open.has(b.cmdId) || isRunning(b)}
           maximized={maximized === b.cmdId}
+          interactive={interactive ?? false}
           onToggle={() => onToggle(b.cmdId)}
           actions={actions}
         />
@@ -75,6 +78,7 @@ interface RowProps {
   cols: number
   open: boolean
   maximized: boolean
+  interactive: boolean
   onToggle(): void
   actions: BlockActions
 }
@@ -95,7 +99,7 @@ function RestoreIcon() {
   )
 }
 
-function BlockRow({ block, bytes, cols, open, maximized, onToggle, actions }: RowProps) {
+function BlockRow({ block, bytes, cols, open, maximized, interactive, onToggle, actions }: RowProps) {
   const running = isRunning(block)
   const [html, setHtml] = useState<string | null>(null)
   const [text, setText] = useState<string | null>(null)
@@ -137,6 +141,8 @@ function BlockRow({ block, bytes, cols, open, maximized, onToggle, actions }: Ro
   const cmdText = block.text
 
   // 正文与动作抽出来，内联 / 最大化两处共用同一份渲染结果
+  // 结束的块有没有内容：cd 这类零输出命令不该显示一个空黑面板
+  const emptyDone = !running && !html && !text && len <= 0
   const bodyInner = (
     <>
       {bytes?.truncated && (
@@ -144,15 +150,26 @@ function BlockRow({ block, bytes, cols, open, maximized, onToggle, actions }: Ro
           开头的输出已经滚出保留窗口，下面不是完整内容。
         </div>
       )}
-      {running ? (
+      {running && interactive ? (
+        // 交互式程序（claude/codex/vim…）就地重绘整屏，plainText 拍扁只会是一坨乱码；
+        // 这里给个门，去终端如实看与操作
+        <button
+          class="block-interactive"
+          data-testid={`block-${block.cmdId}-interactive`}
+          onClick={() => actions.onViewTerm?.(block)}
+        >
+          <span class="block-interactive-mark">⌨</span>
+          交互式程序正在运行 —— 在终端里查看与操作
+        </button>
+      ) : running ? (
         <pre class="block-out block-live" data-testid={`block-${block.cmdId}-live`}>{live ?? ''}</pre>
-      ) : html !== null ? (
+      ) : emptyDone ? null : html !== null ? (
         <div class="block-out" dangerouslySetInnerHTML={{ __html: html }} />
       ) : text !== null ? (
         <pre class="block-out">{text}</pre>
-      ) : (
+      ) : len > 0 ? (
         <div class="block-out block-pending">渲染中…</div>
-      )}
+      ) : null}
     </>
   )
   const actionsEl = !running && (

@@ -112,6 +112,30 @@ test.describe('手机：读视图是默认', () => {
     await expect(raw).toHaveCount(0)
   })
 
+  test('无输出的命令（cd）展开后不显示空的黑面板', async ({ page }) => {
+    await agent.pair(page)
+    await page.goto(agent.baseURL)
+    await expect(page.getByTestId('conn-text')).toHaveText('在线')
+    await submit(page, 'cd /tmp')
+    await page.waitForTimeout(500)
+    await submit(page, "printf 'HAS-%s\\n' OUT")
+    await waitFor(async () => (await terminalText(page)).includes('HAS-OUT'), '有输出的那条跑完')
+    await page.waitForTimeout(300)
+    const cd = page
+      .getByTestId('stream')
+      .locator('.block:not(.block-tail)', { has: page.locator('.block-head', { hasText: 'cd /tmp' }) })
+    await cd.locator('.block-head').click()
+    await page.waitForTimeout(200)
+    expect(await cd.locator('.block-out').count(), 'cd 无输出不该有黑面板').toBe(0)
+    // 有输出的块仍正常显示面板
+    const has = page
+      .getByTestId('stream')
+      .locator('.block:not(.block-tail)', { has: page.locator('.block-head', { hasText: 'printf' }) })
+    await has.locator('.block-head').click()
+    await page.waitForTimeout(200)
+    expect(await has.locator('.block-out').count()).toBe(1)
+  })
+
   test('块最大化铺满整屏、可滚动，恢复后回到内联', async ({ page }) => {
     await agent.pair(page)
     await page.goto(agent.baseURL)

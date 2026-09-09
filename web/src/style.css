@@ -49,6 +49,10 @@
 }
 
 * { box-sizing: border-box; }
+/* 【hidden 属性必须真的隐藏】。给元素设了 display（如 .bar{display:flex}）会压过
+   hidden 的 UA 默认 display:none —— 终端底栏的直发提示行明明 hidden 却仍占 56px，
+   把终端最后几行盖住。用它兜住所有 hidden。 */
+[hidden] { display: none !important; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   background: var(--bg);
@@ -104,7 +108,9 @@ body {
 .banner.error { background: color-mix(in srgb, var(--err) 18%, transparent); }
 .banner button { font: inherit; border: 0; background: transparent; cursor: pointer; color: inherit; text-decoration: underline; }
 
-.term { min-height: 0; background: var(--term-bg); padding: 4px; overflow: hidden; }
+.term { min-height: 0; background: var(--term-bg); padding: 4px; overflow: hidden; overscroll-behavior: contain; }
+/* xterm 的内部滚动容器：到顶/到底再拖不外溢到文档（手机上会把整页橡皮筋拽成空白） */
+.term .xterm-viewport { overscroll-behavior: contain; }
 .term .xterm { height: 100%; }
 
 .composer {
@@ -573,7 +579,7 @@ body {
 .canvas > .stream { bottom: var(--sheet-inset, 0px); }
 /* 槽里的键条：正好 56px（44 + 6×2），终端视图里它独占槽、不盖终端；读视图里挂在直发输入行下面 */
 .bottom > .keybar { padding: 6px; border-top: 0; }
-.bottom > .bar + .keybar { border-top: 1px solid var(--line); }
+.bottom > .bar:not([hidden]) + .keybar { border-top: 1px solid var(--line); }
 .keybar-lead { font-family: inherit; font-weight: 500; }
 .bar-hint { flex: 1; color: var(--muted); font-size: 12px; padding-left: 6px; }
 
@@ -613,3 +619,13 @@ body {
 }
 /* 最大化里正文不再受 60vh 限制 —— 就是要铺满 */
 .block-body-max .block-live { max-height: none; }
+
+/* 交互式程序（claude/codex/vim…）在读视图运行时的门：不拍扁，引去终端 */
+.block-interactive {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  margin: 0; padding: 12px 12px; border: 1px dashed var(--line-strong); border-radius: 8px;
+  background: var(--code-bg); color: var(--code-fg);
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.block-interactive:active { background: color-mix(in srgb, var(--code-fg) 8%, var(--code-bg)); }
+.block-interactive-mark { flex: none; font-size: 15px; }
