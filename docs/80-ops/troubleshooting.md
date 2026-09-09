@@ -301,3 +301,11 @@ journalctl --user -u webterm -n 200 --no-pager
 
 - 给元素设 `display`（如 `.bar{display:flex}`）会压过 `hidden` 属性的 UA `display:none` —— 隐藏的直发提示行仍占 56px，把终端最后几行盖住。用全局 `[hidden]{display:none!important}` 兜住。
 - xterm 的内部滚动容器 `.xterm-viewport` 要 `overscroll-behavior: contain`，否则手机上拖到底再拖会把整页橡皮筋拽成空白。
+
+## 一点输入，输入框就被键盘推得看不见（iPhone）
+
+**现象**：读视图点 Composer、或终端视图点「⌨ 打字」，软键盘弹出的同时整个页面被"上推"，输入框（甚至整个应用）不在屏幕上。
+
+**根因**：iOS Safari 弹键盘只缩【可视视口】不缩布局视口，并把可视区上推（`visualViewport.offsetTop` > 0）去露出输入框；应用要 `translateY(offsetTop)` 跟过去。而 Safari 的 `window.innerHeight` 报的是可视视口高度 —— 键盘一弹它也变矮，若用它做"键盘是否弹起"的参照，闸门永远关着、不补偿。参照必须是 `documentElement.clientHeight`（布局视口），见 [`../40-frontend/layout-responsive.md`](../40-frontend/layout-responsive.md) §高度计算。
+
+**排查**：在 Safari 的 Web Inspector 里聚焦输入框后看 `document.querySelector('.app').style.transform` —— 键盘弹起时应为 `translateY(<offsetTop>px)`；为空即闸门没开，对比 `visualViewport.height`、`document.documentElement.clientHeight`、`window.innerHeight` 三个数。

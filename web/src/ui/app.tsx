@@ -26,15 +26,7 @@ import { locateBlock } from '../term/locate'
 import { ExitedBar, SessionList } from './sessionlist'
 import { applyTheme, readFontSize, readTheme, writeFontSize, type Theme } from './settings'
 import { RecoveredToast, StatusBar } from './status'
-import {
-  breakpoint,
-  debounce,
-  isCoarsePointer,
-  isShort,
-  readViewport,
-  watchViewport,
-  type Breakpoint,
-} from './viewport'
+import { breakpoint, debounce, isCoarsePointer, isKeyboardUp, isShort, layoutViewportHeight, readViewport, type Breakpoint, watchViewport } from './viewport'
 
 type View = 'read' | 'term'
 
@@ -430,8 +422,11 @@ export function App() {
             root.style.height = `${h}px`
             lastVH = h
           }
-          // 键盘弹起 = 可视高度比窗口矮一大截；普通滚动 / 回弹的 offsetTop 不追
-          const keyboardUp = vp.height < window.innerHeight - 80
+          // 键盘弹起 = 可视高度比【布局视口】矮一大截；普通滚动 / 回弹的 offsetTop 不追。
+          // 参照必须是 documentElement.clientHeight 而不是 window.innerHeight ——
+          // Safari 的 innerHeight 是可视视口高度，键盘一弹它也变矮，闸门就永远关着，
+          // 整个 .app 会被 Safari 推出可视区（viewport.ts::layoutViewportHeight）。
+          const keyboardUp = isKeyboardUp(vp.height, layoutViewportHeight())
           const top = keyboardUp ? Math.round(vp.offsetTop) : 0
           if (top !== lastVTop) {
             root.style.transform = top ? `translateY(${top}px)` : ''
