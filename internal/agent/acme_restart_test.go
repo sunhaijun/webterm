@@ -28,7 +28,10 @@ func TestRestartReusesCachedCertificate(t *testing.T) {
 
 	base := t.TempDir()
 	certDir := filepath.Join(base, "certs")
-	httpPort, httpsPort := freePort(t), freePort(t)
+	// 【必须一次分配两个】。分开调 freePort 两次，第一个 listener 已关闭，OS 可能
+	// 把同一个端口再发给第二次 —— http/https 撞车，偶发 CI 红（见 #30 的 freePorts）。
+	ports := freePorts(t, 2)
+	httpPort, httpsPort := ports[0], ports[1]
 	ca.ValidateAgainst(fmt.Sprintf("127.0.0.1:%d", httpPort))
 
 	start := func(round string) {
