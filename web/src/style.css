@@ -8,12 +8,20 @@
   --surface: #ffffff;
   --line-strong: #cfcfd4;
   --ring: rgba(26, 26, 26, 0.35);
+  --link: #2563eb;
   --term-bg: #111111;
   --ok: #2ea043;
   --warn: #d29922;
   --err: #cf222e;
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas,
     'Liberation Mono', 'Noto Sans Mono CJK SC', 'Sarasa Mono SC', monospace;
+  /* 界面 chrome 用比例字体，命令 / 输出用等宽 —— 精致终端区分 chrome 与内容的做法 */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  /* 命令输出的代码面板底色（两个主题都用深色 —— ANSI 配色是按深底校准的） */
+  --code-bg: #0e1116;
+  --code-fg: #e6e6e6;
+  --card-shadow: 0 1px 2px rgba(16, 18, 22, 0.04), 0 1px 3px rgba(16, 18, 22, 0.06);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
@@ -24,6 +32,8 @@
     --surface: #161b22;
     --line-strong: #30363d;
     --ring: rgba(230, 237, 243, 0.35);
+    --link: #6ea8fe;
+    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   }
 }
 :root[data-theme='dark'] {
@@ -34,6 +44,8 @@
   --surface: #161b22;
   --line-strong: #30363d;
   --ring: rgba(230, 237, 243, 0.35);
+  --link: #6ea8fe;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 * { box-sizing: border-box; }
@@ -41,7 +53,7 @@ html, body, #app { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--fg);
-  font: 14px/1.5 var(--font-mono);
+  font: 14px/1.5 var(--font-ui);
 }
 
 .app {
@@ -76,7 +88,7 @@ body {
   overflow: hidden;
 }
 .statusbar .name { font-weight: 600; }
-.statusbar .cwd { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.statusbar .cwd { color: var(--muted); overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 12px; }
 .statusbar .conn { margin-left: auto; color: var(--muted); }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted); }
@@ -105,6 +117,7 @@ body {
   resize: none;
   max-height: 40vh;
   outline-offset: -2px;
+  font-family: var(--font-mono);
 }
 
 .toast {
@@ -361,7 +374,7 @@ body {
 .cmd-row:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .cmd-star { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0; }
 .cmd-star[data-on='true'] { color: var(--warn); }
-.cmd-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmd-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .cmd-sub { color: var(--muted); }
 /* 退出码 0 用弱色不干扰，非零用警示色 —— "昨天那条失败的命令"极易定位 */
 .cmd-exit { color: var(--muted); width: 3ch; text-align: right; }
@@ -376,7 +389,7 @@ body {
 }
 .quickbar::-webkit-scrollbar { display: none; }
 .quick-key {
-  flex: none; min-height: 32px; padding: 4px 10px; font: inherit; font-size: 12px;
+  flex: none; min-height: 32px; padding: 4px 10px; font-family: var(--font-mono); font-size: 12px;
   border: 1px solid var(--line); border-radius: 999px; background: transparent;
   color: var(--fg); cursor: pointer; white-space: nowrap;
 }
@@ -399,21 +412,22 @@ body {
 .block-mark[data-running='true'] { color: var(--warn); }
 /* 失败的块整条留一道红边 —— 折叠状态下也要一眼看见 */
 .block[data-failed='true'] { border-left: 3px solid var(--err); }
-.block-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.block-exit { flex: none; color: var(--err); font-size: 11px; }
-.block-dur, .block-lines { flex: none; color: var(--muted); font-size: 11px; }
+.block-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.block-exit { flex: none; color: var(--err); font-size: 11px; font-variant-numeric: tabular-nums; }
+.block-dur, .block-lines { flex: none; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 
-.block-body { background: var(--term-bg); }
+.block-body { background: var(--surface); padding: 6px 8px 2px; }
 .block-truncated {
-  padding: 6px 12px; font-size: 11px;
-  color: #111; background: color-mix(in srgb, var(--warn) 60%, transparent);
+  margin: 0 0 6px; padding: 6px 10px; font-size: 11px; border-radius: 6px;
+  color: var(--fg); background: color-mix(in srgb, var(--warn) 22%, transparent);
 }
 .block-out {
-  margin: 0; padding: 8px 12px; font: inherit; font-size: 12px; line-height: 1.35;
-  color: #e6e6e6; white-space: pre;
-  /* 长行横向自己滚，别把面板撑宽 */
-  overflow-x: auto; overscroll-behavior-x: contain;
+  margin: 0; padding: 10px 12px; font-family: var(--font-mono); font-size: 12px; line-height: 1.45;
+  color: var(--code-fg); white-space: pre; background: var(--code-bg); border-radius: 8px;
+  /* 长行横向自己滚，别把面板撑宽；滚动条藏起来 */
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
 }
+.block-out::-webkit-scrollbar { display: none; }
 .block-pending { color: var(--muted); }
 
 /* serializeAsHTML 把 color / background-color / font-family / font-size
@@ -427,18 +441,24 @@ body {
   font-size: inherit !important;
   line-height: inherit !important;
 }
-.block-actions { padding: 6px 12px 10px; }
-.block-actions button {
-  font: inherit; font-size: 12px; min-height: 36px; padding: 0 12px;
-  border: 1px solid var(--line); border-radius: 6px;
-  background: var(--bg); color: var(--fg); cursor: pointer;
+/* 动作是文字链接，放在浅色页脚里（不再是黑底上挤成一排的白盒子），拉开间距 */
+.block-actions {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 20px;
+  padding: 2px 12px 8px; background: var(--surface);
 }
+.block-actions button {
+  font: inherit; font-size: 13px; min-height: 40px; padding: 0 2px;
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  transition: color 120ms ease;
+}
+.block-actions button:hover, .block-actions button:focus-visible { color: var(--fg); outline: none; text-decoration: underline; text-underline-offset: 3px; }
+.block-actions .block-action-primary { color: var(--link); font-weight: 500; margin-left: auto; }
 
 /* ---------- 读视图：块流 ---------- */
 
 .stream { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
-  padding: 8px 0 10px; display: flex; flex-direction: column; gap: 6px; background: var(--bg); }
-.stream .block { margin: 0 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  padding: 10px 0 12px; display: flex; flex-direction: column; gap: 8px; background: var(--bg); }
+.stream .block { margin: 0 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: var(--card-shadow); }
 .stream .block[data-failed='true'] { border-left: 3px solid var(--err); }
 .stream .block-head { min-height: 48px; padding: 8px 12px; }
 .stream .block-body { border-top: 1px solid var(--line); }
@@ -448,6 +468,7 @@ body {
 @keyframes block-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .block[data-running='true'] .block-mark { animation: none; } }
 .block-live { max-height: 60vh; overflow: auto; }
+.block-body > .block-out + .block-out { margin-top: 6px; }
 .block-tail .block-cmd-muted { color: var(--muted); font-style: italic; }
 
 /* 直发输入行：命令在跑时替换 Composer（读视图） */
@@ -558,16 +579,18 @@ body {
 
 /* ── 块最大化 / 恢复（读视图 & 块面板）── */
 .block-max-btn {
-  flex: none; margin-left: 4px; padding: 0 6px; min-height: 24px;
+  flex: none; margin-left: 2px; padding: 0; width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
   border: 0; background: transparent; color: var(--muted);
-  font-size: 14px; line-height: 1; cursor: pointer; border-radius: 6px;
+  cursor: pointer; border-radius: 8px;
 }
+.block-max-btn > svg { display: block; }
 .block-max-btn:hover, .block-max-btn:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
 /* 铺满整屏细看：盖在所有东西上（含底栏 / 键条），自己滚 */
 .block-maxwrap {
   position: fixed; inset: 0; z-index: 40;
   display: flex; flex-direction: column;
-  background: var(--term-bg);
+  background: var(--code-bg);
 }
 .block-maxbar {
   flex: none; display: flex; align-items: center; gap: 8px;
