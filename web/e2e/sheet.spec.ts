@@ -174,6 +174,6 @@ test('⋯ 菜单：历史 / 命令面板 / 设置 / 输入模式都从这里进'
 
   // 点外面收起菜单
   await page.getByTestId('open-more').click()
-  await page.getByTestId('more-backdrop').click()
+  await page.getByTestId('more-backdrop').click({ position: { x: 8, y: 8 } })
   await expect(page.getByTestId('more-menu')).toHaveCount(0)
 })

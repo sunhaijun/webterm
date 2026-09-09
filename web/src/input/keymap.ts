@@ -166,10 +166,14 @@ export const CTRL_KEYS: Readonly<Record<string, string>> = {
  * 卡住了，不能还要求先横向滚动一下。Alt 让位 —— 手机上它比 ^C 罕见得多。
  */
 /** 功能键条上的一个键。有 bytes 就直接发这些字节，不走 KEY_BYTES / chord。 */
+/** 键条上的【本地动作】：不发 PTY，只动 xterm 的视口（读长内容用）。 */
+export type KeyAction = 'pageUp' | 'pageDown' | 'bottom'
+
 export interface KeyDef {
   label: string
   key: string
   bytes?: string
+  action?: KeyAction
 }
 
 export const KEY_BAR: readonly KeyDef[] = [
@@ -276,6 +280,23 @@ const CONTEXT_KEYS: Record<string, readonly KeyDef[]> = {
     ...ARROWS,
   ],
   tui: [ESC_KEY, CTRL_C, { label: 'q', key: 'tui-q', bytes: 'q' }, { label: 'Enter', key: 'Enter' }, { label: 'Tab', key: 'Tab' }, ...ARROWS, { label: 'Ctrl', key: 'Ctrl' }],
+  /**
+   * AI CLI（claude / codex…）：没有 q；要的是打断、切模式（⇧Tab）、斜杠命令、
+   * 选项上下、以及【读长回答】的翻页 / 跳底 —— 后三个是本地动作，只动 xterm 视口。
+   */
+  ai: [
+    ESC_KEY,
+    CTRL_C,
+    { label: 'Enter', key: 'Enter' },
+    { label: '⇧Tab', key: 'ShiftTab', bytes: '\x1b[Z' },
+    { label: '/', key: 'ai-slash', bytes: '/' },
+    ...ARROWS.slice(0, 2),
+    { label: 'Tab', key: 'Tab' },
+    { label: '⇞', key: 'PageUpView', action: 'pageUp' },
+    { label: '⇟', key: 'PageDownView', action: 'pageDown' },
+    { label: '⤓', key: 'ToBottom', action: 'bottom' },
+    { label: 'Ctrl', key: 'Ctrl' },
+  ],
 }
 
 const PROGRAM_CONTEXT: Record<string, keyof typeof CONTEXT_KEYS> = {
@@ -283,6 +304,7 @@ const PROGRAM_CONTEXT: Record<string, keyof typeof CONTEXT_KEYS> = {
   top: 'top', htop: 'top', btop: 'top', atop: 'top',
   vim: 'vim', vi: 'vim', nvim: 'vim', view: 'vim',
   nano: 'nano', pico: 'nano',
+  claude: 'ai', codex: 'ai', gemini: 'ai', aider: 'ai',
 }
 
 /**

@@ -645,3 +645,21 @@ body {
   .rawline input { font-size: 16px; }
   .xterm .xterm-helper-textarea { font-size: 16px; }
 }
+
+/* ── 终端视图里读长内容（claude / codex 的长回答）的三件小事 ── */
+/* 滚上去读的时候来了新输出：一枚跳底的药丸，回到底部自动消失 */
+.new-output {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 12;
+  padding: 6px 14px; border-radius: 999px; border: 1px solid var(--link);
+  background: var(--bg); color: var(--link); font: 600 13px var(--font-ui);
+  box-shadow: var(--card-shadow); cursor: pointer;
+}
+/* 键条收起：底槽只剩一条 22px 的把手，画布多出两行多 */
+.bottom-slot[data-collapsed='true'] {
+  height: 22px; display: flex; justify-content: center; align-items: center;
+  border-top: 1px solid var(--line); background: var(--bg);
+}
+.bar-handle { border: 0; background: transparent; color: var(--muted); font: 12px var(--font-ui); padding: 0 16px; height: 22px; cursor: pointer; }
+.keybar-collapse { min-width: 32px; color: var(--muted); }
+/* 横屏（矮视口）的终端视图：状态栏让位，多出一行；会话入口在 ⋯ 里 */
+.app[data-short='true'] .main[data-view='term'] .statusbar { display: none; }

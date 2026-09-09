@@ -7,6 +7,7 @@ import type { ComponentChildren } from 'preact'
 import { useState } from 'preact/hooks'
 
 import { CTRL_KEYS, KEY_BYTES, chord, keyBarFor } from './keymap'
+import type { KeyAction } from './keymap'
 import type { Mode } from './modes'
 
 /** 粘滞修饰键的三个状态。 */
@@ -22,9 +23,11 @@ export interface KeyBarProps {
   context?: { altScreen: boolean; program: string | null }
   /** 排在最前面的前导键（终端视图里回「读」与 ⋯）。 */
   leading?: ComponentChildren
+  /** 本地动作键（翻页 / 跳底）：不发 PTY。 */
+  onAction?(action: KeyAction): void
 }
 
-export function KeyBar({ mode, onRaw, onComposerKey, context, leading }: KeyBarProps) {
+export function KeyBar({ mode, onRaw, onComposerKey, context, leading, onAction }: KeyBarProps) {
   const ctx = context ?? { altScreen: false, program: null }
   const keys = keyBarFor(ctx)
   const [ctrl, setCtrl] = useState<Sticky>('off')
@@ -38,7 +41,12 @@ export function KeyBar({ mode, onRaw, onComposerKey, context, leading }: KeyBarP
     if (alt === 'armed') setAlt('off')
   }
 
-  const press = (key: string, bytes?: string) => {
+  const press = (key: string, bytes?: string, action?: KeyAction) => {
+    // 本地动作：只动 xterm 视口，不发 PTY
+    if (action !== undefined) {
+      onAction?.(action)
+      return
+    }
     // 上下文键（vim 的 :q、less 的 q…）带着要发的字节，直接送 PTY
     if (bytes !== undefined) {
       onRaw(bytes)
@@ -97,7 +105,7 @@ export function KeyBar({ mode, onRaw, onComposerKey, context, leading }: KeyBarP
             key={k.key}
             class="keybar-key"
             data-testid={`key-${k.key}`}
-            onClick={() => press(k.key, k.bytes)}
+            onClick={() => press(k.key, k.bytes, k.action)}
           >
             {k.label}
           </button>

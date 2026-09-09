@@ -125,6 +125,8 @@ tablet（`640–1023px`）同样默认读视图；desktop 默认终端视图。
 - 布局视口一起缩的浏览器（老 Android Chrome 的 `resizes-content`）：两个高度同步变、`offsetTop` 为 0，闸门自然关着，`.app` 跟着 `visualViewport.height` 缩即可。
 - 触屏上会拿焦点的控件（Composer、直发框、xterm 的隐藏 textarea）字号 ≥ 16px：iOS 对 <16px 的输入框会在聚焦时自动放大页面并左右平移，`translateY` 管不了横向。
 
+**两处刻意的画布变化**（都会给 PTY 发一次 resize，程序重排一次，所以只做成用户明确触发或进出横屏时发生，不随手势抖动）：终端视图里键条收起成 22px 把手（回读自动恢复）；横屏（`data-short`）的终端视图隐藏状态栏。见 [`input-modes.md`](input-modes.md) §AI CLI。
+
 **不要在 `visualViewport` 事件里直接调 `fit()`** —— 布局还没稳定，会算出错误的行列数。必须让 `ResizeObserver` 观察终端容器，由它触发。
 
 ## 终端尺寸

@@ -390,6 +390,16 @@ Playwright 可以派发 composition 事件。
 2. **只缩可视视口 + 上推**（iOS Safari / Chrome `resizes-visual`）：假 `visualViewport` 重放"可视 727→400、`offsetTop`→327"，分别在 **Safari 语义（`innerHeight` 跟着变 400）** 与 Chrome 语义（恒 727）下 → `.app` 必须 `translateY(327px)`、顶部 = 327、Composer 在可视区 [327,727]；键盘收起全部复位
 3. **普通回弹不补偿**：`offsetTop` 变成 −40 / 60 而高度不变 → `.app` 无 `translateY`（守住拖动抖动的修复）
 
+## E2E-22 终端视图里读 claude / codex 长回答（AC-3.15）
+
+`web/e2e/aicli.spec.ts`，Pixel 5 视口。
+
+1. **AI 键条**：用 shell 函数冒充 `claude`（键盘协议入栈占屏）→ 键条 `data-context=claude`，有 `⇧Tab`（点了 PTY 收到 `ESC [ Z`）、`⇞ ⇟ ⤓`，没有 `q`
+2. **横幅**：`bash --norc` 里两次回应无标记 → `unmarked` 横幅出现；子 shell 里起占屏程序 → 横幅让位
+3. **新输出**：`seq 1 400` 填回滚，后台 4 秒后一条输出，期间滚到顶 → 「↓ 有新输出」出现，点它到底部、药丸消失
+4. **收起**：`⌄` 收起键条 → 键条消失、行数变多；把手展开 → 行数恢复；横屏 → 状态栏隐藏、⋯ 里有「会话」；竖屏恢复
+5. **复制**：⋯ → 复制屏幕 → 剪贴板含屏上文本，toast「已复制 N 行」
+
 ## 不在 E2E 覆盖范围（放手工清单）
 
 - 真机中文输入法的实际候选框行为

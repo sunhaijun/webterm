@@ -211,7 +211,7 @@ test.describe('手机：读视图是默认', () => {
     // 终端视图里才有「块」面板入口 —— 手机上收在底栏的 ⋯ 菜单里（ADR-0011 ③）
     await page.getByTestId('open-more').click()
     await expect(page.getByTestId('open-blocks')).toBeVisible()
-    await page.getByTestId('more-backdrop').click()
+    await page.getByTestId('more-backdrop').click({ position: { x: 8, y: 8 } })
     await expect(page.getByTestId('more-menu')).toHaveCount(0)
 
     await page.getByTestId('view-toggle').click()

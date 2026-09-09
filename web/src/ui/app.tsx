@@ -16,7 +16,7 @@ import { useChips } from '../input/chips'
 import { type Chip, tokenAt } from '../input/complete'
 import { Composer, type ComposerHandle } from '../input/composer'
 import { KeyBar } from '../input/keybar'
-import { EDIT_INSERT, appAction, programOf } from '../input/keymap'
+import { EDIT_INSERT, appAction, programOf, type KeyAction } from '../input/keymap'
 import type { ModeState } from '../input/modes'
 import { RawIme, cursorPosition } from '../input/raw'
 import { SLOT_HEIGHT, WriteSheet, type SheetSize } from '../input/sheet'
@@ -119,6 +119,18 @@ export function App() {
   const [bottomH, setBottomH] = useState(SLOT_HEIGHT)
   const [draft, setDraft] = useState({ value: '', cursor: 0 })
   const [moreOpen, setMoreOpen] = useState(false)
+  // 终端视图里读长内容的三件小事（层 1）：键条可收起 / 滚上去时有新输出的提示 / 复制的回执
+  const [barCollapsed, setBarCollapsed] = useState(false)
+  const [newOutput, setNewOutput] = useState(false)
+  const newOutputRef = useRef(false)
+  newOutputRef.current = newOutput
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const showToast = (msg: string) => {
+    setToast(msg)
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 1800)
+  }
   // 最近一次「在终端里看」是怎么定位的（marker / search / bottom），测试与诊断用
   const lastLocateRef = useRef<string>('')
   const changeSheet = useCallback((next: SheetSize) => {
@@ -506,6 +518,14 @@ export function App() {
         return { cols: term?.term.cols ?? 0, rows: term?.term.rows ?? 0 }
       },
       welcome: () => lastWelcome,
+      termView: () => {
+        const sid = store.active
+        const t = sid === null ? undefined : store.termOf(sid)?.term
+        if (!t) return { viewportY: 0, baseY: 0, length: 0 }
+        const b = t.buffer.active
+        return { viewportY: b.viewportY, baseY: b.baseY, length: b.length }
+      },
+      newOutput: () => newOutputRef.current,
       mode: () => (store.active === null ? { mode: 'composer', locked: false } : store.modesOf(store.active)!.current),
       unread: (sid: number) => store.isUnread(sid),
       view: () => viewRef.current,
@@ -602,6 +622,72 @@ export function App() {
   // 手机 / 平板两种视图共用同一个 56px 的槽（ADR-0011 ③）：读视图里它是写态 sheet 的
   // 收起态，终端视图里停在 prompt 是一行输入、命令在跑是键条 —— 【槽高不变，切视图
   // 画布几何不变，PTY 不 resize】。
+  // 「↓ 有新输出」：终端视图里滚上去读的时候来了新输出，给一个跳底的入口；回到底部自动消失
+  useEffect(() => {
+    setNewOutput(false)
+    if (activeSid === null) return
+    // activeSid 可能先于会话条目恢复（localStorage 记的），xterm 还没建 —— 等到有为止再挂
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let d1: { dispose(): void } | undefined
+    let d2: { dispose(): void } | undefined
+    const attach = () => {
+      const h = storeRef.current?.termOf(activeSid)
+      if (!h) {
+        timer = setTimeout(attach, 250)
+        return
+      }
+      const atBottom = () => {
+        const b = h.term.buffer.active
+        return b.viewportY >= b.baseY
+      }
+      d1 = h.term.onWriteParsed(() => {
+        if (!atBottom()) setNewOutput(true)
+      })
+      d2 = h.term.onScroll(() => {
+        if (atBottom()) setNewOutput(false)
+      })
+    }
+    attach()
+    return () => {
+      if (timer) clearTimeout(timer)
+      d1?.dispose()
+      d2?.dispose()
+    }
+  }, [activeSid])
+  // 键条收起只是终端视图里的读态；回读视图就恢复 —— 两个视图底栏等高的约束不能破
+  useEffect(() => {
+    if (view !== 'term') setBarCollapsed(false)
+  }, [view])
+
+  const activeTerm = () => (activeSid === null ? undefined : storeRef.current?.termOf(activeSid)?.term)
+  /** 键条本地动作：翻页 / 跳底只动 xterm 视口。 */
+  const termAction = (a: KeyAction) => {
+    const t = activeTerm()
+    if (!t) return
+    if (a === 'pageUp') t.scrollPages(-1)
+    else if (a === 'pageDown') t.scrollPages(1)
+    else t.scrollToBottom()
+  }
+  /** 复制终端文本：当前屏 / 最近 200 行（含回滚）。手机上 xterm 长按选择基本不可用，这是替代路径。 */
+  const copyTerm = (which: 'screen' | 'recent') => {
+    const t = activeTerm()
+    if (!t) return
+    const b = t.buffer.active
+    const end = which === 'screen' ? Math.min(b.length, b.viewportY + t.rows) : b.length
+    const start = which === 'screen' ? b.viewportY : Math.max(0, end - 200)
+    const lines: string[] = []
+    for (let i = start; i < end; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '')
+    while (lines.length && lines[lines.length - 1] === '') lines.pop()
+    if (!navigator.clipboard) {
+      showToast('复制失败：浏览器不允许')
+      return
+    }
+    navigator.clipboard.writeText(lines.join('\n')).then(
+      () => showToast(`已复制 ${lines.length} 行`),
+      () => showToast('复制失败：浏览器不允许'),
+    )
+  }
+
   const classic = bp === 'desktop'
   // 写态 chips：sheet 开着才拉数据（ADR-0011 ③）
   const chips = useChips({
@@ -727,7 +813,7 @@ export function App() {
         />
       </aside>
 
-      <div class="main" style={{ '--sheet-inset': `${sheetInset}px` }}>
+      <div class="main" data-view={view} style={{ '--sheet-inset': `${sheetInset}px` }}>
         <StatusBar
           state={connState}
           info={info}
@@ -745,7 +831,9 @@ export function App() {
             shell 集成未生效 · 命令历史、CWD 与自动切换不可用
           </div>
         )}
-        {active?.unmarked_input && active.integration !== 'inactive' && (
+        {active?.unmarked_input && active.integration !== 'inactive' && !interactive && (
+          // 占屏程序（claude / codex / vim / top）里按 Enter 当然没有标记 —— 那是用户在用它，
+          // 不是 shell 坏了；这条横幅只给 ssh / su / 容器 / 没钩子的子 shell 看。
           // 输入去了一个没有集成的地方：ssh / su / 容器 / exec bash / 摘了钩子 ——
           // 这些在字节流里【完全同形】，所以措辞不能承诺"退出后恢复"（exec bash
           // 没有可退出的东西），只说事实和恢复的条件。
@@ -780,6 +868,18 @@ export function App() {
             切视图不改变 xterm 的尺寸 —— 否则每次切换都给 PTY 发 resize，
             正在跑的程序收到 SIGWINCH、折行位置全变。 */}
         <div class="canvas" data-testid="canvas">
+          {view === 'term' && newOutput && (
+            <button
+              class="new-output"
+              data-testid="new-output"
+              onClick={() => {
+                activeTerm()?.scrollToBottom()
+                setNewOutput(false)
+              }}
+            >
+              ↓ 有新输出
+            </button>
+          )}
           {view === 'read' && activeSid !== null && (
             <ReadView
               /* blocksTick：命令事件与 live-tail 节流都会 +1 */
@@ -890,7 +990,15 @@ export function App() {
           </div>
         )}
 
-        {!classic && active?.status !== 'exited' && (
+        {!classic && active?.status !== 'exited' && barCollapsed && view === 'term' && (
+          // 键条收起（读长回答）：底槽只剩一个把手，画布多出两行多；回读视图自动恢复
+          <div class="bottom-slot" data-collapsed="true">
+            <button class="bar-handle" data-testid="bar-expand" onClick={() => setBarCollapsed(false)}>
+              ⌃ 键条
+            </button>
+          </div>
+        )}
+        {!classic && active?.status !== 'exited' && !(barCollapsed && view === 'term') && (
           // 写态 sheet（ADR-0011 ③）：收起是一行，碰输入框升起半屏 / 全屏。
           // 命令在跑（raw）时读视图里是直发输入行 + 功能键条；终端视图里只有键条。
           <WriteSheet
@@ -929,6 +1037,7 @@ export function App() {
                 <KeyBar
                   mode="raw"
                   context={{ altScreen: interactive, program }}
+                  onAction={termAction}
                   onRaw={(bytes) => sendRawRef.current(bytes)}
                   onComposerKey={() => {}}
                   leading={
@@ -948,6 +1057,15 @@ export function App() {
                           onClick={() => focusTermRef.current()}
                         >
                           ⌨ 打字
+                        </button>
+                        <button
+                          class="keybar-key keybar-lead keybar-collapse"
+                          data-testid="bar-collapse"
+                          title="收起键条，多看几行"
+                          aria-label="收起键条"
+                          onClick={() => setBarCollapsed(true)}
+                        >
+                          ⌄
                         </button>
                       </>
                     ) : undefined
@@ -980,6 +1098,11 @@ export function App() {
             />
           </WriteSheet>
         )}
+        {toast && (
+          <div class="toast" data-testid="toast">
+            {toast}
+          </div>
+        )}
         {!classic && moreOpen && (
           // 读视图里模式条那些次要入口收进 ⋯ 菜单 —— 底栏只留输入、「终端」、⋯ 三样
           <>
@@ -1007,6 +1130,40 @@ export function App() {
                   块
                 </button>
               )}
+              {view === 'term' && (
+                <>
+                  <button
+                    role="menuitem"
+                    data-testid="copy-screen"
+                    onClick={() => {
+                      setMoreOpen(false)
+                      copyTerm('screen')
+                    }}
+                  >
+                    复制屏幕
+                  </button>
+                  <button
+                    role="menuitem"
+                    data-testid="copy-recent"
+                    onClick={() => {
+                      setMoreOpen(false)
+                      copyTerm('recent')
+                    }}
+                  >
+                    复制最近 200 行
+                  </button>
+                </>
+              )}
+              <button
+                role="menuitem"
+                data-testid="open-sessions"
+                onClick={() => {
+                  setMoreOpen(false)
+                  setSidebarOpen(true)
+                }}
+              >
+                会话
+              </button>
               <button
                 role="menuitem"
                 data-testid="open-palette"
