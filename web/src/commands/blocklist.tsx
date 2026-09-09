@@ -27,6 +27,8 @@ export interface BlockActions {
   onCopy?(text: string): void
   /** "在终端里看"：块承载不了的输出（对齐表格、彩色 diff）需要门。 */
   onViewTerm?(b: Block): void
+  /** 最大化：把这个块的输出铺满整屏细看；null 恢复。 */
+  onMaximize?(id: number | null): void
 }
 
 export interface BlockListProps extends BlockActions {
@@ -41,9 +43,11 @@ export interface BlockListProps extends BlockActions {
   /** 尾块：没有被任何块认领的输出（降级形态），非空才渲染。 */
   tail?: BlockBytes | null
   tailLabel?: string
+  /** 当前最大化的块 id（null 无）。 */
+  maximized?: number | null
 }
 
-export function BlockList({ blocks, bytesOf, cols, order, open, onToggle, tail, tailLabel, ...actions }: BlockListProps) {
+export function BlockList({ blocks, bytesOf, cols, order, open, onToggle, tail, tailLabel, maximized, ...actions }: BlockListProps) {
   const ordered = order === 'newest-first' ? blocks.slice().reverse() : blocks
   return (
     <>
@@ -55,6 +59,7 @@ export function BlockList({ blocks, bytesOf, cols, order, open, onToggle, tail, 
           bytes={bytesOf(b)}
           cols={cols}
           open={open.has(b.cmdId) || isRunning(b)}
+          maximized={maximized === b.cmdId}
           onToggle={() => onToggle(b.cmdId)}
           actions={actions}
         />
@@ -69,11 +74,12 @@ interface RowProps {
   bytes: BlockBytes | null
   cols: number
   open: boolean
+  maximized: boolean
   onToggle(): void
   actions: BlockActions
 }
 
-function BlockRow({ block, bytes, cols, open, onToggle, actions }: RowProps) {
+function BlockRow({ block, bytes, cols, open, maximized, onToggle, actions }: RowProps) {
   const running = isRunning(block)
   const [html, setHtml] = useState<string | null>(null)
   const [text, setText] = useState<string | null>(null)
@@ -114,6 +120,51 @@ function BlockRow({ block, bytes, cols, open, onToggle, actions }: RowProps) {
   const lines = bytes ? countLines(bytes.bytes) : 0
   const cmdText = block.text
 
+  // 正文与动作抽出来，内联 / 最大化两处共用同一份渲染结果
+  const bodyInner = (
+    <>
+      {bytes?.truncated && (
+        <div class="block-truncated" data-testid={`block-${block.cmdId}-truncated`}>
+          开头的输出已经滚出保留窗口，下面不是完整内容。
+        </div>
+      )}
+      {running ? (
+        <pre class="block-out block-live" data-testid={`block-${block.cmdId}-live`}>{live ?? ''}</pre>
+      ) : html !== null ? (
+        <div class="block-out" dangerouslySetInnerHTML={{ __html: html }} />
+      ) : text !== null ? (
+        <pre class="block-out">{text}</pre>
+      ) : (
+        <div class="block-out block-pending">渲染中…</div>
+      )}
+    </>
+  )
+  const actionsEl = !running && (
+    <div class="block-actions">
+      {actions.onRun && (
+        <button data-testid={`block-${block.cmdId}-rerun`} onClick={() => actions.onRun!(cmdText)}>
+          重跑
+        </button>
+      )}
+      <button data-testid={`block-${block.cmdId}-fill`} onClick={() => actions.onFill(cmdText)}>
+        填入命令
+      </button>
+      {actions.onCopy && (
+        <button
+          data-testid={`block-${block.cmdId}-copy`}
+          onClick={() => actions.onCopy!(bytes ? plainText(bytes.bytes) : '')}
+        >
+          复制输出
+        </button>
+      )}
+      {actions.onViewTerm && (
+        <button data-testid={`block-${block.cmdId}-term`} onClick={() => actions.onViewTerm!(block)}>
+          在终端里看
+        </button>
+      )}
+    </div>
+  )
+
   return (
     <div class="block" data-testid={`block-${block.cmdId}`} data-failed={failed(block)} data-running={running} data-open={open}>
       <div class="block-head" onClick={onToggle}>
@@ -126,55 +177,54 @@ function BlockRow({ block, bytes, cols, open, onToggle, actions }: RowProps) {
         )}
         <span class="block-dur">{running ? '运行中' : formatDuration(block.durationMs)}</span>
         <span class="block-lines">{lines > 0 ? `${lines} 行` : ''}</span>
+        {open && actions.onMaximize && (
+          <button
+            class="block-max-btn"
+            data-testid={`block-${block.cmdId}-maximize`}
+            title={maximized ? '恢复' : '最大化'}
+            aria-label={maximized ? '恢复' : '最大化'}
+            onClick={(e) => {
+              e.stopPropagation()
+              actions.onMaximize!(maximized ? null : block.cmdId)
+            }}
+          >
+            {maximized ? '❏' : '⛶'}
+          </button>
+        )}
       </div>
-      {open && (
-        <div class="block-body">
-          {bytes?.truncated && (
-            <div class="block-truncated" data-testid={`block-${block.cmdId}-truncated`}>
-              开头的输出已经滚出保留窗口，下面不是完整内容。
-            </div>
-          )}
-          {running ? (
-            <pre class="block-out block-live" data-testid={`block-${block.cmdId}-live`}>{live ?? ''}</pre>
-          ) : html !== null ? (
-            <div class="block-out" dangerouslySetInnerHTML={{ __html: html }} />
-          ) : text !== null ? (
-            <pre class="block-out">{text}</pre>
-          ) : (
-            <div class="block-out block-pending">渲染中…</div>
-          )}
-          {!running && (
-            <div class="block-actions">
-              {actions.onRun && (
-                <button data-testid={`block-${block.cmdId}-rerun`} onClick={() => actions.onRun!(cmdText)}>
-                  重跑
-                </button>
-              )}
-              <button data-testid={`block-${block.cmdId}-fill`} onClick={() => actions.onFill(cmdText)}>
-                填入命令
+      {open &&
+        (maximized ? (
+          <div class="block-maxwrap" data-testid={`block-${block.cmdId}-maxwrap`}>
+            <div class="block-maxbar">
+              <span class="block-mark" data-failed={failed(block)} data-running={running}>
+                {running ? '⟳' : failed(block) ? '✗' : '✓'}
+              </span>
+              <span class="block-cmd">{ellipsize(cmdText, 80)}</span>
+              <span class="block-max-spacer" />
+              {!running && <span class="block-dur">{formatDuration(block.durationMs)}</span>}
+              <button
+                class="block-max-restore"
+                data-testid={`block-${block.cmdId}-restore`}
+                onClick={() => actions.onMaximize!(null)}
+              >
+                恢复
               </button>
-              {actions.onCopy && (
-                <button
-                  data-testid={`block-${block.cmdId}-copy`}
-                  onClick={() => actions.onCopy!(bytes ? plainText(bytes.bytes) : '')}
-                >
-                  复制输出
-                </button>
-              )}
-              {actions.onViewTerm && (
-                <button data-testid={`block-${block.cmdId}-term`} onClick={() => actions.onViewTerm!(block)}>
-                  在终端里看
-                </button>
-              )}
             </div>
-          )}
-        </div>
-      )}
+            <div class="block-body block-body-max">
+              {bodyInner}
+              {actionsEl}
+            </div>
+          </div>
+        ) : (
+          <div class="block-body">
+            {bodyInner}
+            {actionsEl}
+          </div>
+        ))}
     </div>
   )
 }
 
-/** 尾块：降级形态。永远展开、纯文本、随输出重画。 */
 function TailBlock({ bytes, label }: { bytes: BlockBytes; label: string }) {
   const text = useMemo(() => plainText(bytes.bytes), [bytes.bytes.length, bytes])
   return (

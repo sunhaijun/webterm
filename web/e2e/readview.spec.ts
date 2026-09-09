@@ -112,6 +112,35 @@ test.describe('手机：读视图是默认', () => {
     await expect(raw).toHaveCount(0)
   })
 
+  test('块最大化铺满整屏、可滚动，恢复后回到内联', async ({ page }) => {
+    await agent.pair(page)
+    await page.goto(agent.baseURL)
+    await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+    await submit(page, "seq 1 80; printf 'DONE-%s\\n' OK")
+    await waitFor(async () => (await terminalText(page)).includes('DONE-OK'), '命令跑完', 15_000)
+    const blk = page
+      .getByTestId('stream')
+      .locator('.block:not(.block-tail)', { has: page.locator('.block-head', { hasText: 'seq 1 80' }) })
+    await blk.locator('.block-head').click()
+    await blk.locator('[data-testid$="-maximize"]').click()
+
+    const wrap = page.locator('[data-testid$="-maxwrap"]')
+    await expect(wrap).toBeVisible()
+    const box = await wrap.boundingBox()
+    const vp = page.viewportSize()!
+    expect(box!.height, '铺满整屏高度').toBeGreaterThan(vp.height * 0.9)
+    expect(box!.width).toBe(vp.width)
+    // 命令原文在标题栏，输出在里面（含末尾）
+    await expect(wrap.locator('.block-maxbar')).toContainText('seq 1 80')
+    await expect(wrap).toContainText('DONE-OK')
+
+    await page.locator('[data-testid$="-restore"]').click()
+    await expect(wrap).toHaveCount(0)
+    // 恢复后块还在、仍展开
+    await expect(blk).toHaveAttribute('data-open', 'true')
+  })
+
   test('「终端」切到终端视图并能切回来', async ({ page }) => {
     await agent.pair(page)
     await page.goto(agent.baseURL)

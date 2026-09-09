@@ -170,7 +170,7 @@ Esc  Tab  Ctrl  Alt  ↑  ↓  ←  →  |  ~  /  -  _  Home  End  PgUp  PgDn
 
 ### 上下文键条（ADR-0011 分片 ②）
 
-有程序占屏时（xterm 备用屏幕缓冲激活），键条**按前台程序换内容**，而不是永远那一排通用键：
+有程序占屏时，键条**按前台程序换内容**，而不是永远那一排通用键。占屏 = xterm 备用缓冲激活（vim / top / less），**或主屏就地重绘**（claude / codex 这类不切备用缓冲、靠光标寻址重画的 CLI，检测见 `web/src/term/interactive.ts`）：
 
 | 程序 | 键 |
 |---|---|
@@ -178,7 +178,7 @@ Esc  Tab  Ctrl  Alt  ↑  ↓  ←  →  |  ~  /  -  _  Home  End  PgUp  PgDn
 | `top` / `htop` / `btop` | `q 退出` `k 杀` `P CPU` `M 内存` `/ 找` `↑` `↓` `Enter` `^C` `Esc` |
 | `vim` / `vi` / `nvim` | `Esc` `:w` `:q` `:q!` `:wq` `i` `u 撤销` `h` `j` `k` `l` `^C` |
 | `nano` | `^X 退出` `^O 保存` `^W 搜索` `^K` `^U` `Y` `N` `Enter` 方向键 |
-| 不认识的 | `Esc` `^C` `q` `Enter` `Tab` 方向键 `Ctrl` |
+| 不认识的（含 claude / codex） | `Esc` `^C` `q` `Enter` `Tab` 方向键 `Ctrl`，键条左侧显示程序名 |
 
 程序名取自正在跑的块的命令原文（`programOf`：跳过 `FOO=1` 与 `sudo` 之类包装，管道取末端）。选错也只是少几个快捷键 —— `^C` 与 `Esc` 每一套都有。vim 的 `:q` 发的是 `Esc :q Enter`，避免停在插入模式。
 

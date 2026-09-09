@@ -362,6 +362,19 @@ Playwright 可以派发 composition 事件。
 3. **chips**：`mktemp -d` 造 `src/commands`、`docs`、`src/a.go` 并 `cd` 进去；空输入出现同目录历史、没有路径 chip；敲 `cd s` 出现 `src/`（没有 `docs`），点一下变 `cd src/` 且焦点不丢；`Tab` 编辑键补成 `cd src/commands/`；`|` 插 ` | `，`⌫词` 删词；发送键提交并收起
 4. **⋯ 菜单**：历史面板、输入模式切换与解锁、点外面收起
 
+## E2E-11b 占屏程序自动进控（ADR-0011 ②）
+
+`web/e2e/control.spec.ts`，Pixel 5 视口。
+
+1. 备用缓冲：裸 `\e[?1049h … \e[?1049l` → 自动进终端、退出回读、不写偏好
+2. **主屏就地重绘**：合成"藏光标 + 反复上移重写、跑完自退"的程序（claude/codex 的机械签名，不切备用缓冲）→ `interactive` 被识别为 true 且 `altScreen` 为 false、自动进终端，程序退出后自动回读、不写偏好
+3. `less` 占屏：键条换成分页器键，`q` 退出回读
+4. 用户手动选终端后，备用缓冲进出都不改它
+
+## E2E-12b 块最大化 / 恢复（ADR-0011 ④）
+
+`web/e2e/readview.spec.ts`。跑 `seq 1 80` 展开块 → 点最大化，`.block-maxwrap` 铺满整屏（高 > 90% 视口、宽 = 视口）、标题栏含命令原文、正文含末尾 `DONE-OK`；点「恢复」→ 覆盖层消失、块仍展开。
+
 ## E2E-20 在终端里看 → 定位到该块（ADR-0011 ④）
 
 `web/e2e/locate.spec.ts`，Pixel 5 视口。

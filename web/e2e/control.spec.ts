@@ -12,9 +12,10 @@ import { Agent, submit, terminalText, waitFor } from './harness'
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 test.use(PIXEL)
 
-type Hooks = { __webterm: { view(): string; altScreen(): boolean } }
+type Hooks = { __webterm: { view(): string; altScreen(): boolean; interactive(): boolean } }
 const view = (page: import('@playwright/test').Page) => page.evaluate(() => (window as unknown as Hooks).__webterm.view())
 const alt = (page: import('@playwright/test').Page) => page.evaluate(() => (window as unknown as Hooks).__webterm.altScreen())
+const interactive = (page: import('@playwright/test').Page) => page.evaluate(() => (window as unknown as Hooks).__webterm.interactive())
 const stored = (page: import('@playwright/test').Page) => page.evaluate(() => localStorage.getItem('webterm.view'))
 
 let agent: Agent
@@ -45,6 +46,31 @@ test('进备用缓冲自动切到终端，退出自动回读；自动切换不�
   // 回到 prompt：功能键条退场（写态的编辑键在 sheet 里，ADR-0011 ③）
   await expect(page.getByTestId('keybar')).toHaveCount(0, { timeout: 5_000 })
   // 自动切换是临时的，不能把用户偏好改成 term
+  expect(await stored(page)).not.toBe('term')
+})
+
+test('主屏就地重绘（claude/codex 那类，不切备用缓冲）也自动进终端，退出回读', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  expect(await view(page)).toBe('read')
+
+  // 合成一个"主屏就地重绘"的程序：藏光标 + 反复上移重写，跑 ~2.5s 后自己退出。
+  // 这正是 claude(Ink) / codex(ratatui) 的机械签名 —— 不切备用缓冲，靠光标寻址重画。
+  await submit(
+    page,
+    "printf '\\033[?25l'; for i in $(seq 1 12); do printf 'frame %s\\n' $i; printf '\\033[1A'; sleep 0.2; done; printf '\\033[?25h\\n'",
+  )
+  // 备用缓冲【没有】激活，但仍被识别为占屏 → 自动进终端
+  await waitFor(async () => (await interactive(page)) === true, '主屏就地重绘被识别为占屏', 10_000)
+  expect(await alt(page), '这类程序不切备用缓冲').toBe(false)
+  await waitFor(async () => (await view(page)) === 'term', '自动进终端', 5_000)
+  await expect(page.getByTestId('terminal')).toHaveAttribute('data-hidden', 'false')
+
+  // 程序自己退出（命令结束）→ 自动回读
+  await waitFor(async () => (await interactive(page)) === false, '程序退出、占屏结束', 12_000)
+  await waitFor(async () => (await view(page)) === 'read', '自动回到读', 6_000)
+  // 自动切换不写偏好
   expect(await stored(page)).not.toBe('term')
 })
 

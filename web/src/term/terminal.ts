@@ -30,8 +30,6 @@ export interface TermHandle {
    * sleep 100 和 top 都是 running，只有 top 切了备用缓冲。
    */
   altScreen(): boolean
-  /** 备用缓冲切换时通知。返回取消订阅函数。 */
-  onAltScreen(cb: (on: boolean) => void): () => void
   dispose(): void
 }
 
@@ -94,10 +92,6 @@ export function createTerminal(fontSize: number): TermHandle {
     attachWebgl,
     detachWebgl,
     altScreen: () => term.buffer.active.type === 'alternate',
-    onAltScreen(cb) {
-      const d = term.buffer.onBufferChange((buf) => cb(buf.type === 'alternate'))
-      return () => d.dispose()
-    },
     dispose() {
       detachWebgl()
       term.dispose()

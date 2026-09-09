@@ -8,6 +8,7 @@ import { Connection } from '../conn/connection'
 import { ModeMachine, type ModeState } from '../input/modes'
 import type { SessionInfo } from '../protocol/messages'
 import { MarkTracker } from '../term/marks'
+import { installInteractive, type InteractiveDetector } from '../term/interactive'
 import { createTerminal, type TermHandle } from '../term/terminal'
 import type { IMarker } from '@xterm/xterm'
 
@@ -25,8 +26,9 @@ interface Entry {
   modes: ModeMachine
   pinnedSubscription: boolean
   opened: boolean
-  /** 备用屏幕缓冲是否激活（有程序占屏）。 */
-  altScreen: boolean
+  /** 有程序占屏：备用缓冲，或主屏就地重绘（claude / codex）。 */
+  interactive: boolean
+  detector: InteractiveDetector
   /** 输出流里的行锚点（ADR-0011 ④：「在终端里看」定位到块）。 */
   marks: MarkTracker
 }
@@ -38,8 +40,8 @@ export interface SessionStoreHandlers {
   onTermData(sid: number, data: string): void
   /** 应用级快捷键：返回 false 表示拦下来，不让它进 PTY。 */
   allowKey(e: KeyboardEvent): boolean
-  /** 备用屏幕缓冲切换（ADR-0011 分片 ②：驱动读 ⇄ 控的自动切换）。 */
-  onAltScreen(sid: number, on: boolean): void
+  /** 占屏状态切换（ADR-0011 ②：驱动读 ⇄ 控的自动切换）。备用缓冲 或 主屏就地重绘。 */
+  onInteractive(sid: number, on: boolean): void
 }
 
 export class SessionStore {
@@ -118,21 +120,32 @@ export class SessionStore {
       modes,
       pinnedSubscription: false,
       opened: false,
-      altScreen: false,
+      interactive: false,
+      detector: installInteractive(term.term),
       marks: new MarkTracker(term.term),
     }
-    // 备用缓冲切换：vim / top / less 进出的机械信号
-    term.onAltScreen((on) => {
-      entry.altScreen = on
-      this.h.onAltScreen(info.sid, on)
+    // 占屏检测：vim/top/less 的备用缓冲，以及 claude/codex 的主屏就地重绘
+    entry.detector.onChange((on) => {
+      entry.interactive = on
+      this.h.onInteractive(info.sid, on)
     })
     this.entries.set(info.sid, entry)
     this.h.onChange()
   }
 
-  /** 该会话是否有程序占屏（备用缓冲激活）。 */
+  /** 该会话是否有程序占屏（备用缓冲 或 主屏就地重绘）。 */
+  interactiveOf(sid: number): boolean {
+    return this.entries.get(sid)?.interactive ?? false
+  }
+
+  /** 备用缓冲是否激活（仅缓冲类型，控态键条区分 vim/less 用）。 */
   altScreenOf(sid: number): boolean {
-    return this.entries.get(sid)?.altScreen ?? false
+    return this.entries.get(sid)?.term.altScreen() ?? false
+  }
+
+  /** 命令边界：清掉主屏就地重绘的判定（新命令 / 回到 prompt）。 */
+  resetInteractive(sid: number): void {
+    this.entries.get(sid)?.detector.reset()
   }
 
   patch(sid: number, patch: Partial<SessionInfo>): void {
@@ -147,6 +160,7 @@ export class SessionStore {
     const e = this.entries.get(sid)
     if (!e) return
     e.modes.dispose()
+    e.detector.dispose()
     e.term.dispose()
     e.host.remove()
     this.entries.delete(sid)

@@ -113,7 +113,7 @@ export function App() {
   // 读视图里 vim / top 一进备用缓冲就切到终端，退出后自动回读。
   // 【自动切换不持久化】—— 它是临时的，用户的偏好还是读。
   const autoTermRef = useRef(false)
-  const [altScreen, setAltScreen] = useState(false)
+  const [interactive, setInteractive] = useState(false)
   const [rawLine, setRawLine] = useState('')
   const [quick, setQuick] = useState<CommandRecord[]>([])
   // 写态 sheet（ADR-0011 ③）：读视图里输入框升起的那块。三档：收起 / 半屏 / 全屏。
@@ -220,11 +220,15 @@ export function App() {
               blocks.cmdStart(msg.sid, msg)
               // 事件先于帧到达（协议 §4），所以此刻登记的锚点会落在正确的行
               store.markAt(msg.sid, msg.out_seq, `start:${msg.cmd_id}`)
+              // 新命令：清掉上一条的"主屏就地重绘"判定，从头认
+              store.resetInteractive(msg.sid)
               bumpBlocks()
               break
             case T.commandEnd:
               blocks.cmdEnd(msg.sid, msg)
               store.markAt(msg.sid, msg.out_seq, `end:${msg.cmd_id}`)
+              // 回到 prompt：占屏结束 → 自动回读（若之前是自动切过去的）
+              store.resetInteractive(msg.sid)
               bumpBlocks()
               break
             case T.prompt:
@@ -256,9 +260,9 @@ export function App() {
       onModeChange: (sid, s) => {
         if (store.active === sid) setMode(s)
       },
-      onAltScreen: (sid, on) => {
+      onInteractive: (sid, on) => {
         if (store.active !== sid) return
-        applyAltScreen(on)
+        applyInteractive(on)
       },
       onTermData: (sid, data) => {
         if (store.active !== sid) return
@@ -271,13 +275,19 @@ export function App() {
     })
     storeRef.current = store
 
-    // 备用缓冲进出 → 读 ⇄ 控。手动切过就不再自动回去（changeView 会清标记）。
-    const applyAltScreen = (on: boolean) => {
-      setAltScreen(on)
-      if (on && viewRef.current === 'read') {
-        autoTermRef.current = true
-        setView('term')
-      } else if (!on && autoTermRef.current) {
+    // 占屏进出 → 读 ⇄ 控。备用缓冲（vim/top）或主屏就地重绘（claude/codex）都算。
+    // 手动切过就不再自动回去（changeView 会清标记）。占屏时把视口钉到底 —— 全屏
+    // 程序自己重绘整屏，别让残留的滚动位置和它抢。
+    const applyInteractive = (on: boolean) => {
+      setInteractive(on)
+      if (on) {
+        const sid = store.active
+        if (sid !== null) store.termOf(sid)?.term.scrollToBottom()
+        if (viewRef.current === 'read') {
+          autoTermRef.current = true
+          setView('term')
+        }
+      } else if (autoTermRef.current) {
         autoTermRef.current = false
         setView(readView())
       }
@@ -289,7 +299,7 @@ export function App() {
       setTruncated(false)
       sendResize()
       // 切到的会话如果正有程序占屏，视图要跟着它
-      applyAltScreen(store.altScreenOf(sid))
+      applyInteractive(store.interactiveOf(sid))
     }
     const newSession = () => {
       const cur = store.active !== null ? store.get(store.active) : undefined
@@ -365,7 +375,17 @@ export function App() {
       }
     }, 100)
 
+    // 【只在容器尺寸真的变了才 fit】。ResizeObserver 会因为内容变化、亚像素
+    // 抖动等被反复触发；每次都 fit() 会在全屏程序狂写时反复重算行列、给 PTY
+    // 发 resize，程序被迫整屏重绘 —— 这就是终端视图里的"拖动抖动"。
+    let lastW = 0
+    let lastH = 0
     const ro = new ResizeObserver(() => {
+      const w = area.clientWidth
+      const h = area.clientHeight
+      if (w === lastW && h === lastH) return
+      lastW = w
+      lastH = h
       const sid = store.active
       store.termOf(sid ?? -1)?.fit.fit()
       sendResize()
@@ -457,6 +477,7 @@ export function App() {
       unread: (sid: number) => store.isUnread(sid),
       view: () => viewRef.current,
       altScreen: () => (store.active === null ? false : store.altScreenOf(store.active)),
+      interactive: () => (store.active === null ? false : store.interactiveOf(store.active)),
       sheet: () => sheetRef.current,
       lastLocate: () => lastLocateRef.current,
       // 测试用：终端视口顶行在缓冲里的位置与文字（「在终端里看」定位是否落对）
@@ -853,7 +874,7 @@ export function App() {
               mode.mode === 'raw' && coarse ? (
                 <KeyBar
                   mode="raw"
-                  context={{ altScreen, program }}
+                  context={{ altScreen: interactive, program }}
                   onRaw={(bytes) => sendRawRef.current(bytes)}
                   onComposerKey={() => {}}
                   leading={
@@ -988,7 +1009,7 @@ export function App() {
         {classic && coarse && (
           <KeyBar
             mode={mode.mode}
-            context={{ altScreen, program }}
+            context={{ altScreen: interactive, program }}
             onRaw={(bytes) => sendRawRef.current(bytes)}
             onComposerKey={(key) => {
               if (key === 'Escape') composerRef.current?.focus()
