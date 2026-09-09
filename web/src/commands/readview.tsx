@@ -30,6 +30,8 @@ export const TAIL_NOISE_BYTES = 256
 
 export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, inset = 0, ...actions }: ReadViewProps) {
   const el = useRef<HTMLDivElement>(null)
+  // 最大化的块 id（铺满整屏细看）；null 无
+  const [maximized, setMaximized] = useState<number | null>(null)
   // 失败的块默认展开；用户手动折叠/展开的记在这里
   const [open, setOpen] = useState<Set<number>>(() => new Set(blocks.filter(failed).map((b) => b.cmdId)))
   // 【按"变成失败"那一刻判断，不是按"首次出现"】：块刚出现时还在跑、退出码
@@ -82,6 +84,8 @@ export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, inset = 
         order="oldest-first"
         open={open}
         onToggle={toggle}
+        maximized={maximized}
+        onMaximize={setMaximized}
         tail={showTail ? tail : null}
         tailLabel="没有命令边界的输出"
         {...actions}

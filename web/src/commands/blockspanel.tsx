@@ -20,6 +20,7 @@ export interface BlocksPanelProps {
 
 export function BlocksPanel({ blocks, bytesOf, cols, onClose, onFill, onViewTerm }: BlocksPanelProps) {
   const [onlyFailed, setOnlyFailed] = useState(false)
+  const [maximized, setMaximized] = useState<number | null>(null)
   const [open, setOpen] = useState<Set<number>>(() => new Set(blocks.filter(failed).map((b) => b.cmdId)))
 
   const toggle = useCallback((id: number) => {
@@ -55,6 +56,8 @@ export function BlocksPanel({ blocks, bytesOf, cols, onClose, onFill, onViewTerm
             order="newest-first"
             open={open}
             onToggle={toggle}
+            maximized={maximized}
+            onMaximize={setMaximized}
             onFill={onFill}
             onViewTerm={onViewTerm}
           />

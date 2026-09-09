@@ -555,3 +555,38 @@ body {
 .bottom > .bar + .keybar { border-top: 1px solid var(--line); }
 .keybar-lead { font-family: inherit; font-weight: 500; }
 .bar-hint { flex: 1; color: var(--muted); font-size: 12px; padding-left: 6px; }
+
+/* ── 块最大化 / 恢复（读视图 & 块面板）── */
+.block-max-btn {
+  flex: none; margin-left: 4px; padding: 0 6px; min-height: 24px;
+  border: 0; background: transparent; color: var(--muted);
+  font-size: 14px; line-height: 1; cursor: pointer; border-radius: 6px;
+}
+.block-max-btn:hover, .block-max-btn:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
+/* 铺满整屏细看：盖在所有东西上（含底栏 / 键条），自己滚 */
+.block-maxwrap {
+  position: fixed; inset: 0; z-index: 40;
+  display: flex; flex-direction: column;
+  background: var(--term-bg);
+}
+.block-maxbar {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 0 10px; min-height: 44px;
+  background: var(--bg); color: var(--fg); border-bottom: 1px solid var(--line);
+  padding-top: env(safe-area-inset-top, 0);
+}
+.block-maxbar .block-cmd { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--font-mono); }
+.block-max-spacer { flex: 1; }
+.block-max-restore {
+  flex: none; min-height: 32px; padding: 0 14px;
+  border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+}
+.block-max-restore:active { background: var(--line); }
+.block-body-max {
+  flex: 1 1 0; min-height: 0; overflow: auto; margin: 0;
+  padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0));
+  border-top: 0;
+}
+/* 最大化里正文不再受 60vh 限制 —— 就是要铺满 */
+.block-body-max .block-live { max-height: none; }
