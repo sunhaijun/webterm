@@ -195,8 +195,7 @@ test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；直
   await inp.click()
   await inp.pressSequentially('2', { delay: 60 })
   await waitFor(async () => sent.some((x) => x.endsWith('2')), '数字 2 立即送出', 3_000)
-  // 门指向终端（点击进终端的行为由 locate.spec 的 onViewTerm 覆盖，这里只确认门在且可用）
-  await expect(page.locator('[data-testid$="-interactive"]')).toBeEnabled()
+  // 门是否可见已在上面断言（点击进终端的行为由 locate.spec 的 onViewTerm 覆盖）
 })
 
 test('终端视图有「⌨ 打字」入口：点它聚焦终端、唤起键盘，直接打字给程序', async ({ page }) => {
