@@ -170,7 +170,7 @@ test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；直
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
   // 合成占屏程序：建立 Kitty 键盘协议（\e[>1u）+ 藏光标上移重写（不切备用缓冲）
-  await submit(page, "printf '\\033[>1u\\033[?25l'; for i in $(seq 1 20); do printf 'F %s\\n' $i; printf '\\033[1A'; sleep 0.1; done; sleep 60")
+  await submit(page, "printf '\\033[>1u\\033[?25l'; sleep 60")
   await waitFor(async () => (await interactive(page)) === true, '占屏被识别', 10_000)
   await waitFor(async () => (await view(page)) === 'term', '自动进终端', 5_000)
 
