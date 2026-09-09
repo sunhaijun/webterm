@@ -382,6 +382,14 @@ Playwright 可以派发 composition 事件。
 1. 跑 `seq 1 150; echo ALPHA-END`、`seq 200 350; echo BETA-END`、`echo GAMMA-LAST` 三块；读视图里展开块 A 点「在终端里看」→ 视图切到终端，**视口顶行正是 `1`**（块 A 输出的第一行），且不是滚到顶；回读再看块 B → 顶行 `200`，且比 A 更靠下
 2. 终端视图的「块」面板（⋯ → 块）里点同一动作 → 面板关掉、终端滚到块首行
 
+## E2E-21 软键盘几何：键盘一弹输入控件仍在可视区
+
+`web/e2e/keyboard.spec.ts`，Pixel 5 视口。两种浏览器模型都覆盖（见 [`../40-frontend/layout-responsive.md`](../40-frontend/layout-responsive.md) §高度计算）：
+
+1. **布局视口一起缩**（`resizes-content`）：聚焦 Composer 后把视口从 727 缩到 450 → `.app` 高 450、无 `translateY`、Composer 在 [0,450]；终端视图「⌨ 打字」后同样，键条在 [0,450]
+2. **只缩可视视口 + 上推**（iOS Safari / Chrome `resizes-visual`）：假 `visualViewport` 重放"可视 727→400、`offsetTop`→327"，分别在 **Safari 语义（`innerHeight` 跟着变 400）** 与 Chrome 语义（恒 727）下 → `.app` 必须 `translateY(327px)`、顶部 = 327、Composer 在可视区 [327,727]；键盘收起全部复位
+3. **普通回弹不补偿**：`offsetTop` 变成 −40 / 60 而高度不变 → `.app` 无 `translateY`（守住拖动抖动的修复）
+
 ## 不在 E2E 覆盖范围（放手工清单）
 
 - 真机中文输入法的实际候选框行为

@@ -637,3 +637,11 @@ body {
   background: color-mix(in srgb, var(--link) 10%, transparent);
 }
 .bar-type { border: 0; background: transparent; color: var(--link); font: inherit; font-size: 12px; cursor: pointer; padding-left: 6px; }
+
+/* iOS Safari 对字号 <16px 的输入控件会在聚焦时【自动放大页面】（可视视口跟着缩、左右平移），
+   translateY 补偿管不了横向平移。触屏上把会拿焦点的控件都抬到 16px 起，免疫这一手。 */
+@media (pointer: coarse) {
+  .bar .composer { font-size: 16px; }
+  .rawline input { font-size: 16px; }
+  .xterm .xterm-helper-textarea { font-size: 16px; }
+}

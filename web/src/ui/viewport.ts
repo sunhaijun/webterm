@@ -18,6 +18,31 @@ export function readViewport(): ViewportState {
 }
 
 /**
+ * 布局视口高度 —— 判断"键盘是否占屏"的参照。
+ *
+ * 【不能用 window.innerHeight】：Safari（iOS）的 innerHeight 报的是【可视视口】高度
+ * （随捏合缩放、随软键盘一起变矮），Chrome 的才是布局视口。拿 innerHeight 做参照，
+ * 在 iPhone 上键盘一弹它也跟着矮下去，"可视比布局矮一大截"永远不成立 → 不补偿 →
+ * Safari 把可视区上推去露输入框，整个 .app 却留在布局顶部、被推出可视区
+ * （表现："一点输入，输入框就没影了"）。documentElement.clientHeight 在所有浏览器
+ * 里都是布局视口高度，不随键盘 / 缩放变。
+ */
+export function layoutViewportHeight(): number {
+  return document.documentElement.clientHeight || window.innerHeight
+}
+
+/** 键盘占屏的最小高度：地址栏滑入滑出（≈50–100px 但布局视口同步变）、回弹都到不了。 */
+export const KEYBOARD_MIN_PX = 80
+
+/**
+ * 键盘是否弹起 = 可视视口比布局视口矮一大截。只有这时才追 offsetTop 做 translateY 补偿；
+ * 普通滚动 / 回弹（offsetTop 动、高度不动）一律不追 —— 否则拖一下抖一会儿（见 app.tsx）。
+ */
+export function isKeyboardUp(visualHeight: number, layoutHeight: number): boolean {
+  return visualHeight < layoutHeight - KEYBOARD_MIN_PX
+}
+
+/**
  * 订阅 visualViewport 变化。
  *
  * 【不要在这个回调里直接调 fit()】—— 布局还没稳定，会算出错误的行列数。

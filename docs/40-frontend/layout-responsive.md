@@ -114,6 +114,17 @@ tablet（`640–1023px`）同样默认读视图；desktop 默认终端视图。
 
 顺序：`visualViewport` 变化 → 重算容器 → 布局稳定 → `ResizeObserver` 通知终端 → `FitAddon.fit()` → 发 `resize` 控制消息（100ms 防抖）。
 
+**键盘弹起时的 `translateY` 补偿只看两个数，参照必须是布局视口。** iOS Safari（以及 Chrome ≥108 的 `resizes-visual`）弹键盘只缩【可视视口】、不缩布局视口，并把可视区**上推**（`visualViewport.offsetTop` > 0）去露出输入框；`.app` 要 `translateY(offsetTop)` 跟过去，否则整个应用留在布局顶部、被推出可视区。闸门：
+
+```
+键盘弹起 := visualViewport.height < documentElement.clientHeight − 80
+```
+
+- **参照是 `documentElement.clientHeight`，不能是 `window.innerHeight`**：Safari 的 `innerHeight` 报的是可视视口高度（随捏合缩放、随键盘一起变矮），拿它当参照，iPhone 上键盘一弹闸门就永远关着 → 不补偿 → "一点输入，输入框就没影了"。`clientHeight` 在所有浏览器里都是布局视口高度。
+- **闸门关着时不追 `offsetTop`**：地址栏滑入滑出（可视与布局同步变）、边缘回弹（`offsetTop` 变、高度不变）都不该动 `.app`，否则拖一下抖一会儿（反馈环）。
+- 布局视口一起缩的浏览器（老 Android Chrome 的 `resizes-content`）：两个高度同步变、`offsetTop` 为 0，闸门自然关着，`.app` 跟着 `visualViewport.height` 缩即可。
+- 触屏上会拿焦点的控件（Composer、直发框、xterm 的隐藏 textarea）字号 ≥ 16px：iOS 对 <16px 的输入框会在聚焦时自动放大页面并左右平移，`translateY` 管不了横向。
+
 **不要在 `visualViewport` 事件里直接调 `fit()`** —— 布局还没稳定，会算出错误的行列数。必须让 `ResizeObserver` 观察终端容器，由它触发。
 
 ## 终端尺寸
