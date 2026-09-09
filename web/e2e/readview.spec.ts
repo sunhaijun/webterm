@@ -7,6 +7,11 @@ const { defaultBrowserType: _d, ...DESKTOP } = devices['Desktop Chrome']!
 
 import { Agent, submit, terminalText, waitFor } from './harness'
 
+/** 确保块是展开的：最后一条会自动展开，只在折叠时才点头部，别把它点收起。 */
+async function ensureOpen(blk: import('@playwright/test').Locator): Promise<void> {
+  if ((await blk.getAttribute('data-open')) !== 'true') await blk.locator('.block-head').click()
+}
+
 /**
  * 读视图 —— ADR-0011 分片 ①。
  *
@@ -52,8 +57,8 @@ test.describe('手机：读视图是默认', () => {
     const block = stream.locator('.block', { hasText: 'READ-' }).first()
     await expect(block).toBeVisible()
     await expect(block).toHaveAttribute('data-running', 'false')
-    // 成功的块默认折叠；点开能看到输出
-    await block.locator('.block-head').click()
+    // 最后一条命令的块自动展开；确保展开后能看到输出
+    await ensureOpen(block)
     await expect(block.locator('.block-out')).toContainText('READ-ONE')
   })
 
@@ -112,6 +117,29 @@ test.describe('手机：读视图是默认', () => {
     await expect(raw).toHaveCount(0)
   })
 
+  test('最新一条命令的块自动展开，上一条自动折叠；手动展开的不被折叠', async ({ page }) => {
+    await agent.pair(page)
+    await page.goto(agent.baseURL)
+    await expect(page.getByTestId('conn-text')).toHaveText('在线')
+    const blk = (t: string) =>
+      page.getByTestId('stream').locator('.block:not(.block-tail)', { has: page.locator('.block-head', { hasText: t }) })
+    await submit(page, "printf 'AAA-out\\n'")
+    await waitFor(async () => (await terminalText(page)).includes('AAA-out'), 'a')
+    await submit(page, "printf 'BBB-out\\n'")
+    await waitFor(async () => (await terminalText(page)).includes('BBB-out'), 'b')
+    await page.waitForTimeout(400)
+    await expect(blk('BBB-out'), '最新一条自动展开').toHaveAttribute('data-open', 'true')
+    await expect(blk('AAA-out'), '上一条自动折叠').toHaveAttribute('data-open', 'false')
+    // 手动展开 AAA，再跑 CCC → AAA 保持展开、BBB 折叠、CCC 展开
+    await blk('AAA-out').locator('.block-head').click()
+    await submit(page, "printf 'CCC-out\\n'")
+    await waitFor(async () => (await terminalText(page)).includes('CCC-out'), 'c')
+    await page.waitForTimeout(400)
+    await expect(blk('CCC-out')).toHaveAttribute('data-open', 'true')
+    await expect(blk('AAA-out'), '手动展开的不被自动折叠').toHaveAttribute('data-open', 'true')
+    await expect(blk('BBB-out')).toHaveAttribute('data-open', 'false')
+  })
+
   test('无输出的命令（cd）展开后不显示空的黑面板', async ({ page }) => {
     await agent.pair(page)
     await page.goto(agent.baseURL)
@@ -124,14 +152,14 @@ test.describe('手机：读视图是默认', () => {
     const cd = page
       .getByTestId('stream')
       .locator('.block:not(.block-tail)', { has: page.locator('.block-head', { hasText: 'cd /tmp' }) })
-    await cd.locator('.block-head').click()
+    await ensureOpen(cd)
     await page.waitForTimeout(200)
     expect(await cd.locator('.block-out').count(), 'cd 无输出不该有黑面板').toBe(0)
     // 有输出的块仍正常显示面板
     const has = page
       .getByTestId('stream')
       .locator('.block:not(.block-tail)', { has: page.locator('.block-head', { hasText: 'printf' }) })
-    await has.locator('.block-head').click()
+    await ensureOpen(has)
     await page.waitForTimeout(200)
     expect(await has.locator('.block-out').count()).toBe(1)
   })
@@ -146,7 +174,7 @@ test.describe('手机：读视图是默认', () => {
     const blk = page
       .getByTestId('stream')
       .locator('.block:not(.block-tail)', { has: page.locator('.block-head', { hasText: 'seq 1 80' }) })
-    await blk.locator('.block-head').click()
+    await ensureOpen(blk)
     await blk.locator('[data-testid$="-maximize"]').click()
 
     const wrap = page.locator('[data-testid$="-maxwrap"]')
