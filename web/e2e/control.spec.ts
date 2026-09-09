@@ -55,11 +55,11 @@ test('主屏就地重绘（claude/codex 那类，不切备用缓冲）也自动�
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
   expect(await view(page)).toBe('read')
 
-  // 合成一个"主屏就地重绘"的程序：藏光标 + 反复上移重写，跑 ~2.5s 后自己退出。
-  // 这正是 claude(Ink) / codex(ratatui) 的机械签名 —— 不切备用缓冲，靠光标寻址重画。
+  // 合成一个全屏交互程序：建立 Kitty 键盘协议（\e[>1u，claude/codex 的机械签名，
+  // 进度条从不发这个），再藏光标反复上移重写，跑 ~2.5s 后自己退出。
   await submit(
     page,
-    "printf '\\033[?25l'; for i in $(seq 1 12); do printf 'frame %s\\n' $i; printf '\\033[1A'; sleep 0.2; done; printf '\\033[?25h\\n'",
+    "printf '\\033[>1u\\033[?25l'; for i in $(seq 1 12); do printf 'frame %s\\n' $i; printf '\\033[1A'; sleep 0.2; done; printf '\\033[<u\\033[?25h\\n'",
   )
   // 备用缓冲【没有】激活，但仍被识别为占屏 → 自动进终端
   await waitFor(async () => (await interactive(page)) === true, '主屏就地重绘被识别为占屏', 10_000)
@@ -72,6 +72,23 @@ test('主屏就地重绘（claude/codex 那类，不切备用缓冲）也自动�
   await waitFor(async () => (await view(page)) === 'read', '自动回到读', 6_000)
   // 自动切换不写偏好
   expect(await stored(page)).not.toBe('term')
+})
+
+test('多行进度条（npm/cargo 那类：藏光标 + 上移重绘但不建立键盘协议）不误判为占屏、不甩进终端', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  expect(await view(page)).toBe('read')
+  // 藏光标 + 多行上移重绘（npm/pnpm/cargo/docker 进度条的形态），但【不发键盘协议】
+  await submit(page, "printf '\\033[?25l'; for n in $(seq 1 8); do printf 'idealTree\\nreify\\nbuild\\n'; printf '\\033[3A'; sleep 0.12; done; printf '\\033[?25h\\ndone PROGRESS\\n'")
+  // 跑动全程都不该被判占屏、不该切终端
+  for (let k = 0; k < 10; k++) {
+    expect(await interactive(page), '进度条不该被判占屏').toBe(false)
+    expect(await view(page), '进度条不该把用户甩进终端').toBe('read')
+    await page.waitForTimeout(120)
+  }
+  await waitFor(async () => (await terminalText(page)).includes('done PROGRESS'), '进度条跑完')
+  expect(await view(page)).toBe('read')
 })
 
 test('less 占屏：键条换成分页器键，按 q 退出后回读', async ({ page }) => {
@@ -124,8 +141,8 @@ test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；直
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  // 合成占屏程序：藏光标 + 反复上移重写（不切备用缓冲）
-  await submit(page, "printf '\\033[?25l'; for i in $(seq 1 80); do printf 'F %s\\n' $i; printf '\\033[1A'; sleep 0.15; done")
+  // 合成占屏程序：建立 Kitty 键盘协议（\e[>1u）+ 藏光标上移重写（不切备用缓冲）
+  await submit(page, "printf '\\033[>1u\\033[?25l'; for i in $(seq 1 80); do printf 'F %s\\n' $i; printf '\\033[1A'; sleep 0.15; done")
   await waitFor(async () => (await interactive(page)) === true, '占屏被识别', 10_000)
   await waitFor(async () => (await view(page)) === 'term', '自动进终端', 5_000)
 
