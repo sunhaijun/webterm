@@ -629,3 +629,11 @@ body {
 }
 .block-interactive:active { background: color-mix(in srgb, var(--code-fg) 8%, var(--code-bg)); }
 .block-interactive-mark { flex: none; font-size: 15px; }
+
+/* 终端视图里的「打字」入口：点它聚焦终端、唤起软键盘，直接打字给程序 */
+.keybar-key.keybar-type {
+  flex: none; white-space: nowrap; font-weight: 600;
+  color: var(--link); border-color: color-mix(in srgb, var(--link) 45%, var(--line));
+  background: color-mix(in srgb, var(--link) 10%, transparent);
+}
+.bar-type { border: 0; background: transparent; color: var(--link); font: inherit; font-size: 12px; cursor: pointer; padding-left: 6px; }
