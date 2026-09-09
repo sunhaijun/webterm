@@ -114,7 +114,7 @@ export function App() {
   // 【自动切换不持久化】—— 它是临时的，用户的偏好还是读。
   const autoTermRef = useRef(false)
   const [interactive, setInteractive] = useState(false)
-  const [rawLine, setRawLine] = useState('')
+  const rawComposingRef = useRef(false)
   const [quick, setQuick] = useState<CommandRecord[]>([])
   // 写态 sheet（ADR-0011 ③）：读视图里输入框升起的那块。三档：收起 / 半屏 / 全屏。
   const [sheet, setSheet] = useState<SheetSize>('closed')
@@ -656,26 +656,45 @@ export function App() {
   const sheetInset = !classic && view === 'read' ? Math.max(0, bottomH - SLOT_HEIGHT) : 0
   // 读视图里 xterm 不可见，Raw 模式的输入要有地方落：一条直发输入行，
   // Enter 把整行 + \r 送进 PTY。按行发 —— 组字期间自然不会有半个字节出去。
+  // 直发输入行：【逐字立刻送进 PTY】（对得起"敲什么立刻送进去"这句话，也让 codex/claude
+  // 的 1/2 选项、y/n 这类单键选择即时生效）。组字期间不发，等 compositionend 一次性送；
+  // 特殊键（Enter/Backspace/方向键…）映射成控制字节直发。发完即清空，回显由 PTY 出。
+  const rawFlush = (el: HTMLInputElement) => {
+    const v = el.value
+    el.value = ''
+    if (v) sendRawRef.current(v)
+  }
   const rawLineEl = (
-      <div class="rawline" data-testid="rawline">
-        <span class="rawlabel">直发</span>
-    <input
-      data-testid="raw-input"
-      value={rawLine}
-      placeholder="命令在跑 · 敲什么立刻送进去"
-      autocapitalize="off"
-      autocorrect="off"
-      spellcheck={false}
-      autocomplete="off"
-      onInput={(e) => setRawLine(e.currentTarget.value)}
-      onKeyDown={(e) => {
-        if (e.key !== 'Enter' || e.isComposing) return
-        e.preventDefault()
-        sendRawRef.current(rawLine + '\r')
-        setRawLine('')
-      }}
-    />
-      </div>
+    <div class="rawline" data-testid="rawline">
+      <span class="rawlabel">直发</span>
+      <input
+        data-testid="raw-input"
+        placeholder="命令在跑 · 敲什么立刻送进去"
+        autocapitalize="off"
+        autocorrect="off"
+        spellcheck={false}
+        autocomplete="off"
+        onCompositionStart={() => {
+          rawComposingRef.current = true
+        }}
+        onCompositionEnd={(e) => {
+          rawComposingRef.current = false
+          rawFlush(e.currentTarget)
+        }}
+        onInput={(e) => {
+          if (rawComposingRef.current) return
+          rawFlush(e.currentTarget)
+        }}
+        onKeyDown={(e) => {
+          if (e.isComposing) return
+          const b = RAWLINE_KEYS[e.key]
+          if (b !== undefined) {
+            e.preventDefault()
+            sendRawRef.current(b)
+          }
+        }}
+      />
+    </div>
   )
 
   return (
@@ -769,6 +788,7 @@ export function App() {
               }
               cols={active?.cols ?? 80}
               inset={sheetInset}
+              interactive={interactive}
               onFill={(text) => composerRef.current?.fill(text)}
               onRun={(text) => {
                 if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
@@ -1116,6 +1136,18 @@ export function App() {
  *   单行   → 内容 + CR
  *   空     → CR
  */
+/** 直发输入行里的特殊键 → 控制字节（单行 input 不产生 input 事件的那些）。 */
+const RAWLINE_KEYS: Record<string, string> = {
+  Enter: '\r',
+  Backspace: '\x7f',
+  Tab: '\t',
+  Escape: '\x1b',
+  ArrowUp: '\x1b[A',
+  ArrowDown: '\x1b[B',
+  ArrowRight: '\x1b[C',
+  ArrowLeft: '\x1b[D',
+}
+
 export function encodeSubmission(text: string): Uint8Array {
   const enc = new TextEncoder()
   if (text.trim() === '') return enc.encode('\r')

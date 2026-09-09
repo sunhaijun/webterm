@@ -228,9 +228,9 @@ visualViewport.addEventListener('scroll', onViewportChange)
 | 模式 | 读视图里的输入 |
 |---|---|
 | Composer | 底栏收起时是一行输入框（`data-testid="composer"`，始终是同一个 `textarea`）+「终端」+ ⋯。碰它升起 sheet：半屏 / 全屏 |
-| Raw | **直发输入行**（`data-testid="rawline"`）：单行 `input`，Enter 把整行 + `\r` 送进 PTY；功能键条（含上下文键）挂在它下面。用于 `[Y/n]`、密码、REPL 这类"命令在跑但要输入"的场景 |
+| Raw | **直发输入行**（`data-testid="rawline"`）：单行 `input`，**逐字立刻送进 PTY**（对得起"敲什么立刻送进去"，也让 codex/claude 的 `1`/`2` 选项、`y`/`n` 即时生效）；Enter/Backspace/方向键映射成控制字节直发；组字期间不发、`compositionend` 一次性送。用于 `[Y/n]`、菜单选择、密码、REPL 这类"命令在跑但要输入"的场景 |
 
-直发输入行是**按行**发的，不是按键直通 —— 组字期间自然不会有半个字节出去（AC-3.3 的另一种满足方式）。要真正按键直通（vim / less 的单键操作）就切到终端视图，或者让备用缓冲自动切过去（分片 ②）。
+直发输入行**逐字直发**（发完即清空，回显由 PTY 出）；组字期间不送、`compositionend` 时一次性送最终文本（满足 AC-3.3）。**占屏程序（claude/codex/vim…）在读视图运行时不再用 `plainText` 拍扁**（那样会单词粘连、box-drawing 错位、还漏出裸转义）——运行块显示一个"⌨ 交互式程序正在运行 —— 在终端里查看与操作"的门（`data-testid` 后缀 `-interactive`），点它切到终端如实渲染。
 
 ### 写态 sheet 的三档
 
