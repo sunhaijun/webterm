@@ -18,7 +18,7 @@
  */
 
 /** reset 回放前置的 SGR reset 字节数，不计入 out_seq（见 protocol/frame.ts）。 */
-const ATTR_PREFIX_LEN = 4
+export const ATTR_PREFIX_LEN = 4
 
 /** 每个会话保留的输出字节上限。超出的从最旧的一端丢。 */
 export const DEFAULT_RETAIN_BYTES = 512 * 1024

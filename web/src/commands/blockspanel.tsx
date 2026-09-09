@@ -14,9 +14,11 @@ export interface BlocksPanelProps {
   cols: number
   onClose(): void
   onFill(text: string): void
+  /** 「在终端里看」：定位到该块（ADR-0011 ④）。 */
+  onViewTerm?(b: Block): void
 }
 
-export function BlocksPanel({ blocks, bytesOf, cols, onClose, onFill }: BlocksPanelProps) {
+export function BlocksPanel({ blocks, bytesOf, cols, onClose, onFill, onViewTerm }: BlocksPanelProps) {
   const [onlyFailed, setOnlyFailed] = useState(false)
   const [open, setOpen] = useState<Set<number>>(() => new Set(blocks.filter(failed).map((b) => b.cmdId)))
 
@@ -54,6 +56,7 @@ export function BlocksPanel({ blocks, bytesOf, cols, onClose, onFill }: BlocksPa
             open={open}
             onToggle={toggle}
             onFill={onFill}
+            onViewTerm={onViewTerm}
           />
         </div>
       </div>

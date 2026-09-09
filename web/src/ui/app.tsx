@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
 import { listCommands, type CommandRecord } from '../commands/api'
-import { BlockStore, type Block } from '../commands/blocks'
+import { ATTR_PREFIX_LEN, BlockStore, type Block } from '../commands/blocks'
 import { BlocksPanel } from '../commands/blockspanel'
 import { ReadView, TAIL_NOISE_BYTES } from '../commands/readview'
 import { HistoryPanel, QuickBar } from '../commands/history'
@@ -22,6 +22,7 @@ import { RawIme, cursorPosition } from '../input/raw'
 import { SLOT_HEIGHT, WriteSheet, type SheetSize } from '../input/sheet'
 import { T } from '../protocol/messages'
 import { SessionStore, type SessionView } from '../sessions/store'
+import { locateBlock } from '../term/locate'
 import { ExitedBar, SessionList } from './sessionlist'
 import { applyTheme, readFontSize, readTheme, writeFontSize, type Theme } from './settings'
 import { RecoveredToast, StatusBar } from './status'
@@ -125,6 +126,8 @@ export function App() {
   const [bottomH, setBottomH] = useState(SLOT_HEIGHT)
   const [draft, setDraft] = useState({ value: '', cursor: 0 })
   const [moreOpen, setMoreOpen] = useState(false)
+  // 最近一次「在终端里看」是怎么定位的（marker / search / bottom），测试与诊断用
+  const lastLocateRef = useRef<string>('')
   const changeSheet = useCallback((next: SheetSize) => {
     setSheet(next)
     // 收起就收键盘 —— sheet 收了键盘还占着半屏，等于没收
@@ -175,7 +178,8 @@ export function App() {
       clientID: clientID(),
       handlers: {
         onOutput(sid, data, attrPrefix, startSeq) {
-          store.write(sid, data)
+          // 带上 out_seq：写入时在 command.start/end 的位置登记行锚点（ADR-0011 ④）
+          store.write(sid, data, startSeq, attrPrefix ? ATTR_PREFIX_LEN : 0)
           blocks.write(sid, data, attrPrefix, startSeq)
           // live-tail：读视图里正在跑的块 / 尾块要跟着输出长。输出可能很密，
           // 120ms 节流一次重渲染 —— 运行中的块是纯文本渲染，便宜。
@@ -214,10 +218,13 @@ export function App() {
             }
             case T.commandStart:
               blocks.cmdStart(msg.sid, msg)
+              // 事件先于帧到达（协议 §4），所以此刻登记的锚点会落在正确的行
+              store.markAt(msg.sid, msg.out_seq, `start:${msg.cmd_id}`)
               bumpBlocks()
               break
             case T.commandEnd:
               blocks.cmdEnd(msg.sid, msg)
+              store.markAt(msg.sid, msg.out_seq, `end:${msg.cmd_id}`)
               bumpBlocks()
               break
             case T.prompt:
@@ -451,6 +458,15 @@ export function App() {
       view: () => viewRef.current,
       altScreen: () => (store.active === null ? false : store.altScreenOf(store.active)),
       sheet: () => sheetRef.current,
+      lastLocate: () => lastLocateRef.current,
+      // 测试用：终端视口顶行在缓冲里的位置与文字（「在终端里看」定位是否落对）
+      viewport: () => {
+        const sid = store.active
+        const term = sid === null ? undefined : store.termOf(sid)
+        if (!term) return { y: -1, top: '' }
+        const buf = term.term.buffer.active
+        return { y: buf.viewportY, top: buf.getLine(buf.viewportY)?.translateToString(true) ?? '' }
+      },
       // 测试/诊断：读视图块流的内部状态
       blocks: () => {
         const sid = store.active
@@ -505,6 +521,27 @@ export function App() {
 
   const runText = (text: string) => {
     if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
+  }
+  // 「在终端里看」：切到终端视图并滚到该块输出的第一行（ADR-0011 ④）
+  const viewBlockInTerm = (b: Block) => {
+    const sid = activeSid
+    const store = storeRef.current
+    const th = sid === null ? undefined : store?.termOf(sid)
+    changeView('term')
+    if (sid === null || !store || !th) return
+    // 切完视图 xterm 才可见，滚动与高亮放到下一帧
+    requestAnimationFrame(() => {
+      lastLocateRef.current = locateBlock(
+        {
+          term: th.term,
+          search: th.search,
+          start: store.markOf(sid, `start:${b.cmdId}`),
+          end: store.markOf(sid, `end:${b.cmdId}`),
+        },
+        b,
+        blocksRef.current?.blocks(sid) ?? [],
+      )
+    })
   }
   // 桌面（≥1024px）保留经典底栏：模式条 + 输入框 + 快捷条 + 键条，两种视图一样。
   // 手机 / 平板两种视图共用同一个 56px 的槽（ADR-0011 ③）：读视图里它是写态 sheet 的
@@ -692,7 +729,7 @@ export function App() {
               onCopy={(text) => {
                 navigator.clipboard?.writeText(text).catch(() => {})
               }}
-              onViewTerm={() => changeView('term')}
+              onViewTerm={viewBlockInTerm}
             />
           )}
           <div class="term" ref={termAreaRef} data-testid="terminal" data-hidden={view === 'read'} />
@@ -1014,6 +1051,10 @@ export function App() {
           onFill={(text) => {
             composerRef.current?.fill(text)
             setBlocksOpen(false)
+          }}
+          onViewTerm={(b) => {
+            setBlocksOpen(false)
+            viewBlockInTerm(b)
           }}
         />
       )}
