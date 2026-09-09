@@ -1,74 +1,74 @@
 /**
  * 「前台有程序在占屏」的检测 —— ADR-0011 分片 ② 的推广。
  *
- * 老信号只有备用屏幕缓冲（vim / top / less 的 `\e[?1049h`）。claude、codex 这类
- * 现代 CLI 在【主屏缓冲】上就地重绘，不切备用缓冲，得靠别的机械信号识别。
+ * 占屏有两类信号：
+ *  1. xterm 能自己跟踪的【模式】——【实时读】，程序退出复位后立即反映（不粘）：
+ *     - 备用屏幕缓冲（`buffer.active.type === 'alternate'`）：vim / top? / less / htop
+ *     - 应用光标键 DECCKM（`\e[?1h`）：top（不切备用缓冲，靠它想接管方向键）
+ *     - 鼠标跟踪（`\e[?1000/1002/1003/1006h`）
+ *  2. xterm 不跟踪的信号 ——【粘】到命令边界（reset()），因为没有"复位"可读：
+ *     - 富键盘协议：Kitty 键盘入栈 `\e[>…u`、modifyOtherKeys `\e[>…m`：claude / codex
+ *     - 同步输出 DECSET 2026（整帧重绘）：codex
  *
- * 【关键：用"程序建立了富键盘输入"当信号，而不是"藏光标 + 光标上移"】。
- * 后者会误伤 npm / pnpm / cargo / docker 这类多行进度条 —— 它们也藏光标、也
- * 上移重绘，一旦被判成占屏就会把用户莫名甩进终端视图、打断输入（实测复现）。
- * 而全屏交互程序会主动【设置键盘协议】来接管按键：
- *   - Kitty 键盘协议入栈：`\e[>…u`
- *   - modifyOtherKeys（XTMODKEYS）：`\e[>…m`
- *   - 同步输出（DECSET 2026）：整帧重绘
- * 进度条工具从不发这些。claude / codex / vim / top / less 都发（或切备用缓冲）。
- *
- * 判定在一条命令内【粘】—— 程序在输入框显示光标不代表退出了 —— 只在命令边界
- * （reset()）清掉。
+ * 【关键】：DECCKM / 备用缓冲要【实时读】而不是粘 —— 否则 less/vim 这种既切备用缓冲
+ * 又设 DECCKM 的程序，按 q 退出后备用缓冲已关、DECCKM 已复位，却因为"粘"还占着，
+ * 迟迟不回读（实测：回读超时）。而进度条（npm/cargo/docker）不进入任何这些模式。
  */
 import type { IDisposable, Terminal } from '@xterm/xterm'
 
 export interface InteractiveDetector {
-  /** 当前是否有程序占屏（备用缓冲 或 主屏全屏程序）。 */
   get(): boolean
   onChange(cb: (on: boolean) => void): () => void
-  /** 命令边界：清掉主屏占屏判定（备用缓冲由 xterm 自己维护）。 */
+  /** 命令边界：清掉"粘"的信号（键盘协议 / 2026）。模式类由 xterm 自己维护。 */
   reset(): void
-  /** 从当前 xterm 模式重新判定占屏（重连 / 切会话后补判已在跑的全屏程序）。 */
+  /** 从当前 xterm 模式重新判定（重连 / 切会话后补判已在跑的全屏程序）。 */
   sync(): void
   dispose(): void
 }
 
 export function installInteractive(term: Terminal): InteractiveDetector {
-  let occupied = false // 主屏全屏程序，sticky，reset 清
+  let sticky = false // 键盘协议 / 2026，reset 清
   let last = false
   const cbs = new Set<(on: boolean) => void>()
   const disposers: IDisposable[] = []
 
   const alt = () => term.buffer.active.type === 'alternate'
-  const state = () => alt() || occupied
+  const modeOn = () => {
+    try {
+      const m = term.modes
+      return m.applicationCursorKeysMode || m.mouseTrackingMode !== 'none'
+    } catch {
+      return false
+    }
+  }
+  const state = () => alt() || modeOn() || sticky
   const fire = () => {
     const v = state()
     if (v === last) return
     last = v
     for (const cb of cbs) cb(v)
   }
+  // 模式在 xterm 的默认处理器里更新（在我们的处理器之后），所以延到微任务再读
+  const fireSoon = () => queueMicrotask(fire)
   const mark = () => {
-    if (occupied) return
-    occupied = true
+    if (sticky) return
+    sticky = true
     fire()
   }
 
   disposers.push(term.buffer.onBufferChange(() => fire()))
-  // 富键盘输入的建立 = 交互式全屏程序（进度条不发这些），返回 false 不消费
-  disposers.push(term.parser.registerCsiHandler({ prefix: '>', final: 'u' }, () => (mark(), false))) // Kitty 键盘入栈
-  disposers.push(term.parser.registerCsiHandler({ prefix: '>', final: 'm' }, () => (mark(), false))) // modifyOtherKeys
-  // DECSET：同步输出(2026)整帧重绘、应用光标键(DECCKM ?1)、鼠标跟踪(?1000/1002/1003/1006)
-  // —— top/vim/htop 这类全屏程序会设这些输入模式，进度条不设。
+  // 粘信号：富键盘协议、同步输出
+  disposers.push(term.parser.registerCsiHandler({ prefix: '>', final: 'u' }, () => (mark(), false)))
+  disposers.push(term.parser.registerCsiHandler({ prefix: '>', final: 'm' }, () => (mark(), false)))
+  // DECSET/DECRST：2026 是粘信号；其余（DECCKM ?1、鼠标 ?1000… 的开关）走实时模式，只需触发一次重判
   disposers.push(
     term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
-      if (
-        params.includes(2026) ||
-        params.includes(1) ||
-        params.includes(1000) ||
-        params.includes(1002) ||
-        params.includes(1003) ||
-        params.includes(1006)
-      )
-        mark()
+      if (params.includes(2026)) mark()
+      else fireSoon()
       return false
     }),
   )
+  disposers.push(term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, () => (fireSoon(), false)))
 
   return {
     get: state,
@@ -77,18 +77,11 @@ export function installInteractive(term: Terminal): InteractiveDetector {
       return () => cbs.delete(cb)
     },
     reset() {
-      occupied = false
+      sticky = false
       fire()
     },
     sync() {
-      // 重连后：回放已把 top 的 DECCKM / 鼠标模式写进 xterm，据此补判占屏
-      try {
-        const m = term.modes
-        if (m.applicationCursorKeysMode || m.mouseTrackingMode !== 'none') mark()
-        else fire()
-      } catch {
-        fire()
-      }
+      fire() // state() 会实时读备用缓冲 + 模式
     },
     dispose() {
       for (const d of disposers) d.dispose()
