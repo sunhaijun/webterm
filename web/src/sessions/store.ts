@@ -148,6 +148,11 @@ export class SessionStore {
     this.entries.get(sid)?.detector.reset()
   }
 
+  /** 重连 / 切到某会话后，从 xterm 当前模式补判占屏（top 这类可能在重连前就已在跑）。 */
+  syncInteractive(sid: number): void {
+    this.entries.get(sid)?.detector.sync()
+  }
+
   patch(sid: number, patch: Partial<SessionInfo>): void {
     const e = this.entries.get(sid)
     if (!e) return

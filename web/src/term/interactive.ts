@@ -24,6 +24,8 @@ export interface InteractiveDetector {
   onChange(cb: (on: boolean) => void): () => void
   /** 命令边界：清掉主屏占屏判定（备用缓冲由 xterm 自己维护）。 */
   reset(): void
+  /** 从当前 xterm 模式重新判定占屏（重连 / 切会话后补判已在跑的全屏程序）。 */
+  sync(): void
   dispose(): void
 }
 
@@ -51,9 +53,19 @@ export function installInteractive(term: Terminal): InteractiveDetector {
   // 富键盘输入的建立 = 交互式全屏程序（进度条不发这些），返回 false 不消费
   disposers.push(term.parser.registerCsiHandler({ prefix: '>', final: 'u' }, () => (mark(), false))) // Kitty 键盘入栈
   disposers.push(term.parser.registerCsiHandler({ prefix: '>', final: 'm' }, () => (mark(), false))) // modifyOtherKeys
+  // DECSET：同步输出(2026)整帧重绘、应用光标键(DECCKM ?1)、鼠标跟踪(?1000/1002/1003/1006)
+  // —— top/vim/htop 这类全屏程序会设这些输入模式，进度条不设。
   disposers.push(
     term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
-      if (params.includes(2026)) mark() // 同步输出：整帧重绘
+      if (
+        params.includes(2026) ||
+        params.includes(1) ||
+        params.includes(1000) ||
+        params.includes(1002) ||
+        params.includes(1003) ||
+        params.includes(1006)
+      )
+        mark()
       return false
     }),
   )
@@ -67,6 +79,16 @@ export function installInteractive(term: Terminal): InteractiveDetector {
     reset() {
       occupied = false
       fire()
+    },
+    sync() {
+      // 重连后：回放已把 top 的 DECCKM / 鼠标模式写进 xterm，据此补判占屏
+      try {
+        const m = term.modes
+        if (m.applicationCursorKeysMode || m.mouseTrackingMode !== 'none') mark()
+        else fire()
+      } catch {
+        fire()
+      }
     },
     dispose() {
       for (const d of disposers) d.dispose()

@@ -41,16 +41,30 @@ export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, inset = 
   // 真踩到了。用一个"已处理过失败态"的集合，保证只自动展开一次，
   // 用户之后手动折叠不会被再次撑开。
   const autoOpened = useRef<Set<number>>(new Set(blocks.filter(failed).map((b) => b.cmdId)))
+  // 用户手动展开过的块（点头部）—— 它们不被"最后一条切换"时的自动折叠碰。
+  const manualOpen = useRef<Set<number>>(new Set())
+  // 【最新一条命令的块自动展开】（终端般：一眼看到最新输出）。切到更新的命令时，
+  // 上一条【自动展开】的收起（除非它失败了、或用户手动展开过），只留最新一条展开。
+  const lastAuto = useRef<number | null>(null)
+  let nextOpen: Set<number> | null = null
+  const edit = () => (nextOpen ??= new Set(open))
   for (const b of blocks) {
     if (failed(b) && !autoOpened.current.has(b.cmdId)) {
       autoOpened.current.add(b.cmdId)
-      if (!open.has(b.cmdId)) {
-        const next = new Set(open)
-        next.add(b.cmdId)
-        setOpen(next)
-      }
+      if (!open.has(b.cmdId)) edit().add(b.cmdId)
     }
   }
+  const lastBlock = blocks.length > 0 ? blocks[blocks.length - 1] : null
+  if (lastBlock && lastAuto.current !== lastBlock.cmdId) {
+    const prev = lastAuto.current
+    lastAuto.current = lastBlock.cmdId
+    if (!open.has(lastBlock.cmdId)) edit().add(lastBlock.cmdId)
+    if (prev !== null && !manualOpen.current.has(prev)) {
+      const pb = blocks.find((b) => b.cmdId === prev)
+      if (pb && !failed(pb) && open.has(prev)) edit().delete(prev)
+    }
+  }
+  if (nextOpen) setOpen(nextOpen)
 
   const atBottom = useRef(true)
   const onScroll = () => {
@@ -66,8 +80,13 @@ export function ReadView({ blocks, bytesOf, tail, showTail, cols, tick, inset = 
   const toggle = (id: number) =>
     setOpen((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(id)) {
+        next.delete(id)
+        manualOpen.current.delete(id)
+      } else {
+        next.add(id)
+        manualOpen.current.add(id) // 手动展开：不被自动折叠碰
+      }
       return next
     })
 

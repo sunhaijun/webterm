@@ -91,6 +91,34 @@ test('多行进度条（npm/cargo 那类：藏光标 + 上移重绘但不建立�
   expect(await view(page)).toBe('read')
 })
 
+test('应用光标键（DECCKM \\e[?1h，top/vim 那类主屏全屏程序）也识别为占屏、自动进终端', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  expect(await view(page)).toBe('read')
+  // 合成 top 那类：设应用光标键(DECCKM) + 藏光标反复重绘，跑完复位、自退（不切备用缓冲、无键盘协议）
+  await submit(page, "printf '\\033[?1h\\033[?25l'; for i in $(seq 1 12); do printf '\\033[H\\033[Jframe %s\\n' $i; sleep 0.2; done; printf '\\033[?1l\\033[?25h\\n'")
+  await waitFor(async () => (await interactive(page)) === true, 'DECCKM 被识别为占屏', 10_000)
+  expect(await alt(page), '不切备用缓冲').toBe(false)
+  await waitFor(async () => (await view(page)) === 'term', '自动进终端', 5_000)
+  await waitFor(async () => (await interactive(page)) === false, '退出占屏', 12_000)
+  await waitFor(async () => (await view(page)) === 'read', '回读', 6_000)
+})
+
+test('占屏程序（DECCKM）运行中刷新页面：重连后仍在终端，不卡在坏块', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  // 设 DECCKM 后长睡（模拟 top 一直在跑），刷新前一直占屏
+  await submit(page, "printf '\\033[?1h\\033[?25l'; sleep 30; printf '\\033[?1l\\033[?25h'")
+  await waitFor(async () => (await view(page)) === 'term', '进终端', 10_000)
+  await page.waitForTimeout(1000)
+  await page.reload()
+  await expect(page.getByTestId('conn-text')).toHaveText('在线', { timeout: 15_000 })
+  await waitFor(async () => (await view(page)) === 'term', '重连后仍在终端', 8_000)
+  expect(await interactive(page)).toBe(true)
+})
+
 test('less 占屏：键条换成分页器键，按 q 退出后回读', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)

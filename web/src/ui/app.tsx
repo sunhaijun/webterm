@@ -298,8 +298,14 @@ export function App() {
       attachIme()
       setTruncated(false)
       sendResize()
-      // 切到的会话如果正有程序占屏，视图要跟着它
+      // 切到的会话如果正有程序占屏，视图要跟着它。回放（top 的 DECCKM 等）会稍后到达，
+      // 到达时检测器的 CSI 处理器会补判；这里再延迟补一次 sync 兜底。
       applyInteractive(store.interactiveOf(sid))
+      setTimeout(() => {
+        if (store.active !== sid) return
+        store.syncInteractive(sid)
+        applyInteractive(store.interactiveOf(sid))
+      }, 600)
     }
     const newSession = () => {
       const cur = store.active !== null ? store.get(store.active) : undefined
