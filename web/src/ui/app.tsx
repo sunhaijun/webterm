@@ -73,6 +73,7 @@ export function App() {
   const storeRef = useRef<SessionStore | null>(null)
   const composerRef = useRef<ComposerHandle | null>(null)
   const sendRawRef = useRef<(bytes: string) => void>(() => {})
+  const focusTermRef = useRef<() => void>(() => {})
 
   const [connState, setConnState] = useState<ConnState>('connecting')
   const [info, setInfo] = useState<StateInfo>({})
@@ -330,6 +331,12 @@ export function App() {
       conn.sendInput(sid, new TextEncoder().encode(bytes))
     }
     sendRawRef.current = sendRaw
+    // 聚焦 xterm 的隐藏 textarea —— 必须在点击手势里调用，手机才会弹出软键盘
+    focusTermRef.current = () => {
+      const sid = store.active
+      const t = sid === null ? undefined : store.termOf(sid)
+      t?.term.focus()
+    }
 
     // 应用级快捷键要拦下来，不能让它们进 PTY
     const onKey = (e: KeyboardEvent) => {
@@ -939,6 +946,14 @@ export function App() {
                         <button class="keybar-key keybar-lead" data-testid="open-more" aria-label="更多" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
                           ⋯
                         </button>
+                        <button
+                          class="keybar-key keybar-type"
+                          data-testid="term-type"
+                          title="调出键盘，直接打字给程序"
+                          onClick={() => focusTermRef.current()}
+                        >
+                          ⌨ 打字
+                        </button>
                       </>
                     ) : undefined
                   }
@@ -947,7 +962,11 @@ export function App() {
             }
           >
             {view === 'read' && mode.mode === 'raw' && rawLineEl}
-            {view === 'term' && mode.mode === 'raw' && <span class="bar-hint">按键直通终端</span>}
+            {view === 'term' && mode.mode === 'raw' && (
+              <button class="bar-hint bar-type" data-testid="term-type-hint" onClick={() => focusTermRef.current()}>
+                ⌨ 点此打字，直接输入到程序
+              </button>
+            )}
             <Composer
               hidden={mode.mode === 'raw'}
               placeholder="输入命令…"

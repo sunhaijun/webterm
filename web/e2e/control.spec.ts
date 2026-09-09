@@ -199,6 +199,37 @@ test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；直
   await expect(page.locator('[data-testid$="-interactive"]')).toBeEnabled()
 })
 
+test('终端视图有「⌨ 打字」入口：点它聚焦终端、唤起键盘，直接打字给程序', async ({ page }) => {
+  const sent: string[] = []
+  await page.exposeFunction('__rec', (x: string) => sent.push(x))
+  await page.addInitScript(() => {
+    const send = WebSocket.prototype.send
+    WebSocket.prototype.send = function (d: unknown) {
+      try {
+        const buf = d instanceof ArrayBuffer ? d : (d as { buffer?: ArrayBuffer })?.buffer
+        if (buf) { const u = new Uint8Array(buf); let x = ''; for (let i = 0; i < u.length; i++) { const c = u[i]!; x += c >= 32 && c < 127 ? String.fromCharCode(c) : '.' }; (window as unknown as { __rec(s: string): void }).__rec(x) }
+      } catch { /* ignore */ }
+      return send.call(this, d as never)
+    }
+  })
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  // 合成占屏程序（键盘协议）→ 自动进终端
+  await submit(page, "printf '\\033[>1u\\033[?25l'; sleep 60")
+  await waitFor(async () => (await view(page)) === 'term', '进终端', 10_000)
+  // 「⌨ 打字」入口在
+  await expect(page.getByTestId('term-type')).toBeVisible()
+  // 点它 → xterm 聚焦
+  await page.getByTestId('term-type').click()
+  await page.waitForTimeout(150)
+  expect(await page.evaluate(() => document.activeElement?.className || ''), '点打字后 xterm 聚焦').toContain('xterm')
+  // 打字直达程序
+  sent.length = 0
+  await page.keyboard.type('x')
+  await waitFor(async () => sent.some((s) => s.endsWith('x')), '字符直达 PTY', 3_000)
+})
+
 test('用户手动选了终端视图：备用缓冲进出都不改它', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
