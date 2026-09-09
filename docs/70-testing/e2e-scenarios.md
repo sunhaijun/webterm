@@ -367,7 +367,7 @@ Playwright 可以派发 composition 事件。
 `web/e2e/control.spec.ts`，Pixel 5 视口。
 
 1. 备用缓冲：裸 `\e[?1049h … \e[?1049l` → 自动进终端、退出回读、不写偏好
-2. **主屏就地重绘**：合成"藏光标 + 反复上移重写、跑完自退"的程序（claude/codex 的机械签名，不切备用缓冲）→ `interactive` 被识别为 true 且 `altScreen` 为 false、自动进终端，程序退出后自动回读、不写偏好
+2. **主屏全屏程序**：合成"建立 Kitty 键盘协议 `\e[>1u` + 藏光标上移重写、跑完自退"的程序（claude/codex 的机械签名，不切备用缓冲）→ `interactive` 被识别为 true 且 `altScreen` 为 false、自动进终端，退出后自动回读、不写偏好；npm 式多行进度条（无键盘协议）不误触发
 3. `less` 占屏：键条换成分页器键，`q` 退出回读
 4. 用户手动选终端后，备用缓冲进出都不改它
 
