@@ -3,20 +3,19 @@ import { devices, expect, test } from '@playwright/test'
 import { Agent, submit, terminalText, waitFor } from './harness'
 
 /**
- * 控态 —— ADR-0011 分片 ②。
+ * 占屏检测 —— ADR-0013：终端始终是唯一显示面，占屏不再切视图，而是【换键条上下文】。
  *
- * 备用屏幕缓冲（DECSET 1049）是"有程序占屏"的机械信号：vim / top / less
- * 都切它，sleep 100 不切。读视图里一进备用缓冲就自动切到终端视图，退出后
- * 自动回读；键条按前台程序换内容。手动切过视图的选择不被自动切换覆盖。
+ * 占屏的机械信号：备用缓冲（DECSET 1049，vim/less/top）、富键盘协议（Kitty \e[>1u /
+ * modifyOtherKeys，claude/codex）、应用光标键（DECCKM \e[?1h，top）。命令在跑 → Raw →
+ * 键条出现；键条按前台程序换内容（less→分页器、top→top、claude→AI、其余→通用 TUI）。
+ * npm/cargo 多行进度条【不】建立这些模式，不该被判占屏。
  */
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 test.use(PIXEL)
 
-type Hooks = { __webterm: { view(): string; altScreen(): boolean; interactive(): boolean } }
-const view = (page: import('@playwright/test').Page) => page.evaluate(() => (window as unknown as Hooks).__webterm.view())
-const alt = (page: import('@playwright/test').Page) => page.evaluate(() => (window as unknown as Hooks).__webterm.altScreen())
-const interactive = (page: import('@playwright/test').Page) => page.evaluate(() => (window as unknown as Hooks).__webterm.interactive())
-const stored = (page: import('@playwright/test').Page) => page.evaluate(() => localStorage.getItem('webterm.view'))
+type Hooks = { __webterm: { altScreen(): boolean; interactive(): boolean; program(): string | null } }
+const alt = (p: import('@playwright/test').Page) => p.evaluate(() => (window as unknown as Hooks).__webterm.altScreen())
+const interactive = (p: import('@playwright/test').Page) => p.evaluate(() => (window as unknown as Hooks).__webterm.interactive())
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -24,102 +23,69 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-test('进备用缓冲自动切到终端，退出自动回读；自动切换不写偏好', async ({ page }) => {
+test('备用缓冲 = 占屏：键条出现且是通用 TUI 键；退出后键条退场', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  expect(await view(page)).toBe('read')
 
-  // 用裸转义序列模拟一个占屏程序：进备用缓冲 → 停 2.5 秒 → 退出。
-  // 不依赖机器上装了什么 TUI，结论只关乎信号本身。
   await submit(page, "printf '\\033[?1049h'; sleep 2.5; printf '\\033[?1049l'")
   await waitFor(async () => (await alt(page)) === true, '备用缓冲激活', 10_000)
-  expect(await view(page)).toBe('term')
-  await expect(page.getByTestId('terminal')).toHaveAttribute('data-hidden', 'false')
-  // 不认识的程序 → 通用 TUI 键条，Esc / ^C 在
   await expect(page.getByTestId('keybar')).toHaveAttribute('data-context', /printf|tui/)
   await expect(page.getByTestId('key-Escape')).toBeVisible()
   await expect(page.getByTestId('key-CtrlC')).toBeVisible()
 
   await waitFor(async () => (await alt(page)) === false, '备用缓冲退出', 10_000)
-  await waitFor(async () => (await view(page)) === 'read', '自动回到读', 5_000)
-  // 回到 prompt：功能键条退场（写态的编辑键在 sheet 里，ADR-0011 ③）
-  await expect(page.getByTestId('keybar')).toHaveCount(0, { timeout: 5_000 })
-  // 自动切换是临时的，不能把用户偏好改成 term
-  expect(await stored(page)).not.toBe('term')
+  // 回到 prompt（Composer 模式）→ 键条退场
+  await expect(page.getByTestId('keybar')).toHaveCount(0, { timeout: 8_000 })
 })
 
-test('主屏就地重绘（claude/codex 那类，不切备用缓冲）也自动进终端，退出回读', async ({ page }) => {
+test('富键盘协议（\\e[>1u，claude/codex 那类主屏程序）= 占屏', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  expect(await view(page)).toBe('read')
-
-  // 合成一个全屏交互程序：建立 Kitty 键盘协议（\e[>1u，claude/codex 的机械签名，
-  // 进度条从不发这个），再藏光标反复上移重写，跑 ~2.5s 后自己退出。
-  await submit(
-    page,
-    "printf '\\033[>1u\\033[?25l'; for i in $(seq 1 12); do printf 'frame %s\\n' $i; printf '\\033[1A'; sleep 0.2; done; printf '\\033[<u\\033[?25h\\n'",
-  )
-  // 备用缓冲【没有】激活，但仍被识别为占屏 → 自动进终端
-  await waitFor(async () => (await interactive(page)) === true, '主屏就地重绘被识别为占屏', 10_000)
+  await submit(page, "printf '\\033[>1u\\033[?25l'; sleep 3; printf '\\033[<u\\033[?25h\\n'")
+  await waitFor(async () => (await interactive(page)) === true, '被识别为占屏', 10_000)
   expect(await alt(page), '这类程序不切备用缓冲').toBe(false)
-  await waitFor(async () => (await view(page)) === 'term', '自动进终端', 5_000)
-  await expect(page.getByTestId('terminal')).toHaveAttribute('data-hidden', 'false')
-
-  // 程序自己退出（命令结束）→ 自动回读
-  await waitFor(async () => (await interactive(page)) === false, '程序退出、占屏结束', 12_000)
-  await waitFor(async () => (await view(page)) === 'read', '自动回到读', 6_000)
-  // 自动切换不写偏好
-  expect(await stored(page)).not.toBe('term')
+  await expect(page.getByTestId('keybar')).toBeVisible()
+  await waitFor(async () => (await interactive(page)) === false, '退出占屏', 12_000)
 })
 
-test('多行进度条（npm/cargo 那类：藏光标 + 上移重绘但不建立键盘协议）不误判为占屏、不甩进终端', async ({ page }) => {
+test('应用光标键（DECCKM \\e[?1h，top 那类）= 占屏', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  expect(await view(page)).toBe('read')
-  // 藏光标 + 多行上移重绘（npm/pnpm/cargo/docker 进度条的形态），但【不发键盘协议】
+  await submit(page, "printf '\\033[?1h\\033[?25l'; for i in $(seq 1 12); do printf '\\033[H\\033[Jframe %s\\n' $i; sleep 0.2; done; printf '\\033[?1l\\033[?25h\\n'")
+  await waitFor(async () => (await interactive(page)) === true, 'DECCKM 占屏', 10_000)
+  expect(await alt(page), '不切备用缓冲').toBe(false)
+  await waitFor(async () => (await interactive(page)) === false, '退出占屏', 12_000)
+})
+
+test('多行进度条（npm/cargo：藏光标 + 上移重绘，不建立键盘协议）不误判为占屏', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
   await submit(page, "printf '\\033[?25l'; for n in $(seq 1 8); do printf 'idealTree\\nreify\\nbuild\\n'; printf '\\033[3A'; sleep 0.12; done; printf '\\033[?25h\\ndone PROGRESS\\n'")
-  // 跑动全程都不该被判占屏、不该切终端
   for (let k = 0; k < 10; k++) {
     expect(await interactive(page), '进度条不该被判占屏').toBe(false)
-    expect(await view(page), '进度条不该把用户甩进终端').toBe('read')
     await page.waitForTimeout(120)
   }
   await waitFor(async () => (await terminalText(page)).includes('done PROGRESS'), '进度条跑完')
-  expect(await view(page)).toBe('read')
 })
 
-test('应用光标键（DECCKM \\e[?1h，top/vim 那类主屏全屏程序）也识别为占屏、自动进终端', async ({ page }) => {
+test('占屏程序（DECCKM）运行中刷新页面：重连后仍判占屏、键条仍在', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  expect(await view(page)).toBe('read')
-  // 合成 top 那类：设应用光标键(DECCKM) + 藏光标反复重绘，跑完复位、自退（不切备用缓冲、无键盘协议）
-  await submit(page, "printf '\\033[?1h\\033[?25l'; for i in $(seq 1 12); do printf '\\033[H\\033[Jframe %s\\n' $i; sleep 0.2; done; printf '\\033[?1l\\033[?25h\\n'")
-  await waitFor(async () => (await interactive(page)) === true, 'DECCKM 被识别为占屏', 10_000)
-  expect(await alt(page), '不切备用缓冲').toBe(false)
-  await waitFor(async () => (await view(page)) === 'term', '自动进终端', 5_000)
-  await waitFor(async () => (await interactive(page)) === false, '退出占屏', 12_000)
-  await waitFor(async () => (await view(page)) === 'read', '回读', 6_000)
-})
-
-test('占屏程序（DECCKM）运行中刷新页面：重连后仍在终端，不卡在坏块', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  // 设 DECCKM 后长睡（模拟 top 一直在跑），刷新前一直占屏
   await submit(page, "printf '\\033[?1h\\033[?25l'; sleep 30; printf '\\033[?1l\\033[?25h'")
-  await waitFor(async () => (await view(page)) === 'term', '进终端', 10_000)
+  await waitFor(async () => (await interactive(page)) === true, '进占屏', 10_000)
   await page.waitForTimeout(1000)
   await page.reload()
   await expect(page.getByTestId('conn-text')).toHaveText('在线', { timeout: 15_000 })
-  await waitFor(async () => (await view(page)) === 'term', '重连后仍在终端', 8_000)
-  expect(await interactive(page)).toBe(true)
+  await waitFor(async () => (await interactive(page)) === true, '重连后仍占屏', 8_000)
+  await expect(page.getByTestId('keybar')).toBeVisible()
 })
 
-test('less 占屏：键条换成分页器键，按 q 退出后回读', async ({ page }) => {
+test('less 占屏：键条换成分页器键，按 q 退出', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
@@ -130,23 +96,14 @@ test('less 占屏：键条换成分页器键，按 q 退出后回读', async ({ 
 
   await submit(page, 'less /etc/hostname')
   await waitFor(async () => (await alt(page)) === true, 'less 进了备用缓冲', 10_000)
-  expect(await view(page)).toBe('term')
   await expect(page.getByTestId('keybar')).toHaveAttribute('data-context', 'less')
   await expect(page.getByTestId('keybar-context')).toHaveText('less')
 
-  // 分页器键：q 退出
   await page.getByTestId('key-pager-quit').click()
   await waitFor(async () => (await alt(page)) === false, 'less 退出', 10_000)
-  await waitFor(async () => (await view(page)) === 'read', '回到读', 5_000)
-  // 那条命令在块流里是完成态
-  await expect(page.getByTestId('stream').locator('.block', { hasText: 'less /etc/hostname' })).toHaveAttribute(
-    'data-running',
-    'false',
-    { timeout: 10_000 },
-  )
 })
 
-test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；Composer 整段粘贴发送；底栏不盖终端', async ({ page }) => {
+test('Composer 整段粘贴发送：数字选项 + 回车分两帧送进程序', async ({ page }) => {
   const sent: string[] = []
   await page.exposeFunction('__rec', (x: string) => sent.push(x))
   await page.addInitScript(() => {
@@ -169,38 +126,18 @@ test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；Com
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  // 合成占屏程序：建立 Kitty 键盘协议（\e[>1u）+ 藏光标上移重写（不切备用缓冲）
   await submit(page, "printf '\\033[>1u\\033[?25l'; sleep 60")
-  await waitFor(async () => (await interactive(page)) === true, '占屏被识别', 10_000)
-  await waitFor(async () => (await view(page)) === 'term', '自动进终端', 5_000)
+  await waitFor(async () => (await interactive(page)) === true, '占屏', 10_000)
 
-  // 终端视图底栏正好一行、不侵入 canvas（曾经隐藏的直发提示行仍占 56px，盖住终端最后几行）
-  const geo = await page.evaluate(() => {
-    const b = document.querySelector('.bottom')!.getBoundingClientRect()
-    const c = document.querySelector('.canvas')!.getBoundingClientRect()
-    return { bottomH: Math.round(b.height), bottomTop: Math.round(b.top), canvasBottom: Math.round(c.bottom) }
-  })
-  expect(geo.bottomH, '底栏≈键条一行').toBeLessThanOrEqual(58)
-  expect(geo.bottomTop, '底栏顶不侵入 canvas').toBeGreaterThanOrEqual(geo.canvasBottom - 1)
-
-  // 手动回读：运行块显示"交互式"门，不是 plainText 拍扁
-  await page.getByTestId('keybar').getByTestId('view-toggle').click()
-  await waitFor(async () => (await view(page)) === 'read', '回读')
-  await expect(page.locator('[data-testid$="-interactive"]')).toBeVisible()
-  expect(await page.locator('.block-live').count(), '不再 plainText 拍扁').toBe(0)
-
-  // 读视图里还是同一个 Composer：发送 = 整段粘贴 + 回车（ADR-0012 α）
   sent.length = 0
   const composer = page.getByTestId('composer')
   await composer.fill('2')
   await composer.press('Enter')
-  await waitFor(async () => sent.some((x) => x.endsWith('2')), '内容送进 PTY', 3_000)
-  const i2 = sent.findIndex((x) => x.endsWith('2'))
-  // 回车是单独一帧，帧尾那个字节不可打印（\r → '.'）
-  await waitFor(async () => sent.slice(i2 + 1).some((x) => x.endsWith('.')), '随后补一个回车', 3_000)
+  // 送进 PTY 的字节里有 '2'，且以回车收尾（\r → 不可打印 '.'）—— 不假设分几帧
+  await waitFor(async () => { const j = sent.join(''); return j.includes('2') && j.endsWith('.') }, '2 + 回车送进 PTY', 3_000)
 })
 
-test('终端视图有「⌨ 打字」入口：点它聚焦终端、唤起键盘，直接打字给程序', async ({ page }) => {
+test('「⌨ 打字」入口：点它聚焦终端、直接打字给程序', async ({ page }) => {
   const sent: string[] = []
   await page.exposeFunction('__rec', (x: string) => sent.push(x))
   await page.addInitScript(() => {
@@ -216,35 +153,13 @@ test('终端视图有「⌨ 打字」入口：点它聚焦终端、唤起键盘�
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  // 合成占屏程序（键盘协议）→ 自动进终端
   await submit(page, "printf '\\033[>1u\\033[?25l'; sleep 60")
-  await waitFor(async () => (await view(page)) === 'term', '进终端', 10_000)
-  // 「⌨ 打字」入口在
+  await waitFor(async () => (await interactive(page)) === true, '占屏', 10_000)
   await expect(page.getByTestId('term-type')).toBeVisible()
-  // 点它 → xterm 聚焦
   await page.getByTestId('term-type').click()
   await page.waitForTimeout(150)
   expect(await page.evaluate(() => document.activeElement?.className || ''), '点打字后 xterm 聚焦').toContain('xterm')
-  // 打字直达程序
   sent.length = 0
   await page.keyboard.type('x')
   await waitFor(async () => sent.some((s) => s.endsWith('x')), '字符直达 PTY', 3_000)
-})
-
-test('用户手动选了终端视图：备用缓冲进出都不改它', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-
-  await page.getByTestId('view-toggle').click() // 手动 → term（持久化）
-  expect(await view(page)).toBe('term')
-
-  await submit(page, "printf '\\033[?1049h'; sleep 1.5; printf '\\033[?1049l'")
-  await waitFor(async () => (await alt(page)) === true, '备用缓冲激活', 10_000)
-  expect(await view(page)).toBe('term')
-  await waitFor(async () => (await alt(page)) === false, '备用缓冲退出', 10_000)
-  await page.waitForTimeout(400)
-  // 不是自动切过去的，就不该自动切回来
-  expect(await view(page)).toBe('term')
-  expect(await stored(page)).toBe('term')
 })

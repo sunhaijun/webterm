@@ -23,7 +23,6 @@ export const T = {
   pong: 'pong',
   error: 'error',
   notice: 'notice',
-  transcript: 'transcript',
 } as const
 
 export const Code = {
@@ -188,25 +187,6 @@ export interface Notice {
 }
 
 /** agent → client 的全部控制消息。 */
-/** AI CLI 会话转录里的一条（ADR-0012 β）。 */
-export interface TranscriptItem {
-  id: string
-  role: 'user' | 'assistant' | 'tool' | 'system'
-  kind: 'text' | 'tool_use'
-  text: string
-  name?: string
-  at: number
-}
-
-/** 转录增量；reset 为 true 表示新一轮跟踪开始，先清空再接。 */
-export interface Transcript {
-  t: 'transcript'
-  sid: number
-  source: 'claude' | 'codex'
-  items: TranscriptItem[]
-  reset?: boolean
-}
-
 export type ServerMessage =
   | Welcome
   | SessionCreated
@@ -221,7 +201,6 @@ export type ServerMessage =
   | Pong
   | ErrorMsg
   | Notice
-  | Transcript
 
 const KNOWN: ReadonlySet<string> = new Set(Object.values(T))
 

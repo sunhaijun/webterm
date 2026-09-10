@@ -5,8 +5,8 @@ import { Agent, submit, terminalText, waitFor } from './harness'
 /**
  * 写态 sheet —— ADR-0011 分片 ③。
  *
- * 读视图的底栏收起时是一行；碰输入框升起半屏，把手点一下到全屏，拖到底收起。
- * sheet 盖在块流上而不挤画布：xterm 的尺寸在三档之间必须一个字都不变。
+ * 底栏收起时是一行；碰输入框升起半屏，把手点一下到全屏，拖到底收起。
+ * sheet 盖在终端上而不挤画布（ADR-0013）：xterm 的尺寸在三档之间必须一个字都不变。
  * chips：空输入给同目录历史，敲了 `cd s` 给真实存在的路径，点一下补进去。
  */
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
@@ -32,11 +32,10 @@ test('三档：碰输入框升半屏，把手点一下到全屏，收起回一�
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
 
-  // 收起：一行，输入框 + 「终端」 + ⋯ 都在
+  // 收起：一行，输入框 + ⋯ 都在
   expect(await sheet(page)).toBe('closed')
   const closedBar = await rect(page, '.bottom')
   expect(closedBar.height, '收起态就是一行').toBeLessThan(70)
-  await expect(page.getByTestId('view-toggle')).toBeVisible()
   await expect(page.getByTestId('open-more')).toBeVisible()
   await expect(page.getByTestId('editkeys')).toHaveCount(0)
   const canvas0 = await rect(page, '.canvas')
@@ -52,10 +51,6 @@ test('三档：碰输入框升半屏，把手点一下到全屏，收起回一�
   expect(half.height).toBeLessThan(main.height * 0.6)
   await expect(page.getByTestId('editkeys')).toBeVisible()
   await expect(page.getByTestId('chips')).toBeVisible()
-  await expect(page.getByTestId('view-toggle'), '打开时「终端」让位给输入').toBeHidden()
-  // 块流让出被盖住的那段：它的底边在 sheet 顶上
-  const stream = await rect(page, '.stream')
-  expect(Math.abs(stream.bottom - half.top), '块流底边要贴着 sheet 顶边').toBeLessThanOrEqual(2)
   // 画布没动、PTY 没 resize
   expect(await rect(page, '.canvas')).toEqual(canvas0)
   expect(await ptySize(page)).toEqual(size0)

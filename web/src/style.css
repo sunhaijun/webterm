@@ -639,55 +639,5 @@ body {
   .xterm .xterm-helper-textarea { font-size: 16px; }
 }
 
-/* ---------- 转录视图（ADR-0012 γ）：claude / codex 在前台时读视图的画布 ---------- */
-.transcript { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
-.tr-scroll {
-  flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
-  padding: 10px 12px calc(12px + var(--tr-inset, 0px));
-  display: flex; flex-direction: column; gap: 10px;
-}
-.tr-empty { margin: 32px 8px; color: var(--muted); font-size: 13px; text-align: center; line-height: 1.6; }
-.tr-card { border-radius: 12px; padding: 10px 14px; box-shadow: var(--card-shadow); }
-.tr-user { align-self: flex-end; max-width: 88%; background: color-mix(in srgb, var(--link) 14%, var(--bg)); border: 1px solid color-mix(in srgb, var(--link) 30%, var(--line)); }
-.tr-user-text { margin: 0; font: 15px/1.55 var(--font-ui); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); }
-.tr-assistant { align-self: stretch; background: var(--surface); border: 1px solid var(--line); }
-.tr-tool { display: flex; gap: 8px; align-items: baseline; padding: 2px 6px; font: 12px var(--font-mono); color: var(--muted); overflow: hidden; }
-.tr-tool-name { flex: none; font-weight: 600; color: var(--warn); }
-.tr-tool-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tr-system { padding: 2px 6px; font: 12px var(--font-mono); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
-
-/* Markdown：正文用界面字体读起来舒服，代码块用等宽 + 代码底色，长行横滑不撑宽 */
-.tr-md { font: 15px/1.6 var(--font-ui); color: var(--fg); overflow-wrap: anywhere; }
-.tr-md > :first-child { margin-top: 0; }
-.tr-md > :last-child { margin-bottom: 0; }
-.tr-md p { margin: 0 0 10px; }
-.tr-md h1, .tr-md h2, .tr-md h3, .tr-md h4, .tr-md h5, .tr-md h6 { margin: 14px 0 8px; line-height: 1.3; text-wrap: balance; }
-.tr-md h1 { font-size: 19px; } .tr-md h2 { font-size: 17px; } .tr-md h3 { font-size: 16px; } .tr-md h4, .tr-md h5, .tr-md h6 { font-size: 15px; }
-.tr-md ul, .tr-md ol { margin: 0 0 10px; padding-left: 22px; }
-.tr-md li { margin: 3px 0; }
-.tr-md code { font: 13px var(--font-mono); background: color-mix(in srgb, var(--fg) 8%, transparent); border-radius: 4px; padding: 1px 5px; }
-.tr-md pre { margin: 8px 0 10px; padding: 10px 12px; background: var(--code-bg); color: var(--code-fg); border-radius: 8px; overflow-x: auto; overscroll-behavior-x: contain; }
-.tr-md pre code { font: 12.5px/1.5 var(--font-mono); background: transparent; padding: 0; color: inherit; white-space: pre; }
-.tr-md blockquote { margin: 0 0 10px; padding: 2px 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
-.tr-md hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
-.tr-md a { color: var(--link); }
-.tr-md .md-table { overflow-x: auto; margin: 0 0 10px; }
-.tr-md table { border-collapse: collapse; font-size: 13px; }
-.tr-md th, .tr-md td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
-.tr-md th { background: color-mix(in srgb, var(--fg) 6%, transparent); }
-
-/* 新内容药丸 */
-.tr-new {
-  position: absolute; left: 50%; bottom: calc(var(--tr-inset, 0px) + 120px); transform: translateX(-50%); z-index: 3;
-  padding: 6px 14px; border-radius: 999px; border: 1px solid var(--link); background: var(--bg); color: var(--link);
-  font: 600 13px var(--font-ui); box-shadow: var(--card-shadow); cursor: pointer;
-}
-/* 终端尾巴：贴底一条，等宽小字，整条可点进终端 */
-.tr-tail {
-  flex: none; margin-bottom: var(--tr-inset, 0px); text-align: left; cursor: pointer;
-  border: 0; border-top: 1px solid var(--line); background: var(--code-bg); color: var(--code-fg); padding: 6px 10px 6px;
-  font: inherit;
-}
-.tr-tail-label { display: block; font: 600 11px var(--font-ui); color: var(--muted); letter-spacing: .04em; margin-bottom: 4px; }
-.tr-tail-prog { color: var(--warn); font-family: var(--font-mono); }
-.tr-tail-lines { margin: 0; font: 11px/1.4 var(--font-mono); white-space: pre; overflow: hidden; max-height: calc(1.4em * 8); }
+/* 双指缩放读（ADR-0013）：放大只作用在 .xterm-screen 的 transform 上；.term 已 overflow:hidden 裁掉溢出。 */
+.term[data-zoom] .xterm-viewport { pointer-events: none; } /* 放大平移时别和 xterm 自身滚动打架 */

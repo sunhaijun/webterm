@@ -379,32 +379,6 @@
         "level": "warn",
         "message": "agent 即将重启，所有会话将结束"
       }
-    },
-    {
-      "name": "transcript_batch",
-      "json": {
-        "t": "transcript",
-        "sid": 1,
-        "source": "claude",
-        "items": [
-          {
-            "id": "u1#0",
-            "role": "user",
-            "kind": "text",
-            "text": "解释一下 context 包",
-            "at": 1757116800000
-          },
-          {
-            "id": "a1#1",
-            "role": "tool",
-            "kind": "tool_use",
-            "text": "go test ./...",
-            "name": "Bash",
-            "at": 1757116801000
-          }
-        ],
-        "reset": true
-      }
     }
   ],
   "unknown_messages": [

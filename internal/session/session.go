@@ -75,14 +75,13 @@ type Session struct {
 	// 所以【有输出却零标记】才说明这次输入去了一个没有钩子的 shell。
 	// "多久没标记"不是存活信号（见 checkIntegrationIdle 的注释）。
 	probeArmed    bool
-	probeGen      int             // 每次装探针 +1；到期定时器只认自己那一代
-	probeAt       time.Time       // 那次 Enter 的时间
-	probeOutput   bool            // 那次 Enter 之后有过输出
-	probeState    string          // Enter 时的 promptState —— 决定结论归谁
-	unmarkedRuns  int             // 连续未标记往返计数
-	unmarkedInput bool            // 对外报告：输入正去往一个没有集成的子程序
-	sink          func(msg any)   // 测试观察钩子，生产为 nil
-	obs           CommandObserver // 测试直挂的旁听者；生产走 mgr.commandObserver()
+	probeGen      int           // 每次装探针 +1；到期定时器只认自己那一代
+	probeAt       time.Time     // 那次 Enter 的时间
+	probeOutput   bool          // 那次 Enter 之后有过输出
+	probeState    string        // Enter 时的 promptState —— 决定结论归谁
+	unmarkedRuns  int           // 连续未标记往返计数
+	unmarkedInput bool          // 对外报告：输入正去往一个没有集成的子程序
+	sink          func(msg any) // 测试观察钩子，生产为 nil
 	ring          *ringbuf.Buffer
 	subs          map[Subscriber]struct{}
 	// inAck/inQueued 按 client_id 记账，【跨重连存活】（协议 §5.3）。
@@ -418,10 +417,6 @@ func (s *Session) waitLoop() {
 		Status:   strPtr(protocol.StatusExited),
 		ExitCode: &code,
 	})
-	// shell 自己退了：正在跑的 AI 命令也就结束了，停掉转录跟踪（条目留给回放）
-	if o := s.observer(); o != nil {
-		o.CommandEnded(s.sid)
-	}
 	// ring 保留，不释放：构建失败了要能回看报错（AC-4.5）。
 	if s.rcPath != "" {
 		os.Remove(s.rcPath)
@@ -544,20 +539,6 @@ func (s *Session) beginCommand(at uint64) {
 		SID: s.sid, CmdID: cmdID, Text: text, CWD: cwd,
 		At: now.UnixMilli(), OutSeq: at,
 	})
-	if o := s.observer(); o != nil {
-		o.CommandStarted(s.sid, text, cwd)
-	}
-}
-
-// observer 取命令旁听者：测试直挂在会话上，生产从 manager 拿。
-func (s *Session) observer() CommandObserver {
-	if s.obs != nil {
-		return s.obs
-	}
-	if s.mgr != nil {
-		return s.mgr.commandObserver()
-	}
-	return nil
 }
 
 // endCommand 在 133;D 时补齐退出码与耗时。
@@ -579,9 +560,6 @@ func (s *Session) endCommand(exitCode *int, at uint64) {
 		SID: s.sid, CmdID: id, ExitCode: exitCode,
 		DurationMS: dur.Milliseconds(), OutSeq: at,
 	})
-	if o := s.observer(); o != nil {
-		o.CommandEnded(s.sid)
-	}
 }
 
 // emit 把一条控制消息发给【所有连接】，不只是订阅者。
