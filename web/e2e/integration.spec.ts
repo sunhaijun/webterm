@@ -31,7 +31,9 @@ test.describe('E2E-9 输入模式自动切换', () => {
     // 跑一条慢命令 → 去抖后切 Raw
     await submit(page, 'sleep 2')
     await waitFor(async () => (await mode(page)).mode === 'raw', '命令在跑 → Raw', 10_000)
-    await expect(page.getByTestId('composer'), 'Raw 模式下输入框收起').toBeHidden()
+    // ADR-0012：Raw 下输入框不再收起（整段粘贴发送），功能键条出现
+    await expect(page.getByTestId('composer'), 'Raw 模式下输入框仍在').toBeVisible()
+    await expect(page.getByTestId('keybar')).toBeVisible()
 
     // 命令结束 → 立即切回 Composer
     await waitFor(async () => (await mode(page)).mode === 'composer', '命令结束 → Composer', 15_000)

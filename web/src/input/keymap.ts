@@ -276,6 +276,17 @@ const CONTEXT_KEYS: Record<string, readonly KeyDef[]> = {
     ...ARROWS,
   ],
   tui: [ESC_KEY, CTRL_C, { label: 'q', key: 'tui-q', bytes: 'q' }, { label: 'Enter', key: 'Enter' }, { label: 'Tab', key: 'Tab' }, ...ARROWS, { label: 'Ctrl', key: 'Ctrl' }],
+  /** AI CLI（claude / codex…）：没有 q；要的是打断、切模式（⇧Tab 发 CSI Z）、斜杠命令、选项上下。 */
+  ai: [
+    ESC_KEY,
+    CTRL_C,
+    { label: 'Enter', key: 'Enter' },
+    { label: '⇧Tab', key: 'ShiftTab', bytes: '\x1b[Z' },
+    { label: '/', key: 'ai-slash', bytes: '/' },
+    ...ARROWS.slice(0, 2),
+    { label: 'Tab', key: 'Tab' },
+    { label: 'Ctrl', key: 'Ctrl' },
+  ],
 }
 
 const PROGRAM_CONTEXT: Record<string, keyof typeof CONTEXT_KEYS> = {
@@ -283,6 +294,7 @@ const PROGRAM_CONTEXT: Record<string, keyof typeof CONTEXT_KEYS> = {
   top: 'top', htop: 'top', btop: 'top', atop: 'top',
   vim: 'vim', vi: 'vim', nvim: 'vim', view: 'vim',
   nano: 'nano', pico: 'nano',
+  claude: 'ai', codex: 'ai', gemini: 'ai', aider: 'ai',
 }
 
 /**

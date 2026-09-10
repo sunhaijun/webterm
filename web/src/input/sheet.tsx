@@ -32,7 +32,9 @@ export interface WriteSheetProps {
   editKeys: boolean
   onEditKey(key: string): void
   onSend(): void
-  /** 输入行：Composer（或命令在跑时的直发输入行）。 */
+  /** 长按发送：只粘贴不回车（命令在跑时）。 */
+  onSendHold?(): void
+  /** 输入行：Composer（命令在跑时也是它，整段粘贴发送）。 */
   children: ComponentChildren
   /** 输入行右侧、只在收起态显示的按钮（「终端」「⋯」）。class 要带 bar-btn。 */
   bar?: ComponentChildren
@@ -46,6 +48,13 @@ export interface WriteSheetProps {
 const keepFocus = (e: Event) => e.preventDefault()
 
 export function WriteSheet(p: WriteSheetProps) {
+  // 长按「发送」= 只粘贴不回车
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const held = useRef(false)
+  const cancelHold = () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    holdTimer.current = undefined
+  }
   const ref = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
   const drag = useRef<{ y0: number; h0: number; moved: boolean } | null>(null)
@@ -206,7 +215,29 @@ export function WriteSheet(p: WriteSheetProps) {
                 </button>
               ))}
             </div>
-            <button class="editkey-send" data-testid="send" onPointerDown={keepFocus} onClick={() => p.onSend()}>
+            <button
+              class="editkey-send"
+              data-testid="send"
+              title="发送 = 粘贴 + 回车；长按 = 只粘贴不回车"
+              onPointerDown={(e) => {
+                keepFocus(e)
+                held.current = false
+                if (p.onSendHold) holdTimer.current = setTimeout(() => {
+                  held.current = true
+                  p.onSendHold?.()
+                }, 450)
+              }}
+              onPointerUp={cancelHold}
+              onPointerLeave={cancelHold}
+              onPointerCancel={cancelHold}
+              onClick={() => {
+                if (held.current) {
+                  held.current = false
+                  return
+                }
+                p.onSend()
+              }}
+            >
               发送
             </button>
           </div>

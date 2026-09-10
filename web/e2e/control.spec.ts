@@ -146,7 +146,7 @@ test('less 占屏：键条换成分页器键，按 q 退出后回读', async ({ 
   )
 })
 
-test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；直发逐字立即送；底栏不盖终端', async ({ page }) => {
+test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；Composer 整段粘贴发送；底栏不盖终端', async ({ page }) => {
   const sent: string[] = []
   await page.exposeFunction('__rec', (x: string) => sent.push(x))
   await page.addInitScript(() => {
@@ -189,13 +189,15 @@ test('占屏程序在读视图：显示"在终端里看"门而不是拍扁；直
   await expect(page.locator('[data-testid$="-interactive"]')).toBeVisible()
   expect(await page.locator('.block-live').count(), '不再 plainText 拍扁').toBe(0)
 
-  // 直发逐字：输入数字立即送进 PTY（对得起"敲什么立刻送进去"）
+  // 读视图里还是同一个 Composer：发送 = 整段粘贴 + 回车（ADR-0012 α）
   sent.length = 0
-  const inp = page.getByTestId('raw-input')
-  await inp.click()
-  await inp.pressSequentially('2', { delay: 60 })
-  await waitFor(async () => sent.some((x) => x.endsWith('2')), '数字 2 立即送出', 3_000)
-  // 门是否可见已在上面断言（点击进终端的行为由 locate.spec 的 onViewTerm 覆盖）
+  const composer = page.getByTestId('composer')
+  await composer.fill('2')
+  await composer.press('Enter')
+  await waitFor(async () => sent.some((x) => x.endsWith('2')), '内容送进 PTY', 3_000)
+  const i2 = sent.findIndex((x) => x.endsWith('2'))
+  // 回车是单独一帧，帧尾那个字节不可打印（\r → '.'）
+  await waitFor(async () => sent.slice(i2 + 1).some((x) => x.endsWith('.')), '随后补一个回车', 3_000)
 })
 
 test('终端视图有「⌨ 打字」入口：点它聚焦终端、唤起键盘，直接打字给程序', async ({ page }) => {

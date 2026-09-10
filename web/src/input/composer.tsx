@@ -29,6 +29,8 @@ export interface ComposerHandle {
   deleteWord(): void
   history(dir: 'older' | 'newer'): void
   submit(): void
+  /** 取走全文并清空（长按发送 = 只粘贴不回车）。 */
+  take(): string
 }
 
 export interface ComposerProps {
@@ -103,6 +105,16 @@ export function Composer(props: ComposerProps) {
     }
     const place = (p: number) => el.setSelectionRange(p, p)
     onHandle({
+      take() {
+        const el = ref.current
+        if (!el) return ''
+        const v = el.value
+        el.value = ''
+        cursor.current.reset()
+        grow(el)
+        notify(el)
+        return v
+      },
       fill(text) {
         el.value = text
         // 光标置于末尾，方便直接改后面几个字（AC-6.4）

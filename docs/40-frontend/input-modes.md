@@ -42,7 +42,7 @@
 
 `prompt` 消息只在状态变化时发一次，客户端离线期间的那些就丢了。断线如果
 恰好跨过一个命令边界，客户端手里还是断线前的状态 —— 命令早跑完了它却以为
-还在跑，于是停在 Raw、Composer 收起，**用户连字都打不了**，要等下一条命令
+还在跑，于是停在 Raw、提交语义变成"发给程序"，**用户敲的下一条命令会被粘进上一条的 stdin**，要等下一条命令
 才自愈。
 
 所以收到 `welcome` 时要用 `sessions[].prompt_state` 重算一次（`locked` 时
@@ -228,9 +228,9 @@ visualViewport.addEventListener('scroll', onViewportChange)
 | 模式 | 读视图里的输入 |
 |---|---|
 | Composer | 底栏收起时是一行输入框（`data-testid="composer"`，始终是同一个 `textarea`）+「终端」+ ⋯。碰它升起 sheet：半屏 / 全屏 |
-| Raw | **直发输入行**（`data-testid="rawline"`）：单行 `input`，**逐字立刻送进 PTY**（对得起"敲什么立刻送进去"，也让 codex/claude 的 `1`/`2` 选项、`y`/`n` 即时生效）；Enter/Backspace/方向键映射成控制字节直发；组字期间不发、`compositionend` 一次性送。用于 `[Y/n]`、菜单选择、密码、REPL 这类"命令在跑但要输入"的场景 |
+| Raw | **还是同一个 Composer**（ADR-0012）。发送 = 整段交给 `xterm.paste()`（按前台程序的括号粘贴模式自动包裹、换行转回车）再补一个回车；sheet 里的「发送」**长按 = 只粘贴不回车**（codex 的数字选项、y/n 这类想自己按回车的场合）。单键（Esc ^C ⇧Tab ↑ ↓ Enter Tab Ctrl）在功能键条 |
 
-直发输入行**逐字直发**（发完即清空，回显由 PTY 出）；组字期间不送、`compositionend` 时一次性送最终文本（满足 AC-3.3）。**占屏程序（claude/codex/vim…）在读视图运行时不再用 `plainText` 拍扁**（那样会单词粘连、box-drawing 错位、还漏出裸转义）——运行块显示一个"⌨ 交互式程序正在运行 —— 在终端里查看与操作"的门（`data-testid` 后缀 `-interactive`），点它切到终端如实渲染。
+长文在本地编辑完一次送出：慢网下不再逐键往返等回显，iOS 输入法也走原生 textarea（满足 AC-3.3）。claude / codex 都开了括号粘贴（`?2004h`），多行 prompt 不会被换行提前提交。**占屏程序（claude/codex/vim…）在读视图运行时不再用 `plainText` 拍扁**（那样会把光标定位输出拍成乱码）。
 
 ### 写态 sheet 的三档
 

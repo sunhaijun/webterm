@@ -478,11 +478,6 @@ body {
 .block-tail .block-cmd-muted { color: var(--muted); font-style: italic; }
 
 /* 直发输入行：命令在跑时替换 Composer（读视图） */
-.rawline { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--bg); }
-.rawline .rawlabel { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--warn); }
-.rawline input { flex: 1; min-height: 40px; padding: 0 12px; border: 1px solid var(--warn); border-radius: 999px;
-  background: var(--bg); color: var(--fg); font: 14px var(--font-mono); }
-.rawline input:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 
 /* 视图切换按钮：和模式条其它按钮同款，但 44px 命中区 */
 .modebar .view-toggle { min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; text-decoration: none; font-weight: 500; }
@@ -546,7 +541,6 @@ body {
   border-radius: 10px; font-size: 16px; line-height: 1.5;
 }
 .bar .composer:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
-.bar .rawline { flex: 1 1 auto; min-width: 0; padding: 0; border-top: 0; background: transparent; }
 .editkeys { flex: none; display: flex; gap: 6px; padding: 0 10px 8px; }
 .editkeys-scroll { flex: 1 1 0; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
 .editkeys-scroll::-webkit-scrollbar { display: none; }
@@ -642,6 +636,5 @@ body {
    translateY 补偿管不了横向平移。触屏上把会拿焦点的控件都抬到 16px 起，免疫这一手。 */
 @media (pointer: coarse) {
   .bar .composer { font-size: 16px; }
-  .rawline input { font-size: 16px; }
   .xterm .xterm-helper-textarea { font-size: 16px; }
 }
