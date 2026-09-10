@@ -7,11 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/sunhaijun/webterm/internal/auth"
 	"github.com/sunhaijun/webterm/internal/session"
 	"github.com/sunhaijun/webterm/internal/store"
+	"github.com/sunhaijun/webterm/internal/transcript"
 	"github.com/sunhaijun/webterm/internal/wsconn"
 )
 
@@ -27,6 +29,9 @@ type Config struct {
 	MaxHistory int
 	Version    string
 	Logger     *slog.Logger
+	// TranscriptHome 是找 ~/.claude/projects 与 ~/.codex/sessions 的 home（ADR-0012 β）。
+	// 空 = 当前用户的 home；测试与 E2E 用 WEBTERM_TRANSCRIPT_HOME 指到临时目录。
+	TranscriptHome string
 
 	// 下面几个只为集成测试而存在，生产走默认值。
 	WSIdleTimeout   time.Duration
@@ -45,6 +50,8 @@ type Agent struct {
 	sessions *session.Manager
 	hub      *wsconn.Hub
 	mux      *http.ServeMux
+	// transcripts 跟踪前台 claude / codex 的会话文件（ADR-0012 β）
+	transcripts *transcript.Service
 }
 
 // New 组装 agent。
@@ -62,6 +69,12 @@ func New(cfg Config, st *store.Store, sessions *session.Manager) *Agent {
 		hub:      wsconn.NewHub(cfg.MaxConns),
 		mux:      http.NewServeMux(),
 	}
+	home := cfg.TranscriptHome
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	a.transcripts = transcript.New(transcript.DefaultRoots(home), sessions.Fanout)
+	sessions.SetCommandObserver(a.transcripts)
 	a.routes()
 	return a
 }
@@ -111,6 +124,8 @@ func (a *Agent) routes() {
 
 	// 写态路径补全（ADR-0011 ③）：与 shell 同权限，见 fs.go
 	a.mux.Handle("GET /api/fs", a.requireAuth(http.HandlerFunc(a.handleFS)))
+	// AI CLI 会话转录回放（ADR-0012 β），见 transcript.go
+	a.mux.Handle("GET /api/transcript", a.requireAuth(http.HandlerFunc(a.handleTranscript)))
 
 	a.mux.Handle("GET /api/settings", a.requireAuth(http.HandlerFunc(a.handleGetSettings)))
 	a.mux.Handle("PATCH /api/settings", a.requireAuth(http.HandlerFunc(a.handlePatchSettings)))

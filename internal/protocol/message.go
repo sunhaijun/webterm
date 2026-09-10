@@ -29,6 +29,7 @@ const (
 	TPong           = "pong"
 	TError          = "error"
 	TNotice         = "notice"
+	TTranscript     = "transcript"
 )
 
 // 错误码（协议 §7）。
@@ -260,6 +261,29 @@ type CommandEnd struct {
 	OutSeq     uint64 `json:"out_seq"`
 }
 
+// TranscriptItem 是 AI CLI 会话转录里的一条（ADR-0012 β）。
+//
+// Role：user / assistant / tool / system；Kind：text / tool_use。
+// Text 对 text 是 Markdown 正文，对 tool_use 是一行摘要（命令、路径…）。
+type TranscriptItem struct {
+	ID   string `json:"id"`
+	Role string `json:"role"`
+	Kind string `json:"kind"`
+	Text string `json:"text"`
+	Name string `json:"name,omitempty"`
+	At   int64  `json:"at"`
+}
+
+// Transcript 推送新到的转录条目。Reset 为 true 表示新一轮跟踪开始（前台又起了一个
+// claude / codex），客户端先清空再接。Source：claude / codex。
+type Transcript struct {
+	T      string           `json:"t"`
+	SID    uint16           `json:"sid"`
+	Source string           `json:"source"`
+	Items  []TranscriptItem `json:"items"`
+	Reset  bool             `json:"reset,omitempty"`
+}
+
 type Pong struct {
 	T  string `json:"t"`
 	TS int64  `json:"ts"`
@@ -326,6 +350,8 @@ func Encode(msg any) ([]byte, error) {
 		m.T = TCommandStart
 	case *CommandEnd:
 		m.T = TCommandEnd
+	case *Transcript:
+		m.T = TTranscript
 	case *Pong:
 		m.T = TPong
 	case *Error:
@@ -388,6 +414,8 @@ func Decode(data []byte) (any, error) {
 		dst = &CommandStart{}
 	case TCommandEnd:
 		dst = &CommandEnd{}
+	case TTranscript:
+		dst = &Transcript{}
 	case TPong:
 		dst = &Pong{}
 	case TError:

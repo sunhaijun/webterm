@@ -310,6 +310,26 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 - **顺序承诺**：`command.start` / `command.end`（以及同一次 PTY 读里产生的 `prompt` / `cwd`）**先于**包含其 `out_seq` 位置的 OUTPUT 帧到达。事件与帧走同一条按序写队列，agent 在推帧之前先发事件。client 据此能在写入 xterm 时把帧在 `out_seq` 处切开、登记行锚点 ——「在终端里看」才能定位到块（[ADR-0011](../20-architecture/adr/0011-read-first-layout.md) ④）。不保证这一点的旧 agent 只是让 client 登记不了锚点，定位退回按命令原文搜索
 - **`out_seq` 是该标记在剥离后输出流里的精确位置**，不是发消息那一刻的 head。`[start.out_seq, end.out_seq)` 恰好是这条命令的输出字节 —— 命令块视图靠它切块。同一次 PTY 读里可能同时到达 `133;C`、输出、`133;D`，每个标记各有各的位置（解析器为每个事件报告它在本块干净输出里的偏移，见 [shell-integration.md §5](shell-integration.md#5-agent-侧-osc-解析器要求)）。**用整块 append 之后的 head 盖戳是错的**：快命令的 start 和 end 会相等，块为空
 
+#### `transcript`
+
+```json
+{ "t": "transcript", "sid": 1, "source": "claude", "reset": true, "items": [] }
+{ "t": "transcript", "sid": 1, "source": "claude", "items": [
+  { "id": "u1#0", "role": "user", "kind": "text", "text": "解释一下 context 包", "at": 1757116800000 },
+  { "id": "a1#1", "role": "assistant", "kind": "text", "text": "## context\n\n…", "at": 1757116805000 },
+  { "id": "a1#2", "role": "tool", "kind": "tool_use", "name": "Bash", "text": "go test ./...", "at": 1757116805000 }
+] }
+```
+
+前台起了 claude / codex（`command.start` 的 `text` 认出程序名），agent 跟踪它的会话文件（[ADR-0012](../20-architecture/adr/0012-ai-cli-conversation-first.md) β）并把对话按到达顺序推过来。
+
+- `source`：`claude`（`~/.claude/projects/<cwd-slug>/*.jsonl`）或 `codex`（`~/.codex/sessions/…/rollout-*.jsonl`）
+- `reset: true` 的那条在新一轮跟踪开始时发（`items` 为空）：客户端先清空
+- `role`：`user` / `assistant` / `tool`（工具调用摘要，`name` 是工具名）/ `system`（斜杠命令的本地回显）；`kind`：`text`（Markdown 正文）/ `tool_use`
+- 消息是**整块完成才落盘**的，流式过程看终端；子代理、思考、工具结果、开发者提示、注入的上下文都不进转录
+- 与 `command.*` 一样发给**所有连接**、不可续传；重连 / 切会话后用 [`GET /api/transcript`](http-api.md#转录) 回放，再接增量
+- 命令结束（`command.end` 或 shell 退出）停止跟踪；条目留到下一次 AI 命令开始或会话关闭
+
 #### `pong`
 
 ```json
