@@ -390,6 +390,18 @@ Playwright 可以派发 composition 事件。
 2. **只缩可视视口 + 上推**（iOS Safari / Chrome `resizes-visual`）：假 `visualViewport` 重放"可视 727→400、`offsetTop`→327"，分别在 **Safari 语义（`innerHeight` 跟着变 400）** 与 Chrome 语义（恒 727）下 → `.app` 必须 `translateY(327px)`、顶部 = 327、Composer 在可视区 [327,727]；键盘收起全部复位
 3. **普通回弹不补偿**：`offsetTop` 变成 −40 / 60 而高度不变 → `.app` 无 `translateY`（守住拖动抖动的修复）
 
+## E2E-23 转录视图（ADR-0012 γ）
+
+`web/e2e/transcript.spec.ts`，Pixel 5 视口。用 shell 函数冒充 `claude`：键盘协议入栈（占屏）+ 往 `WEBTERM_TRANSCRIPT_HOME`（测试前设成临时目录，agent 与会话 shell 都继承）下的 `.claude/projects/<slug>/e2e.jsonl` 写两行 JSONL，然后 `read` 一行回显、长睡。
+
+1. 起假 claude → 读视图换成转录视图，尾巴条出现程序打的那行；等 1.2 秒仍在读视图（占屏但不自动进终端）；键条 `data-context=claude`
+2. 卡片：用户气泡有 prompt；助手卡片里 `h2` / `strong` / `pre code` 都渲出来了；工具摘要 `Bash` + `go test ./...`
+3. Composer 填一行回车 → 尾巴条看到程序的 `GOT-…` 回显（整段粘贴 + 回车进了程序 stdin）
+4. 点尾巴进终端；键条「读」回来，卡片仍在
+5. `^C` 打断 → 命令结束 → 回到块流（转录条目留着，供回放）
+6. **刷新页面**（另起一次假 claude）：`GET /api/transcript` 回放 → 转录视图与卡片都回来，用户气泡只有一个（去重）
+7. 非 AI 的占屏程序（`printf '\033[>1u'; sleep`）照旧自动进终端，没有转录视图
+
 ## 不在 E2E 覆盖范围（放手工清单）
 
 - 真机中文输入法的实际候选框行为
