@@ -48,19 +48,8 @@ func (c *Config) withDefaults() {
 	}
 }
 
-// CommandObserver 旁听命令生命周期（ADR-0012 β：转录跟踪据此起停）。
-// 三个回调都在会话的读循环 / 关闭路径上同步调用，实现必须不阻塞。
-type CommandObserver interface {
-	CommandStarted(sid uint16, text, cwd string)
-	CommandEnded(sid uint16)
-	SessionClosed(sid uint16)
-}
-
 // Manager 负责 sid 分配、会话表、上限控制与生命周期编排。
 type Manager struct {
-	obsMu  sync.RWMutex
-	cmdObs CommandObserver
-
 	cfg   Config
 	store *store.Store
 
@@ -104,22 +93,6 @@ func NewManager(cfg Config, st *store.Store) *Manager {
 	go m.janitor()
 	return m
 }
-
-// SetCommandObserver 挂一个命令旁听者（只允许一个；nil 取消）。
-func (m *Manager) SetCommandObserver(o CommandObserver) {
-	m.obsMu.Lock()
-	m.cmdObs = o
-	m.obsMu.Unlock()
-}
-
-func (m *Manager) commandObserver() CommandObserver {
-	m.obsMu.RLock()
-	defer m.obsMu.RUnlock()
-	return m.cmdObs
-}
-
-// Fanout 把一条控制消息发给所有连接（供 session 包之外的推送方使用，如转录跟踪）。
-func (m *Manager) Fanout(msg any) { m.fanout(msg) }
 
 // HistoryConfigured 报告 agent 是否允许记录历史（--no-history 会让它为 false）。
 func (m *Manager) HistoryConfigured() bool { return m.cfg.History }
@@ -372,9 +345,6 @@ func (m *Manager) Close(sid uint16) (*int, error) {
 	m.mu.Unlock()
 
 	s.close()
-	if o := m.commandObserver(); o != nil {
-		o.SessionClosed(sid)
-	}
 	s.mu.RLock()
 	code := s.exitCode
 	s.mu.RUnlock()

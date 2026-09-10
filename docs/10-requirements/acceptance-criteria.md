@@ -65,11 +65,13 @@
 | AC-3.9 | 功能键条包含 `Esc ^C Tab Ctrl ↑ ↓ ← → Alt ^D ^Z ^L \| ~ / - _ Home End PgUp PgDn` 且可横向滚动；`Ctrl`/`Alt` 为粘滞修饰键，`^C`/`^D`/`^Z`/`^L` 一按直发控制码。**`^C` 必须在免滚动的前 8 个里** —— 它是唯一的通用脱困键，而粘滞 `Ctrl` 在软键盘没弹出时（Raw 模式看 top）根本按不出组合 | E2E-10 |
 | AC-3.10 | 输入元素禁用 `autocorrect` / `autocapitalize` / `spellcheck` | UT-input-3 |
 | AC-3.11 | 终端尺寸变化时向 agent 发 `resize`，agent 对 PTY 执行 `TIOCSWINSZ`；resize 消息做 100ms 防抖 | IT-resize-1, UT-resize-1 |
-| AC-3.12 | 读视图的底栏是三档写态 sheet（收起 / 半屏 / 全屏）：碰输入框升半屏，把手点一下到全屏，拖到底、提交或空输入时 `Esc` 收起且输入框失焦；**三档之间 `.canvas` 几何与 PTY 尺寸不变**（sheet 盖在块流上，不挤画布） | E2E-19 |
-| AC-3.13 | sheet 打开时有面向"写"的编辑键条 `Tab ↑ ↓ ← → ⌫词 \| ~ / - _ " ' $ ⇤ ⇥` + 发送；`Tab` 有路径 chip 时补第一个；按键不抢输入框焦点 | UT-keymap-2, E2E-19 |
-| AC-3.14 | 读视图下前台出现**占屏程序**时自动切到终端视图、退出后自动回读；占屏 = 备用缓冲激活 **或程序进入全屏输入模式**（富键盘 Kitty `\e[>…u` / modifyOtherKeys `\e[>…m`、应用光标键 DECCKM `\e[?1h`（top）、鼠标跟踪，或同步输出 2026）—— 覆盖 claude / codex / top / vim；**npm / cargo / docker 等多行进度条（藏光标 + 上移重绘但不进入输入模式）不误触发**；重连后从 xterm 当前模式补判（top 运行中刷新不卡）；自动切换不写偏好，手动切过不再自动回 | UT-interactive-1, E2E-11b |
-| AC-3.15 | 命令在跑（Raw）时读视图**仍是同一个 Composer**：提交 = 整段 `xterm.paste()`（按前台程序的括号粘贴模式包裹）+ 回车，sheet 可升起编辑长文；「发送」长按 = 只粘贴不回车；前台是 claude / codex 时键条换成 `Esc ^C Enter ⇧Tab / ↑ ↓ Tab Ctrl`（无 `q`，`⇧Tab` 发 `ESC [ Z`）；**占屏程序里不显示「没有集成」横幅** | UT-keymap-ai, E2E-11b, E2E-19 |
-| AC-3.16 | 前台是 claude / codex 时读视图是**转录视图**：对话卡片（用户 / 助手 Markdown / 工具摘要）原生滚动选择缩放、贴底跟随、「↓ 新内容」；底部**终端尾巴**（xterm 末 8 行纯文本，300ms 节流）点它进终端；数据来自 WS `transcript` + `GET /api/transcript` 回放（刷新后仍在）；命令结束回块流；**AI CLI 占屏不自动进终端**，vim / less / top 照旧 | UT-markdown, UT-transcriptstore, E2E-23 |
+| AC-3.12 | **终端是唯一显示面**（ADR-0013）：xterm 始终铺满、始终可见；命令在跑（Raw）时 Composer 不隐藏，提交 = 整段 `xterm.paste()` + 回车，「发送」长按 = 只粘贴不回车；占屏（备用缓冲 / 富键盘协议 / DECCKM / 鼠标）**不切视图**，只把键条换成对应上下文（less→分页器、top→top、claude/codex→AI 无 `q`、其余→通用 TUI）并给出「⌨ 打字」入口；占屏时不显示「没有集成」横幅；npm/cargo 多行进度条不误判 | UT-interactive-1, UT-keymap-ai, E2E-11 |
+| ~~AC-3.12（旧）~~ | ~~读视图的底栏是三档写态 sheet（收起 / 半屏 / 全屏）：碰输入框升半屏，把手点一下到全屏，拖到底、提交或空输入时 `Esc` 收起且输入框失焦；**三档之间 `.canvas` 几何与 PTY 尺寸不变**（sheet 盖在块流上，不挤画布） | E2E-19 |
+| AC-3.13 | **双指缩放读**（ADR-0013）：PTY 固定 43 列；双指放大是纯视觉 transform（只作用在 `.xterm-screen`，不 fit、不发 resize、PTY 尺寸不变），单指平移，缩回 1× 或双击 / 换命令 / 切会话复位 | UT-pinch, E2E-24 |
+| ~~AC-3.13（旧）~~ | ~~sheet 打开时有面向"写"的编辑键条 `Tab ↑ ↓ ← → ⌫词 \| ~ / - _ " ' $ ⇤ ⇥` + 发送；`Tab` 有路径 chip 时补第一个；按键不抢输入框焦点 | UT-keymap-2, E2E-19 |
+| ~~AC-3.14（ADR-0013 取代）~~ | 读视图下前台出现**占屏程序**时自动切到终端视图、退出后自动回读；占屏 = 备用缓冲激活 **或程序进入全屏输入模式**（富键盘 Kitty `\e[>…u` / modifyOtherKeys `\e[>…m`、应用光标键 DECCKM `\e[?1h`（top）、鼠标跟踪，或同步输出 2026）—— 覆盖 claude / codex / top / vim；**npm / cargo / docker 等多行进度条（藏光标 + 上移重绘但不进入输入模式）不误触发**；重连后从 xterm 当前模式补判（top 运行中刷新不卡）；自动切换不写偏好，手动切过不再自动回 | UT-interactive-1, E2E-11b |
+| ~~AC-3.15（ADR-0013 取代）~~ | 命令在跑（Raw）时读视图**仍是同一个 Composer**：提交 = 整段 `xterm.paste()`（按前台程序的括号粘贴模式包裹）+ 回车，sheet 可升起编辑长文；「发送」长按 = 只粘贴不回车；前台是 claude / codex 时键条换成 `Esc ^C Enter ⇧Tab / ↑ ↓ Tab Ctrl`（无 `q`，`⇧Tab` 发 `ESC [ Z`）；**占屏程序里不显示「没有集成」横幅** | UT-keymap-ai, E2E-11b, E2E-19 |
+| ~~AC-3.16（ADR-0013 取代）~~ | 前台是 claude / codex 时读视图是**转录视图**：对话卡片（用户 / 助手 Markdown / 工具摘要）原生滚动选择缩放、贴底跟随、「↓ 新内容」；底部**终端尾巴**（xterm 末 8 行纯文本，300ms 节流）点它进终端；数据来自 WS `transcript` + `GET /api/transcript` 回放（刷新后仍在）；命令结束回块流；**AI CLI 占屏不自动进终端**，vim / less / top 照旧 | UT-markdown, UT-transcriptstore, E2E-23 |
 
 ---
 
@@ -95,9 +97,9 @@
 | AC-5.3 | 字号可调，设置持久化到 localStorage；各断点有独立默认值 | E2E-12 |
 | AC-5.4 | 选中文本时自动滚动暂停，选择不被破坏 | E2E-12 |
 | AC-5.5 | 渲染使用 WebGL addon；WebGL 不可用时回退到 canvas 且不报错 | UT-render-1 |
-| AC-5.7 | 读视图里展开的块可**最大化**铺满整屏细看（可滚动、含末尾输出）、点「恢复」回内联；「块」面板同样支持 | E2E-12b |
-| AC-5.8 | 读视图里**最新一条命令的块自动展开**（一眼看到最新输出）；切到更新的命令时上一条自动展开的收起，只留最新一条 —— 失败的块与用户手动展开过的不被自动收起 | E2E-12c |
-| AC-5.6 | 块的「在终端里看」切到终端视图并**滚到该块输出的第一行**：agent 发 `command.start/end` 先于对应输出帧（IT-order-1），client 写入时按 `out_seq` 切帧、切口处登记 xterm marker；marker 已滚出 scrollback 时退回按命令原文搜索，再不行滚到底 | UT-marks-1, IT-order-1, E2E-20 |
+| ~~AC-5.7（ADR-0013 取代）~~ | 读视图里展开的块可**最大化**铺满整屏细看（可滚动、含末尾输出）、点「恢复」回内联；「块」面板同样支持 | E2E-12b |
+| ~~AC-5.8（ADR-0013 取代）~~ | 读视图里**最新一条命令的块自动展开**（一眼看到最新输出）；切到更新的命令时上一条自动展开的收起，只留最新一条 —— 失败的块与用户手动展开过的不被自动收起 | E2E-12c |
+| ~~AC-5.6（ADR-0013 取代）~~ | 块的「在终端里看」切到终端视图并**滚到该块输出的第一行**：agent 发 `command.start/end` 先于对应输出帧（IT-order-1），client 写入时按 `out_seq` 切帧、切口处登记 xterm marker；marker 已滚出 scrollback 时退回按命令原文搜索，再不行滚到底 | UT-marks-1, IT-order-1, E2E-20 |
 
 ---
 

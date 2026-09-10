@@ -69,9 +69,7 @@ test('^D / ^Z / ^L 也能一按直发', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  // 清屏是终端视图里的事。终端视图停在 prompt 时是一行输入框；手动切到 Raw
-  // 键条才独占底栏 —— 这正是"看 top 时按 ^C"那种使用方式
-  await page.getByTestId('view-toggle').click()
+  // 清屏用清屏键。手动切到 Raw，键条出现（这正是"看 top 时按 ^C"那种使用方式）
   await submit(page, 'printf "BEFORE-CLEAR\\n"')
   await waitFor(async () => (await terminalText(page)).includes('BEFORE-CLEAR'), '先有点内容')
   await page.getByTestId('open-more').click()

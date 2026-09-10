@@ -353,7 +353,7 @@ Playwright 可以派发 composition 事件。
 
 ---
 
-## E2E-19 写态 sheet（ADR-0011 ③）
+## E2E-19 写态 sheet（已随 ADR-0013 移除）
 
 `web/e2e/sheet.spec.ts`，Pixel 5 视口。
 
@@ -362,7 +362,7 @@ Playwright 可以派发 composition 事件。
 3. **chips**：`mktemp -d` 造 `src/commands`、`docs`、`src/a.go` 并 `cd` 进去；空输入出现同目录历史、没有路径 chip；敲 `cd s` 出现 `src/`（没有 `docs`），点一下变 `cd src/` 且焦点不丢；`Tab` 编辑键补成 `cd src/commands/`；`|` 插 ` | `，`⌫词` 删词；发送键提交并收起
 4. **⋯ 菜单**：历史面板、输入模式切换与解锁、点外面收起
 
-## E2E-11b 占屏程序自动进控（ADR-0011 ②）
+## E2E-11b 占屏程序自动进控（已随 ADR-0013 移除；占屏改为换键条上下文，见 control.spec）
 
 `web/e2e/control.spec.ts`，Pixel 5 视口。
 
@@ -371,11 +371,11 @@ Playwright 可以派发 composition 事件。
 3. `less` 占屏：键条换成分页器键，`q` 退出回读
 4. 用户手动选终端后，备用缓冲进出都不改它
 
-## E2E-12b 块最大化 / 恢复（ADR-0011 ④）
+## E2E-12b 块最大化 / 恢复（已随 ADR-0013 移除）
 
 `web/e2e/readview.spec.ts`。跑 `seq 1 80` 展开块 → 点最大化，`.block-maxwrap` 铺满整屏（高 > 90% 视口、宽 = 视口）、标题栏含命令原文、正文含末尾 `DONE-OK`；点「恢复」→ 覆盖层消失、块仍展开。
 
-## E2E-20 在终端里看 → 定位到该块（ADR-0011 ④）
+## E2E-20 在终端里看 → 定位到该块（已随 ADR-0013 移除）
 
 `web/e2e/locate.spec.ts`，Pixel 5 视口。
 
@@ -390,7 +390,7 @@ Playwright 可以派发 composition 事件。
 2. **只缩可视视口 + 上推**（iOS Safari / Chrome `resizes-visual`）：假 `visualViewport` 重放"可视 727→400、`offsetTop`→327"，分别在 **Safari 语义（`innerHeight` 跟着变 400）** 与 Chrome 语义（恒 727）下 → `.app` 必须 `translateY(327px)`、顶部 = 327、Composer 在可视区 [327,727]；键盘收起全部复位
 3. **普通回弹不补偿**：`offsetTop` 变成 −40 / 60 而高度不变 → `.app` 无 `translateY`（守住拖动抖动的修复）
 
-## E2E-23 转录视图（ADR-0012 γ）
+## E2E-23 转录视图（已随 ADR-0013 移除）
 
 `web/e2e/transcript.spec.ts`，Pixel 5 视口。用 shell 函数冒充 `claude`：键盘协议入栈（占屏）+ 往 `WEBTERM_TRANSCRIPT_HOME`（测试前设成临时目录，agent 与会话 shell 都继承）下的 `.claude/projects/<slug>/e2e.jsonl` 写两行 JSONL，然后 `read` 一行回显、长睡。
 
@@ -401,6 +401,13 @@ Playwright 可以派发 composition 事件。
 5. `^C` 打断 → 命令结束 → 回到块流（转录条目留着，供回放）
 6. **刷新页面**（另起一次假 claude）：`GET /api/transcript` 回放 → 转录视图与卡片都回来，用户气泡只有一个（去重）
 7. 非 AI 的占屏程序（`printf '\033[>1u'; sleep`）照旧自动进终端，没有转录视图
+
+## E2E-24 双指缩放读（ADR-0013）
+
+`web/e2e/pinch.spec.ts`，Pixel 5 视口。在 `.term` 上派发两指 `touchstart`/`touchmove`/`touchend`：
+
+1. 双指张开 → `__webterm.zoom() > 1`、`.xterm-screen` 有 `scale(...)`、`__webterm.size()`（PTY cols/rows）**不变**；双击复位到 1× 且 transform 清空
+2. 捏合（缩小）不放大：`zoom()` 保持 1、transform 为空
 
 ## 不在 E2E 覆盖范围（放手工清单）
 

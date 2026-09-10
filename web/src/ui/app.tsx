@@ -6,11 +6,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
 import { listCommands, type CommandRecord } from '../commands/api'
-import { ATTR_PREFIX_LEN, BlockStore, type Block } from '../commands/blocks'
-import { BlocksPanel } from '../commands/blockspanel'
-import { ReadView, TAIL_NOISE_BYTES } from '../commands/readview'
-import { TranscriptView } from '../commands/transcript'
-import { TranscriptStore, aiSourceOf, type TranscriptSnapshot } from '../commands/transcriptstore'
 import { HistoryPanel, QuickBar } from '../commands/history'
 import { CommandPalette } from '../commands/palette'
 import { Connection, type ConnState, type StateInfo } from '../conn/connection'
@@ -21,35 +16,17 @@ import { KeyBar } from '../input/keybar'
 import { EDIT_INSERT, appAction, programOf } from '../input/keymap'
 import type { ModeState } from '../input/modes'
 import { RawIme, cursorPosition } from '../input/raw'
+import { installPinch } from '../term/pinch'
 import { SLOT_HEIGHT, WriteSheet, type SheetSize } from '../input/sheet'
 import { T } from '../protocol/messages'
 import { SessionStore, type SessionView } from '../sessions/store'
-import { locateBlock } from '../term/locate'
 import { ExitedBar, SessionList } from './sessionlist'
 import { applyTheme, readFontSize, readTheme, writeFontSize, type Theme } from './settings'
 import { RecoveredToast, StatusBar } from './status'
 import { breakpoint, debounce, isCoarsePointer, isKeyboardUp, isShort, layoutViewportHeight, readViewport, type Breakpoint, watchViewport } from './viewport'
 
-type View = 'read' | 'term'
 
 /** 视图选择：手机/平板默认读，桌面默认终端（ADR-0011）；用户切过就记住。 */
-function readView(): View {
-  try {
-    const v = localStorage.getItem('webterm.view')
-    if (v === 'read' || v === 'term') return v
-  } catch {
-    /* 私密模式等取不到就走默认 */
-  }
-  return breakpoint(window.innerWidth) === 'desktop' ? 'term' : 'read'
-}
-function writeView(v: View): void {
-  try {
-    localStorage.setItem('webterm.view', v)
-  } catch {
-    /* 写不进去就算 */
-  }
-}
-
 /** client_id 每个标签页一个，存 sessionStorage —— localStorage 是同源共享的。 */
 function clientID(): string {
   const key = 'webterm.client_id'
@@ -88,27 +65,17 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [blocksOpen, setBlocksOpen] = useState(false)
   // 块存储活在 ref 里（它不参与渲染），用一个计数器把它的变化推给 UI。
-  const blocksRef = useRef<BlockStore>()
-  const [blocksTick, setBlocksTick] = useState(0)
   // 读视图 / 终端视图（ADR-0011）。手机、平板默认读；桌面默认终端。选择持久化。
-  const [view, setView] = useState<View>(readView)
-  const viewRef = useRef<View>(view)
-  viewRef.current = view
   // 【同步写入，不放 useEffect】。effect 在 paint 之后才跑，用户切完视图立刻
   // 刷新或关页，写入就丢了（CI 上稳定复现：toggle 后马上 reload，选择没记住）。
-  const changeView = useCallback((next: View) => {
-    writeView(next)
-    setView(next)
-    // 用户亲手切了，之前的自动切换就不再"自动回去"
-    autoTermRef.current = false
-  }, [])
   // 备用屏幕（有程序占屏）驱动的自动切换（ADR-0011 分片 ②）：
   // 读视图里 vim / top 一进备用缓冲就切到终端，退出后自动回读。
   // 【自动切换不持久化】—— 它是临时的，用户的偏好还是读。
-  const autoTermRef = useRef(false)
   const [interactive, setInteractive] = useState(false)
+  // 前台正在跑的命令原文（按会话）—— 只用来给键条上下文 / Composer 占位符取程序名。
+  const runningCmdRef = useRef(new Map<number, string>())
+  const [program, setProgram] = useState<string | null>(null)
   const [quick, setQuick] = useState<CommandRecord[]>([])
   // 写态 sheet（ADR-0011 ③）：读视图里输入框升起的那块。三档：收起 / 半屏 / 全屏。
   const [sheet, setSheet] = useState<SheetSize>('closed')
@@ -117,15 +84,10 @@ export function App() {
   // 上次打开时的档位 —— 下次碰输入框还回到那一档
   const lastOpenRef = useRef<Exclude<SheetSize, 'closed'>>('half')
   // .bottom 实际多高：超出收起态的部分是盖在块流上的，块流据此让位
-  const [bottomH, setBottomH] = useState(SLOT_HEIGHT)
+  const [, setBottomH] = useState(SLOT_HEIGHT)
   const [draft, setDraft] = useState({ value: '', cursor: 0 })
   const [moreOpen, setMoreOpen] = useState(false)
-  // 转录（ADR-0012 γ）：claude / codex 的对话条目 + 终端尾巴
-  const transcriptsRef = useRef(new TranscriptStore())
-  const [trTick, setTrTick] = useState(0)
-  const [tail, setTail] = useState<string[]>([])
   // 最近一次「在终端里看」是怎么定位的（marker / search / bottom），测试与诊断用
-  const lastLocateRef = useRef<string>('')
   const changeSheet = useCallback((next: SheetSize) => {
     setSheet(next)
     // 收起就收键盘 —— sheet 收了键盘还占着半屏，等于没收
@@ -134,7 +96,7 @@ export function App() {
   }, [])
   const openSheet = useCallback(() => {
     // 只有读视图有 sheet：终端视图里输入框就是一行，不能盖住终端的最后几行
-    if (viewRef.current === 'read' && sheetRef.current === 'closed') changeSheet(lastOpenRef.current)
+    if (sheetRef.current === 'closed') changeSheet(lastOpenRef.current)
   }, [changeSheet])
   // 命令一跑起来（raw）sheet 就收：这时候该看的是输出
   useEffect(() => {
@@ -165,23 +127,21 @@ export function App() {
     const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
     let store: SessionStore
     let lastWelcome: unknown = null
-    const blocks = new BlockStore()
-    blocksRef.current = blocks
-    // 命令事件是低频的（一条命令一两次），直接 bump 不会有性能问题。
-    const bumpBlocks = () => setBlocksTick((n) => n + 1)
-    const tailBump = debounce(bumpBlocks, 120)
+    const pinch = installPinch(area)
+    const runningCmd = runningCmdRef.current
+    // 前台程序名同步给 render（键条上下文 / Composer 占位符）
+    const syncProgram = () => {
+      const sid = store.active
+      setProgram(sid === null ? null : (programOfMaybe(runningCmd.get(sid)) ))
+    }
 
     const conn = new Connection({
       url,
       clientID: clientID(),
       handlers: {
-        onOutput(sid, data, attrPrefix, startSeq) {
+        onOutput(sid, data) {
           // 带上 out_seq：写入时在 command.start/end 的位置登记行锚点（ADR-0011 ④）
-          store.write(sid, data, startSeq, attrPrefix ? ATTR_PREFIX_LEN : 0)
-          blocks.write(sid, data, attrPrefix, startSeq)
-          // live-tail：读视图里正在跑的块 / 尾块要跟着输出长。输出可能很密，
-          // 120ms 节流一次重渲染 —— 运行中的块是纯文本渲染，便宜。
-          if (viewRef.current === 'read' && sid === store.active) tailBump()
+          store.write(sid, data)
         },
         onMessage(msg) {
           switch (msg.t) {
@@ -207,7 +167,7 @@ export function App() {
               break
             case T.sessionClosed:
               store.remove(msg.sid)
-              blocks.forget(msg.sid) // 别攒着已关会话的输出
+              runningCmd.delete(msg.sid)
               break
             case T.sessionUpdated: {
               const { t: _t, sid, ...patch } = msg
@@ -215,24 +175,18 @@ export function App() {
               break
             }
             case T.commandStart:
-              blocks.cmdStart(msg.sid, msg)
-              // 事件先于帧到达（协议 §4），所以此刻登记的锚点会落在正确的行
-              store.markAt(msg.sid, msg.out_seq, `start:${msg.cmd_id}`)
+              runningCmd.set(msg.sid, msg.text)
+              if (msg.sid === store.active) {
+                syncProgram()
+                pinch.reset()
+              }
               // 新命令：清掉上一条的"主屏就地重绘"判定，从头认
               store.resetInteractive(msg.sid)
-              bumpBlocks()
-              break
-            case T.transcript:
-              if (transcriptsRef.current.apply(msg)) setTrTick((n) => n + 1)
               break
             case T.commandEnd:
-              blocks.cmdEnd(msg.sid, msg)
-              transcriptsRef.current.finish(msg.sid)
-              setTrTick((n) => n + 1)
-              store.markAt(msg.sid, msg.out_seq, `end:${msg.cmd_id}`)
-              // 回到 prompt：占屏结束 → 自动回读（若之前是自动切过去的）
+              runningCmd.delete(msg.sid)
+              if (msg.sid === store.active) syncProgram()
               store.resetInteractive(msg.sid)
-              bumpBlocks()
               break
             case T.prompt:
               // 这条消息驱动输入模式自动切换（ADR-0007）
@@ -246,7 +200,6 @@ export function App() {
           refresh()
         },
         onState(s, i) {
-          if (s === 'online' && store.active !== null) void backfillTranscript(store.active)
           setConnState(s)
           setInfo(i)
           if (s === 'online' && i.replayedBytes) {
@@ -279,73 +232,25 @@ export function App() {
     })
     storeRef.current = store
 
-    // 占屏进出 → 读 ⇄ 控。备用缓冲（vim/top）或主屏就地重绘（claude/codex）都算。
-    // 手动切过就不再自动回去（changeView 会清标记）。占屏时把视口钉到底 —— 全屏
-    // 程序自己重绘整屏，别让残留的滚动位置和它抢。
-    // 重连 / 切会话：WS 增量可能漏了，用 HTTP 回放补齐（http-api.md §转录）
-    const backfills = new Map<number, Promise<void>>()
-    const backfillTranscript = (sid: number): Promise<void> => {
-      const run = async () => {
-        try {
-          const r = await fetch(`/api/transcript?sid=${sid}`, { credentials: 'same-origin' })
-          if (r.status === 404) {
-            transcriptsRef.current.clear(sid)
-            setTrTick((n) => n + 1)
-            return
-          }
-          if (!r.ok) return
-          const snap = (await r.json()) as TranscriptSnapshot
-          transcriptsRef.current.replace(snap)
-          setTrTick((n) => n + 1)
-        } catch {
-          /* 网络问题：等下一次增量 */
-        }
-      }
-      const p = run().finally(() => {
-        if (backfills.get(sid) === p) backfills.delete(sid)
-      })
-      backfills.set(sid, p)
-      return p
-    }
-    // 前台正在跑的程序名（键条上下文 / 转录视图 / 自动切终端都看它）
-    const runningProgram = (sid: number) => {
-      const b = blocks.blocks(sid).find((x) => x.endSeq === null)
-      return b ? programOf(b.text) : null
-    }
+    // 占屏（备用缓冲 vim/top，或主屏就地重绘 claude/codex）：只用来把视口钉到底、
+    // 换键条上下文。【不再切视图】—— 终端始终是唯一的显示面（ADR-0013）。
     const applyInteractive = (on: boolean) => {
       setInteractive(on)
       if (on) {
         const sid = store.active
         if (sid !== null) store.termOf(sid)?.term.scrollToBottom()
-        if (viewRef.current !== 'read' || sid === null) return
-        // claude / codex 留在读视图（转录 + Composer 才是它们的主场，ADR-0012）；
-        // vim / less / top 这类才自动进终端。刷新页面后运行中的块不在了，程序名要等转录回放
-        // 说话 —— 回放还在路上就先不决定，免得先跳终端再跳回来。
-        const decide = () => {
-          if (viewRef.current !== 'read' || store.active !== sid || !store.interactiveOf(sid)) return
-          const ai = aiSourceOf(runningProgram(sid)) !== null || !!transcriptsRef.current.get(sid)?.active
-          if (!ai) {
-            autoTermRef.current = true
-            setView('term')
-          }
-        }
-        const pending = backfills.get(sid)
-        if (runningProgram(sid) === null && pending) void pending.then(decide, decide)
-        else decide()
-      } else if (autoTermRef.current) {
-        autoTermRef.current = false
-        setView(readView())
       }
     }
     const select = (sid: number) => {
       store.activate(sid, area)
       // activate 里的 term.open() 是同步的，此刻 textarea 已经在 DOM 里
       attachIme()
+      pinch.reset()
       setTruncated(false)
       sendResize()
-      // 切到的会话如果正有程序占屏，视图要跟着它。回放（top 的 DECCKM 等）会稍后到达，
+      syncProgram()
+      // 切到的会话如果正有程序占屏，键条要跟着它。回放（top 的 DECCKM 等）会稍后到达，
       // 到达时检测器的 CSI 处理器会补判；这里再延迟补一次 sync 兜底。
-      void backfillTranscript(sid)
       applyInteractive(store.interactiveOf(sid))
       setTimeout(() => {
         if (store.active !== sid) return
@@ -559,35 +464,19 @@ export function App() {
         return { cols: term?.term.cols ?? 0, rows: term?.term.rows ?? 0 }
       },
       welcome: () => lastWelcome,
-      transcript: () => (store.active === null ? null : (transcriptsRef.current.get(store.active) ?? null)),
-      tail: () => tailRef.current,
       mode: () => (store.active === null ? { mode: 'composer', locked: false } : store.modesOf(store.active)!.current),
       unread: (sid: number) => store.isUnread(sid),
-      view: () => viewRef.current,
+      program: () => (store.active === null ? null : programOfMaybe(runningCmd.get(store.active))),
       altScreen: () => (store.active === null ? false : store.altScreenOf(store.active)),
       interactive: () => (store.active === null ? false : store.interactiveOf(store.active)),
       sheet: () => sheetRef.current,
-      lastLocate: () => lastLocateRef.current,
-      // 测试用：终端视口顶行在缓冲里的位置与文字（「在终端里看」定位是否落对）
+      zoom: () => pinch.scale(),
       viewport: () => {
         const sid = store.active
         const term = sid === null ? undefined : store.termOf(sid)
         if (!term) return { y: -1, top: '' }
         const buf = term.term.buffer.active
         return { y: buf.viewportY, top: buf.getLine(buf.viewportY)?.translateToString(true) ?? '' }
-      },
-      // 测试/诊断：读视图块流的内部状态
-      blocks: () => {
-        const sid = store.active
-        if (sid === null) return []
-        return blocks.blocks(sid).map((b) => ({
-          cmdId: b.cmdId, text: b.text, startSeq: b.startSeq, endSeq: b.endSeq,
-          len: blocks.bytesOf(sid, b)?.bytes.length ?? -1,
-        }))
-      },
-      tailLen: () => {
-        const sid = store.active
-        return sid === null ? -1 : (blocks.tailBytes(sid)?.bytes.length ?? -1)
       },
     }
 
@@ -599,8 +488,8 @@ export function App() {
       unwatchViewport()
       if (vpRaf) cancelAnimationFrame(vpRaf)
       sendResize.cancel()
-      tailBump.cancel()
       ro.disconnect()
+      pinch.dispose()
       ime?.dispose()
       conn.close()
       store.dispose()
@@ -624,15 +513,6 @@ export function App() {
 
   const active = activeSid === null ? undefined : sessions.find((s) => s.sid === activeSid)
   const atLimit = sessions.length >= maxSessions
-  // 键条按"谁在占屏"换内容：程序名取自正在跑的块的命令原文
-  const runningBlock: Block | undefined =
-    activeSid === null ? undefined : blocksRef.current?.blocks(activeSid).find((b) => b.endSeq === null)
-  // 刷新页面后运行中的块不在了（块流是客户端内存），但转录回放会说"claude 还活着"——
-  // 程序名与占屏判定都可以从它补：转录视图、AI 键条、粘贴发送语义在刷新后照常
-  const trState = activeSid === null ? undefined : transcriptsRef.current.get(activeSid)
-  const trActive = !!trState?.active
-  const program = runningBlock ? programOf(runningBlock.text) : trActive ? (trState?.source ?? null) : null
-
   const runText = (text: string) => {
     if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
   }
@@ -655,86 +535,16 @@ export function App() {
     if (mode.mode === 'raw') sendToProgram(text, true)
     else runText(text)
   }
-  // 「在终端里看」：切到终端视图并滚到该块输出的第一行（ADR-0011 ④）
-  const viewBlockInTerm = (b: Block) => {
-    const sid = activeSid
-    const store = storeRef.current
-    const th = sid === null ? undefined : store?.termOf(sid)
-    changeView('term')
-    if (sid === null || !store || !th) return
-    // 切完视图 xterm 才可见，滚动与高亮放到下一帧
-    requestAnimationFrame(() => {
-      lastLocateRef.current = locateBlock(
-        {
-          term: th.term,
-          search: th.search,
-          start: store.markOf(sid, `start:${b.cmdId}`),
-          end: store.markOf(sid, `end:${b.cmdId}`),
-        },
-        b,
-        blocksRef.current?.blocks(sid) ?? [],
-      )
-    })
-  }
-  // 桌面（≥1024px）保留经典底栏：模式条 + 输入框 + 快捷条 + 键条，两种视图一样。
-  // 手机 / 平板两种视图共用同一个 56px 的槽（ADR-0011 ③）：读视图里它是写态 sheet 的
-  // 收起态，终端视图里停在 prompt 是一行输入、命令在跑是键条 —— 【槽高不变，切视图
-  // 画布几何不变，PTY 不 resize】。
-  // 终端尾巴（转录视图底部那条）：xterm 缓冲末几行的纯文本，300ms 节流；只在转录视图显示时算
-  const tailRef = useRef<string[]>([])
-  tailRef.current = tail
-  const aiSource = aiSourceOf(program)
-  const showTranscript = view === 'read' && aiSource !== null && activeSid !== null
-  useEffect(() => {
-    if (!showTranscript || activeSid === null) {
-      if (tailRef.current.length) setTail([])
-      return
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let d: { dispose(): void } | undefined
-    let attach: ReturnType<typeof setTimeout> | undefined
-    const compute = () => {
-      timer = undefined
-      const t = storeRef.current?.termOf(activeSid)?.term
-      if (!t) return
-      const b = t.buffer.active
-      const lines: string[] = []
-      for (let i = b.length - 1; i >= 0 && lines.length < TAIL_LINES; i--) {
-        const ln = b.getLine(i)?.translateToString(true) ?? ''
-        if (lines.length === 0 && ln.trim() === '') continue // 底部的空行不算
-        lines.unshift(ln)
-      }
-      setTail(lines)
-    }
-    const schedule = () => {
-      if (timer === undefined) timer = setTimeout(compute, 300)
-    }
-    const tryAttach = () => {
-      const t = storeRef.current?.termOf(activeSid)?.term
-      if (!t) {
-        attach = setTimeout(tryAttach, 250)
-        return
-      }
-      d = t.onWriteParsed(schedule)
-      compute()
-    }
-    tryAttach()
-    return () => {
-      if (timer) clearTimeout(timer)
-      if (attach) clearTimeout(attach)
-      d?.dispose()
-    }
-  }, [showTranscript, activeSid])
-
+  // 终端始终是唯一显示面（ADR-0013）：桌面经典底栏，手机是 Composer + 键条槽。
   const classic = bp === 'desktop'
   // 写态 chips：sheet 开着才拉数据（ADR-0011 ③）
   const chips = useChips({
-    open: !classic && view === 'read' && sheet !== 'closed' && mode.mode === 'composer',
+    open: !classic && sheet !== 'closed' && mode.mode === 'composer',
     cwd: active?.cwd ?? '',
     pinned: quick,
     value: draft.value,
     cursor: draft.cursor,
-    tick: blocksTick,
+    tick: 0,
   })
   const applyChip = (c: Chip) => {
     const h = composerRef.current
@@ -785,7 +595,7 @@ export function App() {
       }
     }
   }
-  const sheetInset = !classic && view === 'read' ? Math.max(0, bottomH - SLOT_HEIGHT) : 0
+  const sheetInset = 0 // 终端不被推：sheet 盖在它上面（ADR-0013）
   return (
     <div class="app" data-bp={bp} data-short={short} data-sidebar={sidebarOpen ? 'open' : 'closed'}>
       {bp !== 'desktop' && sidebarOpen && (
@@ -859,49 +669,10 @@ export function App() {
           />
         )}
 
-        {/* 读与终端共用同一个几何盒（ADR-0011）：两者都绝对铺满 .canvas，
-            切视图不改变 xterm 的尺寸 —— 否则每次切换都给 PTY 发 resize，
-            正在跑的程序收到 SIGWINCH、折行位置全变。 */}
+        {/* 终端是唯一的显示面（ADR-0013）。铺满 .canvas；底部的 Composer / 键条槽
+            绝对定位盖在它上面，不改 xterm 尺寸（切不触发 PTY resize / SIGWINCH）。 */}
         <div class="canvas" data-testid="canvas">
-          {showTranscript && activeSid !== null && (
-            <TranscriptView
-              source={transcriptsRef.current.get(activeSid)?.source ?? aiSource}
-              program={program ?? 'AI'}
-              items={transcriptsRef.current.get(activeSid)?.items ?? []}
-              tick={trTick}
-              tail={tail}
-              inset={sheetInset}
-              onViewTerm={() => changeView('term')}
-            />
-          )}
-          {view === 'read' && !showTranscript && activeSid !== null && (
-            <ReadView
-              /* blocksTick：命令事件与 live-tail 节流都会 +1 */
-              tick={blocksTick}
-              blocks={blocksRef.current?.blocks(activeSid) ?? []}
-              bytesOf={(b) => blocksRef.current?.bytesOf(activeSid, b) ?? null}
-              tail={blocksRef.current?.tailBytes(activeSid) ?? null}
-              showTail={
-                // 尾块只在"确实有未切分输出"时显示：没有集成、输入去了子程序、
-                // 或者尾巴大到不像是 prompt 重画
-                active?.integration !== 'active' ||
-                !!active?.unmarked_input ||
-                (blocksRef.current?.tailBytes(activeSid)?.bytes.length ?? 0) > TAIL_NOISE_BYTES
-              }
-              cols={active?.cols ?? 80}
-              inset={sheetInset}
-              interactive={interactive}
-              onFill={(text) => composerRef.current?.fill(text)}
-              onRun={(text) => {
-                if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
-              }}
-              onCopy={(text) => {
-                navigator.clipboard?.writeText(text).catch(() => {})
-              }}
-              onViewTerm={viewBlockInTerm}
-            />
-          )}
-          <div class="term" ref={termAreaRef} data-testid="terminal" data-hidden={view === 'read'} />
+          <div class="term" ref={termAreaRef} data-testid="terminal" data-hidden="false" />
         </div>
 
         {classic && (
@@ -919,19 +690,6 @@ export function App() {
               onClick={() => activeSid !== null && storeRef.current?.modesOf(activeSid)?.unlock()}
             >
               解锁自动
-            </button>
-          )}
-          <button
-            class="view-toggle"
-            data-testid="view-toggle"
-            data-view={view}
-            onClick={() => changeView(view === 'read' ? 'term' : 'read')}
-          >
-            {view === 'read' ? '终端' : '读'}
-          </button>
-          {view === 'term' && (
-            <button data-testid="open-blocks" onClick={() => setBlocksOpen(true)}>
-              块
             </button>
           )}
           <button data-testid="open-palette" onClick={() => setPaletteOpen(true)}>
@@ -988,8 +746,7 @@ export function App() {
           // 写态 sheet（ADR-0011 ③）：收起是一行，碰输入框升起半屏 / 全屏。
           // 命令在跑（raw）时读视图里是直发输入行 + 功能键条；终端视图里只有键条。
           <WriteSheet
-            size={view === 'read' ? sheet : 'closed'}
-            barHidden={view === 'term' && mode.mode === 'raw' && coarse}
+            size={sheet}
             onSize={changeSheet}
             onHeight={setBottomH}
             chips={chips}
@@ -1003,63 +760,41 @@ export function App() {
               changeSheet('closed')
             }}
             bar={
-              <>
-                <button
-                  class="bar-btn view-toggle"
-                  data-testid="view-toggle"
-                  data-view={view}
-                  onClick={() => changeView(view === 'read' ? 'term' : 'read')}
-                >
-                  {view === 'read' ? '终端' : '读'}
-                </button>
-                <button
-                  class="bar-btn bar-more"
-                  data-testid="open-more"
-                  aria-label="更多"
-                  aria-expanded={moreOpen}
-                  onClick={() => setMoreOpen((v) => !v)}
-                >
-                  ⋯
-                </button>
-              </>
+              <button
+                class="bar-btn bar-more"
+                data-testid="open-more"
+                aria-label="更多"
+                aria-expanded={moreOpen}
+                onClick={() => setMoreOpen((v) => !v)}
+              >
+                ⋯
+              </button>
             }
             below={
               mode.mode === 'raw' && coarse ? (
                 <KeyBar
                   mode="raw"
-                  context={{ altScreen: interactive || trActive, program }}
+                  context={{ altScreen: interactive, program }}
                   onRaw={(bytes) => sendRawRef.current(bytes)}
                   onComposerKey={() => {}}
                   leading={
-                    // 终端视图里键条独占那 56px：回「读」与 ⋯ 做成键条的前导键
-                    view === 'term' ? (
-                      <>
-                        <button class="keybar-key keybar-lead" data-testid="view-toggle" data-view={view} onClick={() => changeView('read')}>
-                          读
-                        </button>
-                        <button class="keybar-key keybar-lead" data-testid="open-more" aria-label="更多" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
-                          ⋯
-                        </button>
-                        <button
-                          class="keybar-key keybar-type"
-                          data-testid="term-type"
-                          title="调出键盘，直接打字给程序"
-                          onClick={() => focusTermRef.current()}
-                        >
-                          ⌨ 打字
-                        </button>
-                      </>
+                    // 只有全屏程序占屏时才给「打字」入口（把键盘唤起、直接打给程序）；
+                    // 普通 shell 提示符下键条就是纯按键，不占这一格
+                    interactive ? (
+                      <button
+                        class="keybar-key keybar-type"
+                        data-testid="term-type"
+                        title="调出键盘，直接打字给全屏程序"
+                        onClick={() => focusTermRef.current()}
+                      >
+                        ⌨ 打字
+                      </button>
                     ) : undefined
                   }
                 />
               ) : null
             }
           >
-                {view === 'term' && mode.mode === 'raw' && (
-              <button class="bar-hint bar-type" data-testid="term-type-hint" onClick={() => focusTermRef.current()}>
-                ⌨ 点此打字，直接输入到程序
-              </button>
-            )}
             <Composer
               hidden={false}
               placeholder={mode.mode === 'raw' ? `输入给 ${program ?? '程序'}…` : '输入命令…'}
@@ -1093,18 +828,6 @@ export function App() {
               >
                 历史
               </button>
-              {view === 'term' && (
-                <button
-                  role="menuitem"
-                  data-testid="open-blocks"
-                  onClick={() => {
-                    setMoreOpen(false)
-                    setBlocksOpen(true)
-                  }}
-                >
-                  块
-                </button>
-              )}
               <button
                 role="menuitem"
                 data-testid="open-palette"
@@ -1172,7 +895,7 @@ export function App() {
         {classic && coarse && (
           <KeyBar
             mode={mode.mode}
-            context={{ altScreen: interactive || trActive, program }}
+            context={{ altScreen: interactive, program }}
             onRaw={(bytes) => sendRawRef.current(bytes)}
             onComposerKey={(key) => {
               if (key === 'Escape') composerRef.current?.focus()
@@ -1224,24 +947,6 @@ export function App() {
           onPinnedChanged={reloadQuick}
         />
       )}
-      {blocksOpen && activeSid !== null && (
-        <BlocksPanel
-          /* blocksTick 只是为了让块变化能触发重渲染 —— 存储本身在 ref 里 */
-          key={`blocks-${activeSid}-${blocksTick}`}
-          blocks={blocksRef.current?.blocks(activeSid) ?? []}
-          bytesOf={(b) => blocksRef.current?.bytesOf(activeSid, b) ?? null}
-          cols={active?.cols ?? 80}
-          onClose={() => setBlocksOpen(false)}
-          onFill={(text) => {
-            composerRef.current?.fill(text)
-            setBlocksOpen(false)
-          }}
-          onViewTerm={(b) => {
-            setBlocksOpen(false)
-            viewBlockInTerm(b)
-          }}
-        />
-      )}
       {recovered !== null && <RecoveredToast bytes={recovered} />}
     </div>
   )
@@ -1253,8 +958,10 @@ export function App() {
  *   单行   → 内容 + CR
  *   空     → CR
  */
-/** 终端尾巴条显示几行。 */
-const TAIL_LINES = 8
+/** 命令原文 → 前台程序名；空 / undefined → null。 */
+function programOfMaybe(cmd: string | undefined): string | null {
+  return cmd ? programOf(cmd) : null
+}
 
 export function encodeSubmission(text: string): Uint8Array {
   const enc = new TextEncoder()

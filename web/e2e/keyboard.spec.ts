@@ -92,12 +92,12 @@ test('布局视口一起缩（resizes-content）：读视图 Composer 仍在可�
   expect(within(g.composer, 0, 450), `Composer ${JSON.stringify(g.composer)} 应在 [0,450]`).toBe(true)
 })
 
-test('布局视口一起缩：终端视图「⌨ 打字」后键条仍在可视区', async ({ page }) => {
+test('占屏程序「⌨ 打字」后键条仍在可视区', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
   await submit(page, "printf '\\033[>1u'; sleep 60")
-  await waitFor(async () => (await page.evaluate(() => (window as unknown as { __webterm: { view(): string } }).__webterm.view())) === 'term', '进终端', 10_000)
+  await waitFor(async () => (await page.evaluate(() => (window as unknown as { __webterm: { interactive(): boolean } }).__webterm.interactive())) === true, '占屏', 10_000)
   await settle(page)
   await page.getByTestId('term-type').click()
   await page.setViewportSize({ width: 393, height: 450 })

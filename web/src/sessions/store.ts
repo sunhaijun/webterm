@@ -7,10 +7,8 @@
 import { Connection } from '../conn/connection'
 import { ModeMachine, type ModeState } from '../input/modes'
 import type { SessionInfo } from '../protocol/messages'
-import { MarkTracker } from '../term/marks'
 import { installInteractive, type InteractiveDetector } from '../term/interactive'
 import { createTerminal, type TermHandle } from '../term/terminal'
-import type { IMarker } from '@xterm/xterm'
 
 export interface SessionView extends SessionInfo {
   /** 用户开了"保持接收"：切走也保持订阅，代价是流量。 */
@@ -30,7 +28,6 @@ interface Entry {
   interactive: boolean
   detector: InteractiveDetector
   /** 输出流里的行锚点（ADR-0011 ④：「在终端里看」定位到块）。 */
-  marks: MarkTracker
 }
 
 export interface SessionStoreHandlers {
@@ -122,7 +119,6 @@ export class SessionStore {
       opened: false,
       interactive: false,
       detector: installInteractive(term.term),
-      marks: new MarkTracker(term.term),
     }
     // 占屏检测：vim/top/less 的备用缓冲，以及 claude/codex 的主屏就地重绘
     entry.detector.onChange((on) => {
@@ -217,32 +213,13 @@ export class SessionStore {
     this.h.onChange()
   }
 
-  /**
-   * 写一帧输出。startSeq 是 data[skip] 那个字节的 out_seq（skip 是不计数的渲染前缀），
-   * 给行锚点用；不传就是普通写入。
-   */
-  write(sid: number, data: Uint8Array, startSeq = -1, skip = 0): void {
-    const e = this.entries.get(sid)
-    if (!e) return
-    if (startSeq < 0) e.term.term.write(data)
-    else e.marks.write(data, startSeq, skip)
-  }
-
-  /** 在 out_seq = seq 处登记锚点（command.start/end 到达时调）。位置已过去返回 false。 */
-  markAt(sid: number, seq: number, key: string): boolean {
-    return this.entries.get(sid)?.marks.markAt(seq, key) ?? false
-  }
-
-  markOf(sid: number, key: string): IMarker | undefined {
-    return this.entries.get(sid)?.marks.get(key)
+  /** 写一帧输出到终端。 */
+  write(sid: number, data: Uint8Array): void {
+    this.entries.get(sid)?.term.term.write(data)
   }
 
   resetTerm(sid: number): void {
-    const e = this.entries.get(sid)
-    if (!e) return
-    e.term.term.reset()
-    // 缓冲清了，行号全部作废
-    e.marks.reset()
+    this.entries.get(sid)?.term.term.reset()
   }
 
   /** 改字号：所有实例一起改，并重新 fit。 */
