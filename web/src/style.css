@@ -237,7 +237,7 @@ body {
 }
 .session-exit[data-failed='true'] { color: var(--err); }
 .session-unread { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); flex: none; }
-.session-pin, .session-close {
+.session-pin, .session-rename, .session-close {
   border: 0; background: transparent; color: var(--muted); cursor: pointer;
   font: inherit; padding: 2px 4px; flex: none; opacity: 0.5;
 }
