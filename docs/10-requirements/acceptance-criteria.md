@@ -69,6 +69,7 @@
 | AC-3.13 | sheet 打开时有面向"写"的编辑键条 `Tab ↑ ↓ ← → ⌫词 \| ~ / - _ " ' $ ⇤ ⇥` + 发送；`Tab` 有路径 chip 时补第一个；按键不抢输入框焦点 | UT-keymap-2, E2E-19 |
 | AC-3.14 | 读视图下前台出现**占屏程序**时自动切到终端视图、退出后自动回读；占屏 = 备用缓冲激活 **或程序进入全屏输入模式**（富键盘 Kitty `\e[>…u` / modifyOtherKeys `\e[>…m`、应用光标键 DECCKM `\e[?1h`（top）、鼠标跟踪，或同步输出 2026）—— 覆盖 claude / codex / top / vim；**npm / cargo / docker 等多行进度条（藏光标 + 上移重绘但不进入输入模式）不误触发**；重连后从 xterm 当前模式补判（top 运行中刷新不卡）；自动切换不写偏好，手动切过不再自动回 | UT-interactive-1, E2E-11b |
 | AC-3.15 | 命令在跑（Raw）时读视图**仍是同一个 Composer**：提交 = 整段 `xterm.paste()`（按前台程序的括号粘贴模式包裹）+ 回车，sheet 可升起编辑长文；「发送」长按 = 只粘贴不回车；前台是 claude / codex 时键条换成 `Esc ^C Enter ⇧Tab / ↑ ↓ Tab Ctrl`（无 `q`，`⇧Tab` 发 `ESC [ Z`）；**占屏程序里不显示「没有集成」横幅** | UT-keymap-ai, E2E-11b, E2E-19 |
+| AC-3.16 | 前台是 claude / codex 时读视图是**转录视图**：对话卡片（用户 / 助手 Markdown / 工具摘要）原生滚动选择缩放、贴底跟随、「↓ 新内容」；底部**终端尾巴**（xterm 末 8 行纯文本，300ms 节流）点它进终端；数据来自 WS `transcript` + `GET /api/transcript` 回放（刷新后仍在）；命令结束回块流；**AI CLI 占屏不自动进终端**，vim / less / top 照旧 | UT-markdown, UT-transcriptstore, E2E-23 |
 
 ---
 

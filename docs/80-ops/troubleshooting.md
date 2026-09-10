@@ -309,3 +309,14 @@ journalctl --user -u webterm -n 200 --no-pager
 **根因**：iOS Safari 弹键盘只缩【可视视口】不缩布局视口，并把可视区上推（`visualViewport.offsetTop` > 0）去露出输入框；应用要 `translateY(offsetTop)` 跟过去。而 Safari 的 `window.innerHeight` 报的是可视视口高度 —— 键盘一弹它也变矮，若用它做"键盘是否弹起"的参照，闸门永远关着、不补偿。参照必须是 `documentElement.clientHeight`（布局视口），见 [`../40-frontend/layout-responsive.md`](../40-frontend/layout-responsive.md) §高度计算。
 
 **排查**：在 Safari 的 Web Inspector 里聚焦输入框后看 `document.querySelector('.app').style.transform` —— 键盘弹起时应为 `translateY(<offsetTop>px)`；为空即闸门没开，对比 `visualViewport.height`、`document.documentElement.clientHeight`、`window.innerHeight` 三个数。
+
+## claude / codex 跑着，读视图却没有转录卡片
+
+**现象**：进了 claude / codex，读视图是块流的门或空转录视图，尾巴条有输出但没有对话卡片。
+
+**排查顺序**：
+1. agent 认出的程序名：`command.start` 的 `text` 最后一段第一个词得是 `claude` / `codex`（`ProgramOf` 规则，包装器 sudo / env 会跳过；别名 / 脚本名不算）
+2. 会话文件在哪：Claude Code 写 `~/.claude/projects/<cwd 里非字母数字换成 ->/<session>.jsonl`，Codex 写 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`；agent 只认**命令开始之后被写过**的文件，cwd 对得上的优先。`--resume` 继续旧会话时，第一条新消息落盘后才会被认出
+3. home 对不对：agent 用自己进程的 home（systemd 下是 `User=` 的 home）；`WEBTERM_TRANSCRIPT_HOME` 可以指别处
+4. `GET /api/transcript?sid=N`：404 = 没跟踪过（程序名没认出）；200 但 `items` 空 = 文件还没被写或没定位到
+5. 消息是整块完成才落盘的：正在流式输出时看尾巴条，答完才出卡片

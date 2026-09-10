@@ -25,6 +25,18 @@ const rawTextarea = (page: import('@playwright/test').Page) => page.locator('.xt
  * 读视图（ADR-0011，手机默认）里 xterm 不可见，Raw 的落点是同一个 Composer（整段粘贴 + 回车）；
  * 终端视图里才是 xterm 的隐藏 textarea。两条路都覆盖。
  */
+/** 反复敲 echo 直到 unmarked 横幅出现（探针在负载下可能漏计一次，固定两条会 flaky）。 */
+async function typeUntilUnmarked(page: import('@playwright/test').Page, prefix: string) {
+  const banner = page.getByTestId('unmarked')
+  for (let i = 1; i <= 5; i++) {
+    await typeRaw(page, `echo ${prefix}-${i}`)
+    await waitFor(async () => (await terminalText(page)).includes(`${prefix}-${i}`), `${prefix}-${i} 有输出`)
+    if (await banner.isVisible().catch(() => false)) return
+    await page.waitForTimeout(2400)
+  }
+  await expect(banner).toBeVisible({ timeout: 5_000 })
+}
+
 async function typeRaw(page: import('@playwright/test').Page, text: string) {
   const line = page.getByTestId('composer')
   if (await line.isVisible().catch(() => false)) {
@@ -53,13 +65,7 @@ test('钩子在本 shell 被摘掉：与子 shell 同形，提示"没有集成"�
   await waitFor(async () => (await terminalText(page)).includes('> '), '新 prompt 出现')
 
   await page.waitForTimeout(600)
-  await typeRaw(page, 'echo NOHOOK-1')
-  await waitFor(async () => (await terminalText(page)).includes('NOHOOK-1'), '第一条有输出')
-  await page.waitForTimeout(2500)
-  await typeRaw(page, 'echo NOHOOK-2')
-  await waitFor(async () => (await terminalText(page)).includes('NOHOOK-2'), '第二条有输出')
-
-  await expect(page.getByTestId('unmarked')).toBeVisible({ timeout: 10_000 })
+  await typeUntilUnmarked(page, 'NOHOOK')
   // 不能报 inactive：外层 shell 的钩子状态我们并不知道，而且这与 ssh 不可区分
   await expect(page.getByTestId('degraded')).toHaveCount(0)
 })
@@ -77,14 +83,8 @@ test('进了没有集成的子 shell：提示但不判失效；退出后自动�
   )
   await page.waitForTimeout(600)
 
-  await typeRaw(page, 'echo INSUB-1')
-  await waitFor(async () => (await terminalText(page)).includes('INSUB-1'), '子 shell 有回应')
-  await page.waitForTimeout(2500)
-  await typeRaw(page, 'echo INSUB-2')
-  await waitFor(async () => (await terminalText(page)).includes('INSUB-2'), '子 shell 再次回应')
-
+  await typeUntilUnmarked(page, 'INSUB')
   // 【提示出现，但 integration 没被判成不可用】
-  await expect(page.getByTestId('unmarked')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByTestId('degraded')).toHaveCount(0)
 
   // 退出子 shell → 外层 133;D / A / B 回来 → 提示消失
