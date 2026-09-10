@@ -11,7 +11,7 @@ ADR-0011 给手机做了「读（块流）/ 写（sheet）/ 控（终端）」�
 1. **终端是唯一的显示面。** xterm 始终铺满画布、始终可见。删除块流（ReadView / BlockList / BlockStore）、转录视图（TranscriptView / 转录 store / Markdown 渲染）、块↔终端定位（locate / marks）、读↔控视图切换与占屏自动切换、块面板、agent 侧转录跟踪（`internal/transcript`、`GET /api/transcript`、`transcript` 消息、`CommandObserver`）。约 2500+ 行代码及其测试随之移除。
 2. **输入是一个 Composer + 功能键条。** 命令在跑（Raw）时 Composer 不隐藏，提交 = 整段 `xterm.paste()`（按前台程序括号粘贴模式包裹、换行转回车）+ 回车；「发送」长按 = 只粘贴不回车（数字选项 / y·n）。长 prompt 本地编辑、一次送出（保留 ADR-0012 α 的「写」）。触屏上功能键条在 Raw 时出现；前台是 claude / codex 换成 AI 键条（`Esc ^C Enter ⇧Tab / ↑ ↓ Tab Ctrl`，无 `q`）；占屏时键条最前面给「⌨ 打字」把键盘唤起、直接打给全屏程序。
 3. **占屏不再切视图，只换键条上下文。** 占屏检测（备用缓冲 / 富键盘协议 / DECCKM / 鼠标）仍在，但只用来：把视口钉到底、按前台程序换键条（less→分页器、top→top、claude/codex→AI、其余→通用 TUI）、决定是否显示「⌨ 打字」。占屏程序里不显示「没有集成」横幅。
-4. **读长回答 = 双指缩放。** PTY 固定 43 列（claude / codex 的界面按设计宽度显示、不二次折行）。读的时候双指放大是**纯视觉** transform（只作用在 `.xterm-screen`，不 fit、不发 resize、PTY 尺寸不变）；放大后单指平移，缩回 1× 或双击复位，换命令 / 切会话自动复位。见 `web/src/term/pinch.ts`。
+4. **读长回答 = 双指缩放。** PTY 固定 43 列（claude / codex 的界面按设计宽度显示、不二次折行）。读的时候双指放大是**纯视觉** transform（只作用在 `.xterm-screen`，不 fit、不发 resize、PTY 尺寸不变）；放大【锚在双指中点】（按住哪儿放大哪儿，捏合时那一点不跑），放大后单指平移；双击在点下处放大到 2×、再双击复位；缩回 1× 或换命令 / 切会话自动复位。见 `web/src/term/pinch.ts`。
 5. **桌面**保留经典底栏（模式条 + Composer + 快捷条 + 键条），只是去掉了「读 / 终端」切换与「块」入口。
 
 ## 代价与取舍
