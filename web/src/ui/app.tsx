@@ -107,7 +107,6 @@ export function App() {
   // 【自动切换不持久化】—— 它是临时的，用户的偏好还是读。
   const autoTermRef = useRef(false)
   const [interactive, setInteractive] = useState(false)
-  const rawComposingRef = useRef(false)
   const [quick, setQuick] = useState<CommandRecord[]>([])
   // 写态 sheet（ADR-0011 ③）：读视图里输入框升起的那块。三档：收起 / 半屏 / 全屏。
   const [sheet, setSheet] = useState<SheetSize>('closed')
@@ -577,6 +576,25 @@ export function App() {
   const runText = (text: string) => {
     if (activeSid !== null) connRef.current?.sendInput(activeSid, encodeSubmission(text))
   }
+  const activeTerm = () => (activeSid === null ? undefined : storeRef.current?.termOf(activeSid)?.term)
+  /**
+   * 命令在跑（Raw）时的发送（ADR-0012）：整段交给 xterm.paste —— 它按前台程序的括号粘贴模式
+   * 自动包裹（claude / codex 都开了 ?2004h，多行不会被换行提前提交）、把换行转成回车 ——
+   * 再补一个回车。长文在本地编辑完一次送出，慢网下不再逐键往返等回显。
+   */
+  const sendToProgram = (text: string, enter: boolean) => {
+    const t = activeTerm()
+    if (text) {
+      if (t) t.paste(text)
+      else sendRawRef.current(text.replace(/\r?\n/g, '\r'))
+    }
+    if (enter) sendRawRef.current('\r')
+  }
+  /** Composer 提交：停在 prompt 时是跑命令；命令在跑时是发给前台程序。 */
+  const submitText = (text: string) => {
+    if (mode.mode === 'raw') sendToProgram(text, true)
+    else runText(text)
+  }
   // 「在终端里看」：切到终端视图并滚到该块输出的第一行（ADR-0011 ④）
   const viewBlockInTerm = (b: Block) => {
     const sid = activeSid
@@ -662,49 +680,6 @@ export function App() {
     }
   }
   const sheetInset = !classic && view === 'read' ? Math.max(0, bottomH - SLOT_HEIGHT) : 0
-  // 读视图里 xterm 不可见，Raw 模式的输入要有地方落：一条直发输入行，
-  // Enter 把整行 + \r 送进 PTY。按行发 —— 组字期间自然不会有半个字节出去。
-  // 直发输入行：【逐字立刻送进 PTY】（对得起"敲什么立刻送进去"这句话，也让 codex/claude
-  // 的 1/2 选项、y/n 这类单键选择即时生效）。组字期间不发，等 compositionend 一次性送；
-  // 特殊键（Enter/Backspace/方向键…）映射成控制字节直发。发完即清空，回显由 PTY 出。
-  const rawFlush = (el: HTMLInputElement) => {
-    const v = el.value
-    el.value = ''
-    if (v) sendRawRef.current(v)
-  }
-  const rawLineEl = (
-    <div class="rawline" data-testid="rawline">
-      <span class="rawlabel">直发</span>
-      <input
-        data-testid="raw-input"
-        placeholder="命令在跑 · 敲什么立刻送进去"
-        autocapitalize="off"
-        autocorrect="off"
-        spellcheck={false}
-        autocomplete="off"
-        onCompositionStart={() => {
-          rawComposingRef.current = true
-        }}
-        onCompositionEnd={(e) => {
-          rawComposingRef.current = false
-          rawFlush(e.currentTarget)
-        }}
-        onInput={(e) => {
-          if (rawComposingRef.current) return
-          rawFlush(e.currentTarget)
-        }}
-        onKeyDown={(e) => {
-          if (e.isComposing) return
-          const b = RAWLINE_KEYS[e.key]
-          if (b !== undefined) {
-            e.preventDefault()
-            sendRawRef.current(b)
-          }
-        }}
-      />
-    </div>
-  )
-
   return (
     <div class="app" data-bp={bp} data-short={short} data-sidebar={sidebarOpen ? 'open' : 'closed'}>
       {bp !== 'desktop' && sidebarOpen && (
@@ -745,7 +720,9 @@ export function App() {
             shell 集成未生效 · 命令历史、CWD 与自动切换不可用
           </div>
         )}
-        {active?.unmarked_input && active.integration !== 'inactive' && (
+        {active?.unmarked_input && active.integration !== 'inactive' && !interactive && (
+          // 占屏程序（claude / codex / vim / top）里按 Enter 当然没有标记 —— 那是用户在用它，
+          // 不是 shell 坏了；这条横幅只给 ssh / su / 容器 / 没钩子的子 shell 看。
           // 输入去了一个没有集成的地方：ssh / su / 容器 / exec bash / 摘了钩子 ——
           // 这些在字节流里【完全同形】，所以措辞不能承诺"退出后恢复"（exec bash
           // 没有可退出的东西），只说事实和恢复的条件。
@@ -894,7 +871,7 @@ export function App() {
           // 写态 sheet（ADR-0011 ③）：收起是一行，碰输入框升起半屏 / 全屏。
           // 命令在跑（raw）时读视图里是直发输入行 + 功能键条；终端视图里只有键条。
           <WriteSheet
-            size={view === 'read' && mode.mode === 'composer' ? sheet : 'closed'}
+            size={view === 'read' ? sheet : 'closed'}
             barHidden={view === 'term' && mode.mode === 'raw' && coarse}
             onSize={changeSheet}
             onHeight={setBottomH}
@@ -903,6 +880,11 @@ export function App() {
             editKeys={coarse}
             onEditKey={editKey}
             onSend={() => composerRef.current?.submit()}
+            onSendHold={() => {
+              // 长按发送 = 只粘贴不回车：给 codex 的数字选项、y/n 这类想自己按回车的场合
+              sendToProgram(composerRef.current?.take() ?? '', false)
+              changeSheet('closed')
+            }}
             bar={
               <>
                 <button
@@ -956,17 +938,16 @@ export function App() {
               ) : null
             }
           >
-            {view === 'read' && mode.mode === 'raw' && rawLineEl}
-            {view === 'term' && mode.mode === 'raw' && (
+                {view === 'term' && mode.mode === 'raw' && (
               <button class="bar-hint bar-type" data-testid="term-type-hint" onClick={() => focusTermRef.current()}>
                 ⌨ 点此打字，直接输入到程序
               </button>
             )}
             <Composer
-              hidden={mode.mode === 'raw'}
-              placeholder="输入命令…"
+              hidden={false}
+              placeholder={mode.mode === 'raw' ? `输入给 ${program ?? '程序'}…` : '输入命令…'}
               onSubmit={(text) => {
-                runText(text)
+                submitText(text)
                 // 发出去就收起：这时候该看的是输出
                 changeSheet('closed')
               }}
@@ -1056,11 +1037,10 @@ export function App() {
             </div>
           </>
         )}
-        {classic && view === 'read' && mode.mode === 'raw' && active?.status !== 'exited' && rawLineEl}
         {classic && active?.status !== 'exited' && (
           <Composer
-            hidden={mode.mode === 'raw'}
-            onSubmit={runText}
+            hidden={false}
+            onSubmit={submitText}
             onRaw={(bytes) => sendRawRef.current(bytes)}
             onHandle={(h) => {
               composerRef.current = h
@@ -1156,18 +1136,6 @@ export function App() {
  *   单行   → 内容 + CR
  *   空     → CR
  */
-/** 直发输入行里的特殊键 → 控制字节（单行 input 不产生 input 事件的那些）。 */
-const RAWLINE_KEYS: Record<string, string> = {
-  Enter: '\r',
-  Backspace: '\x7f',
-  Tab: '\t',
-  Escape: '\x1b',
-  ArrowUp: '\x1b[A',
-  ArrowDown: '\x1b[B',
-  ArrowRight: '\x1b[C',
-  ArrowLeft: '\x1b[D',
-}
-
 export function encodeSubmission(text: string): Uint8Array {
   const enc = new TextEncoder()
   if (text.trim() === '') return enc.encode('\r')

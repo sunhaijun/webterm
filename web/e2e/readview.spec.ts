@@ -16,7 +16,7 @@ async function ensureOpen(blk: import('@playwright/test').Locator): Promise<void
  * 读视图 —— ADR-0011 分片 ①。
  *
  * 手机默认看到的是命令块流，不是终端网格；xterm 保活隐藏；命令在跑时
- * 底栏变成直发输入行；没有标记时输出落进尾块。
+ * 底栏仍是 Composer（整段粘贴发送）；没有标记时输出落进尾块。
  */
 test.describe('手机：读视图是默认', () => {
   test.use(PIXEL)
@@ -89,7 +89,7 @@ test.describe('手机：读视图是默认', () => {
     await expect(bad).toHaveAttribute('data-open', 'false')
   })
 
-  test('运行中的块 live-tail，底栏变成直发输入行', async ({ page }) => {
+  test('运行中的块 live-tail，底栏还是 Composer（整段粘贴发送）', async ({ page }) => {
     await agent.pair(page)
     await page.goto(agent.baseURL)
     await expect(page.getByTestId('conn-text')).toHaveText('在线')
@@ -101,20 +101,22 @@ test.describe('手机：读视图是默认', () => {
     // live-tail：命令还没结束就能在块里看到已产出的行
     await expect(running.locator('.block-live')).toContainText('tick-2', { timeout: 10_000 })
 
-    // 命令在跑 → Raw → 直发输入行出现（Composer 收起）
-    const raw = page.getByTestId('raw-input')
+    // 命令在跑 → Raw → 同一个 Composer 还在：发送 = 整段粘贴 + 回车
+    const raw = page.getByTestId('composer')
     await expect(raw).toBeVisible()
-    await raw.fill('hello-from-rawline')
+    await raw.fill('hello-from-composer')
     await raw.press('Enter')
 
-    await waitFor(async () => (await terminalText(page)).includes('GOT-hello-from-rawline'), '直发输入到达了程序')
-    // 结束后块不再 running，输入行让位给 Composer
+    await waitFor(async () => (await terminalText(page)).includes('GOT-hello-from-composer'), '输入到达了程序')
+    // 结束后块不再 running
     await expect(page.getByTestId('stream').locator('.block', { hasText: 'GOT-' }).first()).toHaveAttribute(
       'data-running',
       'false',
       { timeout: 10_000 },
     )
-    await expect(raw).toHaveCount(0)
+    // 输入框一直是同一个；键条随命令结束退场
+    await expect(raw).toBeVisible()
+    await expect(page.getByTestId('keybar')).toHaveCount(0, { timeout: 10_000 })
   })
 
   test('最新一条命令的块自动展开，上一条自动折叠；手动展开的不被折叠', async ({ page }) => {
@@ -232,7 +234,7 @@ test.describe('手机：读视图是默认', () => {
     await expect(page.getByTestId('conn-text')).toHaveText('在线')
 
     await submit(page, 'bash --norc --noprofile')
-    const raw = page.getByTestId('raw-input')
+    const raw = page.getByTestId('composer')
     await expect(raw).toBeVisible({ timeout: 10_000 })
     await raw.fill('echo INSUB-READ')
     await raw.press('Enter')

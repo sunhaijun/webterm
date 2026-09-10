@@ -78,7 +78,7 @@ test('三档：碰输入框升半屏，把手点一下到全屏，收起回一�
   expect(await ptySize(page)).toEqual(size0)
 })
 
-test('提交后自动收起；Esc 清空再 Esc 收起；命令跑起来时是直发输入行 + 功能键条', async ({ page }) => {
+test('提交后自动收起；Esc 清空再 Esc 收起；命令跑起来时输入框仍在 + 功能键条', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
@@ -96,14 +96,13 @@ test('提交后自动收起；Esc 清空再 Esc 收起；命令跑起来时是�
   await page.getByTestId('composer').press('Escape')
   await waitFor(async () => (await sheet(page)) === 'closed', '第二下 Esc 收起')
 
-  // 命令在跑：底栏变直发输入行，键条挂在下面，sheet 不可能开着
+  // 命令在跑：同一个输入框还在（整段粘贴发送），键条挂在下面，sheet 没有自动开
   await submit(page, 'sleep 30')
-  await expect(page.getByTestId('rawline')).toBeVisible({ timeout: 10_000 })
-  await expect(page.getByTestId('keybar')).toBeVisible()
+  await expect(page.getByTestId('keybar')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByTestId('composer'), '命令在跑：输入框还在').toBeVisible()
   await expect(page.getByTestId('key-CtrlC')).toBeVisible()
   expect(await sheet(page)).toBe('closed')
   await page.getByTestId('key-CtrlC').click()
-  await expect(page.getByTestId('rawline')).toBeHidden({ timeout: 10_000 })
   await expect(page.getByTestId('keybar'), '回到 prompt：键条让位给编辑键').toHaveCount(0)
 })
 
@@ -166,7 +165,8 @@ test('⋯ 菜单：历史 / 命令面板 / 设置 / 输入模式都从这里进'
 
   await page.getByTestId('open-more').click()
   await page.getByTestId('mode-toggle').click()
-  await expect(page.getByTestId('rawline'), '手动切到 Raw：直发输入行出现').toBeVisible()
+  await expect(page.getByTestId('keybar'), '手动切到 Raw：功能键条出现，输入框仍在').toBeVisible()
+  await expect(page.getByTestId('composer')).toBeVisible()
   await page.getByTestId('open-more').click()
   await expect(page.getByTestId('mode-unlock')).toBeVisible()
   await page.getByTestId('mode-unlock').click()
