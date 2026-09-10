@@ -12,6 +12,7 @@ export interface SessionListProps {
   unread(sid: number): boolean
   onSelect(sid: number): void
   onClose(sid: number): void
+  onRename(sid: number, current: string): void
   onTogglePinned(sid: number): void
   onNew(): void
   /** 会话数达上限时禁用新建按钮（US-7.3）。 */
@@ -25,6 +26,7 @@ export function SessionList({
   unread,
   onSelect,
   onClose,
+  onRename,
   onTogglePinned,
   onNew,
   atLimit,
@@ -70,6 +72,17 @@ export function SessionList({
             }}
           >
             ⇵
+          </button>
+          <button
+            class="session-rename"
+            data-testid={`session-${s.sid}-rename`}
+            title="重命名"
+            onClick={(e) => {
+              e.stopPropagation()
+              onRename(s.sid, s.name)
+            }}
+          >
+            ✎
           </button>
           <button
             class="session-close"

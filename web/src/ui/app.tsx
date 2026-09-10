@@ -165,10 +165,17 @@ export function App() {
               store.upsert(msg.session)
               select(msg.session.sid)
               break
-            case T.sessionClosed:
+            case T.sessionClosed: {
+              const wasActive = store.active === msg.sid
               store.remove(msg.sid)
               runningCmd.delete(msg.sid)
+              // 关掉的是当前会话且还有别的 → 自动切过去，别留一块空白终端
+              if (wasActive) {
+                const next = store.firstSid()
+                if (next !== null) select(next)
+              }
               break
+            }
             case T.sessionUpdated: {
               const { t: _t, sid, ...patch } = msg
               store.patch(sid, patch)
@@ -611,8 +618,17 @@ export function App() {
             if (bp !== 'desktop') setSidebarOpen(false)
           }}
           onClose={(sid) => closeRef.current(sid)}
+          onRename={(sid, current) => {
+            const name = prompt('会话名（留空 = 跟随目录）', current)
+            if (name === null) return
+            const trimmed = name.trim()
+            connRef.current?.send({ t: T.sessionRename, req_id: `rename-${sid}-${Date.now()}`, sid, name: trimmed === '' ? null : trimmed })
+          }}
           onTogglePinned={(sid) => storeRef.current?.togglePinnedSubscription(sid)}
-          onNew={() => newSessionRef.current()}
+          onNew={() => {
+            newSessionRef.current()
+            if (bp !== 'desktop') setSidebarOpen(false)
+          }}
           atLimit={atLimit}
           maxSessions={maxSessions}
         />
@@ -818,6 +834,16 @@ export function App() {
           <>
             <div class="more-backdrop" data-testid="more-backdrop" onClick={() => setMoreOpen(false)} />
             <div class="more-menu" data-testid="more-menu" role="menu">
+              <button
+                role="menuitem"
+                data-testid="open-sessions"
+                onClick={() => {
+                  setMoreOpen(false)
+                  setSidebarOpen(true)
+                }}
+              >
+                会话
+              </button>
               <button
                 role="menuitem"
                 data-testid="open-history"

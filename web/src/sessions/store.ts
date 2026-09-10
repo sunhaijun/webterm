@@ -238,6 +238,12 @@ export class SessionStore {
     return ids[i + 1] ?? ids[i - 1] ?? null
   }
 
+  /** 最小 sid 的会话（关掉当前会话后自动切过去用）。 */
+  firstSid(): number | null {
+    const ids = [...this.entries.keys()].sort((a, b) => a - b)
+    return ids[0] ?? null
+  }
+
   /** 上一个 / 下一个（Ctrl+Shift+↑ / ↓）。 */
   step(delta: number): number | null {
     const ids = [...this.entries.keys()].sort((a, b) => a - b)
