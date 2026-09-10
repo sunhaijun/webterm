@@ -267,3 +267,7 @@ active  ──距上一个 133 标记超过 5 分钟──> inactive ──收�
 agent 启动时：删除运行时目录下所有 `rc-*.bash` 文件（上次崩溃残留）。
 
 不需要清理 PTY 或进程 —— agent 死亡时 PTY master 关闭，shell 收到 `SIGHUP` 自行退出。
+
+## 命令旁听（CommandObserver）
+
+`Manager.SetCommandObserver` 挂一个旁听者，会话在 `133;C`（带 `1701;cmd` 文本与 cwd）、`133;D`、shell 退出和 `Close` 时同步回调 `CommandStarted / CommandEnded / SessionClosed`。回调在读循环上执行，**实现必须不阻塞**。目前唯一的旁听者是 `internal/transcript`（[ADR-0012](../20-architecture/adr/0012-ai-cli-conversation-first.md) β），它据此起停会话文件跟踪，并用 `Manager.Fanout` 把 `transcript` 消息发给所有连接。

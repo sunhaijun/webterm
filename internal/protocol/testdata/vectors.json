@@ -4,106 +4,417 @@
     {
       "name": "output_basic",
       "hex": "0100000100000000000000e86869",
-      "decoded": { "type": 1, "flags": 0, "sid": 1, "seq": "232", "payload_hex": "6869" },
+      "decoded": {
+        "type": 1,
+        "flags": 0,
+        "sid": 1,
+        "seq": "232",
+        "payload_hex": "6869"
+      },
       "data_len": 2
     },
     {
       "name": "output_attr_prefix",
       "hex": "0101000100000000000000e81b5b306d6869",
-      "decoded": { "type": 1, "flags": 1, "sid": 1, "seq": "232", "payload_hex": "1b5b306d6869" },
+      "decoded": {
+        "type": 1,
+        "flags": 1,
+        "sid": 1,
+        "seq": "232",
+        "payload_hex": "1b5b306d6869"
+      },
       "data_len": 2,
       "note": "flags bit0：前 4 字节 ESC[0m 是渲染修正，不计入 seq"
     },
     {
       "name": "input_basic",
       "hex": "020000030000000000000000617364",
-      "decoded": { "type": 2, "flags": 0, "sid": 3, "seq": "0", "payload_hex": "617364" },
+      "decoded": {
+        "type": 2,
+        "flags": 0,
+        "sid": 3,
+        "seq": "0",
+        "payload_hex": "617364"
+      },
       "data_len": 3
     },
     {
       "name": "output_seq_max",
       "hex": "010000ffffffffffffffffff41",
-      "decoded": { "type": 1, "flags": 0, "sid": 255, "seq": "18446744073709551615", "payload_hex": "41" },
+      "decoded": {
+        "type": 1,
+        "flags": 0,
+        "sid": 255,
+        "seq": "18446744073709551615",
+        "payload_hex": "41"
+      },
       "data_len": 1,
       "note": "seq = MaxUint64 边界"
     },
     {
       "name": "output_sid_zero",
       "hex": "0100000000000000000000012a",
-      "decoded": { "type": 1, "flags": 0, "sid": 0, "seq": "1", "payload_hex": "2a" },
+      "decoded": {
+        "type": 1,
+        "flags": 0,
+        "sid": 0,
+        "seq": "1",
+        "payload_hex": "2a"
+      },
       "data_len": 1,
       "note": "sid=0 在帧编解码层是合法的；它作为无效值的语义由会话层负责"
     },
     {
       "name": "output_binary_payload",
       "hex": "0100000700000000000f4240e4b8ade696870aff00fe",
-      "decoded": { "type": 1, "flags": 0, "sid": 7, "seq": "1000000", "payload_hex": "e4b8ade696870aff00fe" },
+      "decoded": {
+        "type": 1,
+        "flags": 0,
+        "sid": 7,
+        "seq": "1000000",
+        "payload_hex": "e4b8ade696870aff00fe"
+      },
       "data_len": 10,
       "note": "payload 可以是任意字节序列，包括非法 UTF-8（ff 00 fe）"
     }
   ],
   "invalid_frames": [
-    { "name": "too_short_header", "hex": "010000010000", "expect_error": "bad_frame" },
-    { "name": "header_only_empty_payload", "hex": "0100000100000000000000e8", "expect_error": "bad_frame" },
-    { "name": "empty", "hex": "", "expect_error": "bad_frame" },
-    { "name": "unknown_type", "hex": "0900000100000000000000e841", "expect_error": "bad_frame" },
-    { "name": "attr_prefix_without_sgr", "hex": "0101000100000000000000e84142434445", "expect_error": "bad_frame" },
-    { "name": "attr_prefix_on_input", "hex": "0201000100000000000000e81b5b306d41", "expect_error": "bad_frame" }
+    {
+      "name": "too_short_header",
+      "hex": "010000010000",
+      "expect_error": "bad_frame"
+    },
+    {
+      "name": "header_only_empty_payload",
+      "hex": "0100000100000000000000e8",
+      "expect_error": "bad_frame"
+    },
+    {
+      "name": "empty",
+      "hex": "",
+      "expect_error": "bad_frame"
+    },
+    {
+      "name": "unknown_type",
+      "hex": "0900000100000000000000e841",
+      "expect_error": "bad_frame"
+    },
+    {
+      "name": "attr_prefix_without_sgr",
+      "hex": "0101000100000000000000e84142434445",
+      "expect_error": "bad_frame"
+    },
+    {
+      "name": "attr_prefix_on_input",
+      "hex": "0201000100000000000000e81b5b306d41",
+      "expect_error": "bad_frame"
+    }
   ],
   "control_messages": [
     {
       "name": "hello_first_connect",
-      "json": { "t": "hello", "protocol": 1, "client_id": "tab-7f3a", "resume": [] }
+      "json": {
+        "t": "hello",
+        "protocol": 1,
+        "client_id": "tab-7f3a",
+        "resume": []
+      }
     },
     {
       "name": "hello_resume",
-      "json": { "t": "hello", "protocol": 1, "client_id": "tab-7f3a", "instance_id": "a91e5c", "resume": [{ "sid": 1, "out_seq": 483920 }] }
+      "json": {
+        "t": "hello",
+        "protocol": 1,
+        "client_id": "tab-7f3a",
+        "instance_id": "a91e5c",
+        "resume": [
+          {
+            "sid": 1,
+            "out_seq": 483920
+          }
+        ]
+      }
     },
     {
       "name": "welcome",
       "json": {
-        "t": "welcome", "protocol": 1, "server_version": "0.1.0", "instance_id": "a91e5c",
-        "limits": { "max_sessions": 20, "ring_bytes": 1048576, "max_frame_bytes": 262144 },
-        "sessions": [{
-          "sid": 1, "name": "webterm", "name_is_manual": false, "cwd": "/home/sun/github/webterm",
-          "status": "running", "exit_code": null, "cols": 80, "rows": 24, "integration": "active", "unmarked_input": false, "prompt_state": "input",
-          "base_seq": 0, "head_seq": 483920, "created_at": 1757116000000
-        }],
-        "resumed": [{ "sid": 1, "status": "ok", "from_seq": 483920, "in_ack": 1204 }]
+        "t": "welcome",
+        "protocol": 1,
+        "server_version": "0.1.0",
+        "instance_id": "a91e5c",
+        "limits": {
+          "max_sessions": 20,
+          "ring_bytes": 1048576,
+          "max_frame_bytes": 262144
+        },
+        "sessions": [
+          {
+            "sid": 1,
+            "name": "webterm",
+            "name_is_manual": false,
+            "cwd": "/home/sun/github/webterm",
+            "status": "running",
+            "exit_code": null,
+            "cols": 80,
+            "rows": 24,
+            "integration": "active",
+            "unmarked_input": false,
+            "prompt_state": "input",
+            "base_seq": 0,
+            "head_seq": 483920,
+            "created_at": 1757116000000
+          }
+        ],
+        "resumed": [
+          {
+            "sid": 1,
+            "status": "ok",
+            "from_seq": 483920,
+            "in_ack": 1204
+          }
+        ]
       }
     },
     {
       "name": "welcome_gone_after_restart",
       "json": {
-        "t": "welcome", "protocol": 1, "server_version": "0.1.0", "instance_id": "b02f7d",
-        "limits": { "max_sessions": 20, "ring_bytes": 1048576, "max_frame_bytes": 262144 },
+        "t": "welcome",
+        "protocol": 1,
+        "server_version": "0.1.0",
+        "instance_id": "b02f7d",
+        "limits": {
+          "max_sessions": 20,
+          "ring_bytes": 1048576,
+          "max_frame_bytes": 262144
+        },
         "sessions": [],
-        "resumed": [{ "sid": 1, "status": "gone", "from_seq": 0, "in_ack": 0 }]
+        "resumed": [
+          {
+            "sid": 1,
+            "status": "gone",
+            "from_seq": 0,
+            "in_ack": 0
+          }
+        ]
       }
     },
-    { "name": "session_create", "json": { "t": "session.create", "req_id": "r1", "name": null, "cwd": null, "cols": 80, "rows": 24 } },
-    { "name": "session_close", "json": { "t": "session.close", "req_id": "r2", "sid": 1 } },
-    { "name": "session_rename_auto", "json": { "t": "session.rename", "req_id": "r3", "sid": 1, "name": null } },
-    { "name": "session_closed", "json": { "t": "session.closed", "sid": 1, "exit_code": 0 } },
-    { "name": "session_updated_head_seq", "json": { "t": "session.updated", "sid": 2, "head_seq": 491337 } },
-    { "name": "session_updated_integration", "json": { "t": "session.updated", "sid": 2, "integration": "inactive" } },
-    { "name": "subscribe", "json": { "t": "subscribe", "sid": 1, "out_seq": 483920 } },
-    { "name": "unsubscribe", "json": { "t": "unsubscribe", "sid": 1 } },
-    { "name": "resize", "json": { "t": "resize", "sid": 1, "cols": 100, "rows": 30 } },
-    { "name": "ack", "json": { "t": "ack", "sid": 1, "in_ack": 1352 } },
-    { "name": "reset", "json": { "t": "reset", "sid": 1, "base_seq": 512000 } },
-    { "name": "cwd", "json": { "t": "cwd", "sid": 1, "path": "/home/sun/github/webterm" } },
-    { "name": "prompt_input", "json": { "t": "prompt", "sid": 1, "state": "input" } },
-    { "name": "command_start", "json": { "t": "command.start", "sid": 1, "cmd_id": 8842, "text": "go test ./...", "cwd": "/srv/x", "at": 1757116800000, "out_seq": 483920 } },
-    { "name": "command_end", "json": { "t": "command.end", "sid": 1, "cmd_id": 8842, "exit_code": 0, "duration_ms": 4210, "out_seq": 491337 } },
-    { "name": "command_end_dangling", "json": { "t": "command.end", "sid": 1, "cmd_id": 8843, "exit_code": null, "duration_ms": 0, "out_seq": 491400 } },
-    { "name": "ping", "json": { "t": "ping", "ts": 1757116800123 } },
-    { "name": "pong", "json": { "t": "pong", "ts": 1757116800123 } },
-    { "name": "error_session_limit", "json": { "t": "error", "req_id": "r1", "code": "session_limit", "message": "会话数已达上限 20" } },
-    { "name": "error_input_stalled", "json": { "t": "error", "sid": 3, "code": "input_stalled", "message": "会话输入队列已满" } },
-    { "name": "notice", "json": { "t": "notice", "level": "warn", "message": "agent 即将重启，所有会话将结束" } }
+    {
+      "name": "session_create",
+      "json": {
+        "t": "session.create",
+        "req_id": "r1",
+        "name": null,
+        "cwd": null,
+        "cols": 80,
+        "rows": 24
+      }
+    },
+    {
+      "name": "session_close",
+      "json": {
+        "t": "session.close",
+        "req_id": "r2",
+        "sid": 1
+      }
+    },
+    {
+      "name": "session_rename_auto",
+      "json": {
+        "t": "session.rename",
+        "req_id": "r3",
+        "sid": 1,
+        "name": null
+      }
+    },
+    {
+      "name": "session_closed",
+      "json": {
+        "t": "session.closed",
+        "sid": 1,
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "session_updated_head_seq",
+      "json": {
+        "t": "session.updated",
+        "sid": 2,
+        "head_seq": 491337
+      }
+    },
+    {
+      "name": "session_updated_integration",
+      "json": {
+        "t": "session.updated",
+        "sid": 2,
+        "integration": "inactive"
+      }
+    },
+    {
+      "name": "subscribe",
+      "json": {
+        "t": "subscribe",
+        "sid": 1,
+        "out_seq": 483920
+      }
+    },
+    {
+      "name": "unsubscribe",
+      "json": {
+        "t": "unsubscribe",
+        "sid": 1
+      }
+    },
+    {
+      "name": "resize",
+      "json": {
+        "t": "resize",
+        "sid": 1,
+        "cols": 100,
+        "rows": 30
+      }
+    },
+    {
+      "name": "ack",
+      "json": {
+        "t": "ack",
+        "sid": 1,
+        "in_ack": 1352
+      }
+    },
+    {
+      "name": "reset",
+      "json": {
+        "t": "reset",
+        "sid": 1,
+        "base_seq": 512000
+      }
+    },
+    {
+      "name": "cwd",
+      "json": {
+        "t": "cwd",
+        "sid": 1,
+        "path": "/home/sun/github/webterm"
+      }
+    },
+    {
+      "name": "prompt_input",
+      "json": {
+        "t": "prompt",
+        "sid": 1,
+        "state": "input"
+      }
+    },
+    {
+      "name": "command_start",
+      "json": {
+        "t": "command.start",
+        "sid": 1,
+        "cmd_id": 8842,
+        "text": "go test ./...",
+        "cwd": "/srv/x",
+        "at": 1757116800000,
+        "out_seq": 483920
+      }
+    },
+    {
+      "name": "command_end",
+      "json": {
+        "t": "command.end",
+        "sid": 1,
+        "cmd_id": 8842,
+        "exit_code": 0,
+        "duration_ms": 4210,
+        "out_seq": 491337
+      }
+    },
+    {
+      "name": "command_end_dangling",
+      "json": {
+        "t": "command.end",
+        "sid": 1,
+        "cmd_id": 8843,
+        "exit_code": null,
+        "duration_ms": 0,
+        "out_seq": 491400
+      }
+    },
+    {
+      "name": "ping",
+      "json": {
+        "t": "ping",
+        "ts": 1757116800123
+      }
+    },
+    {
+      "name": "pong",
+      "json": {
+        "t": "pong",
+        "ts": 1757116800123
+      }
+    },
+    {
+      "name": "error_session_limit",
+      "json": {
+        "t": "error",
+        "req_id": "r1",
+        "code": "session_limit",
+        "message": "会话数已达上限 20"
+      }
+    },
+    {
+      "name": "error_input_stalled",
+      "json": {
+        "t": "error",
+        "sid": 3,
+        "code": "input_stalled",
+        "message": "会话输入队列已满"
+      }
+    },
+    {
+      "name": "notice",
+      "json": {
+        "t": "notice",
+        "level": "warn",
+        "message": "agent 即将重启，所有会话将结束"
+      }
+    },
+    {
+      "name": "transcript_batch",
+      "json": {
+        "t": "transcript",
+        "sid": 1,
+        "source": "claude",
+        "items": [
+          {
+            "id": "u1#0",
+            "role": "user",
+            "kind": "text",
+            "text": "解释一下 context 包",
+            "at": 1757116800000
+          },
+          {
+            "id": "a1#1",
+            "role": "tool",
+            "kind": "tool_use",
+            "text": "go test ./...",
+            "name": "Bash",
+            "at": 1757116801000
+          }
+        ],
+        "reset": true
+      }
+    }
   ],
   "unknown_messages": [
-    { "name": "future_type", "json": { "t": "session.split", "sid": 1 }, "note": "接收方必须忽略，不能关连接" }
+    {
+      "name": "future_type",
+      "json": {
+        "t": "session.split",
+        "sid": 1
+      },
+      "note": "接收方必须忽略，不能关连接"
+    }
   ]
 }

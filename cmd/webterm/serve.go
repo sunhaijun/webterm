@@ -133,6 +133,8 @@ func runServe(args []string) error {
 		MaxHistory: o.maxHistory,
 		Version:    version,
 		Logger:     log,
+		// 空 = 当前用户 home；E2E 用它把 ~/.claude/projects 与 ~/.codex/sessions 指到临时目录
+		TranscriptHome: os.Getenv("WEBTERM_TRANSCRIPT_HOME"),
 	}, st, sessions)
 	a.LoadSettings()
 

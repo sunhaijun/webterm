@@ -92,6 +92,21 @@
 - **目录不存在 / 没权限 / 不是目录 → `200` 空列表**，不是 4xx：敲路径的过程中这是常态
 - 权限与 shell 相同 —— 能配对进来的人本来就能在会话里 `ls` 任何目录，所以不做目录白名单，也没有扩权
 
+## 转录
+
+### `GET /api/transcript?sid=N`
+
+回放某会话当前的 AI CLI 转录（[ADR-0012](../20-architecture/adr/0012-ai-cli-conversation-first.md) β；增量走 WS 的 [`transcript`](websocket-protocol.md#transcript) 消息）。
+
+```json
+{ "sid": 1, "source": "claude", "active": true, "items": [ { "id": "u1#0", "role": "user", "kind": "text", "text": "…", "at": 1757116800000 } ] }
+```
+
+- `sid` 非法 → `400 bad_request`；该会话没跟踪过 → `404 not_found`
+- `active`：前台的 claude / codex 还在跑
+- 最多保留 5000 条（最旧的丢）
+- 会话文件的 home 默认是 agent 用户的 home；`WEBTERM_TRANSCRIPT_HOME` 可改（E2E 指到临时目录）
+
 ## 设置
 
 ```json
