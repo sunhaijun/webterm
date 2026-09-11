@@ -6,6 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 
+import { installSwipeDismiss } from '../ui/swipe'
 import { ellipsize, listCommands, type CommandRecord } from './api'
 import { fuzzyMatch, rankScore } from './fuzzy'
 
@@ -34,6 +35,8 @@ export function CommandPalette({
   onSelectSession,
 }: PaletteProps) {
   const [query, setQuery] = useState('')
+  const sheetRef = useRef<HTMLDivElement>(null)
+  useEffect(() => (sheetRef.current ? installSwipeDismiss(sheetRef.current, onClose) : undefined), [onClose])
   const [records, setRecords] = useState<CommandRecord[]>([])
   const [cursor, setCursor] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -101,7 +104,7 @@ export function CommandPalette({
 
   return (
     <div class="palette-backdrop" data-testid="palette" onClick={onClose}>
-      <div class="palette" onClick={(e) => e.stopPropagation()}>
+      <div class="palette" ref={sheetRef} onClick={(e) => e.stopPropagation()}>
         <input
           ref={inputRef}
           class="palette-input"

@@ -17,6 +17,7 @@ import {
   reorderCommands,
   type CommandRecord,
 } from './api'
+import { installSwipeDismiss } from '../ui/swipe'
 
 export interface HistoryPanelProps {
   /** 当前会话的 CWD，用于「仅当前目录」过滤。 */
@@ -29,6 +30,8 @@ export interface HistoryPanelProps {
 }
 
 export function HistoryPanel({ cwd, onClose, onFill, onRun, onPinnedChanged }: HistoryPanelProps) {
+  const sheetRef = useRef<HTMLDivElement>(null)
+  useEffect(() => (sheetRef.current ? installSwipeDismiss(sheetRef.current, onClose) : undefined), [onClose])
   const [q, setQ] = useState('')
   const [onlyCwd, setOnlyCwd] = useState(false)
   const [onlyFailed, setOnlyFailed] = useState(false)
@@ -83,7 +86,7 @@ export function HistoryPanel({ cwd, onClose, onFill, onRun, onPinnedChanged }: H
 
   return (
     <div class="panel-backdrop" data-testid="history-panel" onClick={onClose}>
-      <div class="panel" onClick={(e) => e.stopPropagation()}>
+      <div class="panel" ref={sheetRef} onClick={(e) => e.stopPropagation()}>
         <div class="panel-head">
           <input
             class="panel-search"

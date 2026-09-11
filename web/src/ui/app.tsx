@@ -16,6 +16,7 @@ import { KeyBar } from '../input/keybar'
 import { EDIT_INSERT, appAction, programOf } from '../input/keymap'
 import type { ModeState } from '../input/modes'
 import { RawIme, cursorPosition } from '../input/raw'
+import { installSwipeDismiss } from './swipe'
 import { installPinch } from '../term/pinch'
 import { SLOT_HEIGHT, WriteSheet, type SheetSize } from '../input/sheet'
 import { T } from '../protocol/messages'
@@ -40,6 +41,7 @@ function clientID(): string {
 
 export function App() {
   const termAreaRef = useRef<HTMLDivElement>(null)
+  const sidebarRef = useRef<HTMLElement>(null)
   const connRef = useRef<Connection | null>(null)
   const storeRef = useRef<SessionStore | null>(null)
   const composerRef = useRef<ComposerHandle | null>(null)
@@ -59,6 +61,7 @@ export function App() {
   const [bp, setBp] = useState<Breakpoint>(() => breakpoint(window.innerWidth))
   const [short, setShort] = useState(() => isShort(window.innerHeight))
   const [sidebarOpen, setSidebarOpen] = useState(() => breakpoint(window.innerWidth) === 'desktop')
+  const classicRef = useRef(breakpoint(window.innerWidth) === 'desktop')
   const [coarse] = useState(isCoarsePointer)
   const [theme, setTheme] = useState<Theme>(readTheme)
   const [fontSize, setFontSize] = useState(readFontSize)
@@ -112,6 +115,10 @@ export function App() {
   useEffect(reloadQuick, [reloadQuick])
 
   useEffect(() => applyTheme(theme), [theme])
+  useEffect(() => {
+    if (classicRef.current || !sidebarOpen || !sidebarRef.current) return
+    return installSwipeDismiss(sidebarRef.current, () => setSidebarOpen(false))
+  }, [sidebarOpen])
 
   const refresh = useCallback(() => {
     const store = storeRef.current
@@ -546,6 +553,7 @@ export function App() {
   }
   // 终端始终是唯一显示面（ADR-0013）：桌面经典底栏，手机是 Composer + 键条槽。
   const classic = bp === 'desktop'
+  classicRef.current = classic
   const running = mode.mode === 'raw' // 有命令在跑
   const degraded = active?.integration === 'inactive' // 没有集成：不知道在跑什么，键条常给（含 ^C）
   const showKeys = running || interactive || degraded // 底栏要不要挂功能键条
@@ -613,7 +621,7 @@ export function App() {
       {bp !== 'desktop' && sidebarOpen && (
         <div class="scrim" data-testid="scrim" onClick={() => setSidebarOpen(false)} />
       )}
-      <aside class="sidebar" data-testid="sidebar">
+      <aside class="sidebar" data-testid="sidebar" ref={sidebarRef}>
         <SessionList
           sessions={sessions}
           active={activeSid}

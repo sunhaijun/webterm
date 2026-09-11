@@ -684,3 +684,24 @@ body {
 }
 
 /* 双指缩放读（ADR-0013）：放大只作用在 .xterm-screen 的 transform 上；.term 已 overflow:hidden 裁掉溢出。 */
+
+/* ---------- 触屏：命令面板 / 历史面板 也做成底部 sheet（和 ⋯ 操作面板一套） ---------- */
+@media (pointer: coarse) {
+  .palette-backdrop, .panel-backdrop { align-items: flex-end; padding: 0; }
+  .palette, .panel {
+    width: 100%; max-width: none; border-radius: 16px 16px 0 0; border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    animation: sheet-up 180ms ease;
+  }
+  .palette { max-height: 80vh; }
+  .panel { height: 86vh; }
+  /* 顶部抓手（无需改结构） */
+  .palette::before, .panel::before {
+    content: ''; display: block; flex: none;
+    width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong);
+    margin: 8px auto 2px;
+  }
+  .palette-item { min-height: 48px; font-size: 15px; }
+  .cmd-row { min-height: 48px; font-size: 14px; }
+  .palette-input, .panel-search { font-size: 16px; }
+}
