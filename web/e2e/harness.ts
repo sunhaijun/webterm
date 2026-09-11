@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 
 /** 让内核挑一个空闲端口。随机猜端口在并行/连跑时会撞车。 */
 function freePort(): Promise<number> {
@@ -146,12 +146,24 @@ export async function waitFor(
   throw new Error(`超时等待：${what}`)
 }
 
-/** 往 Composer 里敲一条命令并提交。 */
+/** 切到编辑面板、敲一条命令并整段提交（发送后自动收回终端输入）。
+ * 默认底栏是终端输入、没有 Composer —— 有互切键就先切过去。 */
 export async function submit(page: Page, text: string): Promise<void> {
+  const toEdit = page.getByTestId('to-edit')
+  if (await toEdit.count()) await toEdit.click()
   const composer = page.getByTestId('composer')
   await composer.click()
   await composer.fill(text)
   await composer.press('Enter')
+}
+
+/** 切到编辑面板并返回 Composer 定位（直接操作 Composer 的用例先调它）。 */
+export async function openComposer(page: Page): Promise<Locator> {
+  const toEdit = page.getByTestId('to-edit')
+  if (await toEdit.count()) await toEdit.click()
+  const composer = page.getByTestId('composer')
+  await composer.waitFor({ state: 'visible' })
+  return composer
 }
 
 /** 终端当前的可见文本（含 scrollback）。 */

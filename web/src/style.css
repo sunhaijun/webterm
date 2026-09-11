@@ -535,6 +535,16 @@ body {
   background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
 }
 .bar-more { padding: 0; font-size: 18px; line-height: 1; }
+/* 输入互切键（终端输入 ⇄ 编辑面板）：主控件，淡填充 + 加粗，比普通键条键显眼。
+   键条里的那个继承 .keybar-key 的尺寸，这里只改观感；sheet 头里的独立成型。 */
+.input-toggle { font-weight: 600; white-space: nowrap; border-color: var(--line-strong); background: color-mix(in srgb, var(--fg) 9%, var(--bg)); }
+.sheet-head .input-toggle {
+  flex: none; align-self: center; min-height: 34px; padding: 0 12px;
+  font: inherit; font-size: 13px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--fg); cursor: pointer;
+}
+/* 终端输入态底栏的前导行（互切键 + ⋯）—— 键条另起一行，见 app.tsx 注释 */
+.term-lead { display: flex; gap: 4px; padding: 4px 6px; align-items: center; }
+.term-lead + .keybar { border-top: 1px solid var(--line); }
 /* 收起态：一行、药丸；打开态：吃掉 sheet 剩余高度，字号 16 免得 iOS 聚焦时放大页面 */
 .bar .composer {
   flex: 1 1 auto; min-width: 0; height: 42px !important; overflow: hidden;

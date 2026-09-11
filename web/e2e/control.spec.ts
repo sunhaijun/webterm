@@ -1,6 +1,6 @@
 import { devices, expect, test } from '@playwright/test'
 
-import { Agent, submit, terminalText, waitFor } from './harness'
+import { Agent, openComposer, submit, terminalText, waitFor } from './harness'
 
 /**
  * 占屏检测 —— ADR-0013：终端始终是唯一显示面，占屏不再切视图，而是【换键条上下文】。
@@ -129,6 +129,7 @@ test('Composer 整段粘贴发送：数字选项 + 回车分两帧送进程序',
   await submit(page, "printf '\\033[>1u\\033[?25l'; sleep 60")
   await waitFor(async () => (await interactive(page)) === true, '占屏', 10_000)
 
+  await openComposer(page) // 默认终端输入，先切到编辑面板
   sent.length = 0
   const composer = page.getByTestId('composer')
   await composer.fill('2')

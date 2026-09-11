@@ -83,7 +83,7 @@ test('布局视口一起缩（resizes-content）：读视图 Composer 仍在可�
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
   await settle(page)
-  await page.getByTestId('composer').click()
+  await page.getByTestId('to-edit').click()
   await page.setViewportSize({ width: 393, height: 450 }) // 键盘占掉 277px
   await settle(page)
   const g = await geo(page)
@@ -114,7 +114,7 @@ for (const innerTracks of [true, false]) {
     await page.goto(agent.baseURL)
     await expect(page.getByTestId('conn-text')).toHaveText('在线')
     await settle(page)
-    await page.getByTestId('composer').click()
+    await page.getByTestId('to-edit').click()
     // 键盘弹起：可视 727→400；浏览器把可视区上推 327px 露出底部输入框
     await setViewport(page, 400, 327, innerTracks ? 400 : null)
     await settle(page)

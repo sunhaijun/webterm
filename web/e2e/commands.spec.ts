@@ -95,7 +95,7 @@ test('E2E-14 快捷命令：手机读视图里是写态 sheet 顶上的 ★ chip
 
   // 还没置顶：sheet 里没有 ★ chip（同目录历史 chip 可以有）
   await expect(page.getByTestId('quickbar')).toHaveCount(0)
-  await page.getByTestId('composer').click()
+  await page.getByTestId('to-edit').click()
   await expect(page.getByTestId('chips')).toBeVisible()
   await expect(page.getByTestId('chips').locator('[data-kind="pin"]')).toHaveCount(0)
   await page.getByTestId('sheet-close').click()
@@ -106,7 +106,7 @@ test('E2E-14 快捷命令：手机读视图里是写态 sheet 顶上的 ★ chip
   await page.getByTestId('close-history').click()
 
   // 置顶之后 ★ chip 出现；点击 = 填入
-  await page.getByTestId('composer').click()
+  await page.getByTestId('to-edit').click()
   const pin = page.getByTestId('chips').locator('[data-kind="pin"]').first()
   await expect(pin).toBeVisible()
   await pin.click()

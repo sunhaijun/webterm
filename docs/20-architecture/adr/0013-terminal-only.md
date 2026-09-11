@@ -9,7 +9,7 @@ ADR-0011 给手机做了「读（块流）/ 写（sheet）/ 控（终端）」�
 ## 决定
 
 1. **终端是唯一的显示面。** xterm 始终铺满画布、始终可见。删除块流（ReadView / BlockList / BlockStore）、转录视图（TranscriptView / 转录 store / Markdown 渲染）、块↔终端定位（locate / marks）、读↔控视图切换与占屏自动切换、块面板、agent 侧转录跟踪（`internal/transcript`、`GET /api/transcript`、`transcript` 消息、`CommandObserver`）。约 2500+ 行代码及其测试随之移除。
-2. **输入按触摸位置全自动判定，没有「输入模式」这个概念**（取代 [ADR-0007](0007-dual-mode-input.md) 的用户可见模式）：
+2. **输入按触摸位置全自动判定，没有「输入模式」这个概念**（取代 [ADR-0007](0007-dual-mode-input.md) 的用户可见模式）。⚠️ **[ADR-0014](0014-input-toggle.md) 已把这条细化为一个显式互切键（终端输入 ⇄ 编辑面板，默认终端输入）——下面「底栏形态自动变、无切换」的描述以 0014 为准**：
    - **点终端区打字 = 逐键直送 PTY**（`onTermData` 无条件转发；点终端即聚焦 xterm）。这替代了旧的「Raw 逐键直通」和「⌨ 打字」按钮——点终端就是它。
    - **用底部输入条 = 编辑好整段再发送**（`xterm.paste` 括号粘贴 + 回车；长按发送 = 只粘贴不回车）。长 prompt 本地编辑、一次送出。
    - 底栏形态按「在跑什么」自动变，无标签、无切换、无锁定：**提示符** = 只输入框；**普通命令在跑 / 占屏 / 集成降级** = 输入框 + 功能键条（Esc ^C 方向键；claude/codex 换 AI 键条）；**全屏 TUI（备用缓冲，vim/top/less）** = 只键条、隐输入框。
