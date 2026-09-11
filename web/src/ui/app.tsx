@@ -639,7 +639,7 @@ export function App() {
         />
       </aside>
 
-      <div class="main" style={{ '--sheet-inset': `${sheetInset}px` }}>
+      <div class="main" data-occupied={altScreen ? 'true' : 'false'} style={{ '--sheet-inset': `${sheetInset}px` }}>
         <StatusBar
           state={connState}
           info={info}
@@ -825,46 +825,19 @@ export function App() {
           // 读视图里模式条那些次要入口收进 ⋯ 菜单 —— 底栏只留输入、「终端」、⋯ 三样
           <>
             <div class="more-backdrop" data-testid="more-backdrop" onClick={() => setMoreOpen(false)} />
-            <div class="more-menu" data-testid="more-menu" role="menu">
-              <button
-                role="menuitem"
-                data-testid="open-sessions"
-                onClick={() => {
-                  setMoreOpen(false)
-                  setSidebarOpen(true)
-                }}
-              >
-                会话
+            <div class="action-sheet" data-testid="more-menu" role="menu">
+              <div class="sheet-grabber" />
+              <button role="menuitem" data-testid="open-sessions" onClick={() => { setMoreOpen(false); setSidebarOpen(true) }}>
+                <span class="sheet-ico">⧉</span><span class="sheet-label">会话</span><span class="sheet-chevron">›</span>
               </button>
-              <button
-                role="menuitem"
-                data-testid="open-history"
-                onClick={() => {
-                  setMoreOpen(false)
-                  setHistoryOpen(true)
-                }}
-              >
-                历史
+              <button role="menuitem" data-testid="open-history" onClick={() => { setMoreOpen(false); setHistoryOpen(true) }}>
+                <span class="sheet-ico">↺</span><span class="sheet-label">历史</span><span class="sheet-chevron">›</span>
               </button>
-              <button
-                role="menuitem"
-                data-testid="open-palette"
-                onClick={() => {
-                  setMoreOpen(false)
-                  setPaletteOpen(true)
-                }}
-              >
-                命令面板
+              <button role="menuitem" data-testid="open-palette" onClick={() => { setMoreOpen(false); setPaletteOpen(true) }}>
+                <span class="sheet-ico">⌘</span><span class="sheet-label">命令面板</span><span class="sheet-chevron">›</span>
               </button>
-              <button
-                role="menuitem"
-                data-testid="open-settings"
-                onClick={() => {
-                  setMoreOpen(false)
-                  setSettingsOpen((v) => !v)
-                }}
-              >
-                设置
+              <button role="menuitem" data-testid="open-settings" onClick={() => { setMoreOpen(false); setSettingsOpen((v) => !v) }}>
+                <span class="sheet-ico">⚙</span><span class="sheet-label">设置</span><span class="sheet-chevron">›</span>
               </button>
             </div>
           </>

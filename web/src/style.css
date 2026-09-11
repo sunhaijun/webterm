@@ -563,20 +563,35 @@ body {
   border: 1px solid var(--fg); border-radius: 6px;
   background: var(--fg); color: var(--bg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
 }
-/* ⋯ 菜单：模式条上那些次要入口在读视图里的家 */
-.more-backdrop { position: absolute; inset: 0; z-index: 11; }
-.more-menu {
-  position: absolute; right: 8px; bottom: 62px; z-index: 12; min-width: 200px; padding: 4px;
+/* ⋯ → 底部操作面板（原生 action sheet）：从底部滑起、整宽、大行 */
+.more-backdrop { position: absolute; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.4); }
+.action-sheet {
+  position: absolute; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); z-index: 31;
   display: flex; flex-direction: column;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.18);
+  animation: sheet-up 160ms ease;
 }
-.more-menu button {
-  font: inherit; font-size: 14px; text-align: left; border: 0; background: transparent; color: var(--fg);
-  padding: 0 12px; min-height: 40px; border-radius: 6px; cursor: pointer;
+@keyframes sheet-up { from { transform: translateY(12px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .action-sheet { animation: none; } }
+.sheet-grabber { width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong); margin: 8px auto 4px; }
+.action-sheet button {
+  display: flex; align-items: center; gap: 14px;
+  font: inherit; font-size: 16px; text-align: left; border: 0; background: transparent; color: var(--fg);
+  padding: 0 16px; min-height: 56px; cursor: pointer;
 }
-.more-menu button:hover, .more-menu button:focus-visible { background: var(--surface); outline: none; }
-.more-menu .more-sub { color: var(--muted); font-size: 12px; margin-left: 6px; }
+.action-sheet button + button { border-top: 1px solid var(--line); }
+.action-sheet button:active { background: var(--surface); }
+.sheet-ico { flex: none; width: 24px; text-align: center; font-size: 18px; }
+.sheet-label { flex: 1; }
+.sheet-chevron { flex: none; color: var(--muted); font-size: 20px; }
+/* 桌面：还是一个靠边的小面板 */
+.app[data-bp='desktop'] .action-sheet {
+  left: auto; right: 8px; bottom: 62px; width: 240px;
+}
+
+/* 状态栏收薄；全屏程序占屏时自隐，把这条也让给终端（触屏） */
+.app:not([data-bp='desktop']) .main[data-occupied='true'] > .statusbar { display: none; }
 /* 块流让出被 sheet / 功能键条盖住的那段（.term 不动 —— 它是 PTY 尺寸的来源） */
 .canvas > .stream { bottom: var(--sheet-inset, 0px); }
 /* 槽里的键条：正好 56px（44 + 6×2），终端视图里它独占槽、不盖终端；读视图里挂在直发输入行下面 */
@@ -665,9 +680,7 @@ body {
   .session-new { font-size: 16px; min-height: 52px; padding: 14px; }
   .sessionlist { gap: 4px; padding: 8px; }
 
-  .more-menu { min-width: 240px; }
-  .more-menu button { font-size: 16px; min-height: 48px; }
-  .more-menu .more-sub { font-size: 13px; }
+  .action-sheet button { font-size: 17px; min-height: 60px; }
 }
 
 /* 双指缩放读（ADR-0013）：放大只作用在 .xterm-screen 的 transform 上；.term 已 overflow:hidden 裁掉溢出。 */
