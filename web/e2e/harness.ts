@@ -187,7 +187,7 @@ interface WebtermWindow {
     serialize(): string
     outSeq(): number
     size(): { cols: number; rows: number }
-    mode(): { mode: string; locked: boolean }
+    mode(): { mode: string }
     welcome(): {
       instance_id: string
       resumed: { sid: number; status: string; from_seq: number; in_ack: number }[]

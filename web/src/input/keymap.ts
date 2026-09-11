@@ -23,7 +23,6 @@ export type AppAction =
   | 'closeSession'
   | 'prevSession'
   | 'nextSession'
-  | 'toggleMode'
   | 'toggleSidebar'
   | 'settings'
 
@@ -54,9 +53,6 @@ export function appAction(e: KeyEventLike): AppAction | null {
       return 'prevSession'
     case 'ArrowDown':
       return 'nextSession'
-    case 'M':
-    case 'm':
-      return 'toggleMode'
     case 'B':
     case 'b':
       return 'toggleSidebar'

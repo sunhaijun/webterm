@@ -334,10 +334,10 @@ body {
 .term-host { height: 100%; }
 .statusbar { cursor: pointer; }
 
-/* short（手机横屏）：功能键条压矮、快捷条隐藏、细条只留圆点 */
-.app[data-short='true'] .statusbar .name,
-.app[data-short='true'] .statusbar .cwd,
-.app[data-short='true'] .statusbar .conn { display: none; }
+/* short（手机横屏）省屏：连接正常时把状态细条也让给终端 —— 会话仍可从 ⋯ 菜单进。
+   一旦 connecting / reconnecting / closed，细条立刻显示出来报连接状态，
+   不让用户对着一个冻住的终端瞎猜。 */
+.app[data-short='true'] .statusbar[data-state='online'] { display: none; }
 
 /* ---------- 命令面板 ---------- */
 .palette-backdrop, .panel-backdrop {

@@ -46,13 +46,12 @@ export function App() {
   const storeRef = useRef<SessionStore | null>(null)
   const composerRef = useRef<ComposerHandle | null>(null)
   const sendRawRef = useRef<(bytes: string) => void>(() => {})
-  const focusTermRef = useRef<() => void>(() => {})
 
   const [connState, setConnState] = useState<ConnState>('connecting')
   const [info, setInfo] = useState<StateInfo>({})
   const [sessions, setSessions] = useState<SessionView[]>([])
   const [activeSid, setActiveSid] = useState<number | null>(null)
-  const [mode, setMode] = useState<ModeState>({ mode: 'composer', locked: false })
+  const [mode, setMode] = useState<ModeState>({ mode: 'composer' })
   const [maxSessions, setMaxSessions] = useState(20)
   const [recovered, setRecovered] = useState<number | null>(null)
   const [truncated, setTruncated] = useState(false)
@@ -298,12 +297,6 @@ export function App() {
       conn.sendInput(sid, new TextEncoder().encode(bytes))
     }
     sendRawRef.current = sendRaw
-    // 聚焦 xterm 的隐藏 textarea —— 必须在点击手势里调用，手机才会弹出软键盘
-    focusTermRef.current = () => {
-      const sid = store.active
-      const t = sid === null ? undefined : store.termOf(sid)
-      t?.term.focus()
-    }
 
     // 应用级快捷键要拦下来，不能让它们进 PTY
     const onKey = (e: KeyboardEvent) => {
@@ -311,9 +304,6 @@ export function App() {
       if (act === null) return
       const sid = store.active
       switch (act) {
-        case 'toggleMode':
-          if (sid !== null) store.modesOf(sid)?.toggleManual()
-          break
         case 'newSession':
           newSession()
           break
@@ -481,7 +471,7 @@ export function App() {
         return { cols: term?.term.cols ?? 0, rows: term?.term.rows ?? 0 }
       },
       welcome: () => lastWelcome,
-      mode: () => (store.active === null ? { mode: 'composer', locked: false } : store.modesOf(store.active)!.current),
+      mode: () => (store.active === null ? { mode: 'composer' } : store.modesOf(store.active)!.current),
       unread: (sid: number) => store.isUnread(sid),
       program: () => (store.active === null ? null : programOfMaybe(runningCmd.get(store.active))),
       altScreen: () => (store.active === null ? false : store.altScreenOf(store.active)),
@@ -535,17 +525,15 @@ export function App() {
   }
   const activeTerm = () => (activeSid === null ? undefined : storeRef.current?.termOf(activeSid)?.term)
   /**
-   * 命令在跑（Raw）时的发送（ADR-0012）：整段交给 xterm.paste —— 它按前台程序的括号粘贴模式
-   * 自动包裹（claude / codex 都开了 ?2004h，多行不会被换行提前提交）、把换行转成回车 ——
-   * 再补一个回车。长文在本地编辑完一次送出，慢网下不再逐键往返等回显。
+   * 长按发送 = 只粘贴不回车（ADR-0012）：整段交给 xterm.paste —— 它按前台程序的括号粘贴
+   * 模式自动包裹（claude / codex 都开了 ?2004h，多行不会被换行提前提交）、把换行转成回车。
+   * 不补回车 —— 留给 codex 的数字选项、y/n 这类想自己按回车的场合。
    */
-  const sendToProgram = (text: string, enter: boolean) => {
+  const sendToProgram = (text: string) => {
     const t = activeTerm()
-    if (text) {
-      if (t) t.paste(text)
-      else sendRawRef.current(text.replace(/\r?\n/g, '\r'))
-    }
-    if (enter) sendRawRef.current('\r')
+    if (!text) return
+    if (t) t.paste(text)
+    else sendRawRef.current(text.replace(/\r?\n/g, '\r'))
   }
   /** Composer 提交：整段 + 回车送进终端 —— 提示符处即跑命令，程序里即提交一行。统一一条路。 */
   const submitText = (text: string) => {
@@ -787,7 +775,7 @@ export function App() {
             onSend={() => composerRef.current?.submit()}
             onSendHold={() => {
               // 长按发送 = 只粘贴不回车：给 codex 的数字选项、y/n 这类想自己按回车的场合
-              sendToProgram(composerRef.current?.take() ?? '', false)
+              sendToProgram(composerRef.current?.take() ?? '')
               changeSheet('closed')
             }}
             bar={

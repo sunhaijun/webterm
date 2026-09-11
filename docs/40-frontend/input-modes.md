@@ -19,24 +19,22 @@
 ## 状态机
 
 ```
-状态 = { mode: "composer" | "raw", locked: boolean }
+状态 = { mode: "composer" | "raw" }
 ```
 
-`locked` 表示用户手动指定过模式，自动切换暂停。
+模式**全自动**，跟着 shell 集成上报的 `prompt` 状态走，**没有手动开关**
+（ADR-0013：输入按触摸位置判定直送 / 编辑，模式只决定底栏形态 —— 提示符给
+输入框，命令在跑给功能键条）。
 
 ### 转移表
 
 | 当前 | 事件 | 结果 |
 |---|---|---|
-| 任意，`locked=false` | `prompt{state:"input"}` | `mode=composer` |
-| 任意，`locked=false` | `prompt{state:"running"}` | `mode=raw`（**经去抖**，见下） |
-| 任意，`locked=false` | `prompt{state:"done"}` | `mode=composer` |
-| 任意 | 用户点击模式切换按钮 / 按 `Ctrl+Shift+M` | 切换 `mode`，`locked=true` |
-| 任意 | 用户点"解锁自动"（或切换会话） | `locked=false`，立即按最近的 `prompt` 状态重算 |
+| 任意 | `prompt{state:"input"}` | `mode=composer` |
+| 任意 | `prompt{state:"running"}` | `mode=raw`（**经去抖**，见下） |
+| 任意 | `prompt{state:"done"}` | `mode=composer` |
 | 任意 | `integration` 变为 `inactive` | `mode=composer`，自动切换禁用，显示降级提示 |
-| 任意，`locked=false` | 重连后收到 `welcome` | 按 `sessions[].prompt_state` 重新对齐 |
-| Composer | 用户点击终端区并开始打字 | 不切模式。把字符注入 Composer 并聚焦它（避免"点了终端打不出字"的困惑） |
-| Raw | 用户点击 Composer 输入框 | `mode=composer`，`locked=true` |
+| 任意 | 重连后收到 `welcome` | 按 `sessions[].prompt_state` 重新对齐 |
 
 ### 重连之后必须重新对齐
 
@@ -45,8 +43,8 @@
 还在跑，于是停在 Raw、提交语义变成"发给程序"，**用户敲的下一条命令会被粘进上一条的 stdin**，要等下一条命令
 才自愈。
 
-所以收到 `welcome` 时要用 `sessions[].prompt_state` 重算一次（`locked` 时
-不动，那是用户的明确选择）。
+所以收到 `welcome` 时要用 `sessions[].prompt_state` 重算一次（集成不可用、
+没有数据源时不动，维持当前 Composer）。
 
 ### `running` 的去抖
 
@@ -58,7 +56,7 @@
 
 ### 状态是每会话的
 
-模式状态跟随会话，不是全局的。切换会话时加载目标会话的模式状态。切换会话会重置 `locked=false`（用户对上一个会话的手动选择不该跨会话生效）。
+模式状态跟随会话，不是全局的。切换会话时加载目标会话的模式状态，并重置到 Composer（上一个会话的状态不该跨会话生效）。
 
 ---
 
