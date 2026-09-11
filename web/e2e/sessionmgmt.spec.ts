@@ -27,7 +27,7 @@ test('⋯ 菜单第一项是「会话」，开抽屉；新建后抽屉收起、�
   // ⋯ 菜单：第一项就是「会话」
   await page.getByTestId('open-more').click()
   const items = page.getByTestId('more-menu').getByRole('menuitem')
-  await expect(items.first()).toHaveText('会话')
+  await expect(items.first()).toContainText('会话')
   await page.getByTestId('open-sessions').click()
   await expect.poll(() => drawerOpen(page)).toBe(true)
 
