@@ -69,6 +69,9 @@ export function installPinch(host: HTMLElement): Pinch {
   let lastTap = 0
 
   const screen = () => host.querySelector<HTMLElement>('.xterm-screen')
+  // xterm 的滚动容器。它和触点所在的 .xterm-screen 是【兄弟】—— 触点不在它里面，
+  // 所以原生触摸滚不动它（会漏给页面），单指回滚只能 JS 直接改它的 scrollTop。
+  const viewport = () => host.querySelector<HTMLElement>('.xterm-viewport')
   // 屏内（相对 host 左上角）坐标
   const localX = (clientX: number) => clientX - host.getBoundingClientRect().left
   const localY = (clientY: number) => clientY - host.getBoundingClientRect().top
@@ -116,10 +119,9 @@ export function installPinch(host: HTMLElement): Pinch {
         return
       }
       lastTap = now
-      if (scale > 1) {
-        panX = t.clientX
-        panY = t.clientY
-      }
+      // 记下起点：放大态用来平移画面，1× 用来滚回滚
+      panX = t.clientX
+      panY = t.clientY
     }
   }
 
@@ -134,13 +136,21 @@ export function installPinch(host: HTMLElement): Pinch {
       ty = anchorTranslate(midY, startMidY, startTy, startScale, scale)
       apply()
       e.preventDefault()
-    } else if (e.touches.length === 1 && scale > 1) {
+    } else if (e.touches.length === 1) {
       const t = e.touches[0]!
-      tx += t.clientX - panX
-      ty += t.clientY - panY
+      if (scale > 1) {
+        // 放大态：单指平移画面
+        tx += t.clientX - panX
+        ty += t.clientY - panY
+        apply()
+      } else {
+        // 1× 态：单指纵向拖 = 滚终端回滚（拖下露出上文）。JS 代劳，见 viewport 注释。
+        const vp = viewport()
+        if (vp) vp.scrollTop -= t.clientY - panY
+      }
       panX = t.clientX
       panY = t.clientY
-      apply()
+      // 无论滚没滚到，都吃掉这次拖动，别让它漏给页面变成整页橡皮筋
       e.preventDefault()
     }
   }

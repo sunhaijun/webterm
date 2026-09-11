@@ -77,3 +77,50 @@ test('轻微捏合不放大：缩回 1× 时 transform 清空', async ({ page })
   expect(await zoom(page)).toBe(1)
   expect(await screenTransform(page)).toBe('')
 })
+
+/** 在 .term 上派发一次单指纵向拖动，返回 touchmove 是否被 preventDefault。 */
+async function dragY(p: Page, fromY: number, toY: number): Promise<boolean> {
+  return p.evaluate(
+    ({ fromY, toY }: { fromY: number; toY: number }) => {
+      const host = document.querySelector('.term') as HTMLElement
+      const x = 180
+      const mk = (y: number) => [new Touch({ identifier: 1, target: host, clientX: x, clientY: y })]
+      const fire = (type: string, y: number) => {
+        const ev = new TouchEvent(type, { touches: mk(y), targetTouches: mk(y), changedTouches: mk(y), bubbles: true, cancelable: true })
+        host.dispatchEvent(ev)
+        return ev
+      }
+      fire('touchstart', fromY)
+      const a = fire('touchmove', (fromY + toY) / 2)
+      const b = fire('touchmove', toY)
+      fire('touchend', toY)
+      return a.defaultPrevented && b.defaultPrevented
+    },
+    { fromY, toY },
+  )
+}
+
+test('单指纵向拖 = 滚终端回滚，并吃掉手势不漏给页面（iOS 整页橡皮筋回归）', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await submit(page, 'for i in $(seq 1 400); do printf "row %04d\\n" $i; done')
+  await waitFor(async () => (await terminalText(page)).includes('row 0400'), '输出跑完')
+
+  const vpTop = () => page.evaluate(() => (document.querySelector('.xterm-viewport') as HTMLElement).scrollTop)
+  // buf.viewportY = xterm 实际显示到 buffer 的哪一行 —— 拿它验【内容真滚了】，
+  // 不是光 scrollbar 动了（程序化改 scrollTop 不一定被 xterm 同步到 ydisp）。
+  const bufY = () => page.evaluate(() => (window as unknown as { __webterm: { viewport(): { y: number } } }).__webterm.viewport().y)
+  const beforeTop = await vpTop()
+  const beforeY = await bufY()
+  expect(beforeTop, '有 scrollback，新输出后视口停在底部').toBeGreaterThan(0)
+
+  // 手指向下拖 = 露出上文 → 内容上滚（viewportY 减小）；且 touchmove 必须被吃掉，
+  // 否则 iOS 会拿这次拖动去滚文档、变成整页橡皮筋（触点在 .xterm-screen，原生
+  // 滚不动它的兄弟 .xterm-viewport）。
+  const prevented = await dragY(page, 110, 380)
+  await page.waitForTimeout(50) // 等 xterm 处理 scroll 事件
+  expect(await vpTop(), '拖下 scrollbar 上移').toBeLessThan(beforeTop)
+  expect(await bufY(), '拖下 xterm 实际显示的内容上移（不只是 scrollbar）').toBeLessThan(beforeY)
+  expect(prevented, 'touchmove 必须 preventDefault，否则漏给页面').toBe(true)
+})

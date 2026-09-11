@@ -53,7 +53,9 @@
    hidden 的 UA 默认 display:none —— 终端底栏的直发提示行明明 hidden 却仍占 56px，
    把终端最后几行盖住。用它兜住所有 hidden。 */
 [hidden] { display: none !important; }
-html, body, #app { height: 100%; margin: 0; }
+/* overscroll-behavior:none —— 掐掉 iOS 文档级橡皮筋；整个 app 是固定视口，页面本就不该滚。
+   内部滚动区（终端、底部 sheet、会话列表）各自 overscroll:contain，不受影响。 */
+html, body, #app { height: 100%; margin: 0; overscroll-behavior: none; }
 body {
   background: var(--bg);
   color: var(--fg);
@@ -108,17 +110,12 @@ body {
 .banner.error { background: color-mix(in srgb, var(--err) 18%, transparent); }
 .banner button { font: inherit; border: 0; background: transparent; cursor: pointer; color: inherit; text-decoration: underline; }
 
-.term { min-height: 0; background: var(--term-bg); padding: 4px; overflow: hidden; overscroll-behavior: contain; }
-/* xterm 的内部滚动容器：到顶/到底再拖不外溢到文档（手机上会把整页橡皮筋拽成空白） */
-.term .xterm-viewport {
-  overscroll-behavior: contain;
-  /* 单指纵向拖动 = 滚终端回滚（iOS 上不加这条会漏给页面、变成整页橡皮筋）。
-     双指仍走 pinch 的 JS，touch-action 只管浏览器默认动作、不拦 JS 手势。 */
-  touch-action: pan-y;
-  -webkit-overflow-scrolling: touch;
-}
-/* 双指放大时改由 pinch 的 JS 平移，交给它接管，别和原生滚动打架 */
-.term[data-zoom] .xterm-viewport { touch-action: none; }
+/* 终端区的触摸手势全部由 pinch.ts 接管：单指纵向拖 = 滚回滚，双指 = 缩放。
+   触点落在 .xterm-screen 上，它和滚动容器 .xterm-viewport 是兄弟节点，原生
+   触摸滚不动 viewport、会漏给页面变成整页橡皮筋 —— 所以 touch-action:none 让
+   浏览器别抢，手势交给 JS + preventDefault。tap 不受 touch-action 影响，打字照常。 */
+.term { min-height: 0; background: var(--term-bg); padding: 4px; overflow: hidden; overscroll-behavior: contain; touch-action: none; }
+.term .xterm-viewport { overscroll-behavior: contain; }
 .term .xterm { height: 100%; }
 
 .composer {
