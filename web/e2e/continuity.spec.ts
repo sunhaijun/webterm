@@ -185,9 +185,8 @@ test.describe('E2E-2c 缓冲溢出', () => {
     // 明确告诉用户历史被截断了，而不是让他拿着一屏东西猜发生了什么
     await expect(page.getByTestId('truncated')).toBeVisible({ timeout: 30_000 })
 
-    // 命令还在跑的时候是 Raw 模式，Composer 是收起的（ADR-0007）——
-    // 等它跑完切回 Composer 再敲下一条
-    await expect(page.getByTestId('composer')).toBeVisible({ timeout: 60_000 })
+    // 等 EMIT 跑完（最后一行出现 = 回到提示符），再敲下一条命令
+    await waitFor(async () => (await terminalText(page)).includes('line 01500'), 'EMIT 跑完回到提示符', 60_000)
 
     // 关键：截断【之后】的内容必须完全正确
     await submit(page, 'printf "AFTER-%s\\n" RESET')

@@ -98,13 +98,35 @@ export function App() {
     else lastOpenRef.current = next
   }, [])
   const openSheet = useCallback(() => {
-    // 只有读视图有 sheet：终端视图里输入框就是一行，不能盖住终端的最后几行
     if (sheetRef.current === 'closed') changeSheet(lastOpenRef.current)
   }, [changeSheet])
-  // 命令一跑起来（raw）sheet 就收：这时候该看的是输出
+  // 互切键（ADR-0013+）：终端输入（sheet=closed，点终端逐键直输）⇄ 编辑面板
+  // （sheet 升起，整段编辑一次发送）。默认终端输入，最省屏。
+  const toEdit = useCallback(() => {
+    changeSheet(lastOpenRef.current)
+    requestAnimationFrame(() => composerRef.current?.focus())
+  }, [changeSheet])
+  const toTerminal = useCallback(() => {
+    changeSheet('closed')
+    // 聚焦 xterm —— 在点击手势里调用，手机才会弹软键盘、之后点终端直输
+    const s = storeRef.current
+    const sid = s?.active
+    if (sid != null) s?.termOf(sid)?.term.focus()
+  }, [changeSheet])
+  // 从历史 / 命令面板 / chip 填入 Composer：终端输入态下先把编辑面板升起来
+  // （否则 Composer 还没挂载，填了个寂寞）。桌面经典底栏的 Composer 常在，直接填。
+  const fillComposer = useCallback((text: string) => {
+    if (!classicRef.current && sheetRef.current === 'closed') {
+      changeSheet(lastOpenRef.current)
+      requestAnimationFrame(() => composerRef.current?.fill(text))
+    } else {
+      composerRef.current?.fill(text)
+    }
+  }, [changeSheet])
+  // 进全屏 TUI（vim/top/less）就强制收起编辑面板：那类程序自己占屏，点终端直输
   useEffect(() => {
-    if (mode.mode === 'raw') setSheet('closed')
-  }, [mode.mode])
+    if (altScreen && coarse) changeSheet('closed')
+  }, [altScreen, coarse, changeSheet])
 
   const reloadQuick = useCallback(() => {
     listCommands({ pinned: true, limit: 50 })
@@ -545,6 +567,21 @@ export function App() {
   const running = mode.mode === 'raw' // 有命令在跑
   const degraded = active?.integration === 'inactive' // 没有集成：不知道在跑什么，键条常给（含 ^C）
   const showKeys = running || interactive || degraded // 底栏要不要挂功能键条
+  const forceTerminal = altScreen && coarse // 全屏 TUI：强制终端输入，编辑面板对它没意义
+  const editing = sheet !== 'closed' && !forceTerminal // 编辑面板是否显示（否则终端输入）
+  // 终端输入态底栏的前导键：互切（切到编辑面板；全屏 TUI 下不给）+ ⋯
+  const termLead = (
+    <>
+      {!forceTerminal && (
+        <button class="keybar-key keybar-lead input-toggle" data-testid="to-edit" aria-label="切到编辑面板" onClick={toEdit}>
+          ⌨▸编辑
+        </button>
+      )}
+      <button class="keybar-key keybar-lead" data-testid="open-more" aria-label="更多" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
+        ⋯
+      </button>
+    </>
+  )
   // 写态 chips：sheet 开着才拉数据（ADR-0011 ③）
   const chips = useChips({
     open: !classic && sheet !== 'closed' && mode.mode === 'composer',
@@ -744,26 +781,8 @@ export function App() {
           </div>
         )}
 
-        {!classic && active?.status !== 'exited' && altScreen && coarse && (
-          // 全屏 TUI（vim / top / less）：底部只有键条；打字点终端直送（ADR-0013+）
-          <div class="bottom-slot" data-testid="tui-bar">
-            <div class="bottom">
-              <KeyBar
-                mode="raw"
-                context={{ altScreen: true, program }}
-                onRaw={(bytes) => sendRawRef.current(bytes)}
-                onComposerKey={() => {}}
-                leading={
-                  <button class="keybar-key keybar-lead" data-testid="open-more" aria-label="更多" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
-                    ⋯
-                  </button>
-                }
-              />
-            </div>
-          </div>
-        )}
-        {!classic && active?.status !== 'exited' && !(altScreen && coarse) && (
-          // 有输入框：编辑后发送。命令在跑时下面挂功能键条（Esc ^C 方向键 / AI 键）。
+        {!classic && active?.status !== 'exited' && editing && (
+          // 编辑面板：整段编辑后发送。第一个键是互切（切回终端输入）；命令在跑时下挂功能键条。
           <WriteSheet
             size={sheet}
             onSize={changeSheet}
@@ -778,15 +797,9 @@ export function App() {
               sendToProgram(composerRef.current?.take() ?? '')
               changeSheet('closed')
             }}
-            bar={
-              <button
-                class="bar-btn bar-more"
-                data-testid="open-more"
-                aria-label="更多"
-                aria-expanded={moreOpen}
-                onClick={() => setMoreOpen((v) => !v)}
-              >
-                ⋯
+            lead={
+              <button class="input-toggle" data-testid="to-terminal" aria-label="切到终端输入" onPointerDown={(e) => e.preventDefault()} onClick={toTerminal}>
+                ✎▸终端
               </button>
             }
             below={
@@ -816,6 +829,26 @@ export function App() {
               onEscapeEmpty={() => changeSheet('closed')}
             />
           </WriteSheet>
+        )}
+        {!classic && active?.status !== 'exited' && !editing && (
+          // 终端输入（默认，最省屏；或全屏 TUI 强制）：底栏只留互切键 + ⋯，点终端逐键直输；
+          // 命令在跑 / 占屏 / 降级时挂功能键条。TUI 下互切键让位给退出键条。
+          <div class="bottom-slot" data-testid="term-bar">
+            <div class="bottom">
+              <div class="term-lead" data-testid="term-lead" role="toolbar" aria-label="输入">
+                {termLead}
+              </div>
+              {showKeys && coarse && (
+                // 键条【单独一行、整行铺开】—— 前导键放上面那行，别把 ^C / 方向键挤出免滚区
+                <KeyBar
+                  mode="raw"
+                  context={{ altScreen: forceTerminal, program }}
+                  onRaw={(bytes) => sendRawRef.current(bytes)}
+                  onComposerKey={() => {}}
+                />
+              )}
+            </div>
+          </div>
         )}
         {!classic && moreOpen && (
           // 读视图里模式条那些次要入口收进 ⋯ 菜单 —— 底栏只留输入、「终端」、⋯ 三样
@@ -851,7 +884,7 @@ export function App() {
         {/* 快捷命令条：Composer 上方，横滑；为空时整条不渲染。
             short 布局（手机横屏）下挤不下，从面板访问。读视图里它以 chips 的形式在 sheet 里 */}
         {classic && !short && active?.status !== 'exited' && (
-          <QuickBar items={quick} onFill={(text) => composerRef.current?.fill(text)} onRun={runText} />
+          <QuickBar items={quick} onFill={fillComposer} onRun={runText} />
         )}
         {classic && coarse && (
           <KeyBar
@@ -888,7 +921,7 @@ export function App() {
             },
           ]}
           onClose={() => setPaletteOpen(false)}
-          onFill={(text) => composerRef.current?.fill(text)}
+          onFill={fillComposer}
           onRun={runText}
           onSelectSession={(sid) => selectRef.current(sid)}
         />
@@ -898,7 +931,7 @@ export function App() {
           cwd={active?.cwd ?? ''}
           onClose={() => setHistoryOpen(false)}
           onFill={(text) => {
-            composerRef.current?.fill(text)
+            fillComposer(text)
             setHistoryOpen(false)
           }}
           onRun={(text) => {

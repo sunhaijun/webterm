@@ -36,7 +36,9 @@ export interface WriteSheetProps {
   onSendHold?(): void
   /** 输入行：Composer（命令在跑时也是它，整段粘贴发送）。 */
   children: ComponentChildren
-  /** 输入行右侧、只在收起态显示的按钮（「终端」「⋯」）。class 要带 bar-btn。 */
+  /** 输入行【最前】的按钮 —— 互切键（切回终端输入）。class 要带 bar-btn。 */
+  lead?: ComponentChildren
+  /** 输入行右侧的按钮（⋯）。class 要带 bar-btn。 */
   bar?: ComponentChildren
   /** 输入行下面的东西（命令在跑时的功能键条）。 */
   below?: ComponentChildren
@@ -155,6 +157,7 @@ export function WriteSheet(p: WriteSheetProps) {
         style={open && px !== null ? { height: `${px}px` } : undefined}
       >
         <div class="sheet-head">
+          {p.lead}
           <div
             class="handle"
             data-testid="sheet-handle"

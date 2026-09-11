@@ -5,7 +5,7 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 
-import { Agent, submit, terminalText, waitFor } from './harness'
+import { Agent, openComposer, submit, terminalText, waitFor } from './harness'
 
 /** 记录本页发出的所有 INPUT 帧的 payload（解成字符串）。 */
 async function recordInput(page: Page): Promise<() => Promise<string[]>> {
@@ -58,6 +58,7 @@ test('E2E-7 Composer：组字期间零 INPUT 帧，组字中按 Enter 不提交'
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
 
+  await openComposer(page) // 默认终端输入，先切到编辑面板
   const before = (await sent()).length
   await composeInto(page, '[data-testid=composer]', ['ni', '你'], '你好')
 
@@ -178,8 +179,7 @@ test('E2E-8 提交格式：单行不包 bracketed paste，多行包', async ({ p
   expect(single, '单行不该包 bracketed paste').toBe('echo single\r')
 
   // 多行：必须包起来，否则会被 shell 逐行当成独立命令执行
-  const composer = page.getByTestId('composer')
-  await composer.click()
+  const composer = await openComposer(page)
   await composer.fill('echo line1\necho line2')
   await composer.press('Enter')
 
@@ -204,7 +204,7 @@ test('E2E-10 移动端：功能键条、粘滞修饰键、输入框属性', asyn
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
 
   // AC-3.10：移动端会把 cd 自动大写成 Cd，这些必须全关
-  const composer = page.getByTestId('composer')
+  const composer = await openComposer(page)
   await expect(composer).toHaveAttribute('autocorrect', 'off')
   await expect(composer).toHaveAttribute('autocapitalize', 'off')
   await expect(composer).toHaveAttribute('spellcheck', 'false')
