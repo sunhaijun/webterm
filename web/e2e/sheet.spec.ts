@@ -158,15 +158,6 @@ test('⋯ 菜单：历史 / 命令面板 / 设置 / 输入模式都从这里进'
   await expect(page.getByTestId('more-menu'), '选完菜单就收').toHaveCount(0)
   await page.getByTestId('close-history').click()
 
-  await page.getByTestId('open-more').click()
-  await page.getByTestId('mode-toggle').click()
-  await expect(page.getByTestId('keybar'), '手动切到 Raw：功能键条出现，输入框仍在').toBeVisible()
-  await expect(page.getByTestId('composer')).toBeVisible()
-  await page.getByTestId('open-more').click()
-  await expect(page.getByTestId('mode-unlock')).toBeVisible()
-  await page.getByTestId('mode-unlock').click()
-  await expect(page.getByTestId('composer')).toBeVisible()
-
   // 点外面收起菜单
   await page.getByTestId('open-more').click()
   await page.getByTestId('more-backdrop').click()

@@ -58,8 +58,8 @@
 | AC-3.2 | Composer 提交：含换行时以 bracketed paste 包裹（不被逐条执行），单行与空输入不包裹；一律以 `CR` 结尾 | UT-input-1, E2E-8 |
 | AC-3.3 | Raw 模式下，composition 期间不向 PTY 写入；`compositionend` 时一次性写入最终文本 | UT-input-2, E2E-7 |
 | AC-3.4 | Raw 模式下 `Ctrl+C` / `Ctrl+D` / 方向键 / `Esc` / 功能键正确映射为控制字节 | UT-keymap-1 |
-| AC-3.5 | 输入模式随 shell 集成的 prompt 状态自动切换：`B`→Composer，`C`→Raw，`D`→Composer | UT-mode-1, E2E-9 |
-| AC-3.6 | 用户手动切换模式后进入"锁定"状态，自动切换暂停，直到用户解锁 | UT-mode-2 |
+| AC-3.5（ADR-0013：仅内部，无 UI） | 输入模式随 shell 集成的 prompt 状态自动切换：`B`→Composer，`C`→Raw，`D`→Composer | UT-mode-1, E2E-9 |
+| ~~AC-3.6（ADR-0013 取代：无手动锁定）~~ | 用户手动切换模式后进入"锁定"状态，自动切换暂停，直到用户解锁 | UT-mode-2 |
 | AC-3.7 | shell 集成不可用时，模式默认为 Composer 且自动切换禁用，UI 显示降级提示 | E2E-13 |
 | AC-3.8 | 软键盘弹出时（`visualViewport` resize），终端可视区与功能键条不被遮挡，布局无跳动 | E2E-10 |
 | AC-3.9 | 功能键条包含 `Esc ^C Tab Ctrl ↑ ↓ ← → Alt ^D ^Z ^L \| ~ / - _ Home End PgUp PgDn` 且可横向滚动；`Ctrl`/`Alt` 为粘滞修饰键，`^C`/`^D`/`^Z`/`^L` 一按直发控制码。**`^C` 必须在免滚动的前 8 个里** —— 它是唯一的通用脱困键，而粘滞 `Ctrl` 在软键盘没弹出时（Raw 模式看 top）根本按不出组合 | E2E-10 |

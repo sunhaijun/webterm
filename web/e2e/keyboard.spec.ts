@@ -99,7 +99,7 @@ test('占屏程序「⌨ 打字」后键条仍在可视区', async ({ page }) =>
   await submit(page, "printf '\\033[>1u'; sleep 60")
   await waitFor(async () => (await page.evaluate(() => (window as unknown as { __webterm: { interactive(): boolean } }).__webterm.interactive())) === true, '占屏', 10_000)
   await settle(page)
-  await page.getByTestId('term-type').click()
+  await page.locator('.xterm-screen').click()
   await page.setViewportSize({ width: 393, height: 450 })
   await settle(page)
   const g = await geo(page)
