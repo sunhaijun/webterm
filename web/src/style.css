@@ -637,6 +637,29 @@ body {
 @media (pointer: coarse) {
   .bar .composer { font-size: 16px; }
   .xterm .xterm-helper-textarea { font-size: 16px; }
+
+  /* 触屏（手机 / 平板）：界面 chrome 字号偏小、图标靠 hover 才显 —— 都放大、常显、给足点击区。
+     终端字号不在这里，它由设置里的字号单独控制（只影响 xterm）。 */
+  .statusbar { font-size: 14px; }
+  .statusbar .name { font-size: 15px; }
+  .statusbar .cwd { font-size: 13px; }
+  .banner { font-size: 14px; }
+
+  .session-item { font-size: 15px; min-height: 52px; gap: 10px; padding: 10px 12px; }
+  .session-name { font-size: 16px; }
+  .session-cwd, .session-exit { font-size: 13px; }
+  .session-dot { width: 10px; height: 10px; }
+  /* 无 hover：三个图标常显、放大到易点 */
+  .session-pin, .session-rename, .session-close {
+    opacity: 0.9; font-size: 20px; min-width: 44px; min-height: 44px;
+    display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  }
+  .session-new { font-size: 16px; min-height: 52px; padding: 14px; }
+  .sessionlist { gap: 4px; padding: 8px; }
+
+  .more-menu { min-width: 240px; }
+  .more-menu button { font-size: 16px; min-height: 48px; }
+  .more-menu .more-sub { font-size: 13px; }
 }
 
 /* 双指缩放读（ADR-0013）：放大只作用在 .xterm-screen 的 transform 上；.term 已 overflow:hidden 裁掉溢出。 */
