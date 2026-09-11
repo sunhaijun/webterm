@@ -73,6 +73,7 @@ export function App() {
   // 读视图里 vim / top 一进备用缓冲就切到终端，退出后自动回读。
   // 【自动切换不持久化】—— 它是临时的，用户的偏好还是读。
   const [interactive, setInteractive] = useState(false)
+  const [altScreen, setAltScreen] = useState(false) // 全屏 TUI（备用缓冲）：底部只留键条
   // 前台正在跑的命令原文（按会话）—— 只用来给键条上下文 / Composer 占位符取程序名。
   const runningCmdRef = useRef(new Map<number, string>())
   const [program, setProgram] = useState<string | null>(null)
@@ -229,8 +230,9 @@ export function App() {
         applyInteractive(on)
       },
       onTermData: (sid, data) => {
+        // 点终端区打字 = 逐键直送（ADR-0013+：按触摸位置自动判定，不再有输入模式）。
+        // 键只在 xterm 聚焦时才来这儿；底部输入条是另一条「编辑后发送」的路。
         if (store.active !== sid) return
-        if (store.modesOf(sid)?.current.mode !== 'raw') return
         // 组字期间【一个字节都不能发】—— 只在 compositionend 时一次性提交
         if (ime?.isComposing) return
         sendRaw(data)
@@ -243,6 +245,7 @@ export function App() {
     // 换键条上下文。【不再切视图】—— 终端始终是唯一的显示面（ADR-0013）。
     const applyInteractive = (on: boolean) => {
       setInteractive(on)
+      setAltScreen(store.active !== null && store.altScreenOf(store.active))
       if (on) {
         const sid = store.active
         if (sid !== null) store.termOf(sid)?.term.scrollToBottom()
@@ -537,13 +540,15 @@ export function App() {
     }
     if (enter) sendRawRef.current('\r')
   }
-  /** Composer 提交：停在 prompt 时是跑命令；命令在跑时是发给前台程序。 */
+  /** Composer 提交：整段 + 回车送进终端 —— 提示符处即跑命令，程序里即提交一行。统一一条路。 */
   const submitText = (text: string) => {
-    if (mode.mode === 'raw') sendToProgram(text, true)
-    else runText(text)
+    runText(text)
   }
   // 终端始终是唯一显示面（ADR-0013）：桌面经典底栏，手机是 Composer + 键条槽。
   const classic = bp === 'desktop'
+  const running = mode.mode === 'raw' // 有命令在跑
+  const degraded = active?.integration === 'inactive' // 没有集成：不知道在跑什么，键条常给（含 ^C）
+  const showKeys = running || interactive || degraded // 底栏要不要挂功能键条
   // 写态 chips：sheet 开着才拉数据（ADR-0011 ③）
   const chips = useChips({
     open: !classic && sheet !== 'closed' && mode.mode === 'composer',
@@ -692,22 +697,7 @@ export function App() {
         </div>
 
         {classic && (
-        <div class="modebar" data-testid="modebar" data-mode={mode.mode} data-locked={mode.locked}>
-          <span>{mode.mode === 'composer' ? 'Composer' : 'Raw（按键直通）'}</span>
-          <button
-            data-testid="mode-toggle"
-            onClick={() => activeSid !== null && storeRef.current?.modesOf(activeSid)?.toggleManual()}
-          >
-            {mode.locked ? '已锁定 · 切换' : '切换'}
-          </button>
-          {mode.locked && (
-            <button
-              data-testid="mode-unlock"
-              onClick={() => activeSid !== null && storeRef.current?.modesOf(activeSid)?.unlock()}
-            >
-              解锁自动
-            </button>
-          )}
+        <div class="modebar" data-testid="modebar" data-mode={mode.mode}>
           <button data-testid="open-palette" onClick={() => setPaletteOpen(true)}>
             命令面板
           </button>
@@ -758,9 +748,26 @@ export function App() {
           </div>
         )}
 
-        {!classic && active?.status !== 'exited' && (
-          // 写态 sheet（ADR-0011 ③）：收起是一行，碰输入框升起半屏 / 全屏。
-          // 命令在跑（raw）时读视图里是直发输入行 + 功能键条；终端视图里只有键条。
+        {!classic && active?.status !== 'exited' && altScreen && coarse && (
+          // 全屏 TUI（vim / top / less）：底部只有键条；打字点终端直送（ADR-0013+）
+          <div class="bottom-slot" data-testid="tui-bar">
+            <div class="bottom">
+              <KeyBar
+                mode="raw"
+                context={{ altScreen: true, program }}
+                onRaw={(bytes) => sendRawRef.current(bytes)}
+                onComposerKey={() => {}}
+                leading={
+                  <button class="keybar-key keybar-lead" data-testid="open-more" aria-label="更多" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
+                    ⋯
+                  </button>
+                }
+              />
+            </div>
+          </div>
+        )}
+        {!classic && active?.status !== 'exited' && !(altScreen && coarse) && (
+          // 有输入框：编辑后发送。命令在跑时下面挂功能键条（Esc ^C 方向键 / AI 键）。
           <WriteSheet
             size={sheet}
             onSize={changeSheet}
@@ -787,36 +794,21 @@ export function App() {
               </button>
             }
             below={
-              mode.mode === 'raw' && coarse ? (
+              showKeys && coarse ? (
                 <KeyBar
                   mode="raw"
                   context={{ altScreen: interactive, program }}
                   onRaw={(bytes) => sendRawRef.current(bytes)}
                   onComposerKey={() => {}}
-                  leading={
-                    // 只有全屏程序占屏时才给「打字」入口（把键盘唤起、直接打给程序）；
-                    // 普通 shell 提示符下键条就是纯按键，不占这一格
-                    interactive ? (
-                      <button
-                        class="keybar-key keybar-type"
-                        data-testid="term-type"
-                        title="调出键盘，直接打字给全屏程序"
-                        onClick={() => focusTermRef.current()}
-                      >
-                        ⌨ 打字
-                      </button>
-                    ) : undefined
-                  }
                 />
               ) : null
             }
           >
             <Composer
               hidden={false}
-              placeholder={mode.mode === 'raw' ? `输入给 ${program ?? '程序'}…` : '输入命令…'}
+              placeholder={program ? `输入给 ${program}…` : '输入命令…'}
               onSubmit={(text) => {
                 submitText(text)
-                // 发出去就收起：这时候该看的是输出
                 changeSheet('closed')
               }}
               onRaw={(bytes) => sendRawRef.current(bytes)}
@@ -864,32 +856,6 @@ export function App() {
               >
                 命令面板
               </button>
-              <button
-                role="menuitem"
-                data-testid="mode-toggle"
-                onClick={() => {
-                  setMoreOpen(false)
-                  if (activeSid !== null) storeRef.current?.modesOf(activeSid)?.toggleManual()
-                }}
-              >
-                输入模式
-                <span class="more-sub">
-                  {mode.mode === 'composer' ? 'Composer' : 'Raw'}
-                  {mode.locked ? ' · 已锁定' : ''} · 切换
-                </span>
-              </button>
-              {mode.locked && (
-                <button
-                  role="menuitem"
-                  data-testid="mode-unlock"
-                  onClick={() => {
-                    setMoreOpen(false)
-                    if (activeSid !== null) storeRef.current?.modesOf(activeSid)?.unlock()
-                  }}
-                >
-                  解锁自动切换
-                </button>
-              )}
               <button
                 role="menuitem"
                 data-testid="open-settings"

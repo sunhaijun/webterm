@@ -65,36 +65,13 @@ test.describe('E2E-9 输入模式自动切换', () => {
     expect(samples.includes('raw'), `瞬间命令闪了 Raw：${samples.join(',')}`).toBe(false)
   })
 
-  test('手动切换会锁定自动切换，解锁后按当前状态重算', async ({ page }) => {
+  test('点终端区打字 = 直送 PTY', async ({ page }) => {
     await agent.pair(page)
     await page.goto(agent.baseURL)
     await expect(page.getByTestId('conn-text')).toHaveText('在线')
-    await waitFor(async () => (await mode(page)).mode === 'composer', '初始 Composer')
 
-    await page.getByTestId('mode-toggle').click()
-    expect(await mode(page)).toEqual({ mode: 'raw', locked: true })
-
-    // 锁定之后 prompt 消息不再改变模式
-    await page.waitForTimeout(500)
-    expect((await mode(page)).mode).toBe('raw')
-
-    await page.getByTestId('mode-unlock').click()
-    await waitFor(async () => {
-      const m = await mode(page)
-      return m.mode === 'composer' && !m.locked
-    }, '解锁后回到 Composer')
-  })
-
-  test('Raw 模式下按键直通 PTY', async ({ page }) => {
-    await agent.pair(page)
-    await page.goto(agent.baseURL)
-    await expect(page.getByTestId('conn-text')).toHaveText('在线')
-    await waitFor(async () => (await mode(page)).mode === 'composer', '初始 Composer')
-
-    await page.getByTestId('mode-toggle').click()
-    expect((await mode(page)).mode).toBe('raw')
-
-    // 直接往终端上敲
+    // 点终端 → xterm 聚焦 → 逐键直送（无输入模式，ADR-0013+）
+    await page.locator('.xterm-screen').click()
     await page.locator('.xterm-helper-textarea').press('e')
     await page.locator('.xterm-helper-textarea').press('c')
     await page.locator('.xterm-helper-textarea').press('h')
@@ -117,7 +94,7 @@ test.describe('E2E-13 集成降级', () => {
   })
   test.afterEach(() => agent.stop())
 
-  test('集成不可用时：提示可见、终端照常、模式可手动切', async ({ page }) => {
+  test('集成不可用时：提示可见、终端照常、键条可用（含 ^C）', async ({ page }) => {
     await agent.pair(page)
     await page.goto(agent.baseURL)
     await expect(page.getByTestId('conn-text')).toHaveText('在线')
@@ -136,8 +113,10 @@ test.describe('E2E-13 集成降级', () => {
     await page.waitForTimeout(800)
     expect((await mode(page)).mode, '没有数据源就不该自动切').toBe('composer')
 
-    // 但用户能手动切到 Raw，否则 vim 之类就没法用了
-    await page.getByTestId('mode-toggle').click()
-    expect((await mode(page)).mode).toBe('raw')
+    // 降级下照样能操作程序：点终端直接打字（vim 之类靠这条，不再需要手动切模式）
+    await page.locator('.xterm-screen').click()
+    await page.locator('.xterm-helper-textarea').pressSequentially('echo DEGRADED-DIRECT')
+    await page.locator('.xterm-helper-textarea').press('Enter')
+    await waitFor(async () => (await terminalText(page)).includes('DEGRADED-DIRECT'), '点终端直送在降级下也行')
   })
 })

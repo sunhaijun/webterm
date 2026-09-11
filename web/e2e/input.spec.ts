@@ -90,7 +90,7 @@ test('E2E-7 Raw：compositionend 时一次性提交，光标处有内联预览',
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
 
-  await page.getByTestId('mode-toggle').click() // 手动切到 Raw
+  await page.locator('.xterm-screen').click() // 点终端 = 直送（无需模式）
   const before = (await sent()).length
 
   await page.evaluate(() => {
@@ -134,7 +134,7 @@ test('E2E-7 Raw：切过会话之后 IME 仍然生效（每个会话有自己的
     return sid !== null && sid !== sidA
   }, '切到了新会话')
 
-  await page.getByTestId('mode-toggle').click() // 切到 Raw
+  await page.locator('.xterm-screen').click() // 点终端 = 直送
   const before = (await sent()).length
 
   await page.evaluate(() => {
@@ -209,12 +209,10 @@ test('E2E-10 移动端：功能键条、粘滞修饰键、输入框属性', asyn
   await expect(composer).toHaveAttribute('autocapitalize', 'off')
   await expect(composer).toHaveAttribute('spellcheck', 'false')
 
-  // 手机读视图里功能键条只在 Raw（命令在跑 / 手动切）时出现，停在 prompt 是写态的
-  // 编辑键（ADR-0011 ③）。手动切到 Raw：模式切换在底栏的 ⋯ 菜单里
+  // 功能键条只在有命令在跑时出现（ADR-0013+：无输入模式）；停在 prompt 没有键条
   await expect(page.getByTestId('keybar')).toHaveCount(0)
-  await page.getByTestId('open-more').click()
-  await page.getByTestId('mode-toggle').click() // 切到 Raw 才直通
-  await expect(page.getByTestId('keybar')).toBeVisible()
+  await submit(page, 'sleep 30') // 命令在跑 → 键条出现
+  await expect(page.getByTestId('keybar')).toBeVisible({ timeout: 10_000 })
 
   // 前 8 个键无需滚动即可见。
   // 【Alt 让位给 ^C】：手机上 Alt 远比 ^C 罕见，而要 ^C 的时候通常已经

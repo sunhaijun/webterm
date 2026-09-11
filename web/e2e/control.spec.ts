@@ -137,7 +137,7 @@ test('Composer 整段粘贴发送：数字选项 + 回车分两帧送进程序',
   await waitFor(async () => { const j = sent.join(''); return j.includes('2') && j.endsWith('.') }, '2 + 回车送进 PTY', 3_000)
 })
 
-test('「⌨ 打字」入口：点它聚焦终端、直接打字给程序', async ({ page }) => {
+test('点终端区直送：聚焦终端、直接打字给程序', async ({ page }) => {
   const sent: string[] = []
   await page.exposeFunction('__rec', (x: string) => sent.push(x))
   await page.addInitScript(() => {
@@ -155,10 +155,9 @@ test('「⌨ 打字」入口：点它聚焦终端、直接打字给程序', asyn
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
   await submit(page, "printf '\\033[>1u\\033[?25l'; sleep 60")
   await waitFor(async () => (await interactive(page)) === true, '占屏', 10_000)
-  await expect(page.getByTestId('term-type')).toBeVisible()
-  await page.getByTestId('term-type').click()
+  await page.locator('.xterm-screen').click()
   await page.waitForTimeout(150)
-  expect(await page.evaluate(() => document.activeElement?.className || ''), '点打字后 xterm 聚焦').toContain('xterm')
+  expect(await page.evaluate(() => document.activeElement?.className || ''), '点终端后 xterm 聚焦').toContain('xterm')
   sent.length = 0
   await page.keyboard.type('x')
   await waitFor(async () => sent.some((s) => s.endsWith('x')), '字符直达 PTY', 3_000)

@@ -65,21 +65,27 @@ test('^C 在免滚动的前 8 个里', async ({ page }) => {
   expect(geo.first8Right, '前 8 个必须无需横向滚动就能点到').toBeLessThanOrEqual(geo.barRight + 1)
 })
 
-test('^D / ^Z / ^L 也能一按直发', async ({ page }) => {
+test('^D / ^Z / ^L 一按直发正确控制码', async ({ page }) => {
+  const sent: string[] = []
+  await page.exposeFunction('__rec', (x: string) => sent.push(x))
+  await page.addInitScript(() => {
+    const send = WebSocket.prototype.send
+    WebSocket.prototype.send = function (d: unknown) {
+      try {
+        const buf = d instanceof ArrayBuffer ? d : (d as { buffer?: ArrayBuffer })?.buffer
+        if (buf) { const u = new Uint8Array(buf); let x = ''; for (let i = 0; i < u.length; i++) x += String.fromCharCode(u[i]!); (window as unknown as { __rec(s: string): void }).__rec(x) }
+      } catch { /* ignore */ }
+      return send.call(this, d as never)
+    }
+  })
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  // 清屏用清屏键。手动切到 Raw，键条出现（这正是"看 top 时按 ^C"那种使用方式）
-  await submit(page, 'printf "BEFORE-CLEAR\\n"')
-  await waitFor(async () => (await terminalText(page)).includes('BEFORE-CLEAR'), '先有点内容')
-  await page.getByTestId('open-more').click()
-  await page.getByTestId('mode-toggle').click()
-  await expect(page.getByTestId('keybar')).toBeVisible()
-
-  await page.getByTestId('key-CtrlL').click() // 清屏
-  await waitFor(async () => {
-    const t = await terminalText(page)
-    // 清屏之后可视区里不该还挂着那行（scrollback 里有是正常的）
-    return !t.split('\n').slice(-5).join('\n').includes('BEFORE-CLEAR')
-  }, '^L 清了屏')
+  await submit(page, 'sleep 30')
+  await expect(page.getByTestId('keybar')).toBeVisible({ timeout: 10_000 })
+  for (const [k, code] of [['key-CtrlL', '\x0c'], ['key-CtrlD', '\x04'], ['key-CtrlZ', '\x1a']] as const) {
+    sent.length = 0
+    await page.getByTestId(k).click()
+    await waitFor(async () => sent.some((x) => x.includes(code)), k + ' 发出控制码', 3_000)
+  }
 })
