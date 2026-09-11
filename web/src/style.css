@@ -110,7 +110,15 @@ body {
 
 .term { min-height: 0; background: var(--term-bg); padding: 4px; overflow: hidden; overscroll-behavior: contain; }
 /* xterm 的内部滚动容器：到顶/到底再拖不外溢到文档（手机上会把整页橡皮筋拽成空白） */
-.term .xterm-viewport { overscroll-behavior: contain; }
+.term .xterm-viewport {
+  overscroll-behavior: contain;
+  /* 单指纵向拖动 = 滚终端回滚（iOS 上不加这条会漏给页面、变成整页橡皮筋）。
+     双指仍走 pinch 的 JS，touch-action 只管浏览器默认动作、不拦 JS 手势。 */
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+/* 双指放大时改由 pinch 的 JS 平移，交给它接管，别和原生滚动打架 */
+.term[data-zoom] .xterm-viewport { touch-action: none; }
 .term .xterm { height: 100%; }
 
 .composer {
@@ -663,4 +671,3 @@ body {
 }
 
 /* 双指缩放读（ADR-0013）：放大只作用在 .xterm-screen 的 transform 上；.term 已 overflow:hidden 裁掉溢出。 */
-.term[data-zoom] .xterm-viewport { pointer-events: none; } /* 放大平移时别和 xterm 自身滚动打架 */
