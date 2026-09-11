@@ -75,7 +75,8 @@ describe('应用级快捷键', () => {
 
   it('Ctrl+Shift+* 是应用快捷键', () => {
     expect(appAction(key('Enter', { ctrlKey: true, shiftKey: true }))).toBe('newSession')
-    expect(appAction(key('M', { ctrlKey: true, shiftKey: true }))).toBe('toggleMode')
+    // Ctrl+M 就是终端的 Enter（CR）—— 绝不能拿 Ctrl+Shift+M 当应用快捷键，会撞回车
+    expect(appAction(key('M', { ctrlKey: true, shiftKey: true })), 'Ctrl+M 是终端 Enter').toBeNull()
     expect(appAction(key('ArrowUp', { ctrlKey: true, shiftKey: true }))).toBe('prevSession')
   })
 

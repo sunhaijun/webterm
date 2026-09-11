@@ -16,6 +16,7 @@ import { KeyBar } from '../input/keybar'
 import { EDIT_INSERT, appAction, programOf } from '../input/keymap'
 import type { ModeState } from '../input/modes'
 import { RawIme, cursorPosition } from '../input/raw'
+import { installSwipeDismiss } from './swipe'
 import { installPinch } from '../term/pinch'
 import { SLOT_HEIGHT, WriteSheet, type SheetSize } from '../input/sheet'
 import { T } from '../protocol/messages'
@@ -40,17 +41,17 @@ function clientID(): string {
 
 export function App() {
   const termAreaRef = useRef<HTMLDivElement>(null)
+  const sidebarRef = useRef<HTMLElement>(null)
   const connRef = useRef<Connection | null>(null)
   const storeRef = useRef<SessionStore | null>(null)
   const composerRef = useRef<ComposerHandle | null>(null)
   const sendRawRef = useRef<(bytes: string) => void>(() => {})
-  const focusTermRef = useRef<() => void>(() => {})
 
   const [connState, setConnState] = useState<ConnState>('connecting')
   const [info, setInfo] = useState<StateInfo>({})
   const [sessions, setSessions] = useState<SessionView[]>([])
   const [activeSid, setActiveSid] = useState<number | null>(null)
-  const [mode, setMode] = useState<ModeState>({ mode: 'composer', locked: false })
+  const [mode, setMode] = useState<ModeState>({ mode: 'composer' })
   const [maxSessions, setMaxSessions] = useState(20)
   const [recovered, setRecovered] = useState<number | null>(null)
   const [truncated, setTruncated] = useState(false)
@@ -59,6 +60,7 @@ export function App() {
   const [bp, setBp] = useState<Breakpoint>(() => breakpoint(window.innerWidth))
   const [short, setShort] = useState(() => isShort(window.innerHeight))
   const [sidebarOpen, setSidebarOpen] = useState(() => breakpoint(window.innerWidth) === 'desktop')
+  const classicRef = useRef(breakpoint(window.innerWidth) === 'desktop')
   const [coarse] = useState(isCoarsePointer)
   const [theme, setTheme] = useState<Theme>(readTheme)
   const [fontSize, setFontSize] = useState(readFontSize)
@@ -112,6 +114,10 @@ export function App() {
   useEffect(reloadQuick, [reloadQuick])
 
   useEffect(() => applyTheme(theme), [theme])
+  useEffect(() => {
+    if (classicRef.current || !sidebarOpen || !sidebarRef.current) return
+    return installSwipeDismiss(sidebarRef.current, () => setSidebarOpen(false))
+  }, [sidebarOpen])
 
   const refresh = useCallback(() => {
     const store = storeRef.current
@@ -291,12 +297,6 @@ export function App() {
       conn.sendInput(sid, new TextEncoder().encode(bytes))
     }
     sendRawRef.current = sendRaw
-    // 聚焦 xterm 的隐藏 textarea —— 必须在点击手势里调用，手机才会弹出软键盘
-    focusTermRef.current = () => {
-      const sid = store.active
-      const t = sid === null ? undefined : store.termOf(sid)
-      t?.term.focus()
-    }
 
     // 应用级快捷键要拦下来，不能让它们进 PTY
     const onKey = (e: KeyboardEvent) => {
@@ -304,9 +304,6 @@ export function App() {
       if (act === null) return
       const sid = store.active
       switch (act) {
-        case 'toggleMode':
-          if (sid !== null) store.modesOf(sid)?.toggleManual()
-          break
         case 'newSession':
           newSession()
           break
@@ -474,7 +471,7 @@ export function App() {
         return { cols: term?.term.cols ?? 0, rows: term?.term.rows ?? 0 }
       },
       welcome: () => lastWelcome,
-      mode: () => (store.active === null ? { mode: 'composer', locked: false } : store.modesOf(store.active)!.current),
+      mode: () => (store.active === null ? { mode: 'composer' } : store.modesOf(store.active)!.current),
       unread: (sid: number) => store.isUnread(sid),
       program: () => (store.active === null ? null : programOfMaybe(runningCmd.get(store.active))),
       altScreen: () => (store.active === null ? false : store.altScreenOf(store.active)),
@@ -528,17 +525,15 @@ export function App() {
   }
   const activeTerm = () => (activeSid === null ? undefined : storeRef.current?.termOf(activeSid)?.term)
   /**
-   * 命令在跑（Raw）时的发送（ADR-0012）：整段交给 xterm.paste —— 它按前台程序的括号粘贴模式
-   * 自动包裹（claude / codex 都开了 ?2004h，多行不会被换行提前提交）、把换行转成回车 ——
-   * 再补一个回车。长文在本地编辑完一次送出，慢网下不再逐键往返等回显。
+   * 长按发送 = 只粘贴不回车（ADR-0012）：整段交给 xterm.paste —— 它按前台程序的括号粘贴
+   * 模式自动包裹（claude / codex 都开了 ?2004h，多行不会被换行提前提交）、把换行转成回车。
+   * 不补回车 —— 留给 codex 的数字选项、y/n 这类想自己按回车的场合。
    */
-  const sendToProgram = (text: string, enter: boolean) => {
+  const sendToProgram = (text: string) => {
     const t = activeTerm()
-    if (text) {
-      if (t) t.paste(text)
-      else sendRawRef.current(text.replace(/\r?\n/g, '\r'))
-    }
-    if (enter) sendRawRef.current('\r')
+    if (!text) return
+    if (t) t.paste(text)
+    else sendRawRef.current(text.replace(/\r?\n/g, '\r'))
   }
   /** Composer 提交：整段 + 回车送进终端 —— 提示符处即跑命令，程序里即提交一行。统一一条路。 */
   const submitText = (text: string) => {
@@ -546,6 +541,7 @@ export function App() {
   }
   // 终端始终是唯一显示面（ADR-0013）：桌面经典底栏，手机是 Composer + 键条槽。
   const classic = bp === 'desktop'
+  classicRef.current = classic
   const running = mode.mode === 'raw' // 有命令在跑
   const degraded = active?.integration === 'inactive' // 没有集成：不知道在跑什么，键条常给（含 ^C）
   const showKeys = running || interactive || degraded // 底栏要不要挂功能键条
@@ -613,7 +609,7 @@ export function App() {
       {bp !== 'desktop' && sidebarOpen && (
         <div class="scrim" data-testid="scrim" onClick={() => setSidebarOpen(false)} />
       )}
-      <aside class="sidebar" data-testid="sidebar">
+      <aside class="sidebar" data-testid="sidebar" ref={sidebarRef}>
         <SessionList
           sessions={sessions}
           active={activeSid}
@@ -779,7 +775,7 @@ export function App() {
             onSend={() => composerRef.current?.submit()}
             onSendHold={() => {
               // 长按发送 = 只粘贴不回车：给 codex 的数字选项、y/n 这类想自己按回车的场合
-              sendToProgram(composerRef.current?.take() ?? '', false)
+              sendToProgram(composerRef.current?.take() ?? '')
               changeSheet('closed')
             }}
             bar={

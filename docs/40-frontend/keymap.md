@@ -30,7 +30,6 @@ Raw 模式下**所有按键都要能进 PTY**。所以应用级快捷键必须�
 | `Ctrl+Shift+Enter` | 新建会话 |
 | `Ctrl+Shift+W` | 关闭当前会话（`running` 需确认） |
 | `Ctrl+Shift+↑` / `↓` | 上一个 / 下一个会话 |
-| `Ctrl+Shift+M` | 手动切换输入模式（并锁定） |
 | `Ctrl+Shift+B` | 折叠/展开侧栏（desktop）/ 开关抽屉（tablet） |
 | `Ctrl+Shift+,` | 设置 |
 

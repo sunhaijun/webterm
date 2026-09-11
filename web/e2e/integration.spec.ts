@@ -5,9 +5,9 @@ import { expect, test, type Page } from '@playwright/test'
 
 import { Agent, submit, terminalText, waitFor } from './harness'
 
-async function mode(page: Page): Promise<{ mode: string; locked: boolean }> {
+async function mode(page: Page): Promise<{ mode: string }> {
   return page.evaluate(() => {
-    const w = window as unknown as { __webterm: { mode(): { mode: string; locked: boolean } } }
+    const w = window as unknown as { __webterm: { mode(): { mode: string } } }
     return w.__webterm.mode()
   })
 }
@@ -108,7 +108,7 @@ test.describe('E2E-13 集成降级', () => {
     await waitFor(async () => (await terminalText(page)).includes('DEGRADED-OK'), '终端仍然能用')
 
     // 模式固定 Composer，自动切换不发生
-    expect(await mode(page)).toEqual({ mode: 'composer', locked: false })
+    expect(await mode(page)).toEqual({ mode: 'composer' })
     await submit(page, 'sleep 1')
     await page.waitForTimeout(800)
     expect((await mode(page)).mode, '没有数据源就不该自动切').toBe('composer')

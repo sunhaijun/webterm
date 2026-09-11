@@ -2,7 +2,7 @@
  * 输入模式状态机 —— ADR-0007 / docs/40-frontend/input-modes.md §状态机。
  *
  * 它消费 shell 集成上报的 prompt 状态：停在 prompt → Composer，
- * 有命令在跑 → Raw。用户不需要理解"模式"这个概念，但需要时能手动锁定。
+ * 有命令在跑 → Raw。全自动，没有手动开关 —— 用户不需要理解"模式"这个概念。
  */
 import type { Integration, PromptState } from '../protocol/messages'
 
@@ -10,8 +10,6 @@ export type Mode = 'composer' | 'raw'
 
 export interface ModeState {
   mode: Mode
-  /** 用户手动指定过模式，自动切换暂停。 */
-  locked: boolean
 }
 
 /**
@@ -31,8 +29,7 @@ export interface ModeMachineOptions {
 }
 
 export class ModeMachine {
-  private state: ModeState = { mode: 'composer', locked: false }
-  private lastPrompt: PromptState | null = null
+  private state: ModeState = { mode: 'composer' }
   private integration: Integration = 'pending'
   private pendingRaw: ReturnType<typeof setTimeout> | undefined
   private readonly setTimer: NonNullable<ModeMachineOptions['setTimer']>
@@ -57,20 +54,17 @@ export class ModeMachine {
   /**
    * 重连后按 welcome.sessions[].prompt_state 重新对齐。
    *
-   * locked 时不动 —— 那是用户的明确选择，不该被重连覆盖。
+   * 集成不可用时不动 —— 没有数据源，维持当前 Composer。
    */
   resync(state: PromptState | null): void {
-    if (state === null) return
-    this.lastPrompt = state
-    if (this.state.locked || !this.autoAvailable) return
+    if (state === null || !this.autoAvailable) return
     this.cancelPendingRaw()
     this.apply({ mode: state === 'running' ? 'raw' : 'composer' })
   }
 
   /** 收到 prompt{state}。 */
   onPrompt(state: PromptState): void {
-    this.lastPrompt = state
-    if (this.state.locked || !this.autoAvailable) return
+    if (!this.autoAvailable) return
     if (state === 'running') {
       this.scheduleRaw()
       return
@@ -89,34 +83,11 @@ export class ModeMachine {
     }
   }
 
-  /** 用户手动切换 → 进入锁定，自动切换暂停。 */
-  toggleManual(): void {
-    this.cancelPendingRaw()
-    this.apply({ mode: this.state.mode === 'composer' ? 'raw' : 'composer', locked: true })
-  }
-
-  setManual(mode: Mode): void {
-    this.cancelPendingRaw()
-    this.apply({ mode, locked: true })
-  }
-
-  /** 解锁自动 → 立即按最近的 prompt 状态重算。 */
-  unlock(): void {
-    this.state.locked = false
-    if (!this.autoAvailable) {
-      this.apply({ mode: 'composer', locked: false })
-      return
-    }
-    const want: Mode = this.lastPrompt === 'running' ? 'raw' : 'composer'
-    this.apply({ mode: want, locked: false })
-  }
-
-  /** 切换会话时重置：模式跟随会话，而且不该把上一个会话的手动选择带过来。 */
+  /** 切换会话时重置：模式跟随会话，不把上一个会话的状态带过来。 */
   reset(): void {
     this.cancelPendingRaw()
-    this.lastPrompt = null
     this.integration = 'pending'
-    this.apply({ mode: 'composer', locked: false })
+    this.apply({ mode: 'composer' })
   }
 
   dispose(): void {
@@ -127,7 +98,7 @@ export class ModeMachine {
     if (this.pendingRaw !== undefined) return
     this.pendingRaw = this.setTimer(() => {
       this.pendingRaw = undefined
-      if (!this.state.locked && this.autoAvailable) this.apply({ mode: 'raw' })
+      if (this.autoAvailable) this.apply({ mode: 'raw' })
     }, RAW_DEBOUNCE_MS)
   }
 
@@ -140,7 +111,7 @@ export class ModeMachine {
 
   private apply(patch: Partial<ModeState>): void {
     const next = { ...this.state, ...patch }
-    if (next.mode === this.state.mode && next.locked === this.state.locked) return
+    if (next.mode === this.state.mode) return
     this.state = next
     this.notify({ ...next })
   }

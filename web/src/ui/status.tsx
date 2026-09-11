@@ -6,7 +6,7 @@ export interface StatusProps {
   info: StateInfo
   sessionName: string
   cwd: string
-  /** 点细条打开会话列表 —— phone 上没有别的入口。 */
+  /** 点细条打开会话列表（⋯ 菜单里也有会话入口；横屏在线时细条会收起省屏）。 */
   onOpenSessions?(): void
 }
 

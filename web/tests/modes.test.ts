@@ -1,4 +1,4 @@
-/** UT-mode-1 / UT-mode-2：模式状态机的转移表、running 去抖、locked 行为。 */
+/** UT-mode-1：模式状态机的转移表与 running 去抖（全自动，无手动锁定）。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ModeMachine, RAW_DEBOUNCE_MS, type ModeState } from '../src/input/modes'
@@ -50,40 +50,6 @@ describe('UT-mode-1 自动切换', () => {
   })
 })
 
-describe('UT-mode-2 锁定', () => {
-  it('手动切换后自动切换暂停', () => {
-    const { m } = machine()
-    m.toggleManual()
-    expect(m.current).toEqual({ mode: 'raw', locked: true })
-
-    m.onPrompt('input')
-    vi.advanceTimersByTime(1000)
-    expect(m.current.mode, 'locked 之后不该被 prompt 改动').toBe('raw')
-  })
-
-  it('解锁后立即按最近的 prompt 状态重算', () => {
-    const { m } = machine()
-    m.onPrompt('running')
-    vi.advanceTimersByTime(RAW_DEBOUNCE_MS)
-    m.setManual('composer')
-    expect(m.current).toEqual({ mode: 'composer', locked: true })
-
-    m.unlock()
-    expect(m.current, '最近的 prompt 是 running，解锁后应当回到 raw').toEqual({
-      mode: 'raw',
-      locked: false,
-    })
-  })
-
-  it('锁定期间的 running 去抖不该在解锁后偷偷生效', () => {
-    const { m } = machine()
-    m.setManual('composer')
-    m.onPrompt('running')
-    vi.advanceTimersByTime(1000)
-    expect(m.current.mode).toBe('composer')
-  })
-})
-
 describe('集成失效时的降级（AC-3.7）', () => {
   it('integration 变 inactive → 固定 Composer，自动切换禁用', () => {
     const { m } = machine()
@@ -95,17 +61,10 @@ describe('集成失效时的降级（AC-3.7）', () => {
     expect(m.current.mode).toBe('composer')
     expect(m.autoAvailable).toBe(false)
 
-    // 之后的 prompt 消息不再改变模式（本来也不会有）
+    // 之后的 prompt 消息不再改变模式（终端区直送键仍然可用，与模式机无关）
     m.onPrompt('running')
     vi.advanceTimersByTime(1000)
     expect(m.current.mode).toBe('composer')
-  })
-
-  it('降级时用户仍然可以手动切到 Raw —— 否则 vim 就没法用了', () => {
-    const { m } = machine()
-    m.onIntegration('inactive')
-    m.setManual('raw')
-    expect(m.current.mode).toBe('raw')
   })
 
   it('集成恢复后自动切换重新可用', () => {
@@ -120,11 +79,14 @@ describe('集成失效时的降级（AC-3.7）', () => {
 })
 
 describe('会话切换', () => {
-  it('reset 清掉锁定 —— 对上一个会话的手动选择不该跨会话生效', () => {
+  it('reset 回到 Composer —— 上一个会话的状态不跨会话生效', () => {
     const { m } = machine()
-    m.setManual('raw')
+    m.onPrompt('running')
+    vi.advanceTimersByTime(RAW_DEBOUNCE_MS)
+    expect(m.current.mode).toBe('raw')
+
     m.reset()
-    expect(m.current).toEqual({ mode: 'composer', locked: false })
+    expect(m.current).toEqual({ mode: 'composer' })
   })
 })
 
@@ -150,15 +112,10 @@ describe('重连后重新对齐（协议 §4.2 的 prompt_state）', () => {
 
   it('prompt_state 为 null（集成不可用）时不动', () => {
     const { m } = machine()
-    m.setManual('raw')
+    m.onPrompt('running')
+    vi.advanceTimersByTime(RAW_DEBOUNCE_MS)
+    expect(m.current.mode).toBe('raw')
     m.resync(null)
-    expect(m.current).toEqual({ mode: 'raw', locked: true })
-  })
-
-  it('locked 时不被重连覆盖 —— 那是用户的明确选择', () => {
-    const { m } = machine()
-    m.setManual('raw')
-    m.resync('input')
-    expect(m.current).toEqual({ mode: 'raw', locked: true })
+    expect(m.current.mode).toBe('raw')
   })
 })
