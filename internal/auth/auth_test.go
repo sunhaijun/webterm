@@ -3,6 +3,7 @@ package auth_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,4 +175,74 @@ func TestDeviceNameFromUserAgent(t *testing.T) {
 			t.Errorf("DeviceName(%.40q) = %q, want %q", ua, got, want)
 		}
 	}
+}
+
+// UT-pair-5：数字配对码（ADR-0017）—— 16 位、均匀、可带分隔符手输、与 URL 码同生共死。
+func TestPairingDigits(t *testing.T) {
+	a, _ := newAuth(t)
+	now := time.Now()
+
+	t.Run("16 位十进制且不重复", func(t *testing.T) {
+		seen := map[string]bool{}
+		for range 50 {
+			c, err := a.NewPairingCodes(now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(c.Digits) != auth.DigitsLen || strings.Trim(c.Digits, "0123456789") != "" {
+				t.Fatalf("数字码 %q 不是 16 位十进制", c.Digits)
+			}
+			if seen[c.Digits] {
+				t.Fatal("生成了重复的数字码")
+			}
+			seen[c.Digits] = true
+		}
+	})
+
+	t.Run("分组显示与规整", func(t *testing.T) {
+		if got := auth.FormatDigits("4821093755661204"); got != "4821-0937-5566-1204" {
+			t.Fatalf("FormatDigits = %q", got)
+		}
+		for _, in := range []string{"4821-0937-5566-1204", "4821 0937 5566 1204", " 4821093755661204 ", "4821-0937 5566-1204"} {
+			if got := auth.NormalizeCode(in); got != "4821093755661204" {
+				t.Fatalf("NormalizeCode(%q) = %q", in, got)
+			}
+		}
+		// 不是 16 位数字的原样返回 —— URL 码里本来就可能有 -
+		if got := auth.NormalizeCode("kJ8x-abc_DEF"); got != "kJ8x-abc_DEF" {
+			t.Fatalf("URL 码被改了: %q", got)
+		}
+	})
+
+	t.Run("手输带分隔符的数字码能配对，之后 URL 码作废", func(t *testing.T) {
+		c, _ := a.NewPairingCodes(now)
+		if _, _, err := a.Pair(auth.FormatDigits(c.Digits), "UA", "1.2.3.4", now); err != nil {
+			t.Fatalf("数字码配对失败: %v", err)
+		}
+		if _, _, err := a.Pair(c.URL, "UA", "1.2.3.4", now); err == nil {
+			t.Fatal("数字码用掉之后 URL 码仍然可用 —— 两把钥匙必须同生共死")
+		}
+	})
+
+	t.Run("URL 码用掉之后数字码作废", func(t *testing.T) {
+		c, _ := a.NewPairingCodes(now)
+		if _, _, err := a.Pair(c.URL, "UA", "1.2.3.4", now); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := a.Pair(c.Digits, "UA", "1.2.3.4", now); err == nil {
+			t.Fatal("URL 码用掉之后数字码仍然可用")
+		}
+	})
+
+	t.Run("错一位就不行", func(t *testing.T) {
+		c, _ := a.NewPairingCodes(now)
+		wrong := []byte(c.Digits)
+		wrong[15] = '0' + (wrong[15]-'0'+1)%10
+		if _, _, err := a.Pair(string(wrong), "UA", "1.2.3.4", now); err == nil {
+			t.Fatal("错一位的数字码通过了")
+		}
+		if _, _, err := a.Pair(c.Digits, "UA", "1.2.3.4", now); err != nil {
+			t.Fatal("猜错不该把正确的码作废")
+		}
+	})
 }

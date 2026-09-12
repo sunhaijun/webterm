@@ -18,25 +18,29 @@
 ──────────────────────────────────────────────────────────────
 webterm serve
   │
-  ├─ 无已授权设备？→ 生成配对码
-  │    code = base64url(crypto/rand 32 字节)
-  │    存 SHA-256(code)，TTL 5 分钟，一次性
+  ├─ 无已授权设备？→ 生成配对码（两把钥匙，ADR-0017）
+  │    code   = base64url(crypto/rand 32 字节)         ← 走二维码
+  │    digits = 16 位十进制（crypto/rand，拒绝采样）    ← 手输
+  │    同一行存 SHA-256(code) 与 SHA-256(digits)，TTL 5 分钟，任一把用掉整行作废
   │
   ├─ stdout 打印：
   │    https://term.example.com/pair#<code>
   │    ▄▄▄▄▄▄▄ ▄  ▄▄ ▄▄▄▄▄▄▄       ← ASCII 二维码
   │    █ ▄▄▄ █ ▀▄▄▀█▄ █ ▄▄▄ █
   │    …
-  │                                     手机扫码 → 打开 URL
-  │                                          │
-  │  ←─── GET /pair （fragment 不发送） ─────┤
-  │  ───→ 静态页 + JS                        │
-  │                                          ├─ JS 读 location.hash
-  │                                          ├─ history.replaceState 抹掉 hash
-  │  ←─── POST /auth/pair {code} ────────────┤
+  │    扫不了码？打开 https://term.example.com/pair 输入配对码：
+  │        1234-5678-9012-3456
+  │                                     手机扫码 → 打开 URL        │ 或：手机打开 /pair
+  │                                          │                      │
+  │  ←─── GET /pair （fragment 不发送） ─────┤ ←────────────────────┤
+  │  ───→ 静态页 + JS                        │                      │
+  │                                          ├─ JS 读 location.hash │ 没有 hash → 显示输入框
+  │                                          ├─ history.replaceState │ 用户输入 16 位数字
+  │  ←─── POST /auth/pair {code} ────────────┤ ←────────────────────┤ （空格 / - 都接受，服务端剥掉）
   │
   ├─ 限速检查（5/min/IP，超出 429）
-  ├─ 查 SHA-256(code)，常数时间比较
+  ├─ 规整：剥掉空格与 -；16 位纯数字 → 按数字码比，否则按 URL 码比
+  ├─ 逐行常数时间比较 code_hash 与 digits_hash
   ├─ 校验：存在 / 未过期 / 未使用
   ├─ 标记 used_at
   ├─ 创建 device：id、name（从 UA 推断）、token_hash
@@ -63,6 +67,12 @@ webterm serve
 
 用纯 Go 的二维码库渲染成半块字符（`▀▄█`）打到 stdout。终端不支持 Unicode 时回退到 `##`/`  ` 的双宽版本。
 
+### 扫不了码：手输 16 位数字（ADR-0017）
+
+人在手机上、终端在另一块屏幕上时扫不了码，把 URL 贴进聊天工具又正是 T2 要避免的。所以每次配对同时发一个 **16 位十进制数字码**，终端里打成 `1234-5678-9012-3456`；手机浏览器打开 `https://term.example.com/pair`（没有 fragment）就是一个数字输入框，`inputmode=numeric`、边输边按 4 位分组、满 16 位才能提交，空格与 `-` 都接受。
+
+它和 URL 码是**同一次配对的两把钥匙**：哈希存在同一行，任一把用掉整行作废，5 分钟 TTL、常数时间比较一视同仁。约 53 位熵在既有限速下够用：一个码存活的 5 分钟里全网最多 50 次猜测（全局熔断），命中概率 5 × 10⁻¹⁵ —— 推导见 ADR-0017。**不用它替换 URL 码**：二维码那条路没理由降熵。
+
 ## 后续配对
 
 `webterm pair` 子命令随时生成新的配对码（同样打印 URL + 二维码）。用于新设备接入。
@@ -75,6 +85,11 @@ $ webterm pair
 
   ▄▄▄▄▄▄▄ ▄  ▄▄ ▄▄▄▄▄▄▄
   …
+用手机扫码即可完成授权。
+
+扫不了码？在手机浏览器打开  https://term.example.com/pair  输入配对码：
+
+      4821-0937-5566-1204
 ```
 
 **实现注意**：`webterm pair` 是一个独立进程，需要写入同一个 DB。SQLite 的 WAL 模式支持多进程访问，但要处理 `SQLITE_BUSY`（`busy_timeout = 5000`）。

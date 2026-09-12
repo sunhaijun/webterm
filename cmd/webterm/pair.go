@@ -36,21 +36,21 @@ func runPair(args []string) error {
 	}
 	defer st.Close()
 
-	code, err := auth.New(st, c.dev).NewPairingCode(time.Now())
+	codes, err := auth.New(st, c.dev).NewPairingCodes(time.Now())
 	if err != nil {
 		return err
 	}
 	fmt.Println("配对码已生成，5 分钟内有效：")
-	printPairing(c.baseURL(*httpPort, *httpsPort), code)
+	printPairing(c.baseURL(*httpPort, *httpsPort), codes)
 	return nil
 }
 
-// printPairing 打印配对 URL 和终端二维码。
+// printPairing 打印配对 URL、终端二维码，以及可手输的 16 位数字码（ADR-0017）。
 //
 // 配对码走 URL **fragment**：它不会发送给服务器，所以不进访问日志、
 // 不进 Referer、不被中间代理记录（AC-1.5 / 威胁模型 T2）。
-func printPairing(baseURL, code string) {
-	url := baseURL + "/pair#" + code
+func printPairing(baseURL string, codes auth.Codes) {
+	url := baseURL + "/pair#" + codes.URL
 	fmt.Println()
 	fmt.Println("  " + url)
 	fmt.Println()
@@ -60,6 +60,9 @@ func printPairing(baseURL, code string) {
 		fmt.Println(art)
 	}
 	fmt.Println("用手机扫码即可完成授权。")
+	// 扫不了码（终端在另一块屏幕上）的第二把钥匙：16 位数字，4-4-4-4 分组便于看和念。
+	fmt.Println()
+	fmt.Printf("扫不了码？在手机浏览器打开  %s/pair  输入配对码：\n\n      %s\n\n", baseURL, auth.FormatDigits(codes.Digits))
 }
 
 // qrART 把 URL 渲染成半块字符的二维码。

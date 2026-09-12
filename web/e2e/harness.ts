@@ -97,6 +97,17 @@ export class Agent {
     return this.pairURL
   }
 
+  /** 同一次配对的数字码（ADR-0017），从 stdout 里抓 dddd-dddd-dddd-dddd。 */
+  async pairDigits(): Promise<string> {
+    let found = ''
+    await waitFor(() => {
+      const m = this.log.match(/\b(\d{4}-\d{4}-\d{4}-\d{4})\b/)
+      if (m) found = m[1]!
+      return found !== ''
+    }, 'stdout 打出数字配对码', 10_000)
+    return found
+  }
+
   /** 现生成一个新的配对码，用于第二台设备。 */
   async newPairLink(): Promise<string> {
     const before = this.pairURL

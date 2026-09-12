@@ -16,7 +16,7 @@
 | AC-1.1 | `webterm serve --domain X` 在 80/443 可达且 DNS 正确的环境下，能自动获得证书并提供 HTTPS 服务（端口默认 443，可用 `--https-port` 改）；启动时主动预热一次证书（把续期定时器挂上，不依赖有没有流量）；到期前 `min(30 天, 有效期/3)` 自动续期。续期只需 80 或 443 之一从公网可达（HTTP-01 走 80，TLS-ALPN-01 走 443）| IT-tls-1（本地假 ACME CA，见 [strategy.md 的「为什么不用 pebble」](../70-testing/strategy.md#为什么不用-pebble)）|
 | AC-1.2 | `webterm serve --dev` 在 `http://127.0.0.1:8080` 提供服务，不申请证书 | IT-tls-2 |
 | AC-1.3 | 首次启动若无已授权设备，stdout 打印配对 URL 和 ASCII 二维码 | IT-pair-1 |
-| AC-1.4 | 配对码：单次有效，用过即废；5 分钟过期；32 字节熵；比较为常数时间 | UT-pair-1..4 |
+| AC-1.4 | 配对码：单次有效，用过即废；5 分钟过期；URL 码 32 字节熵；比较为常数时间。同一次配对还发一个 16 位十进制数字码（ADR-0017），两把钥匙哈希存同一行，**任一把用掉整行作废**，TTL 与比较规则相同 | UT-pair-1..5 |
 | AC-1.5 | 配对码通过 URL **fragment** 传递，服务端访问日志中不出现配对码 | IT-pair-2 |
 | AC-1.6 | 配对失败 5 次/分钟/IP 后进入退避；退避期间返回 429 | IT-pair-3 |
 | AC-1.7 | 除 `/pair`、静态资源、`/healthz` 外，所有路由无有效 Cookie 时返回 401，**包括 WebSocket 升级** | IT-auth-1 |
@@ -26,6 +26,7 @@
 | AC-1.11 | 吊销设备后，该设备的下一次请求（含已建立的 WebSocket）在 5 秒内被断开并要求重新配对 | IT-auth-4 |
 | AC-1.12 | DB 文件权限为 `0600` | IT-store-1 |
 | AC-1.13 | 证书申请失败时 stdout 给出「原因 + 怎么修」（至少覆盖：80 被占、DNS 未指向本机、ACME 限流），不是 Go error 堆栈；`webterm doctor` 逐项检查同样的前置条件（US-7.2） | IT-tls-3 |
+| AC-1.15 | 手输配对（ADR-0017）：终端把数字码打成 `dddd-dddd-dddd-dddd`；`GET /pair` 无 fragment 时显示数字输入框（`inputmode=numeric`，边输边 4 位分组，满 16 位才能提交），空格与 `-` 都接受；提交走同一个 `POST /auth/pair`，服务端剥掉分隔符后匹配数字码；输错 / 过期 → 401 提示，输入框保留可重试 | IT-pair-4, E2E-27 |
 | AC-1.14 | PWA：`manifest.json` 字段完整、Service Worker 注册成功、`display: standalone`；SW **只缓存静态壳**，不缓存 `/api/*` 与 `/ws`；离线时显示明确状态页（US-1.4） | E2E-17 |
 
 ---
