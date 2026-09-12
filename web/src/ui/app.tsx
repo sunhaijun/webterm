@@ -168,9 +168,8 @@ export function App() {
       url,
       clientID: clientID(),
       handlers: {
-        onOutput(sid, data) {
-          // 带上 out_seq：写入时在 command.start/end 的位置登记行锚点（ADR-0011 ④）
-          store.write(sid, data)
+        onOutput(sid, data, isReplay) {
+          store.write(sid, data, isReplay)
         },
         onMessage(msg) {
           switch (msg.t) {

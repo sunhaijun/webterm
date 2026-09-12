@@ -164,8 +164,13 @@ test.describe('E2E-2c 缓冲溢出', () => {
     // 每行 2ms，让输出【跨越】整个断线窗口。
     // 不加延迟的话几千行可能在我把线掐掉之前就全送到客户端了 ——
     // 那样根本不会溢出，测的就不是 reset 路径。
-    // 1500 行 × 2ms ≈ 3~6s，断线 5s 期间产出远超 64 KiB 的 ring。
-    await submit(page, `cd ${process.cwd()} && ${EMIT} 1500 2`)
+    // 【直接发，不走 submit 的"发完切回终端"】—— 那一步（点 ✎▸终端）在 EMIT 刷屏时
+    // 可能拖到 EMIT 快跑完才断线，导致断线窗口里几乎没有新输出、不溢出（慢机上偶发）。
+    // 这里发完就停在编辑面板、立刻断线；2000 行 × 2ms ≈ 4s，断线 5s 里产出稳超 64 KiB ring。
+    const toEdit = page.getByTestId('to-edit')
+    if (await toEdit.count()) await toEdit.click()
+    await page.getByTestId('composer').fill(`cd ${process.cwd()} && ${EMIT} 2000 2`)
+    await page.getByTestId('composer').press('Enter')
     await waitFor(async () => (await terminalText(page)).includes('line 00005'), '输出开始')
 
     await net.goOffline()
@@ -186,7 +191,7 @@ test.describe('E2E-2c 缓冲溢出', () => {
     await expect(page.getByTestId('truncated')).toBeVisible({ timeout: 30_000 })
 
     // 等 EMIT 跑完（最后一行出现 = 回到提示符），再敲下一条命令
-    await waitFor(async () => (await terminalText(page)).includes('line 01500'), 'EMIT 跑完回到提示符', 60_000)
+    await waitFor(async () => (await terminalText(page)).includes('line 02000'), 'EMIT 跑完回到提示符', 60_000)
 
     // 关键：截断【之后】的内容必须完全正确
     await submit(page, 'printf "AFTER-%s\\n" RESET')
