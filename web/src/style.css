@@ -157,6 +157,20 @@ body {
 
 .gate, .pair { padding: 2rem; max-width: 32rem; margin: 0 auto; }
 .gate pre, .pair pre { background: var(--term-bg); color: #e6e6e6; padding: 8px 12px; border-radius: 6px; }
+/* 手输配对码（ADR-0017）：大号等宽、居中、4 位分组；手机上 16px 起免得 iOS 聚焦放大 */
+.pair-form { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.pair-form code { font-family: var(--font-mono); background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+.pair-code {
+  width: 100%; padding: 12px 14px; text-align: center;
+  font: 22px var(--font-mono); letter-spacing: 0.08em;
+  border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg); color: var(--fg);
+}
+.pair-code:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.pair-form button {
+  min-height: 44px; font: inherit; font-size: 16px; font-weight: 600;
+  border: 1px solid var(--fg); border-radius: 10px; background: var(--fg); color: var(--bg); cursor: pointer;
+}
+.pair-form button:disabled { opacity: 0.4; cursor: default; }
 .error { color: var(--err); }
 
 .modebar {

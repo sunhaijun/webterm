@@ -308,6 +308,31 @@ func TestITPair2_CodeNeverLogged(t *testing.T) {
 	assertNotInDataDir(t, h.dataDir, code)
 }
 
+// IT-pair-4：手输数字码走同一个接口，分隔符由服务端剥掉；用掉后二维码那把也作废（ADR-0017）。
+func TestITPair4_DigitsCodeOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	codes, err := h.agent.Auth().NewPairingCodes(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	spaced := strings.ReplaceAll(auth.FormatDigits(codes.Digits), "-", " ")
+	resp := h.postJSON(h.client(), "/auth/pair", map[string]string{"code": spaced})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("空格分隔的数字码配对 = %d, want 200", resp.StatusCode)
+	}
+	resp2 := h.postJSON(h.client(), "/auth/pair", map[string]string{"code": codes.URL})
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("数字码用掉后 URL 码 = %d, want 401（两把钥匙同生共死）", resp2.StatusCode)
+	}
+	// 数字码与 URL 码一样不进日志、不进库（AC-8.5）
+	if strings.Contains(h.logs.String(), codes.Digits) {
+		t.Fatal("数字码出现在日志里")
+	}
+	assertNotInDataDir(t, h.dataDir, codes.Digits)
+}
+
 // IT-pair-3：限速（AC-1.6）。
 func TestITPair3_RateLimited(t *testing.T) {
 	h := newHarness(t)

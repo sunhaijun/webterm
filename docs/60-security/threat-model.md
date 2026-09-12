@@ -50,7 +50,7 @@ webterm 把一台服务器的 shell 暴露到公网。**攻破 webterm = 拿到�
 |---|---|
 | 认证前置于一切 | 除 `/pair`、静态资源、`/healthz` 外全部要求有效 Cookie，**包括 WebSocket 升级**（AC-1.7） |
 | 无默认凭据 | 配对码每次随机生成。**代码里不存在任何默认密码** |
-| 配对码高熵 | 32 字节 `crypto/rand`，base64url。暴力枚举不可行 |
+| 配对码高熵 | URL 码 32 字节 `crypto/rand`，base64url，暴力枚举不可行。手输的数字码 16 位十进制（≈53 bit），靠限速兜底：5 分钟存活期内全局最多 50 次猜测（每小时 50 次失败熔断），命中概率 5 × 10⁻¹⁵（[ADR-0017](../20-architecture/adr/0017-numeric-pairing-code.md)） |
 | 配对码短命且一次性 | 5 分钟 TTL，用过即废（AC-1.4） |
 | 限速与退避 | 5 次/分钟/IP，之后指数退避返回 429（AC-1.6） |
 | 常数时间比较 | `subtle.ConstantTimeCompare`，防时序侧信道 |

@@ -68,21 +68,94 @@ func randomToken(n int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// NewPairingCode 生成一个一次性配对码并落库（只存哈希）。
-func (a *Auth) NewPairingCode(now time.Time) (string, error) {
+// Codes 是一次配对的两把钥匙（ADR-0017）：URL 走二维码 / fragment，Digits 手输。
+// 哈希存同一行，任一把用掉整行作废。
+type Codes struct {
+	URL    string
+	Digits string // 16 位十进制，显示时用 FormatDigits 分组
+}
+
+// DigitsLen 是数字配对码的位数。16 位 ≈ 53 bit，在既有限速下够用（ADR-0017 有推导）。
+const DigitsLen = 16
+
+// NewPairingCodes 生成一次性配对码（两把钥匙）并落库（只存哈希）。
+func (a *Auth) NewPairingCodes(now time.Time) (Codes, error) {
 	code, err := randomToken(codeBytes)
 	if err != nil {
-		return "", err
+		return Codes{}, err
 	}
-	if err := a.store.CreatePairing(code, now, PairingTTL); err != nil {
-		return "", err
+	digits, err := randomDigits(DigitsLen)
+	if err != nil {
+		return Codes{}, err
 	}
-	return code, nil
+	if err := a.store.CreatePairing(code, digits, now, PairingTTL); err != nil {
+		return Codes{}, err
+	}
+	return Codes{URL: code, Digits: digits}, nil
+}
+
+// NewPairingCode 只返回 URL 码 —— 给只关心二维码路径的调用方与旧测试。
+func (a *Auth) NewPairingCode(now time.Time) (string, error) {
+	c, err := a.NewPairingCodes(now)
+	return c.URL, err
+}
+
+// randomDigits 生成 n 位均匀分布的十进制数字。
+//
+// 拒绝采样：一个随机字节只在 < 250 时取模 —— 250 是 10 的倍数，模 10 才均匀；
+// 直接 b % 10 会让 0..5 比 6..9 多出现 1/256，白白送熵。
+func randomDigits(n int) (string, error) {
+	out := make([]byte, 0, n)
+	buf := make([]byte, 2*n)
+	for len(out) < n {
+		if _, err := rand.Read(buf); err != nil {
+			return "", err
+		}
+		for _, b := range buf {
+			if b >= 250 {
+				continue
+			}
+			out = append(out, '0'+b%10)
+			if len(out) == n {
+				break
+			}
+		}
+	}
+	return string(out), nil
+}
+
+// FormatDigits 把数字码按 4 位一组、用 - 分开：1234-5678-9012-3456。
+// 终端打印与配对页显示都用它 —— 便于看、便于念。
+func FormatDigits(d string) string {
+	var b strings.Builder
+	for i, r := range d {
+		if i > 0 && i%4 == 0 {
+			b.WriteByte('-')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// NormalizeCode 把用户提交的配对码规整成可比对的形式：剥掉空格与 -，
+// 剩下的是 16 位纯数字就当数字码，否则原样（URL 码）返回。
+func NormalizeCode(s string) string {
+	s = strings.TrimSpace(s)
+	stripped := strings.Map(func(r rune) rune {
+		if r == ' ' || r == '-' || r == '\u2013' || r == '\u2014' {
+			return -1
+		}
+		return r
+	}, s)
+	if len(stripped) == DigitsLen && strings.Trim(stripped, "0123456789") == "" {
+		return stripped
+	}
+	return s
 }
 
 // Pair 消费一个配对码，创建设备并返回会话 token。
 func (a *Auth) Pair(code, userAgent, ip string, now time.Time) (*store.Device, string, error) {
-	if err := a.store.ConsumePairing(code, now); err != nil {
+	if err := a.store.ConsumePairing(NormalizeCode(code), now); err != nil {
 		return nil, "", ErrInvalidCode
 	}
 	token, err := randomToken(tokenBytes)

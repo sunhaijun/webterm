@@ -215,13 +215,13 @@ func runServe(args []string) error {
 
 	// 首次启动若无已授权设备，打配对码 + 二维码（AC-1.3）
 	if has, err := st.HasAnyDevice(); err == nil && !has {
-		code, err := a.Auth().NewPairingCode(time.Now())
+		codes, err := a.Auth().NewPairingCodes(time.Now())
 		if err != nil {
 			return err
 		}
 		fmt.Println()
 		fmt.Println("尚无已授权设备。配对码 5 分钟内有效：")
-		printPairing(c.baseURL(o.httpPort, o.httpsPort), code)
+		printPairing(c.baseURL(o.httpPort, o.httpsPort), codes)
 	}
 
 	sig := make(chan os.Signal, 1)

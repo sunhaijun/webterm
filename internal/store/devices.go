@@ -130,13 +130,18 @@ func (s *Store) HasAnyDevice() (bool, error) {
 
 // ---------- 配对码 ----------
 
-// CreatePairing 记录一个配对码的哈希。
-func (s *Store) CreatePairing(code string, now time.Time, ttl time.Duration) error {
+// CreatePairing 记录一次配对的两把钥匙的哈希（ADR-0017）：code 走二维码，digits 手输。
+// digits 为空表示只有 URL 码（老调用方 / 测试）。
+func (s *Store) CreatePairing(code, digits string, now time.Time, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var dh any
+	if digits != "" {
+		dh = TokenHash(digits)
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO pairings (code_hash, created_at, expires_at) VALUES (?, ?, ?)`,
-		TokenHash(code), now.UnixMilli(), now.Add(ttl).UnixMilli())
+		`INSERT INTO pairings (code_hash, digits_hash, created_at, expires_at) VALUES (?, ?, ?, ?)`,
+		TokenHash(code), dh, now.UnixMilli(), now.Add(ttl).UnixMilli())
 	return err
 }
 
@@ -161,8 +166,10 @@ func (s *Store) ConsumePairing(code string, now time.Time) error {
 	}
 	defer tx.Rollback()
 
+	// 两把钥匙都取出来比（ADR-0017）：presented 可能是 URL 码也可能是数字码，
+	// 调用方已把分隔符剥掉。匹配到任一把，就按主键 code_hash 把整行作废。
 	rows, err := tx.Query(
-		`SELECT code_hash FROM pairings WHERE used_at IS NULL AND expires_at >= ?`,
+		`SELECT code_hash, digits_hash FROM pairings WHERE used_at IS NULL AND expires_at >= ?`,
 		now.UnixMilli())
 	if err != nil {
 		return err
@@ -170,28 +177,32 @@ func (s *Store) ConsumePairing(code string, now time.Time) error {
 	want := TokenHash(code)
 	var matched []byte
 	for rows.Next() {
-		var h []byte
-		if err := rows.Scan(&h); err != nil {
+		var h, dh []byte
+		if err := rows.Scan(&h, &dh); err != nil {
 			rows.Close()
 			return err
 		}
-		if subtle.ConstantTimeCompare(h, want) == 1 {
+		// 不短路：每一行两次比较都做完，耗时与命中位置无关
+		hit := subtle.ConstantTimeCompare(h, want) == 1
+		if len(dh) == len(want) && subtle.ConstantTimeCompare(dh, want) == 1 {
+			hit = true
+		}
+		if hit && matched == nil {
 			matched = h
 		}
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
 	if matched == nil {
-		// 不存在 / 已过期 / 已用过，一律报同一个错 ——
-		// 区分它们等于告诉攻击者"这个码存在过"。
 		return ErrPairingInvalid
 	}
-	if _, err := tx.Exec(
+	res, err := tx.Exec(
 		`UPDATE pairings SET used_at = ? WHERE code_hash = ? AND used_at IS NULL`,
-		now.UnixMilli(), matched); err != nil {
+		now.UnixMilli(), matched)
+	if err != nil {
 		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrPairingInvalid // 并发请求抢先用掉了
 	}
 	return tx.Commit()
 }

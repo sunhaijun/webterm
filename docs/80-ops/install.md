@@ -121,6 +121,7 @@ stdout 会打出一个配对 URL 和终端二维码：
 ```
 
 **手机扫码** → 自动完成授权 → 直接进终端。这台设备之后再也不用登录。
+扫不了码（终端在另一块屏幕上）就在手机浏览器打开 `https://<域名>/pair`，输入终端里那 16 位数字（`1234-5678-9012-3456`，空格或 `-` 分隔都行）。
 
 配对码 5 分钟过期、用过即废。它走 URL fragment，**不会发给服务器**，所以不进
 访问日志、不进 Referer。
@@ -389,7 +390,7 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 |---|---|
 | `webterm doctor [--domain X]` | 检查部署前置条件 |
 | `webterm update` | 升级到最新版（按上次的安装参数重装） |
-| `webterm pair` | 生成新的配对码（打印 URL + 二维码） |
+| `webterm pair` | 生成新的配对码（打印 URL + 二维码 + 可手输的 16 位数字） |
 | `webterm devices [list\|revoke <id>\|revoke-all]` | 设备管理（CLI 侧，UI 里也有） |
 | `webterm shell-init bash` | 输出 shell 集成脚本（手动接入的降级路径） |
 | `webterm version` | 版本信息 |
