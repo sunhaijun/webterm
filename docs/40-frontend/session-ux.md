@@ -163,6 +163,27 @@ shell 退出后：
 
 「补齐 N KB」这个信息看起来多余，但它让用户**确信没丢东西** —— 这是"永不断线"这个承诺的可见证据。
 
+## 回看时暂停跟随（AC-5.9）
+
+滚动缓冲完全在浏览器里（xterm 5000 行），往上滚不跟服务端交互。卡的是另一件事：用户在读旧输出，底下 claude 的 spinner、`tail -f`、构建日志还在每秒几十帧地进来，每帧都要解析、标脏、渲染，和滚动抢主线程。所以：
+
+- **视口一离开底部，实时帧只入队不写 xterm**（`web/src/term/outputqueue.ts`）。判定用 `onScroll`：`viewportY < buffer.baseY` 即滚上去了。备用缓冲（vim / less）没有 scrollback，永远算贴底。
+- 终端右下角出现提示条 **「已暂停跟随 · 新增 N 行 ↓」**（`data-testid="follow-pill"`；没有换行的整屏重绘显示「有新输出」）。点它 = `scrollToBottom()`。
+- **回到底部一次写完**：顺序不变、一个字节不丢。序号与 ack 在连接层收到时就记好了，跟这里写不写无关（续传的字节级一致性不受影响）。触发写入的时刻：用户滚到底、点提示条、**输入**（xterm `scrollOnUserInput` 会滚到底）、占屏程序启动（`applyInteractive` 滚到底）、回放帧到达（回放前先把队列排空，保证顺序）。
+- **上限**：暂停期间攒到 2 MiB 或 4000 行就强制写入 —— 再多也会被 scrollback 裁掉；强制写入不动视口。
+- **回放帧不暂停也不合并**：它是一段有界的补课。`terminal.reset()`（reset 续传）时清空队列 —— 屏幕要按服务端缓冲重建。
+- 贴底时的实时帧也走这个队列，**同一帧内到达的多个包合成一次 `write`**：解析与渲染次数按帧算而不是按包算。
+
+- **判定自愈**：每一帧实时输出到达时按真实视口位置（`viewportY >= baseY`）校正一次跟随状态，不单靠 `onScroll` —— 它可能漏、可能报中间位置。点提示条走 `store.follow()`：`scrollToBottom()` 在已经贴底时不发 `onScroll`，所以要显式恢复跟随。
+
+多端：手机 / 平板的单指滚动走的也是 xterm 视口，判定与提示一致；提示条在 `.canvas` 里绝对定位，落在底部键行之上、不被双指缩放的 transform 影响；编辑面板升起时会盖住它 —— 那时用户在写不在读。
+
+**不开 `smoothScrollDuration`**。试过 80ms：xterm 5.5 的平滑滚动用 DOM `scrollTop` 动画实现，持续输出时和它自己的 `syncScrollArea` 打架，程序化 `scrollLines` 会被吞掉或只动一格，`onScroll` 报的位置与最终视口对不上。滚轮按行跳的台阶感是小事，跟随判定出错是大事。
+
+## 渲染器可见（AC-5.10）
+
+WebGL 加载失败或上下文丢失时静默回退到 canvas（AC-5.5），以前从界面上看不出来。设置面板里显示「渲染 WebGL / Canvas」（`data-testid="renderer"`），滚动明显更卡时先看这一眼。
+
 ## 搜索（AC-5.2）
 
 `Ctrl/Cmd+F` 打开搜索框（移动端从 `⋯` 菜单进）。用 xterm 的 `SearchAddon`：

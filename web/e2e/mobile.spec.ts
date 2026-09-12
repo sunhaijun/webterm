@@ -209,3 +209,38 @@ test('PWA 安全区：刘海与 Home 指示条的 inset 落在 .app 上，终端
   expect(reset.statusbar.top).toBe(0)
   expect(reset.term.height).toBe(before.term.height)
 })
+
+/**
+ * E2E-12 ⑥ 的手机版（AC-5.9 多端）：Pixel 5 上滚上去同样暂停跟随，提示条落在键行之上、
+ * 点一下补齐。滚动仍走 xterm 视口钩子 —— 单指拖动在 1× 时就是交给 xterm 的。
+ */
+test('手机：回看时暂停跟随，提示条在键行之上，点一下补齐', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  const count = async () => ((await terminalText(page)).match(/MF-\d{3}/g) ?? []).length
+  await submit(page, 'for i in $(seq 1 150); do printf "MF-%03d\\n" $i; sleep 0.03; done; printf "MF-%s\\n" END')
+  await waitFor(async () => (await count()) >= 30, '输出跑起来了')
+  await page.evaluate(() => (window as unknown as { __webterm: { scrollLines(n: number): void } }).__webterm.scrollLines(-10))
+  const pill = page.getByTestId('follow-pill')
+  await expect(pill).toBeVisible()
+  const frozen = await count()
+  await page.waitForTimeout(600)
+  expect(await count()).toBe(frozen)
+
+  // 提示条在画布里、键行之上，不被底栏盖住
+  const geo = await page.evaluate(() => {
+    const r = (s: string) => document.querySelector(s)!.getBoundingClientRect()
+    return { pillBottom: Math.round(r('[data-testid=follow-pill]').bottom), barTop: Math.round(r('.bottom').top), canvasBottom: Math.round(r('.canvas').bottom) }
+  })
+  expect(geo.pillBottom).toBeLessThanOrEqual(geo.barTop)
+  expect(geo.pillBottom).toBeLessThanOrEqual(geo.canvasBottom)
+
+  await pill.click()
+  await expect(pill).toHaveCount(0)
+  await waitFor(async () => (await terminalText(page)).includes('MF-END'), '命令跑完', 20_000)
+  const lines = (await terminalText(page)).match(/MF-\d{3}/g) ?? []
+  expect(new Set(lines).size).toBe(150)
+  expect(lines.length).toBe(150)
+})

@@ -17,6 +17,7 @@ import { EDIT_INSERT, PROGRAM_EDIT_KEYS, PROMPT_KEYS, appAction, programOf } fro
 import type { ModeState } from '../input/modes'
 import { RawIme, cursorPosition } from '../input/raw'
 import { installSwipeDismiss } from './swipe'
+import type { Parked } from '../term/outputqueue'
 import { installPinch } from '../term/pinch'
 import { SLOT_HEIGHT, WriteSheet, type SheetSize } from '../input/sheet'
 import { T } from '../protocol/messages'
@@ -80,6 +81,8 @@ export function App() {
   // 前台正在跑的命令原文（按会话）—— 只用来给键条上下文 / Composer 占位符取程序名。
   const runningCmdRef = useRef(new Map<number, string>())
   const [program, setProgram] = useState<string | null>(null)
+  // 回看暂停跟随（AC-5.9）：当前会话攒下的新输出量，驱动右下角的「已暂停跟随」提示条
+  const [parked, setParked] = useState<Parked | null>(null)
   const [quick, setQuick] = useState<CommandRecord[]>([])
   // 写态 sheet（ADR-0011 ③）：读视图里输入框升起的那块。三档：收起 / 半屏 / 全屏。
   const [sheet, setSheet] = useState<SheetSize>('closed')
@@ -254,6 +257,9 @@ export function App() {
       onModeChange: (sid, s) => {
         if (store.active === sid) setMode(s)
       },
+      onParked: (sid, p) => {
+        if (sid === store.active) setParked(p)
+      },
       onInteractive: (sid, on) => {
         if (store.active !== sid) return
         applyInteractive(on)
@@ -282,6 +288,7 @@ export function App() {
     }
     const select = (sid: number) => {
       store.activate(sid, area)
+      setParked(store.parkedOf(sid))
       // activate 里的 term.open() 是同步的，此刻 textarea 已经在 DOM 里
       attachIme()
       pinch.reset()
@@ -508,6 +515,11 @@ export function App() {
       interactive: () => (store.active === null ? false : store.interactiveOf(store.active)),
       sheet: () => sheetRef.current,
       zoom: () => pinch.scale(),
+      scrollLines: (n: number) => {
+        if (store.active !== null) store.termOf(store.active)?.term.scrollLines(n)
+      },
+      parked: () => (store.active === null ? null : store.parkedOf(store.active)),
+      renderer: () => (store.active === null ? '' : (store.termOf(store.active)?.renderer() ?? '')),
       viewport: () => {
         const sid = store.active
         const term = sid === null ? undefined : store.termOf(sid)
@@ -722,6 +734,20 @@ export function App() {
             绝对定位盖在它上面，不改 xterm 尺寸（切不触发 PTY resize / SIGWINCH）。 */}
         <div class="canvas" data-testid="canvas">
           <div class="term" ref={termAreaRef} data-testid="terminal" data-hidden="false" />
+          {parked && (
+            // 回看时暂停跟随（AC-5.9）：点一下回到底部，攒下的输出一次写完
+            <button
+              class="follow-pill"
+              data-testid="follow-pill"
+              onClick={() => {
+                const s = storeRef.current
+                const sid = s?.active
+                if (sid != null) s?.follow(sid)
+              }}
+            >
+              已暂停跟随 · {parked.lines > 0 ? `新增 ${parked.lines} 行` : '有新输出'} ↓
+            </button>
+          )}
         </div>
 
         {classic && (
@@ -769,6 +795,10 @@ export function App() {
                 }}
               />
             </label>
+            {/* WebGL 失败会静默退回 canvas（AC-5.5）——滚动变卡时先看这一眼（AC-5.10） */}
+            <span class="settings-renderer" data-testid="renderer">
+              渲染 {activeSid !== null && storeRef.current?.termOf(activeSid)?.renderer() === 'canvas' ? 'Canvas' : 'WebGL'}
+            </span>
             {/* 用户不知道这条规则的话，它等于不存在（privacy-history.md） */}
             <p class="privacy-note" data-testid="privacy-note">
               以空格开头的命令不会被记录。贴 token / 密码时在前面加个空格。

@@ -8,6 +8,7 @@ import { Connection } from '../conn/connection'
 import { ModeMachine, type ModeState } from '../input/modes'
 import type { SessionInfo } from '../protocol/messages'
 import { installInteractive, type InteractiveDetector } from '../term/interactive'
+import { OutputQueue, type Parked } from '../term/outputqueue'
 import { createTerminal, type TermHandle } from '../term/terminal'
 
 export interface SessionView extends SessionInfo {
@@ -29,6 +30,8 @@ interface Entry {
   detector: InteractiveDetector
   /** 正在灌回放输出的写次数（>0 时 xterm 对历史查询的自动应答别当输入送 PTY）。 */
   replayDepth: number
+  /** 输出写入队列：按帧合并；用户滚上去读旧输出时暂停写入（session-ux.md §回看时暂停跟随）。 */
+  queue: OutputQueue
 }
 
 export interface SessionStoreHandlers {
@@ -40,6 +43,8 @@ export interface SessionStoreHandlers {
   allowKey(e: KeyboardEvent): boolean
   /** 占屏状态切换（ADR-0011 ②：驱动读 ⇄ 控的自动切换）。备用缓冲 或 主屏就地重绘。 */
   onInteractive(sid: number, on: boolean): void
+  /** 回看暂停中攒下的输出量变了（null = 没有暂停中的内容）。给「已暂停跟随」提示条用。 */
+  onParked?(sid: number, parked: Parked | null): void
 }
 
 export class SessionStore {
@@ -126,7 +131,17 @@ export class SessionStore {
       interactive: false,
       detector: installInteractive(term.term),
       replayDepth: 0,
+      queue: new OutputQueue((data) => term.term.write(data), {
+        onParked: (p) => this.h.onParked?.(info.sid, p),
+      }),
     }
+    // 跟随 / 回看：视口贴底就跟随，滚上去就暂停写入（session-ux.md §回看时暂停跟随）。
+    // onScroll 在用户滚动、xterm 自动滚、scrollToBottom（输入、占屏程序启动）时都会来；
+    // 备用缓冲没有 scrollback，永远算贴底
+    term.term.onScroll(() => entry.queue.setFollowing(atBottom(term)))
+    term.term.buffer.onBufferChange((buf) => {
+      if (buf.type === 'alternate') entry.queue.setFollowing(true)
+    })
     // 占屏检测：vim/top/less 的备用缓冲，以及 claude/codex 的主屏就地重绘
     entry.detector.onChange((on) => {
       entry.interactive = on
@@ -227,17 +242,40 @@ export class SessionStore {
     const e = this.entries.get(sid)
     if (!e) return
     if (!isReplay) {
-      e.term.term.write(data)
+      // 实时帧走队列：贴底时按帧合并，滚上去时暂停（session-ux.md §回看时暂停跟随）。
+      // 每帧按【真实视口位置】校正一次跟随状态：onScroll 可能漏（或报出中间位置），
+      // 靠这一步自愈 —— 贴底就跟随，离底就暂停，永远不会卡在错误的一侧
+      e.queue.setFollowing(atBottom(e.term))
+      e.queue.push(data)
       return
     }
+    // 回放不暂停也不合并：它是一段有界的补课，而且必须排在之前收到的实时帧【之后】
+    e.queue.drain()
     e.replayDepth++
     e.term.term.write(data, () => {
       if (e.replayDepth > 0) e.replayDepth--
     })
   }
 
+  /** 某会话回看暂停中攒下的量（null = 没有）。 */
+  parkedOf(sid: number): Parked | null {
+    return this.entries.get(sid)?.queue.parked ?? null
+  }
+
+  /** 回到底部并恢复跟随（提示条点击）。scrollToBottom 在已经贴底时不发 onScroll，所以显式恢复。 */
+  follow(sid: number): void {
+    const e = this.entries.get(sid)
+    if (!e) return
+    e.term.term.scrollToBottom()
+    e.queue.setFollowing(true)
+  }
+
   resetTerm(sid: number): void {
-    this.entries.get(sid)?.term.term.reset()
+    const e = this.entries.get(sid)
+    if (!e) return
+    // 屏幕要按服务端缓冲重建，攒着的旧字节没有意义了
+    e.queue.clear()
+    e.term.term.reset()
   }
 
   /** 改字号：所有实例一起改，并重新 fit。 */
@@ -273,6 +311,7 @@ export class SessionStore {
 
   dispose(): void {
     for (const e of this.entries.values()) {
+      e.queue.clear()
       e.modes.dispose()
       e.term.dispose()
     }
@@ -283,4 +322,10 @@ export class SessionStore {
 /** 显示名：手动名优先，否则跟随 CWD。agent 已经算好了，这里只兜底。 */
 export function displayName(s: SessionInfo): string {
   return s.name || 'shell'
+}
+
+/** 视口是否贴底。备用缓冲没有 scrollback，永远算贴底。 */
+function atBottom(t: TermHandle): boolean {
+  const buf = t.term.buffer.active
+  return buf.type === 'alternate' || buf.viewportY >= buf.baseY
 }
