@@ -62,8 +62,9 @@ test('默认终端输入；一键切编辑面板；命令在跑挂键条；全�
   await waitFor(async () => (await alt(page)) === true, '进备用缓冲', 10_000)
   await page.waitForTimeout(400)
   expect(await has(page, 'term-bar')).toBe(true)
-  expect(await has(page, 'composer')).toBe(false)
-  expect(await has(page, 'to-edit'), '全屏 TUI 不给互切键').toBe(false)
+  expect(await has(page, 'composer'), '默认仍是终端输入，没有输入框').toBe(false)
+  // 互切键【始终给】：claude / codex 也走备用缓冲，但它们最需要编辑面板发 prompt
+  expect(await has(page, 'to-edit'), '备用缓冲下互切键仍在').toBe(true)
 })
 
 test('点终端区打字 = 直送 PTY', async ({ page }) => {

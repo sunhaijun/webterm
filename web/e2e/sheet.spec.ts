@@ -143,10 +143,14 @@ test('chips：空输入给同目录历史；敲 cd s 给真实路径，点一下
   await page.getByTestId('edit-DeleteWord').click()
   await expect(page.getByTestId('composer')).toHaveValue('cd ')
 
-  // 发送键提交
+  // 发送键提交：命令执行，但【留在编辑面板】—— 连着发是常态，别把人踢回终端（ADR-0014+）
   await page.getByTestId('composer').fill('printf "SENT-%s\\n" OK')
   await page.getByTestId('send').click()
   await waitFor(async () => (await terminalText(page)).includes('SENT-OK'), '发送键提交了')
+  expect(await sheet(page), '发送后留在编辑面板，不跳回终端').not.toBe('closed')
+  await expect(page.getByTestId('composer'), '发送后输入框清空，可接着编下一条').toHaveValue('')
+  // 要回终端直输，点面板头的 ✎▸终端
+  await page.getByTestId('to-terminal').click()
   expect(await sheet(page)).toBe('closed')
 })
 

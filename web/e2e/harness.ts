@@ -155,6 +155,10 @@ export async function submit(page: Page, text: string): Promise<void> {
   await composer.click()
   await composer.fill(text)
   await composer.press('Enter')
+  // 发送后停在编辑面板（ADR-0014+）；回到终端输入，给后续断言一个干净的默认态。
+  // 备用缓冲程序（less/vim）会自动收起面板 —— 那种情况 to-terminal 正在消失，
+  // 别硬点（会等到它 detach 而超时）：短超时 + 吞掉即可，反正已经是终端态。
+  await page.getByTestId('to-terminal').click({ timeout: 1500 }).catch(() => {})
 }
 
 /** 切到编辑面板并返回 Composer 定位（直接操作 Composer 的用例先调它）。 */
