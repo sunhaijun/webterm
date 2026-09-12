@@ -25,6 +25,9 @@ ADR-0014 落地后在 Pixel 5（393×727）、横屏（802×293）、iPhone SE�
 3. **编辑面板**：头部只剩 16px 抓手条（整条可拖；点一下半屏 ⇄ 全屏）；**去掉「收起」**（拖到底、空输入再按 Esc、互切键都能收）；输入框填满剩余高度（sheet 内取消 40vh 上限）；chips 为空时不占高度；底部是同一条键行：`✎ 终端` · （命令在跑时）`Esc ^C` · 编辑键 · `发送`。其余程序键（方向键、⇧Tab、Enter）属于逐键交互，切回终端态用。
 4. **互切键在两种态里是同一尺寸（44px 高）的键，永远是键行的第一个键。**
 5. **免滚区承诺从「前 8 个键」改为「前 5 个键」**（393px；320px 下 4 个），`^C` 仍在第 2 位。
+6. **触摸设备在 ≥ 1024px 也用键行，不用经典底栏**（iPad mini 横屏是 1133px）。宽度只决定**栅格**（侧栏常驻还是抽屉），触摸能力（`pointer: coarse`）决定**输入层**：`classic = desktop && !coarse`。iPad 横屏因此是「侧栏常驻 + 键行 / 编辑面板」，而不是「模式条 + 常驻输入框 + 键条」—— 后者是给鼠标键盘设计的，触屏上键盘一弹终端只剩 14 行，且没有终端直输这个默认态。
+7. **⋯ 在 tablet / desktop 是锚在键行行尾上方的弹出菜单**（280px，无遮罩变暗、无抓手），只有 phone 才是整宽的底部操作表单 —— 744px 宽的平板上整宽 258px 的四行表单是浪费。
+8. **半屏高度上限 420px**：`max(190, min(46% × 主区高, 420))`。手机 46% 本来就不到 420；平板竖屏 46% 是 521px，输入框 443px 用不了那么多，多出来的留给终端。键盘弹出时主区变矮，46% 自然落回上限以下。
 
 ## 代价与取舍
 
@@ -32,10 +35,11 @@ ADR-0014 落地后在 Pixel 5（393×727）、横屏（802×293）、iPhone SE�
 - **去掉「收起」。** 「收起」= 关面板并收键盘，`✎ 终端` = 关面板并聚焦终端。只想读终端时拖到底或（空输入）Esc；留着它就得再占一个 44px 位或塞回把手行。
 - **编辑态只并入 `Esc ^C`。** 编辑面板的职责是整段写好一次发；逐键操控 claude 的菜单本来就是终端态的事，互切键一下就到。
 - **提示符态多了一排键。** 视觉上比「只有两个键」密，但高度不增，且这几个键（Tab 补全、↑↓ 翻历史、`|` `~`）正是软键盘打 shell 命令最缺的。
+- **触屏宽屏失去经典底栏的「输入框常驻」。** 换来的是与手机一致的心智模型（默认终端直输、一键编辑面板）和键盘弹出时多出的两条 chrome 高度。接了外接键盘的 iPad（`pointer: fine`）不受影响，仍是经典底栏。
 
 ## 影响
 
 - 文档：[input-modes.md](../../40-frontend/input-modes.md) §底栏 / §功能键条 / §编辑键行；[layout-responsive.md](../../40-frontend/layout-responsive.md) 底栏高度与 short 叠加；[acceptance-criteria.md](../../10-requirements/acceptance-criteria.md) AC-3.9 改为前 5 个、新增 AC-3.14；[e2e-scenarios.md](../../70-testing/e2e-scenarios.md) E2E-10 与新增 E2E-25。
-- 前端：`web/src/ui/app.tsx`（`termLead` 并入 `KeyBar` 的 `leading` / `trailing`；终端态 context 改传 `interactive`）、`web/src/input/keybar.tsx`（`trailing` 与 `keys` 槽，键区独立滚动）、`web/src/input/keymap.ts`（`PROMPT_KEYS`、`PROGRAM_EDIT_KEYS`）、`web/src/input/sheet.tsx`（头部改抓手条、去 `sheet-close`、键行接互切键 / 程序键 / 发送、槽位高度改测量）、`web/src/style.css`（`--slot-h`、键行、取消 sheet 内 40vh 上限）。
-- 测试：E2E `inputmodel` / `sheet` / `input` 与 `escape`（前 8 → 前 5）/ `control` / `commands` / `mobile`（滚的是 `.keybar-scroll`）；单测 `keymap.test.ts`。testid：保留 `to-edit` / `to-terminal` / `term-bar` / `keybar` / `editkeys` / `send` / `open-more`，**移除 `sheet-close` / `term-lead`**；编辑键行里的程序键复用 `key-Escape` / `key-CtrlC`。
+- 前端：`web/src/ui/app.tsx`（`termLead` 并入 `KeyBar` 的 `leading` / `trailing`；终端态 context 改传 `interactive`；`classic = desktop && !coarse`）、`web/src/input/keybar.tsx`（`trailing` 与 `keys` 槽，键区独立滚动）、`web/src/input/keymap.ts`（`PROMPT_KEYS`、`PROGRAM_EDIT_KEYS`）、`web/src/input/sheet.tsx`（头部改抓手条、去 `sheet-close`、键行接互切键 / 程序键 / 发送、槽位高度改测量）、`web/src/style.css`（`--slot-h`、键行、取消 sheet 内 40vh 上限）。
+- 测试：E2E `inputmodel` / `sheet` / `input` 与 `escape`（前 8 → 前 5）/ `control` / `commands` / `mobile`（滚的是 `.keybar-scroll`）；新增 `tablet.spec`（iPad mini 横竖屏）；单测 `keymap.test.ts`。testid：保留 `to-edit` / `to-terminal` / `term-bar` / `keybar` / `editkeys` / `send` / `open-more`，**移除 `sheet-close` / `term-lead`**；编辑键行里的程序键复用 `key-Escape` / `key-CtrlC`。
 - 不触及协议、重连、连接层。画布几何仍不因底栏变化而 resize（ADR-0011 约束、ADR-0013）。

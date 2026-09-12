@@ -21,6 +21,8 @@ export type SheetSize = 'closed' | 'half' | 'full'
 
 /** 槽位的默认高度；实际以 .bottom-slot 量出来的为准（short 布局是 40px）。 */
 export const SLOT_HEIGHT = 56
+/** 半屏的像素上限（ADR-0015 ⑧）：平板竖屏 46% 是 520px，输入框用不了那么多，留给终端。 */
+export const HALF_MAX = 420
 
 /** 槽位的实际高度 —— 拖动的下限、全屏高度的下限都以它为准。 */
 function slotHeightOf(el: HTMLElement | null): number {
@@ -73,7 +75,7 @@ export function WriteSheet(p: WriteSheetProps) {
   onHeightRef.current = p.onHeight
 
   // 半屏 / 全屏的像素高度取自 .main 的实际高度：键盘弹出 .main 变矮，sheet 跟着矮。
-  // 半屏至少 190px —— 抓手 + 一行输入 + 键行，再少就摆不下了。
+  // 半屏至少 190px —— 抓手 + 一行输入 + 键行，再少就摆不下了；至多 HALF_MAX（平板）。
   const targets = () => {
     const main = ref.current?.closest('.main') as HTMLElement | null
     const canvas = main?.querySelector('.canvas') as HTMLElement | null
@@ -81,7 +83,7 @@ export function WriteSheet(p: WriteSheetProps) {
     const m = main.getBoundingClientRect()
     const top = canvas ? canvas.getBoundingClientRect().top : m.top + 28
     const full = Math.max(slotHeightOf(ref.current), Math.round(m.bottom - top))
-    const half = Math.min(full, Math.max(190, Math.round(m.height * 0.46)))
+    const half = Math.min(full, Math.max(190, Math.min(Math.round(m.height * 0.46), HALF_MAX)))
     return { half, full }
   }
   const apply = (size: SheetSize) => {

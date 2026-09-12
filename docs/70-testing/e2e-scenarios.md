@@ -410,6 +410,11 @@ Playwright 可以派发 composition 事件。
 3. **编辑态并入程序键**：`sleep 30` 在跑时切编辑面板，`editkeys` 里出现 `key-Escape` `key-CtrlC`，页面上只有一条键行（没有 `keybar`）；点 `key-CtrlC` 回到 prompt 后它们退场
 4. **主屏占屏程序的键条**：`printf '\033[>1u'; sleep` 在终端态时 `keybar` 的 `data-context` 不是 `shell`（与编辑态一致）
 
+`web/e2e/tablet.spec.ts`，iPad mini（触屏 UA，`hasTouch`）：
+
+5. **横屏 1133×744**：`data-bp=desktop`、侧栏可见（宽 ≥ 200px）；**没有 `modebar`**，有 `term-bar`，`to-edit` 是键行第一个键，`.bottom` ≤ `.bottom-slot`；点 `⋯` → `more-menu` 宽 ≤ 320px 且右缘贴着 `.main` 右缘（≤ 16px）；菜单里「设置」能打开 `settings`
+6. **竖屏 744×1133**：`data-bp=tablet`；提示符键集 12 个键全部免滚（`.keybar-scroll` 的 `scrollWidth ≤ clientWidth + 1`）；`to-edit` 升半屏后 `.bottom` 高度在 [190, 420]；`⋯` 菜单宽 ≤ 320px
+
 ## E2E-24 双指缩放读（ADR-0013）
 
 `web/e2e/pinch.spec.ts`，Pixel 5 视口。在 `.term` 上派发两指 `touchstart`/`touchmove`/`touchend`：

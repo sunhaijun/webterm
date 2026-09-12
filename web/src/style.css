@@ -594,10 +594,16 @@ body {
 .sheet-ico { flex: none; width: 24px; text-align: center; font-size: 18px; }
 .sheet-label { flex: 1; }
 .sheet-chevron { flex: none; color: var(--muted); font-size: 20px; }
-/* 桌面：还是一个靠边的小面板 */
-.app[data-bp='desktop'] .action-sheet {
-  left: auto; right: 8px; bottom: 62px; width: 240px;
+/* 平板 / 触屏桌面宽：⋯ 是锚在键行行尾上方的弹出菜单，不是整宽底部表单（ADR-0015 ⑦）。
+   遮罩仍在（点外面收起）但不变暗；没有抓手；行高 48 够手指点 */
+.app:not([data-bp='phone']) .more-backdrop { background: transparent; }
+.app:not([data-bp='phone']) .action-sheet {
+  left: auto; right: 8px; bottom: calc(var(--slot-h) + 8px); width: 280px;
+  border-radius: 12px; animation: none; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
 }
+.app:not([data-bp='phone']) .action-sheet .sheet-grabber { display: none; }
+.app:not([data-bp='phone']) .action-sheet button { min-height: 48px; font-size: 15px; }
+.app:not([data-bp='phone']) .action-sheet .sheet-ico { font-size: 16px; }
 
 /* 状态栏收薄；全屏程序占屏时自隐，把这条也让给终端（触屏） */
 .app:not([data-bp='desktop']) .main[data-occupied='true'] > .statusbar { display: none; }

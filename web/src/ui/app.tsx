@@ -60,8 +60,9 @@ export function App() {
   const [bp, setBp] = useState<Breakpoint>(() => breakpoint(window.innerWidth))
   const [short, setShort] = useState(() => isShort(window.innerHeight))
   const [sidebarOpen, setSidebarOpen] = useState(() => breakpoint(window.innerWidth) === 'desktop')
-  const classicRef = useRef(breakpoint(window.innerWidth) === 'desktop')
   const [coarse] = useState(isCoarsePointer)
+  // 经典底栏（模式条 + 常驻输入框 + 键条）只给鼠标键盘：宽度决定栅格，触摸决定输入层（ADR-0015 ⑥）
+  const classicRef = useRef(breakpoint(window.innerWidth) === 'desktop' && !isCoarsePointer())
   const [theme, setTheme] = useState<Theme>(readTheme)
   const [fontSize, setFontSize] = useState(readFontSize)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -137,9 +138,10 @@ export function App() {
 
   useEffect(() => applyTheme(theme), [theme])
   useEffect(() => {
-    if (classicRef.current || !sidebarOpen || !sidebarRef.current) return
+    // 只有抽屉式侧栏（phone / tablet）才能滑走；desktop 栅格里它是常驻的一栏（iPad 横屏也是）
+    if (bp === 'desktop' || !sidebarOpen || !sidebarRef.current) return
     return installSwipeDismiss(sidebarRef.current, () => setSidebarOpen(false))
-  }, [sidebarOpen])
+  }, [sidebarOpen, bp])
 
   const refresh = useCallback(() => {
     const store = storeRef.current
@@ -560,8 +562,9 @@ export function App() {
   const submitText = (text: string) => {
     runText(text)
   }
-  // 终端始终是唯一显示面（ADR-0013）：桌面经典底栏，手机是 Composer + 键条槽。
-  const classic = bp === 'desktop'
+  // 终端始终是唯一显示面（ADR-0013）。底栏两种：鼠标键盘的桌面宽度给经典底栏；
+  // 触屏一律键行 + 编辑面板 —— 包括 ≥ 1024px 的 iPad 横屏（ADR-0015 ⑥：宽度决定栅格，触摸决定输入层）
+  const classic = bp === 'desktop' && !coarse
   classicRef.current = classic
   const running = mode.mode === 'raw' // 有命令在跑
   const degraded = active?.integration === 'inactive' // 没有集成：不知道在跑什么，键条常给（含 ^C）
