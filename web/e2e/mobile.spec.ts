@@ -221,7 +221,12 @@ test('手机：回看时暂停跟随，提示条在键行之上，点一下补�
 
   const count = async () => ((await terminalText(page)).match(/MF-\d{3}/g) ?? []).length
   await submit(page, 'for i in $(seq 1 150); do printf "MF-%03d\\n" $i; sleep 0.03; done; printf "MF-%s\\n" END')
-  await waitFor(async () => (await count()) >= 30, '输出跑起来了')
+  // 等真有 scrollback 可滚（贴底时 viewport.y == baseY）：Pixel 5 的终端有 39 行，
+  // 只等 30 行输出时根本滚不动 —— CI 机器快，正好踩到
+  await waitFor(
+    async () => (await page.evaluate(() => (window as unknown as { __webterm: { viewport(): { y: number } } }).__webterm.viewport().y)) >= 15,
+    '有足够的 scrollback',
+  )
   await page.evaluate(() => (window as unknown as { __webterm: { scrollLines(n: number): void } }).__webterm.scrollLines(-10))
   const pill = page.getByTestId('follow-pill')
   await expect(pill).toBeVisible()

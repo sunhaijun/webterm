@@ -86,7 +86,9 @@ test('E2E-12 回看时暂停跟随：缓冲不涨、提示计数、点提示一�
 
   const count = async () => ((await terminalText(page)).match(/FOLLOW-\d{3}/g) ?? []).length
   await submit(page, 'for i in $(seq 1 240); do printf "FOLLOW-%03d\\n" $i; sleep 0.03; done; printf "FOLLOW-%s\\n" END')
-  await waitFor(async () => (await count()) >= 40, '输出跑起来了')
+  // 等到真有 scrollback 可滚（贴底时 viewport.y == baseY）。只数输出行数不够：
+  // 终端有几十行高，输出还没填满一屏时 scrollLines 根本滚不动，跟随也就不会暂停 —— CI 机器快，正好踩到
+  await waitFor(async () => (await scrollbackRows(page)) >= 20, '有足够的 scrollback')
 
   // 滚上去 → 暂停跟随
   await page.evaluate(() => (window as unknown as { __webterm: { scrollLines(n: number): void } }).__webterm.scrollLines(-15))
@@ -109,6 +111,11 @@ test('E2E-12 回看时暂停跟随：缓冲不涨、提示计数、点提示一�
   expect(lines.length, '重行').toBe(240)
   for (let i = 0; i < 240; i++) expect(lines[i]).toBe(`FOLLOW-${String(i + 1).padStart(3, '0')}`)
 })
+
+/** 贴底时 viewport.y 就是 baseY —— 能往上滚多少行。 */
+async function scrollbackRows(page: import('@playwright/test').Page): Promise<number> {
+  return page.evaluate(() => (window as unknown as { __webterm: { viewport(): { y: number } } }).__webterm.viewport().y)
+}
 
 test('E2E-12 ⑦ 设置里能看到渲染器', async ({ page }) => {
   await agent.pair(page)
