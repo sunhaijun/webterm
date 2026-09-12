@@ -126,12 +126,13 @@ test('功能键条横向可滚，且不撑破页面', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  // 读视图里功能键条只在命令跑着时出现（ADR-0011 ③：prompt 态是写态的编辑键）
+  // 命令在跑时键区是通用键集（21 个键，比一屏宽）。滚的是键区 .keybar-scroll，
+  // 不是整条 .keybar —— 行首互切键与行尾 ⋯ 钉住不动（ADR-0015）
   await submit(page, 'sleep 30')
-  await expect(page.getByTestId('keybar')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByTestId('key-Escape')).toBeVisible({ timeout: 10_000 })
 
   const kb = await page.evaluate(() => {
-    const el = document.querySelector('.keybar')
+    const el = document.querySelector('.keybar .keybar-scroll')
     if (!el) return null
     return {
       scrollW: el.scrollWidth,
@@ -141,7 +142,7 @@ test('功能键条横向可滚，且不撑破页面', async ({ page }) => {
       viewportW: window.innerWidth,
     }
   })
-  expect(kb, '.keybar 应当存在').not.toBeNull()
+  expect(kb, '.keybar-scroll 应当存在').not.toBeNull()
   expect(kb!.overflowX, '功能键条要能自己横向滚').toBe('auto')
   expect(kb!.scrollW, '键的总宽超过一屏才需要滚').toBeGreaterThan(kb!.clientW)
   expect(kb!.docScrollW, '但它不该把页面撑宽').toBeLessThanOrEqual(kb!.viewportW + 1)

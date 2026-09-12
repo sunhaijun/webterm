@@ -42,27 +42,36 @@ test('卡在全屏程序里能靠 ^C 退出来', async ({ page }) => {
   await waitFor(async () => (await terminalText(page)).includes('ALIVE-AFTER'), '打断后仍可用')
 })
 
-test('^C 在免滚动的前 8 个里', async ({ page }) => {
+test('^C 在免滚动的前 5 个里（提示符态与命令在跑都是）', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  // 读视图里功能键条只在命令跑着的时候出现（停在 prompt 时是写态的编辑键）——
-  // ^C 要用的正是这个时刻
-  await submit(page, 'sleep 30')
-  await expect(page.getByTestId('keybar')).toBeVisible({ timeout: 10_000 })
 
-  const geo = await page.evaluate(() => {
-    const bar = document.querySelector('.keybar')!
-    const keys = [...bar.children].slice(0, 8)
-    const right = Math.max(...keys.map((k) => k.getBoundingClientRect().right))
-    return {
-      first8: keys.map((k) => k.textContent?.trim()),
-      first8Right: Math.round(right),
-      barRight: Math.round(bar.getBoundingClientRect().right),
-    }
-  })
-  expect(geo.first8, '^C 应当在前 8 个里').toContain('^C')
-  expect(geo.first8Right, '前 8 个必须无需横向滚动就能点到').toBeLessThanOrEqual(geo.barRight + 1)
+  // 键区是 .keybar-scroll（行首互切键、行尾 ⋯ 钉住不算，ADR-0015）。
+  // 前 5 个键的右缘不超出键区可视右缘 = 无需横向滚动就能点到（AC-3.9）
+  const geo = () =>
+    page.evaluate(() => {
+      const area = document.querySelector('.keybar .keybar-scroll')!
+      const keys = [...area.querySelectorAll('.keybar-key')].slice(0, 5)
+      const right = Math.max(...keys.map((k) => k.getBoundingClientRect().right))
+      return {
+        first5: keys.map((k) => k.textContent?.trim()),
+        first5Right: Math.round(right),
+        areaRight: Math.round(area.getBoundingClientRect().right),
+      }
+    })
+
+  // 停在提示符：提示符键集里 ^C 也在前 5 个（清掉打错的半行、刚起的命令）
+  let g = await geo()
+  expect(g.first5, '提示符键集：^C 应当在前 5 个里').toContain('^C')
+  expect(g.first5Right, '前 5 个必须无需横向滚动就能点到').toBeLessThanOrEqual(g.areaRight + 1)
+
+  // 命令在跑：通用键集 —— ^C 要用的正是这个时刻
+  await submit(page, 'sleep 30')
+  await expect(page.getByTestId('key-Escape')).toBeVisible({ timeout: 10_000 })
+  g = await geo()
+  expect(g.first5, '^C 应当在前 5 个里').toContain('^C')
+  expect(g.first5Right, '前 5 个必须无需横向滚动就能点到').toBeLessThanOrEqual(g.areaRight + 1)
 })
 
 test('^D / ^Z / ^L 一按直发正确控制码', async ({ page }) => {

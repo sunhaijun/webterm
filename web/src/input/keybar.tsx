@@ -1,12 +1,16 @@
 /**
- * 移动端功能键条 —— docs/40-frontend/input-modes.md §移动端功能键条。
+ * 移动端功能键行 —— docs/40-frontend/input-modes.md §移动端功能键条。
  *
  * 软键盘上没有 Esc / Tab / Ctrl / 方向键，这一排补上它们（AC-3.9）。
+ *
+ * 结构固定为【行首 leading · 键区（横滚）· 行尾 trailing】（ADR-0015）：
+ * .keybar 本身不滚动，互切键与 ⋯ 钉在两端永远可点，中间 .keybar-scroll 装
+ * 上下文标签与键。整行高度等于槽位高度 —— 底栏不盖终端。
  */
 import type { ComponentChildren } from 'preact'
 import { useState } from 'preact/hooks'
 
-import { CTRL_KEYS, KEY_BYTES, chord, keyBarFor } from './keymap'
+import { CTRL_KEYS, KEY_BYTES, type KeyDef, chord, keyBarFor } from './keymap'
 import type { Mode } from './modes'
 
 /** 粘滞修饰键的三个状态。 */
@@ -18,15 +22,19 @@ export interface KeyBarProps {
   onRaw(bytes: string): void
   /** Composer 模式下的语义动作（翻历史、移动光标等）。 */
   onComposerKey(key: string, mods: { ctrl: boolean; alt: boolean }): void
-  /** 谁在占屏：备用缓冲是否激活 + 前台程序名。决定键条内容（ADR-0011 ②）。 */
+  /** 谁在占屏：占屏信号 + 前台程序名。决定键区内容（ADR-0011 ②）。 */
   context?: { altScreen: boolean; program: string | null }
-  /** 排在最前面的前导键（互切键、⋯）。 */
+  /** 覆盖键区内容（提示符键集 / 空）。不传就按 context 选。 */
+  keys?: readonly KeyDef[]
+  /** 行首固定键（互切键）。 */
   leading?: ComponentChildren
+  /** 行尾固定键（⋯）。 */
+  trailing?: ComponentChildren
 }
 
-export function KeyBar({ mode, onRaw, onComposerKey, context, leading }: KeyBarProps) {
+export function KeyBar({ mode, onRaw, onComposerKey, context, keys: override, leading, trailing }: KeyBarProps) {
   const ctx = context ?? { altScreen: false, program: null }
-  const keys = keyBarFor(ctx)
+  const keys = override ?? keyBarFor(ctx)
   const [ctrl, setCtrl] = useState<Sticky>('off')
   const [alt, setAlt] = useState<Sticky>('off')
 
@@ -66,43 +74,46 @@ export function KeyBar({ mode, onRaw, onComposerKey, context, leading }: KeyBarP
   return (
     <div class="keybar" data-testid="keybar" role="toolbar" aria-label="功能键" data-context={ctx.altScreen ? (ctx.program ?? 'tui') : 'shell'}>
       {leading}
-      {ctx.altScreen && (
-        <span class="keybar-ctx" data-testid="keybar-context" title="正在占屏的程序，键条按它换了内容">
-          {ctx.program ?? 'TUI'}
-        </span>
-      )}
-      {keys.map((k) => {
-        if (k.key === 'Ctrl' || k.key === 'Alt') {
-          const [state, set] = k.key === 'Ctrl' ? [ctrl, setCtrl] : [alt, setAlt]
+      <div class="keybar-scroll">
+        {ctx.altScreen && (
+          <span class="keybar-ctx" data-testid="keybar-context" title="正在占屏的程序，键条按它换了内容">
+            {ctx.program ?? 'TUI'}
+          </span>
+        )}
+        {keys.map((k) => {
+          if (k.key === 'Ctrl' || k.key === 'Alt') {
+            const [state, set] = k.key === 'Ctrl' ? [ctrl, setCtrl] : [alt, setAlt]
+            return (
+              <button
+                key={k.key}
+                class="keybar-key"
+                data-testid={`key-${k.key}`}
+                data-sticky={state}
+                aria-pressed={state !== 'off'}
+                onClick={() => set(cycle(state))}
+                // 长按 → 锁定态，连续多次组合都带这个修饰键
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  set(state === 'locked' ? 'off' : 'locked')
+                }}
+              >
+                {k.label}
+              </button>
+            )
+          }
           return (
             <button
               key={k.key}
               class="keybar-key"
               data-testid={`key-${k.key}`}
-              data-sticky={state}
-              aria-pressed={state !== 'off'}
-              onClick={() => set(cycle(state))}
-              // 长按 → 锁定态，连续多次组合都带这个修饰键
-              onContextMenu={(e) => {
-                e.preventDefault()
-                set(state === 'locked' ? 'off' : 'locked')
-              }}
+              onClick={() => press(k.key, k.bytes)}
             >
               {k.label}
             </button>
           )
-        }
-        return (
-          <button
-            key={k.key}
-            class="keybar-key"
-            data-testid={`key-${k.key}`}
-            onClick={() => press(k.key, k.bytes)}
-          >
-            {k.label}
-          </button>
-        )
-      })}
+        })}
+      </div>
+      {trailing}
     </div>
   )
 }

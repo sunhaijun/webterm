@@ -3,10 +3,11 @@ import { devices, expect, test, type Page } from '@playwright/test'
 import { Agent, submit, terminalText, waitFor } from './harness'
 
 /**
- * 编辑面板 sheet（ADR-0013+ 互切输入模型）。
+ * 编辑面板 sheet（ADR-0014 互切输入模型 + ADR-0015 键行，E2E-19 / E2E-25）。
  *
- * 默认终端输入（底栏一行：互切键 + ⋯）；点互切键升起编辑面板，半屏 / 全屏两档，
- * 「收起」回终端输入。sheet 盖在终端上而不挤画布：xterm 尺寸在各档之间一个字都不变。
+ * 默认终端输入（底栏一条键行：互切键 · 键区 · ⋯）；点互切键升起编辑面板，半屏 / 全屏两档，
+ * 面板键行行首的 `✎ 终端` 回终端输入（没有「收起」）。sheet 盖在终端上而不挤画布：
+ * xterm 尺寸在各档之间一个字都不变。全屏时输入框填满面板。
  * chips：空输入给同目录历史，敲 `cd s` 给真实存在的路径，点一下补进去。
  */
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
@@ -20,6 +21,8 @@ const rect = (page: Page, sel: string) =>
     const r = document.querySelector(s)!.getBoundingClientRect()
     return { top: Math.round(r.top), height: Math.round(r.height), bottom: Math.round(r.bottom) }
   }, sel)
+const firstKey = (p: Page, tid: string) =>
+  p.evaluate((t) => document.querySelector(`[data-testid="${t}"]`)?.firstElementChild?.getAttribute('data-testid') ?? null, tid)
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -27,16 +30,18 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-test('一键升编辑面板(半屏)，把手到全屏，收起回终端输入；画布几何与 PTY 尺寸全程不变', async ({ page }) => {
+test('一键升编辑面板(半屏)，抓手到全屏且输入框填满，互切键回终端输入；画布几何与 PTY 尺寸全程不变', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')
 
-  // 默认终端输入：一行，互切键 + ⋯ 都在，没有输入框 / 编辑键
+  // 默认终端输入：一条键行，互切键在行首、⋯ 在行尾，没有输入框 / 编辑键；键行不高于槽位
   expect(await sheet(page)).toBe('closed')
   const closedBar = await rect(page, '.bottom')
   expect(closedBar.height, '终端输入态就是一行').toBeLessThan(70)
+  expect(closedBar.height, '键行不高于槽位（不盖终端）').toBeLessThanOrEqual((await rect(page, '.bottom-slot')).height)
   await expect(page.getByTestId('to-edit')).toBeVisible()
+  expect(await firstKey(page, 'keybar')).toBe('to-edit')
   await expect(page.getByTestId('open-more')).toBeVisible()
   await expect(page.getByTestId('editkeys')).toHaveCount(0)
   const canvas0 = await rect(page, '.canvas')
@@ -51,8 +56,9 @@ test('一键升编辑面板(半屏)，把手到全屏，收起回终端输入；
   expect(half.height, '半屏大致是主区的一半').toBeGreaterThan(main.height * 0.35)
   expect(half.height).toBeLessThan(main.height * 0.6)
   await expect(page.getByTestId('editkeys')).toBeVisible()
-  await expect(page.getByTestId('chips')).toBeVisible()
-  await expect(page.getByTestId('to-terminal'), '面板头有回终端键').toBeVisible()
+  await expect(page.getByTestId('to-terminal'), '键行行首是回终端键').toBeVisible()
+  expect(await firstKey(page, 'editkeys')).toBe('to-terminal')
+  await expect(page.getByTestId('sheet-close'), '没有「收起」').toHaveCount(0)
   // 画布没动、PTY 没 resize
   expect(await rect(page, '.canvas')).toEqual(canvas0)
   expect(await ptySize(page)).toEqual(size0)
@@ -65,9 +71,12 @@ test('一键升编辑面板(半屏)，把手到全屏，收起回终端输入；
   expect(full.height, '全屏盖到画布顶').toBeGreaterThan(main.height * 0.8)
   expect(await rect(page, '.canvas')).toEqual(canvas0)
   expect(await ptySize(page)).toEqual(size0)
+  // 输入框填满面板 —— 以前 40vh 上限让全屏面板下半截空着（ADR-0015）
+  const composerFull = await rect(page, '[data-testid=composer]')
+  expect(composerFull.height, `全屏时输入框（${composerFull.height}px）应填满面板（${full.height}px）`).toBeGreaterThan(full.height * 0.7)
 
-  // 收起 → 回终端输入
-  await page.getByTestId('sheet-close').click()
+  // 互切键 → 回终端输入
+  await page.getByTestId('to-terminal').click()
   await waitFor(async () => (await sheet(page)) === 'closed', '收起回终端输入')
   await page.waitForTimeout(250)
   await expect(page.getByTestId('term-bar')).toBeVisible()
@@ -95,15 +104,16 @@ test('提交后自动收回终端；Esc 清空再 Esc 收回；命令在跑是�
   await page.getByTestId('composer').press('Escape')
   await waitFor(async () => (await sheet(page)) === 'closed', '第二下 Esc 收回终端')
 
-  // 命令在跑：默认终端输入（没有输入框），功能键条挂出来，互切键仍在
+  // 命令在跑：默认终端输入（没有输入框），键区换成通用键集，互切键仍在
   await submit(page, 'sleep 30')
-  await expect(page.getByTestId('keybar')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByTestId('key-Escape')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByTestId('composer'), '命令在跑默认终端输入，没有输入框').toHaveCount(0)
   await expect(page.getByTestId('to-edit'), '仍可一键切到编辑面板').toBeVisible()
   await expect(page.getByTestId('key-CtrlC')).toBeVisible()
   expect(await sheet(page)).toBe('closed')
   await page.getByTestId('key-CtrlC').click()
-  await expect(page.getByTestId('keybar'), '回到 prompt：键条退场').toHaveCount(0)
+  await expect(page.getByTestId('key-Escape'), '回到 prompt：换回提示符键集').toHaveCount(0)
+  await expect(page.getByTestId('key-Tab'), '提示符键集仍在').toBeVisible()
 })
 
 test('chips：空输入给同目录历史；敲 cd s 给真实路径，点一下补成 cd src/，Tab 再补一层', async ({ page }) => {

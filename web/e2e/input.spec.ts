@@ -209,18 +209,24 @@ test('E2E-10 移动端：功能键条、粘滞修饰键、输入框属性', asyn
   await expect(composer).toHaveAttribute('autocapitalize', 'off')
   await expect(composer).toHaveAttribute('spellcheck', 'false')
 
-  // 功能键条只在有命令在跑时出现（ADR-0013+：无输入模式）；停在 prompt 没有键条
-  await expect(page.getByTestId('keybar')).toHaveCount(0)
-  await submit(page, 'sleep 30') // 命令在跑 → 键条出现
-  await expect(page.getByTestId('keybar')).toBeVisible({ timeout: 10_000 })
+  // 键行常在（ADR-0015）：停在 prompt 是提示符键集（有 Tab、没有 Esc）；命令在跑换成通用键集
+  await page.getByTestId('to-terminal').click()
+  await expect(page.getByTestId('keybar')).toBeVisible()
+  await expect(page.getByTestId('key-Tab')).toBeVisible()
+  await expect(page.getByTestId('key-Escape')).toHaveCount(0)
+  await submit(page, 'sleep 30') // 命令在跑 → 通用键集
+  await expect(page.getByTestId('key-Escape')).toBeVisible({ timeout: 10_000 })
 
-  // 前 8 个键无需滚动即可见。
+  // 前 5 个键无需滚动即可见（互切键与 ⋯ 并进同一行后免滚区从 8 减到 5，AC-3.9）。
   // 【Alt 让位给 ^C】：手机上 Alt 远比 ^C 罕见，而要 ^C 的时候通常已经
   // 卡住了（真发生过：误进 top 退不出来 —— 粘滞 Ctrl 需要软键盘配合，
   // 而 Raw 模式下软键盘根本没弹出来）。
-  for (const k of ['Escape', 'CtrlC', 'Tab', 'Ctrl', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']) {
+  for (const k of ['Escape', 'CtrlC', 'Tab', 'Ctrl', 'ArrowUp']) {
     await expect(page.getByTestId(`key-${k}`)).toBeInViewport()
   }
+  // 行首互切键、行尾 ⋯ 钉住不滚
+  await expect(page.getByTestId('to-edit')).toBeInViewport()
+  await expect(page.getByTestId('open-more')).toBeInViewport()
 
   // 粘滞修饰键：点 Ctrl → 激活态；再按 c → 发出 0x03；Ctrl 自动取消
   await page.getByTestId('key-Ctrl').click()
