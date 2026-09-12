@@ -155,15 +155,34 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 
 ## CI
 
+两个 workflow（`.github/workflows/`）：
+
 ```yaml
-jobs:
-  go:        go vet, golangci-lint, go test ./..., go test -tags=integration ./...
-  static:    CGO_ENABLED=0 go build; ldd 断言 "not a dynamic executable"   # AC-8.1
-  web:       npm run lint, npm run typecheck, npm test
-  e2e:       npm run build → go build（含 embed）→ npx playwright test
+ci.yml   # 每个 PR 的每次 push、每次合并进 main 都跑
+  go:      go vet, go test ./... (+ -race)
+  web:     npm run typecheck, npm test
+  static:  CGO_ENABLED=0 go build; ldd 断言 "not a dynamic executable"   # AC-8.1
+  fmt:     gofmt -l
+  docs:    scripts/check-doc-links.py
+
+e2e.yml  # 【按需】：npm run build → go build（含 embed）→ npx playwright test
 ```
 
 E2E 的前置是完整构建 —— 这保证了 `go:embed` 的路径是真的通的。
+
+**E2E 在 CI 上按需跑，不跟每次 push**。一次约 6 分钟（装浏览器 + 构建 + 70 多条用例），
+放在每个 PR 的每次 push 上太费 Actions 额度。本地 `make e2e` 仍是每个 PR 的硬要求
+（[CLAUDE.md](../../CLAUDE.md)）；CI 上的 E2E 是安全网，抓只在 CI 环境才暴露的差异
+（曾经抓到 Go job 不构建前端 → `go:embed` 空目录 → `GET /` 503；Raw 模式 IME 只挂第一个会话的时序）。
+
+| 什么时候跑 | 怎么触发 |
+|---|---|
+| 合并进 `main` 且改了代码 | 自动：`push` 到 main 且路径命中 `web/**` `internal/**` `cmd/**` `go.mod` `go.sum`；只改 docs 不跑 |
+| PR 需要 CI 上的 E2E 结论 | 给 PR 打 **`e2e` 标签**：打上那一刻跑一次，之后每次 push 都跑；摘掉就停 |
+| 临时想跑一次 | `gh workflow run E2E --ref <分支>` |
+
+什么样的 PR 该打 `e2e` 标签：触及**协议、重连、输入、布局**（CLAUDE.md 里要求加 E2E 场景的那四类），
+或者改了 E2E 本身 / CI 环境。纯 docs、纯 Go 内部重构不用。
 
 ## 覆盖率
 
