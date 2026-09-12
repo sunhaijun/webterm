@@ -27,7 +27,8 @@ interface Entry {
   /** 有程序占屏：备用缓冲，或主屏就地重绘（claude / codex）。 */
   interactive: boolean
   detector: InteractiveDetector
-  /** 输出流里的行锚点（ADR-0011 ④：「在终端里看」定位到块）。 */
+  /** 正在灌回放输出的写次数（>0 时 xterm 对历史查询的自动应答别当输入送 PTY）。 */
+  replayDepth: number
 }
 
 export interface SessionStoreHandlers {
@@ -106,8 +107,13 @@ export class SessionStore {
     modes.onIntegration(info.integration)
     modes.resync(info.prompt_state)
 
-    // 每个终端实例创建时就把输入绑好，不用事后轮询去找它
-    term.term.onData((data) => this.h.onTermData(info.sid, data))
+    // 每个终端实例创建时就把输入绑好，不用事后轮询去找它。
+    // 回放（重连续传 / 刷新重放）灌进来的历史输出里可能有终端查询（DSR/DA…），
+    // xterm 会自动应答 —— 那不是用户输入，回放期间别把它送进 PTY（否则 claude 收到乱码）。
+    term.term.onData((data) => {
+      if ((this.entries.get(info.sid)?.replayDepth ?? 0) > 0) return
+      this.h.onTermData(info.sid, data)
+    })
     term.term.attachCustomKeyEventHandler((e) => e.type !== 'keydown' || this.h.allowKey(e))
 
     const entry: Entry = {
@@ -119,6 +125,7 @@ export class SessionStore {
       opened: false,
       interactive: false,
       detector: installInteractive(term.term),
+      replayDepth: 0,
     }
     // 占屏检测：vim/top/less 的备用缓冲，以及 claude/codex 的主屏就地重绘
     entry.detector.onChange((on) => {
@@ -213,9 +220,20 @@ export class SessionStore {
     this.h.onChange()
   }
 
-  /** 写一帧输出到终端。 */
-  write(sid: number, data: Uint8Array): void {
-    this.entries.get(sid)?.term.term.write(data)
+  /** 写一帧输出到终端。isReplay=回放（续传 / 重放历史）：这期间抑制 xterm 对历史查询的
+   * 自动应答（见 onData 绑定）。用 write 回调把抑制窗口卡在【解析完这帧】为止 —— xterm
+   * 是异步分片解析的，同步清标志会漏掉之后才触发的 onData。 */
+  write(sid: number, data: Uint8Array, isReplay = false): void {
+    const e = this.entries.get(sid)
+    if (!e) return
+    if (!isReplay) {
+      e.term.term.write(data)
+      return
+    }
+    e.replayDepth++
+    e.term.term.write(data, () => {
+      if (e.replayDepth > 0) e.replayDepth--
+    })
   }
 
   resetTerm(sid: number): void {

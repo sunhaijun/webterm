@@ -61,7 +61,7 @@ class FakeSocket implements WebSocketLike {
 interface Harness {
   conn: Connection
   socket: () => FakeSocket
-  output: { sid: number; data: Uint8Array; attrPrefix: boolean }[]
+  output: { sid: number; data: Uint8Array; isReplay: boolean }[]
   fatals: string[]
   states: { state: string; retryInMs?: number; replayedBytes?: number; rttMs?: number }[]
 }
@@ -81,7 +81,7 @@ function harness(opts: { backoff?: Backoff } = {}): Harness {
       return s
     },
     handlers: {
-      onOutput: (sid, data, attrPrefix) => output.push({ sid, data, attrPrefix }),
+      onOutput: (sid, data, isReplay) => output.push({ sid, data, isReplay }),
       onMessage: () => {},
       onState: (state, info) => states.push({ state, ...info }),
       onFatal: (r) => fatals.push(r),
@@ -183,7 +183,7 @@ describe('UT-seq-1 输出 seq 记账', () => {
     })
     // seq 只按 data 长度推进；算错了两侧会永久错开 4 字节
     expect(h.conn.outSeqOf(1)).toBe(1005)
-    expect(h.output[0]!.attrPrefix).toBe(true)
+    expect(h.output[0]!.isReplay).toBe(true)
     // 但交给终端的字节【要】带上前缀，属性修正才生效
     expect(str(h.output[0]!.data)).toBe('\x1b[0mhello')
   })

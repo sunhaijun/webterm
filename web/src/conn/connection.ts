@@ -37,18 +37,19 @@ interface SessionState {
   outSeq: number
   /** agent 侧该会话的累计产出字节数，未读 = headSeq > outSeq。 */
   headSeq: number
+  /** 续传/重放时要追赶到的 seq：outSeq 追到它之前收到的输出都算【回放】。 */
+  catchupTo: number
   resend: ResendQueue
   subscribed: boolean
 }
 
 export interface ConnectionHandlers {
-  /** 收到一段输出。attrPrefix 为 true 时调用方应当先清屏（reset 回放）。 */
   /**
-   * startSeq 是【计入 seq 的第一个字节】的 out_seq。
-   * attrPrefix 为真时 data 的前 4 字节是渲染修正、不计数 —— 消费方要按
-   * 这个约定跳过，否则整条流的记账会偏 4 字节（命令块就切错位置）。
+   * 收到一段输出。isReplay=true 表示这是【回放】（续传或刷新重放历史）——
+   * 消费方写这段时要抑制 xterm 对历史查询（DSR/DA…）的自动应答，别当输入送 PTY。
+   * （data 若带 reset 前缀，前 4 字节是渲染修正、不计入 seq，withPrefix 已处理。）
    */
-  onOutput(sid: number, data: Uint8Array, attrPrefix: boolean, startSeq: number): void
+  onOutput(sid: number, data: Uint8Array, isReplay: boolean): void
   onMessage(msg: ServerMessage): void
   onState(state: ConnState, info: StateInfo): void
   /** 出现无法自行修补的错误（如 seq 空洞）。 */
@@ -277,8 +278,9 @@ export class Connection {
       // 前置的 4 个字节是渲染修正，【不计入 seq】。
       st.outSeq = seq + data.length
       st.headSeq = Math.max(st.headSeq, st.outSeq)
+      st.catchupTo = st.outSeq // reset 已重绘到当前，之后就是 live
       this.replayedBytes += data.length
-      this.opts.handlers.onOutput(f.sid, withPrefix(data), true, seq)
+      this.opts.handlers.onOutput(f.sid, withPrefix(data), true) // reset 回放 = isReplay
       return
     }
 
@@ -297,7 +299,8 @@ export class Connection {
     st.outSeq += fresh.length
     st.headSeq = Math.max(st.headSeq, st.outSeq)
     this.replayedBytes += fresh.length
-    this.opts.handlers.onOutput(f.sid, fresh, false, freshSeq)
+    // outSeq 追到 catchupTo 之前的这些输出都是续传回放 —— 抑制查询自动应答
+    this.opts.handlers.onOutput(f.sid, fresh, freshSeq < st.catchupTo)
   }
 
   private handleControl(msg: ServerMessage): void {
@@ -359,6 +362,8 @@ export class Connection {
     for (const s of w.sessions) {
       const st = this.ensure(s.sid)
       st.headSeq = Math.max(st.headSeq, s.head_seq)
+      // 续传要把 outSeq 追到 head_seq；这段追赶输出都是回放，抑制查询自动应答
+      st.catchupTo = s.head_seq
     }
 
     this.setState('online', { replayedBytes: this.replayedBytes })
@@ -384,7 +389,7 @@ export class Connection {
   private ensure(sid: number): SessionState {
     let st = this.sessions.get(sid)
     if (!st) {
-      st = { outSeq: 0, headSeq: 0, resend: new ResendQueue(), subscribed: false }
+      st = { outSeq: 0, headSeq: 0, catchupTo: 0, resend: new ResendQueue(), subscribed: false }
       this.sessions.set(sid, st)
     }
     return st
