@@ -398,6 +398,7 @@ export function App() {
     let vpRaf = 0
     let lastVH = -1
     let lastVTop = -1
+    let lastKbUp = false
     const applyViewport = () => {
       if (vpRaf) return
       vpRaf = requestAnimationFrame(() => {
@@ -419,6 +420,12 @@ export function App() {
           if (top !== lastVTop) {
             root.style.transform = top ? `translateY(${top}px)` : ''
             lastVTop = top
+          }
+          // 键盘弹起时 Home 指示条已被键盘盖住，safe-area 下边距归零；收起后交还给 CSS 的 env()
+          if (keyboardUp !== lastKbUp) {
+            if (keyboardUp) root.style.setProperty('--sa-bottom', '0px')
+            else root.style.removeProperty('--sa-bottom')
+            lastKbUp = keyboardUp
           }
         }
         setBp(breakpoint(window.innerWidth))
