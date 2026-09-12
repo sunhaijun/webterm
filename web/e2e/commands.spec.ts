@@ -98,7 +98,7 @@ test('E2E-14 快捷命令：手机读视图里是写态 sheet 顶上的 ★ chip
   await page.getByTestId('to-edit').click()
   await expect(page.getByTestId('chips')).toBeVisible()
   await expect(page.getByTestId('chips').locator('[data-kind="pin"]')).toHaveCount(0)
-  await page.getByTestId('sheet-close').click()
+  await page.getByTestId('to-terminal').click()
 
   await page.getByTestId('open-more').click()
   await page.getByTestId('open-history').click()

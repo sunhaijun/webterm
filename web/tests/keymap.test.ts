@@ -1,7 +1,7 @@
 /** UT-keymap-1：控制键映射表，对照 docs/40-frontend/keymap.md。 */
 import { describe, expect, it } from 'vitest'
 
-import { CTRL_KEYS, EDIT_INSERT, EDIT_KEYS, KEY_BAR, KEY_BYTES, appAction, chord, keyBarFor, programOf } from '../src/input/keymap'
+import { CTRL_KEYS, EDIT_INSERT, EDIT_KEYS, KEY_BAR, KEY_BYTES, PROGRAM_EDIT_KEYS, PROMPT_KEYS, appAction, bytesOf, chord, keyBarFor, programOf } from '../src/input/keymap'
 
 const ESC = '\x1b'
 
@@ -96,11 +96,11 @@ describe('应用级快捷键', () => {
 })
 
 describe('功能键条', () => {
-  it('前 8 个键在最窄屏幕下必须无需滚动即可见', () => {
-    const first8 = KEY_BAR.slice(0, 8).map((k) => k.label)
+  it('前 5 个键在 393px 宽下必须无需滚动即可见（ADR-0015：互切键与 ⋯ 并进同一行）', () => {
+    const first5 = KEY_BAR.slice(0, 5).map((k) => k.label)
     // Alt 让位给 ^C。手机上 Alt 远比 ^C 罕见，而要 ^C 的时候通常
     // 已经卡住了（比如误进 top），不能还要求先横向滚一下。
-    expect(first8).toEqual(['Esc', '^C', 'Tab', 'Ctrl', '↑', '↓', '←', '→'])
+    expect(first5).toEqual(['Esc', '^C', 'Tab', 'Ctrl', '↑'])
   })
 
   it('包含文档要求的全部按键（AC-3.9）', () => {
@@ -134,9 +134,9 @@ describe('CTRL_KEYS 直发控制码', () => {
 })
 
 describe('功能键条的排布', () => {
-  it('^C 必须在免滚动的前 8 个里 —— 它是唯一的通用脱困键', () => {
-    const first8 = KEY_BAR.slice(0, 8).map((k) => k.key)
-    expect(first8).toContain('CtrlC')
+  it('^C 必须在免滚动的前 5 个里 —— 它是唯一的通用脱困键', () => {
+    const first5 = KEY_BAR.slice(0, 5).map((k) => k.key)
+    expect(first5).toContain('CtrlC')
   })
   it('每个 CTRL_KEYS 都要有对应的按键', () => {
     const keys = KEY_BAR.map((k) => k.key)
@@ -210,5 +210,32 @@ describe('EDIT_KEYS：写态编辑键条（ADR-0011 ③）', () => {
   })
   it('软键盘上难打的符号都在：| ~ / - _ " \' $', () => {
     expect(Object.values(EDIT_INSERT).map((s) => s.trim())).toEqual(expect.arrayContaining(['|', '~', '/', '-', '_', '"', "'", '$']))
+  })
+})
+
+/** ADR-0015：键行的三组键集。 */
+describe('键行键集（ADR-0015）', () => {
+  it('提示符键集：Tab 补全、翻历史、^C 都在前 5 个；没有 Esc / Ctrl（提示符下用不上，也是与通用键集的可测区别）', () => {
+    const first5 = PROMPT_KEYS.slice(0, 5).map((k) => k.key)
+    expect(first5).toContain('Tab')
+    expect(first5).toContain('ArrowUp')
+    expect(first5).toContain('CtrlC')
+    const keys = PROMPT_KEYS.map((k) => k.key)
+    expect(keys).not.toContain('Escape')
+    expect(keys).not.toContain('Ctrl')
+    expect(new Set(keys).size, '按键不重复').toBe(keys.length)
+  })
+  it('提示符键集里每个键都能算出要发的字节', () => {
+    for (const k of PROMPT_KEYS) {
+      // 单字符键（| ~ / - _）走 chord 原样发，其余查 CTRL_KEYS / KEY_BYTES
+      const b = bytesOf(k) ?? (k.key.length === 1 ? chord(k.key, {}) : undefined)
+      expect(b, `${k.label} 没有字节`).toBeTypeOf('string')
+    }
+    expect(bytesOf({ label: '^L', key: 'CtrlL' })).toBe('\x0c')
+    expect(bytesOf({ label: '↑', key: 'ArrowUp' })).toBe(`${ESC}[A`)
+  })
+  it('编辑面板并入的程序键只有 Esc 与 ^C，且都直发 PTY', () => {
+    expect(PROGRAM_EDIT_KEYS.map((k) => k.key)).toEqual(['Escape', 'CtrlC'])
+    expect(PROGRAM_EDIT_KEYS.map((k) => bytesOf(k))).toEqual([ESC, '\x03'])
   })
 })

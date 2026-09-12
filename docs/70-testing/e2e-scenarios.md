@@ -230,7 +230,7 @@ Playwright 可以派发 composition 事件。
 
 在 `viewport: { width: 390, height: 844 }`（iPhone 14）下：
 
-1. 功能键条可见，前 8 个键无需滚动，且【`^C` 在其中】
+1. 底栏是一条键行：第一个键是互切键 `to-edit`，行尾是 `open-more`；停在 prompt 键区是提示符键集（有 `key-Tab`、没有 `key-Escape`）；`sleep 30` 起来后键区换成通用键集，**前 5 个（`Esc ^C Tab Ctrl ↑`）无需滚动即可见**，且【`^C` 在其中】（ADR-0015）
 2. 点 `Ctrl` → 激活态有视觉反馈；再按 `c` → 发出 `0x03`；`Ctrl` 自动取消激活
 2b. 直接点 `^C` → 发出 `0x03`，不需要先点 `Ctrl`；Composer 模式下同样直发
 3. 长按 `Ctrl` → 锁定态；连续两次组合都带 `Ctrl`；再点解锁
@@ -352,14 +352,14 @@ Playwright 可以派发 composition 事件。
 
 ---
 
-## E2E-19 写态 sheet（已随 ADR-0013 移除）
+## E2E-19 编辑面板 sheet（ADR-0014 互切模型；ADR-0015 键行）
 
 `web/e2e/sheet.spec.ts`，Pixel 5 视口。
 
-1. **三档**：收起态一行（< 70px）；碰输入框升半屏（主区高的 35%–60%），块流底边贴着 sheet 顶边；把手点一下到全屏（> 80%）；「收起」回一行且输入框失焦。全程 `.canvas` 的矩形与 `__webterm.size()` 一个字不变
-2. **收起的时机**：提交后自动收起；有内容时 `Esc` 只清空、空输入时 `Esc` 收起；命令跑起来（`sleep 30`）底栏仍是同一个输入框（整段粘贴发送）+ 功能键条，`^C` 回到 prompt 后键条退场
-3. **chips**：`mktemp -d` 造 `src/commands`、`docs`、`src/a.go` 并 `cd` 进去；空输入出现同目录历史、没有路径 chip；敲 `cd s` 出现 `src/`（没有 `docs`），点一下变 `cd src/` 且焦点不丢；`Tab` 编辑键补成 `cd src/commands/`；`|` 插 ` | `，`⌫词` 删词；发送键提交并收起
-4. **⋯ 菜单**：历史面板、输入模式切换与解锁、点外面收起
+1. **档位**：默认终端输入，底栏一条键行（< 70px），`to-edit` 与 `open-more` 可见、没有编辑键；`to-edit` 升半屏（主区高的 35%–60%），`to-terminal` 是 `editkeys` 的第一个键；抓手点一下到全屏（> 80%），全屏时 composer 高度 ≥ `.bottom` 的 70%；`to-terminal` 回终端输入。全程 `.canvas` 的矩形与 `__webterm.size()` 一个字不变
+2. **收回的时机**：提交后（harness）回终端；有内容时 `Esc` 只清空、空输入时 `Esc` 收回；命令跑起来（`sleep 30`）是终端输入 + 通用键集（`key-Escape` `key-CtrlC`），`^C` 回到 prompt 后键区换回提示符键集（`key-Escape` 退场、`key-Tab` 仍在）
+3. **chips**：`mktemp -d` 造 `src/commands`、`docs`、`src/a.go` 并 `cd` 进去；空输入出现同目录历史、没有路径 chip；敲 `cd s` 出现 `src/`（没有 `docs`），点一下变 `cd src/` 且焦点不丢；`Tab` 编辑键补成 `cd src/commands/`；`|` 插 ` | `，`⌫词` 删词；发送键提交后留在面板、输入框清空
+4. **⋯ 菜单**：会话 / 历史 / 命令面板 / 设置从这里进；点外面收起
 
 ## E2E-11b 占屏程序自动进控（已随 ADR-0013 移除；占屏改为换键条上下文，见 control.spec）
 
@@ -400,6 +400,15 @@ Playwright 可以派发 composition 事件。
 5. `^C` 打断 → 命令结束 → 回到块流（转录条目留着，供回放）
 6. **刷新页面**（另起一次假 claude）：`GET /api/transcript` 回放 → 转录视图与卡片都回来，用户气泡只有一个（去重）
 7. 非 AI 的占屏程序（`printf '\033[>1u'; sleep`）照旧自动进终端，没有转录视图
+
+## E2E-25 底栏键行（ADR-0015）
+
+`web/e2e/inputmodel.spec.ts` 与 `web/e2e/sheet.spec.ts`，Pixel 5 视口。
+
+1. **不盖终端**：停在提示符、`sleep 30` 在跑、进备用缓冲三种情况下，终端态 `.bottom` 的高度都 ≤ `.bottom-slot` 的高度
+2. **互切键在行首**：终端态 `to-edit` 是 `.keybar` 的第一个子元素；编辑面板里 `to-terminal` 是 `editkeys` 的第一个子元素；两者高度相同（44px）；面板里没有 `sheet-close`
+3. **编辑态并入程序键**：`sleep 30` 在跑时切编辑面板，`editkeys` 里出现 `key-Escape` `key-CtrlC`，页面上只有一条键行（没有 `keybar`）；点 `key-CtrlC` 回到 prompt 后它们退场
+4. **主屏占屏程序的键条**：`printf '\033[>1u'; sleep` 在终端态时 `keybar` 的 `data-context` 不是 `shell`（与编辑态一致）
 
 ## E2E-24 双指缩放读（ADR-0013）
 

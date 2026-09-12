@@ -167,16 +167,22 @@ body {
   padding: 2px 0;
 }
 
+/* 键行（ADR-0015）：.keybar 本身不滚动 —— 行首互切键、行尾 ⋯ 钉住，中间 .keybar-scroll 横滚 */
 .keybar {
   display: flex;
+  align-items: center;
   gap: 4px;
   padding: 4px 6px;
   border-top: 1px solid var(--line);
+}
+.keybar-scroll {
+  flex: 1 1 0; min-width: 0;
+  display: flex; align-items: center; gap: 4px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
-.keybar::-webkit-scrollbar { display: none; }
+.keybar-scroll::-webkit-scrollbar { display: none; }
 .keybar-key {
   flex: none;
   /* 触摸设备下命中区最小 44×44 */
@@ -494,24 +500,28 @@ body {
 /* ── 写态：底栏 + sheet（ADR-0011 ③）──
  * .bottom 绝对定位在定高的 .bottom-slot 里：往上长只盖块流，不挤画布 ——
  * 画布几何不变，xterm 不 resize，PTY 收不到 SIGWINCH。块流按 --sheet-inset 让位。 */
-.bottom-slot { position: relative; flex: none; height: 56px; }
+/* 槽位高度 = 键行高度（44px 键 + 6px×2）；short 布局 32px 键 + 4px×2（ADR-0015） */
+.app { --slot-h: 56px; }
+.app[data-short='true'] { --slot-h: 40px; }
+.bottom-slot { position: relative; flex: none; height: var(--slot-h); }
 .bottom {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 10;
   display: flex; flex-direction: column;
-  background: var(--bg); border-top: 1px solid var(--line);
+  background: var(--bg);
+  /* 顶边线画在内侧，不占高度 —— 终端态 .bottom 必须正好等于槽位，多 1px 也是盖终端 */
+  box-shadow: inset 0 1px 0 var(--line);
   transition: height 180ms ease;
 }
 .bottom[data-dragging='true'] { transition: none; }
-.bottom:not([data-sheet='closed']) {
+.bottom[data-sheet]:not([data-sheet='closed']) {
   border-top-left-radius: 12px; border-top-right-radius: 12px;
-  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 1px 0 var(--line), 0 -8px 24px rgba(0, 0, 0, 0.08);
 }
 @media (prefers-reduced-motion: reduce) { .bottom { transition: none; } }
-.sheet-head { flex: none; display: flex; align-items: center; height: 24px; padding: 0 4px 0 12px; }
-.bottom[data-sheet='closed'] .sheet-head { display: none; }
-.handle { flex: 1; height: 24px; display: grid; place-items: center; touch-action: none; cursor: ns-resize; }
-.handle span { width: 40px; height: 4px; border-radius: 2px; background: var(--line-strong); }
-.sheet-close { flex: none; font: inherit; font-size: 12px; border: 0; background: transparent; color: var(--muted); padding: 0 8px; min-height: 24px; cursor: pointer; }
+/* 面板头只剩抓手：整条可拖，点一下半屏 ⇄ 全屏 */
+.sheet-head { flex: none; display: flex; align-items: center; height: 16px; }
+.handle { flex: 1; height: 16px; display: grid; place-items: center; touch-action: none; cursor: ns-resize; }
+.handle span { width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong); }
 .chips {
   flex: none; display: flex; gap: 8px; padding: 2px 10px 6px;
   overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
@@ -527,49 +537,41 @@ body {
 .chip[data-kind='pin']::before { content: '★ '; color: var(--warn); }
 .chip:active { background: var(--line); }
 .bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 10px; }
-.bottom:not([data-sheet='closed']) .bar { flex: 1 1 0; min-height: 0; align-items: stretch; padding: 0 10px 6px; }
-.bottom:not([data-sheet='closed']) .bar-btn { display: none; }
-.bar-btn {
-  flex: none; min-height: 42px; min-width: 44px; padding: 0 14px;
-  border: 1px solid var(--line-strong); border-radius: 999px;
-  background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
-}
-.bar-more { padding: 0; font-size: 18px; line-height: 1; }
-/* 输入互切键（终端输入 ⇄ 编辑面板）：主控件，淡填充 + 加粗，比普通键条键显眼。
-   键条里的那个继承 .keybar-key 的尺寸，这里只改观感；sheet 头里的独立成型。 */
+.bottom[data-sheet]:not([data-sheet='closed']) .bar { flex: 1 1 0; min-height: 0; align-items: stretch; padding: 0 10px 6px; }
+/* 输入互切键（终端输入 ⇄ 编辑面板）：两种态都是键行的第一个键、同一尺寸（继承 .keybar-key），
+   主控件，淡填充 + 加粗，比普通键显眼（ADR-0015） */
 .input-toggle { font-weight: 600; white-space: nowrap; border-color: var(--line-strong); background: color-mix(in srgb, var(--fg) 9%, var(--bg)); }
-.sheet-head .input-toggle {
-  flex: none; align-self: center; min-height: 34px; padding: 0 12px;
-  font: inherit; font-size: 13px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--fg); cursor: pointer;
-}
-/* 终端输入态底栏的前导行（互切键 + ⋯）—— 键条另起一行，见 app.tsx 注释 */
-.term-lead { display: flex; gap: 4px; padding: 4px 6px; align-items: center; }
-.term-lead + .keybar { border-top: 1px solid var(--line); }
-/* 收起态：一行、药丸；打开态：吃掉 sheet 剩余高度，字号 16 免得 iOS 聚焦时放大页面 */
+.keybar-more { padding: 0; font-size: 18px; line-height: 1; }
+/* 输入框吃掉 sheet 剩余高度，字号 16 免得 iOS 聚焦时放大页面。
+   【取消 40vh 上限】—— 那是桌面 Composer 的，在 sheet 里它让全屏面板下半截空着 */
 .bar .composer {
   flex: 1 1 auto; min-width: 0; height: 42px !important; overflow: hidden;
   padding: 10px 14px; border: 1px solid var(--line-strong); border-top: 1px solid var(--line-strong); border-radius: 21px;
   background: var(--bg); line-height: 20px;
 }
-.bottom:not([data-sheet='closed']) .bar .composer {
-  height: auto !important; flex: 1 1 0; min-height: 0; overflow: auto;
+.bottom[data-sheet]:not([data-sheet='closed']) .bar .composer {
+  height: auto !important; max-height: none; flex: 1 1 0; min-height: 0; overflow: auto;
   border-radius: 10px; font-size: 16px; line-height: 1.5;
 }
 .bar .composer:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
-.editkeys { flex: none; display: flex; gap: 6px; padding: 0 10px 8px; }
-.editkeys-scroll { flex: 1 1 0; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+/* 编辑面板的键行：与终端态键行同一副骨架 —— 行首互切键 · 程序键 · 编辑键（横滚）· 行尾发送，正好 56px */
+.editkeys { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px; }
+.editkeys-scroll { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
 .editkeys-scroll::-webkit-scrollbar { display: none; }
+.keyrow-div { flex: none; width: 1px; height: 28px; background: var(--line); margin: 0 3px; }
 .editkey {
   flex: none; min-width: 44px; min-height: 44px; padding: 0 10px;
   border: 1px solid var(--line); border-radius: 6px;
   background: var(--surface); color: var(--fg); font: 13px var(--font-mono); cursor: pointer;
 }
-.editkey:active, .bar-btn:active { background: var(--line); }
+.editkey:active { background: var(--line); }
 .editkey-send {
-  flex: none; min-width: 72px; min-height: 44px;
+  flex: none; min-width: 72px; min-height: 44px; margin-left: auto;
   border: 1px solid var(--fg); border-radius: 6px;
   background: var(--fg); color: var(--bg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
 }
+.app[data-short='true'] .editkeys { padding: 4px 6px; }
+.app[data-short='true'] .editkey, .app[data-short='true'] .editkey-send { min-height: 32px; }
 /* ⋯ → 底部操作面板（原生 action sheet）：从底部滑起、整宽、大行 */
 .more-backdrop { position: absolute; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.4); }
 .action-sheet {
@@ -601,9 +603,9 @@ body {
 .app:not([data-bp='desktop']) .main[data-occupied='true'] > .statusbar { display: none; }
 /* 块流让出被 sheet / 功能键条盖住的那段（.term 不动 —— 它是 PTY 尺寸的来源） */
 .canvas > .stream { bottom: var(--sheet-inset, 0px); }
-/* 槽里的键条：正好 56px（44 + 6×2），终端视图里它独占槽、不盖终端；读视图里挂在直发输入行下面 */
+/* 槽里的键行：正好等于槽位（56 = 44 + 6×2；short 40 = 32 + 4×2），独占槽、不盖终端 */
 .bottom > .keybar { padding: 6px; border-top: 0; }
-.bottom > .bar:not([hidden]) + .keybar { border-top: 1px solid var(--line); }
+.app[data-short='true'] .bottom > .keybar { padding: 4px 6px; }
 .keybar-lead { font-family: inherit; font-weight: 500; }
 .bar-hint { flex: 1; color: var(--muted); font-size: 12px; padding-left: 6px; }
 

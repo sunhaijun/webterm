@@ -13,7 +13,7 @@ import { useChips } from '../input/chips'
 import { type Chip, tokenAt } from '../input/complete'
 import { Composer, type ComposerHandle } from '../input/composer'
 import { KeyBar } from '../input/keybar'
-import { EDIT_INSERT, appAction, programOf } from '../input/keymap'
+import { EDIT_INSERT, PROGRAM_EDIT_KEYS, PROMPT_KEYS, appAction, programOf } from '../input/keymap'
 import type { ModeState } from '../input/modes'
 import { RawIme, cursorPosition } from '../input/raw'
 import { installSwipeDismiss } from './swipe'
@@ -567,18 +567,6 @@ export function App() {
   const degraded = active?.integration === 'inactive' // 没有集成：不知道在跑什么，键条常给（含 ^C）
   const showKeys = running || interactive || degraded // 底栏要不要挂功能键条
   const editing = sheet !== 'closed' // 编辑面板是否显示（否则终端输入）
-  // 终端输入态底栏的前导键：互切键（切到编辑面板）+ ⋯。互切键【始终给】——
-  // claude / codex 也走备用缓冲，但它们最需要编辑面板整段发 prompt，不能像 vim 那样藏掉。
-  const termLead = (
-    <>
-      <button class="keybar-key keybar-lead input-toggle" data-testid="to-edit" aria-label="切到编辑面板" onClick={toEdit}>
-        ⌨▸编辑
-      </button>
-      <button class="keybar-key keybar-lead" data-testid="open-more" aria-label="更多" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
-        ⋯
-      </button>
-    </>
-  )
   // 写态 chips：sheet 开着才拉数据（ADR-0011 ③）
   const chips = useChips({
     open: !classic && sheet !== 'closed' && mode.mode === 'composer',
@@ -779,7 +767,7 @@ export function App() {
         )}
 
         {!classic && active?.status !== 'exited' && editing && (
-          // 编辑面板：整段编辑后发送。第一个键是互切（切回终端输入）；命令在跑时下挂功能键条。
+          // 编辑面板：整段编辑后发送。键行行首是互切键（切回终端输入）；命令在跑时并入 Esc ^C（ADR-0015）。
           <WriteSheet
             size={sheet}
             onSize={changeSheet}
@@ -795,20 +783,12 @@ export function App() {
               sendToProgram(composerRef.current?.take() ?? '')
             }}
             lead={
-              <button class="input-toggle" data-testid="to-terminal" aria-label="切到终端输入" onPointerDown={(e) => e.preventDefault()} onClick={toTerminal}>
-                ✎▸终端
+              <button class="keybar-key keybar-lead input-toggle" data-testid="to-terminal" aria-label="切到终端输入" onPointerDown={(e) => e.preventDefault()} onClick={toTerminal}>
+                ✎ 终端
               </button>
             }
-            below={
-              showKeys && coarse ? (
-                <KeyBar
-                  mode="raw"
-                  context={{ altScreen: interactive, program }}
-                  onRaw={(bytes) => sendRawRef.current(bytes)}
-                  onComposerKey={() => {}}
-                />
-              ) : null
-            }
+            programKeys={coarse && showKeys ? PROGRAM_EDIT_KEYS : []}
+            onRaw={(bytes) => sendRawRef.current(bytes)}
           >
             <Composer
               hidden={false}
@@ -825,22 +805,29 @@ export function App() {
           </WriteSheet>
         )}
         {!classic && active?.status !== 'exited' && !editing && (
-          // 终端输入（默认，最省屏；或全屏 TUI 强制）：底栏只留互切键 + ⋯，点终端逐键直输；
-          // 命令在跑 / 占屏 / 降级时挂功能键条。TUI 下互切键让位给退出键条。
+          // 终端输入（默认，最省屏；全屏 TUI 强制）：底栏一条键行 —— 行首互切键、键区、行尾 ⋯（ADR-0015）。
+          // 键区按状态换内容：提示符给提示符键集，命令在跑 / 占屏 / 降级给功能键（占屏按 interactive 判定，
+          // claude / codex 与编辑态拿同一套 AI 键）；没有触摸能力只剩互切键 + ⋯。高度恒等于槽位：不盖终端。
+          // 互切键【始终给】—— claude / codex 也占屏，但它们最需要编辑面板整段发 prompt，不能像 vim 那样藏掉。
           <div class="bottom-slot" data-testid="term-bar">
             <div class="bottom">
-              <div class="term-lead" data-testid="term-lead" role="toolbar" aria-label="输入">
-                {termLead}
-              </div>
-              {showKeys && coarse && (
-                // 键条【单独一行、整行铺开】—— 前导键放上面那行，别把 ^C / 方向键挤出免滚区
-                <KeyBar
-                  mode="raw"
-                  context={{ altScreen, program }}
-                  onRaw={(bytes) => sendRawRef.current(bytes)}
-                  onComposerKey={() => {}}
-                />
-              )}
+              <KeyBar
+                mode="raw"
+                context={{ altScreen: interactive, program }}
+                keys={!coarse ? [] : showKeys ? undefined : PROMPT_KEYS}
+                onRaw={(bytes) => sendRawRef.current(bytes)}
+                onComposerKey={() => {}}
+                leading={
+                  <button class="keybar-key keybar-lead input-toggle" data-testid="to-edit" aria-label="切到编辑面板" onClick={toEdit}>
+                    ⌨ 编辑
+                  </button>
+                }
+                trailing={
+                  <button class="keybar-key keybar-lead keybar-more" data-testid="open-more" aria-label="更多" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
+                    ⋯
+                  </button>
+                }
+              />
             </div>
           </div>
         )}

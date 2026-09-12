@@ -156,9 +156,11 @@ export const CTRL_KEYS: Readonly<Record<string, string>> = {
 }
 
 /**
- * 功能键条上的按键集合（AC-3.9）。前 8 个在最窄屏幕下必须无需滚动即可见。
+ * 功能键条上的按键集合（AC-3.9）—— 命令在跑 / 集成降级时的键区。
+ * 前 5 个（Esc ^C Tab Ctrl ↑）在 393px 宽下必须无需滚动即可见（ADR-0015：
+ * 互切键与 ⋯ 并进同一行后，免滚区从 8 个减到 5 个）。
  *
- * 【^C 必须在前 8 个里】：它是唯一的通用脱困键，要它的时候多半已经
+ * 【^C 必须在免滚区里】：它是唯一的通用脱困键，要它的时候多半已经
  * 卡住了，不能还要求先横向滚动一下。Alt 让位 —— 手机上它比 ^C 罕见得多。
  */
 /** 功能键条上的一个键。有 bytes 就直接发这些字节，不走 KEY_BYTES / chord。 */
@@ -339,4 +341,37 @@ export function keyBarFor(ctx: { altScreen: boolean; program: string | null }): 
   if (!ctx.altScreen) return KEY_BAR
   const kind = ctx.program ? PROGRAM_CONTEXT[ctx.program] : undefined
   return CONTEXT_KEYS[kind ?? 'tui']!
+}
+
+/**
+ * 停在提示符时的键区（ADR-0015）。
+ *
+ * 这一行本来就在（互切键与 ⋯ 占着），空着不如放软键盘最缺的几个：Tab 补全、
+ * ↑↓ 翻历史、^C 清掉打错的半行、^L 清屏、管道与路径符号。没有 Esc / Ctrl ——
+ * 提示符下用不上，也让「有没有 Esc」成为提示符键集与通用键集的可测区别。
+ */
+export const PROMPT_KEYS: readonly KeyDef[] = [
+  { label: 'Tab', key: 'Tab' },
+  { label: '↑', key: 'ArrowUp' },
+  { label: '↓', key: 'ArrowDown' },
+  { label: '^C', key: 'CtrlC' },
+  { label: '^L', key: 'CtrlL' },
+  { label: '|', key: '|' },
+  { label: '~', key: '~' },
+  { label: '/', key: '/' },
+  { label: '-', key: '-' },
+  { label: '_', key: '_' },
+  { label: '←', key: 'ArrowLeft' },
+  { label: '→', key: 'ArrowRight' },
+]
+
+/**
+ * 编辑面板键行里并入的程序键（ADR-0015）：命令在跑时只要打断类的两个。
+ * 方向键 / ⇧Tab / Enter 属于逐键交互，切回终端态按 —— 编辑面板的职责是整段写好一次发。
+ */
+export const PROGRAM_EDIT_KEYS: readonly KeyDef[] = [ESC_KEY, CTRL_C]
+
+/** 键条上一个键要发给 PTY 的字节（上下文键自带 bytes；控制码；其余查表）。 */
+export function bytesOf(k: KeyDef): string | undefined {
+  return k.bytes ?? CTRL_KEYS[k.key] ?? KEY_BYTES[k.key]
 }

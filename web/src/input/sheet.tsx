@@ -1,49 +1,54 @@
 /**
- * 写态 sheet —— ADR-0011 分片 ③。
+ * 编辑面板 sheet —— ADR-0011 分片 ③，形态按 ADR-0014 / ADR-0015。
  *
- * 底栏收起时是一行（输入框 + 「终端」+ ⋯）；碰输入框就升起成半屏 / 全屏：
- * 上面一排 chips（快捷命令 / 同目录历史 / 路径补全），中间输入框吃掉剩余
- * 高度，下面一排面向"写"的编辑键。把手点一下在半屏与全屏之间切，拖动按
- * 位置吸附，拖到底就收起。
+ * 点互切键升起：上面一条 16px 抓手（拖动按位置吸附，点一下半屏 ⇄ 全屏，拖到底
+ * 收起），可选一排 chips（快捷命令 / 同目录历史 / 路径补全），中间输入框吃掉剩余
+ * 高度，底部一条键行：行首互切键（切回终端输入）· 命令在跑时的程序键 Esc ^C ·
+ * 面向"写"的编辑键（横滚）· 行尾「发送」。没有「收起」—— 拖到底、空输入再按 Esc、
+ * 互切键都能收。
  *
- * 【sheet 是盖在块流上的，不挤它】：.bottom 绝对定位在一个定高的 .bottom-slot
- * 里，往上长只会盖住块流，画布 .canvas 的几何完全不变 —— xterm 不会因此
- * resize，PTY 不会收到 SIGWINCH。块流自己按 --sheet-inset 让出被盖住的那段。
+ * 【sheet 是盖在终端上的，不挤它】：.bottom 绝对定位在一个定高的 .bottom-slot
+ * 里，往上长只会盖住终端，画布 .canvas 的几何完全不变 —— xterm 不会因此
+ * resize，PTY 不会收到 SIGWINCH。
  */
 import type { ComponentChildren } from 'preact'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { Chip } from './complete'
-import { EDIT_KEYS } from './keymap'
+import { EDIT_KEYS, type KeyDef, bytesOf } from './keymap'
 
 export type SheetSize = 'closed' | 'half' | 'full'
 
-/** 收起时底栏的高度。.bottom-slot 永远这么高，画布几何据此恒定。 */
+/** 槽位的默认高度；实际以 .bottom-slot 量出来的为准（short 布局是 40px）。 */
 export const SLOT_HEIGHT = 56
+
+/** 槽位的实际高度 —— 拖动的下限、全屏高度的下限都以它为准。 */
+function slotHeightOf(el: HTMLElement | null): number {
+  const slot = el?.closest('.bottom-slot') as HTMLElement | null
+  const h = slot?.getBoundingClientRect().height
+  return h && h > 0 ? Math.round(h) : SLOT_HEIGHT
+}
 
 export interface WriteSheetProps {
   size: SheetSize
   onSize(next: SheetSize): void
-  /** .bottom 的实际高度变了（盖住块流多少）。 */
+  /** .bottom 的实际高度变了（盖住终端多少）。 */
   onHeight(h: number): void
   chips: Chip[]
   onChip(c: Chip): void
-  /** 触摸设备才显示编辑键条；接了键盘的平板不用。 */
+  /** 触摸设备才显示编辑键；接了键盘的平板只剩互切键与发送。 */
   editKeys: boolean
   onEditKey(key: string): void
   onSend(): void
   /** 长按发送：只粘贴不回车（命令在跑时）。 */
   onSendHold?(): void
-  /** 输入行：Composer（命令在跑时也是它，整段粘贴发送）。 */
+  /** 输入框：Composer（命令在跑时也是它，整段粘贴发送）。 */
   children: ComponentChildren
-  /** 输入行【最前】的按钮 —— 互切键（切回终端输入）。class 要带 bar-btn。 */
+  /** 键行行首的互切键（切回终端输入）。class 要带 keybar-key。 */
   lead?: ComponentChildren
-  /** 输入行右侧的按钮（⋯）。class 要带 bar-btn。 */
-  bar?: ComponentChildren
-  /** 输入行下面的东西（命令在跑时的功能键条）。 */
-  below?: ComponentChildren
-  /** 整行输入不渲染（终端视图里命令在跑：键条独占那 56px）。用 hidden 而不是卸载，草稿不丢。 */
-  barHidden?: boolean
+  /** 并入键行的程序键（命令在跑时的 Esc ^C），直发 PTY。 */
+  programKeys?: readonly KeyDef[]
+  onRaw?(bytes: string): void
 }
 
 /** 让按钮不抢输入框的焦点 —— 软键盘一收一弹是最糟的体验。 */
@@ -68,14 +73,14 @@ export function WriteSheet(p: WriteSheetProps) {
   onHeightRef.current = p.onHeight
 
   // 半屏 / 全屏的像素高度取自 .main 的实际高度：键盘弹出 .main 变矮，sheet 跟着矮。
-  // 半屏至少 190px —— 把手 + chips + 一行输入 + 编辑键，再少就摆不下了。
+  // 半屏至少 190px —— 抓手 + 一行输入 + 键行，再少就摆不下了。
   const targets = () => {
     const main = ref.current?.closest('.main') as HTMLElement | null
     const canvas = main?.querySelector('.canvas') as HTMLElement | null
     if (!main) return { half: 260, full: 400 }
     const m = main.getBoundingClientRect()
     const top = canvas ? canvas.getBoundingClientRect().top : m.top + 28
-    const full = Math.max(SLOT_HEIGHT, Math.round(m.bottom - top))
+    const full = Math.max(slotHeightOf(ref.current), Math.round(m.bottom - top))
     const half = Math.min(full, Math.max(190, Math.round(m.height * 0.46)))
     return { half, full }
   }
@@ -124,7 +129,7 @@ export function WriteSheet(p: WriteSheetProps) {
     if (Math.abs(dy) > 6) d.moved = true
     if (!d.moved) return
     const t = targets()
-    setPx(Math.min(t.full, Math.max(SLOT_HEIGHT, Math.round(d.h0 + dy))))
+    setPx(Math.min(t.full, Math.max(slotHeightOf(ref.current), Math.round(d.h0 + dy))))
   }
   const onUp = () => {
     const d = drag.current
@@ -146,6 +151,7 @@ export function WriteSheet(p: WriteSheetProps) {
   }
 
   const open = p.size !== 'closed'
+  const programKeys = p.programKeys ?? []
   return (
     <div class="bottom-slot">
       <div
@@ -157,7 +163,6 @@ export function WriteSheet(p: WriteSheetProps) {
         style={open && px !== null ? { height: `${px}px` } : undefined}
       >
         <div class="sheet-head">
-          {p.lead}
           <div
             class="handle"
             data-testid="sheet-handle"
@@ -170,16 +175,9 @@ export function WriteSheet(p: WriteSheetProps) {
           >
             <span />
           </div>
-          <button
-            class="sheet-close"
-            data-testid="sheet-close"
-            onPointerDown={keepFocus}
-            onClick={() => p.onSize('closed')}
-          >
-            收起
-          </button>
         </div>
-        {open && (
+        {open && p.chips.length > 0 && (
+          // 为空就不渲染 —— 空条也占高度（ADR-0015）
           <div class="chips" data-testid="chips" role="listbox" aria-label="建议">
             {p.chips.map((c) => (
               <button
@@ -199,25 +197,45 @@ export function WriteSheet(p: WriteSheetProps) {
             ))}
           </div>
         )}
-        <div class="bar" hidden={p.barHidden}>
-          {p.children}
-          {p.bar}
-        </div>
-        {open && p.editKeys && (
+        <div class="bar">{p.children}</div>
+        {open && (
+          // 键行：行首互切键 · 程序键 · 编辑键（横滚）· 行尾发送 —— 与终端态同一副骨架（ADR-0015）
           <div class="editkeys" data-testid="editkeys" role="toolbar" aria-label="编辑键">
-            <div class="editkeys-scroll">
-              {EDIT_KEYS.map((k) => (
-                <button
-                  key={k.key}
-                  class="editkey"
-                  data-testid={`edit-${k.key}`}
-                  onPointerDown={keepFocus}
-                  onClick={() => p.onEditKey(k.key)}
-                >
-                  {k.label}
-                </button>
-              ))}
-            </div>
+            {p.lead}
+            {programKeys.length > 0 && (
+              <>
+                {programKeys.map((k) => (
+                  <button
+                    key={k.key}
+                    class="keybar-key"
+                    data-testid={`key-${k.key}`}
+                    onPointerDown={keepFocus}
+                    onClick={() => {
+                      const b = bytesOf(k)
+                      if (b !== undefined) p.onRaw?.(b)
+                    }}
+                  >
+                    {k.label}
+                  </button>
+                ))}
+                <span class="keyrow-div" aria-hidden="true" />
+              </>
+            )}
+            {p.editKeys && (
+              <div class="editkeys-scroll">
+                {EDIT_KEYS.map((k) => (
+                  <button
+                    key={k.key}
+                    class="editkey"
+                    data-testid={`edit-${k.key}`}
+                    onPointerDown={keepFocus}
+                    onClick={() => p.onEditKey(k.key)}
+                  >
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+            )}
             <button
               class="editkey-send"
               data-testid="send"
@@ -245,7 +263,6 @@ export function WriteSheet(p: WriteSheetProps) {
             </button>
           </div>
         )}
-        {p.below}
       </div>
     </div>
   )

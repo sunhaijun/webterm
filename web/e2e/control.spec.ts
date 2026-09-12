@@ -35,8 +35,9 @@ test('备用缓冲 = 占屏：键条出现且是通用 TUI 键；退出后键条
   await expect(page.getByTestId('key-CtrlC')).toBeVisible()
 
   await waitFor(async () => (await alt(page)) === false, '备用缓冲退出', 10_000)
-  // 回到 prompt（Composer 模式）→ 键条退场
-  await expect(page.getByTestId('keybar')).toHaveCount(0, { timeout: 8_000 })
+  // 回到 prompt（Composer 模式）→ 键区换回提示符键集（键行本身常在，ADR-0015）
+  await expect(page.getByTestId('key-Escape')).toHaveCount(0, { timeout: 8_000 })
+  await expect(page.getByTestId('keybar')).toHaveAttribute('data-context', 'shell')
 })
 
 test('富键盘协议（\\e[>1u，claude/codex 那类主屏程序）= 占屏', async ({ page }) => {
