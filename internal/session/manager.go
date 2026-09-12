@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
+
 	"github.com/sunhaijun/webterm/internal/oscparse"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/ringbuf"
@@ -20,6 +22,9 @@ import (
 
 // ErrSessionLimit 表示会话数已达上限。
 var ErrSessionLimit = errors.New("session: 会话数已达上限")
+
+// ErrFrozen：正在热升级交接，此刻不接受新会话（ADR-0016）。
+var ErrFrozen = errors.New("session: 正在热升级，稍后再试")
 
 // Config 是 Manager 的配置。
 type Config struct {
@@ -64,6 +69,9 @@ type Manager struct {
 	sessions  map[uint16]*Session
 	nextSID   uint16
 	observers map[Subscriber]struct{}
+	// generation 是热升级的代数：每交接一次 +1（ADR-0016）。webterm reload 靠它判断新进程已接手。
+	generation int
+	frozen     bool // Freeze 期间拒绝 Create
 
 	janitorStop  chan struct{}
 	janitorDone  chan struct{}
@@ -182,6 +190,10 @@ func (m *Manager) Create(spec Spec) (*Session, error) {
 	}
 
 	m.mu.Lock()
+	if m.frozen {
+		m.mu.Unlock()
+		return nil, ErrFrozen
+	}
 	if len(m.sessions) >= m.cfg.MaxSessions {
 		m.mu.Unlock()
 		return nil, ErrSessionLimit
@@ -249,19 +261,32 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 	// 清理可能干扰 shell 初始化的变量
 	cmd.Env = filterEnv(cmd.Env, "BASH_ENV", "ENV")
 
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
+	raw, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
 	if err != nil {
 		if rcPath != "" {
 			os.Remove(rcPath)
 		}
 		return nil, fmt.Errorf("session: 启动 PTY: %w", err)
 	}
+	// 换成可轮询的 master（ADR-0016）：creack/pty 给的是阻塞文件，SetReadDeadline
+	// 对它不起作用，热升级时打断不了阻塞读。dup 一份、置 O_NONBLOCK、os.NewFile
+	// 包起来就进了 Go 的 poller；原来的关掉（file description 由 dup 持有，shell 不会收 SIGHUP）。
+	ptmx, fd, err := pollable(raw)
+	if err != nil {
+		_ = raw.Close()
+		_ = cmd.Process.Kill()
+		if rcPath != "" {
+			os.Remove(rcPath)
+		}
+		return nil, fmt.Errorf("session: 包装 PTY: %w", err)
+	}
 
 	s := &Session{
 		mgr:         m,
 		sid:         sid,
 		ptmx:        ptmx,
-		cmd:         cmd,
+		fd:          fd,
+		proc:        cmd.Process,
 		rcPath:      rcPath,
 		createdAt:   time.Now(),
 		store:       m.store,
@@ -278,6 +303,7 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 		osc:         oscparse.New(),
 		inputQ:      newInputQueue(),
 		done:        make(chan struct{}),
+		fz:          newFreezer(),
 	}
 	if spec.Name != nil && *spec.Name != "" {
 		s.nameManual = true
@@ -288,15 +314,42 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 		s.integration = protocol.IntegrationInactive
 	}
 
-	go s.readLoop()
-	go s.writeLoop()
-	go s.waitLoop()
+	s.startLoops()
 
 	if m.cfg.RCFileFor != nil {
 		// 集成握手超时（AC-7.6）：只有连 hello 都没收到才判 inactive
 		time.AfterFunc(integrationHelloTimeout, s.onHelloTimeout)
 	}
 	return s, nil
+}
+
+// startLoops 起三个 goroutine。alive 标记要在 go 之前置好：freeze 靠它数要等几个循环。
+func (s *Session) startLoops() {
+	s.readAlive.Store(true)
+	s.writeAlive.Store(true)
+	go s.readLoop()
+	go s.writeLoop()
+	go s.waitLoop()
+}
+
+// pollable 把 creack/pty 给的阻塞 master 换成 Go poller 里的非阻塞文件。
+// 返回新文件与它的 fd 号（fd 单独记着 —— 之后不能再对文件调 Fd()）。
+func pollable(raw *os.File) (*os.File, int, error) {
+	fd, err := unix.Dup(int(raw.Fd()))
+	if err != nil {
+		return nil, -1, err
+	}
+	if err := unix.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
+		return nil, -1, err
+	}
+	f := os.NewFile(uintptr(fd), "ptmx")
+	if f == nil {
+		unix.Close(fd)
+		return nil, -1, errors.New("os.NewFile 失败")
+	}
+	_ = raw.Close()
+	return f, fd, nil
 }
 
 // Get 按 sid 取会话。

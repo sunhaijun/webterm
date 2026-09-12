@@ -123,6 +123,19 @@ export class Agent {
     return this.log
   }
 
+  /** agent 进程的 pid。热升级原地 exec 之后它不变。 */
+  pid(): number {
+    return this.proc.pid ?? -1
+  }
+
+  /**
+   * 热升级（ADR-0016 / E2E-26）：给 agent 发 SIGUSR2，它预检、冻结、交接、原地 exec
+   * 同一个二进制。PID 不变，stdout 管道照旧 —— 这个 ChildProcess 句柄继续有效。
+   */
+  reexec(): void {
+    this.proc.kill('SIGUSR2')
+  }
+
   stop(): void {
     this.proc.kill('SIGKILL')
     try {

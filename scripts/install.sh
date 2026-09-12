@@ -29,6 +29,8 @@ DEV=0
 SETUP_SERVICE=1
 DO_SETCAP=1
 IF_NEWER=0
+WHEN_IDLE=0
+FORCE_RESTART=0
 DRY_RUN=0
 FORCE=0
 BASE_URL=""
@@ -81,6 +83,8 @@ usage() {
   --no-service       装二进制但不配 systemd
   --no-setcap        不做 setcap（你自己解决特权端口的绑定权限）
   --if-newer         版本和已装的一样就什么都不做（webterm update 用）
+  --when-idle        等所有会话都停在提示符再切换（升级不杀正在跑的东西）
+  --force-restart    不热升级，走 systemctl restart（会关闭所有会话）
   --force            前置自检不通过也继续装
   --dry-run          只打印将要执行的命令
   -h, --help         这段说明
@@ -107,6 +111,8 @@ while [ $# -gt 0 ]; do
         --https-port) HTTPS_PORT="${2:?--https-port 需要一个值}"; shift 2 ;;
         --http-port) HTTP_PORT="${2:?--http-port 需要一个值}"; shift 2 ;;
         --force) FORCE=1; shift ;;
+        --when-idle) WHEN_IDLE=1; shift ;;
+        --force-restart) FORCE_RESTART=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "未知选项 $1（--help 看用法）" ;;
@@ -293,6 +299,27 @@ else
       超时就是没放行，那样证书签不下来。"
 fi
 
+# ---------- 热升级还是重启（ADR-0016）----------
+#
+# 运行中的 agent 支持交接（有控制 socket）就走 webterm reload：原地 exec 新二进制，
+# 会话保留。不支持（升级前的老版本）或 --force-restart 才 restart。
+# 用【刚下载的新二进制】当客户端探测 —— 它一定认识 reload 子命令。
+SWITCH=restart
+if [ "$SETUP_SERVICE" = 1 ] && [ "$DRY_RUN" != 1 ] && [ "$FORCE_RESTART" != 1 ] \
+    && systemctl --user is-active --quiet webterm 2>/dev/null \
+    && chmod +x "$TMP/$BIN" && "$TMP/$BIN" reload --probe >/dev/null 2>&1; then
+    SWITCH=reload
+fi
+if [ "$WHEN_IDLE" = 1 ] && [ "$DRY_RUN" != 1 ] && systemctl --user is-active --quiet webterm 2>/dev/null; then
+    if [ "$SWITCH" = reload ]; then
+        : # 交给下面的 webterm reload --when-idle
+    elif "$TMP/$BIN" reload --wait-idle >/dev/null 2>&1; then
+        info "所有会话已停在提示符（--when-idle）"
+    else
+        info "运行中的是老版本，问不到忙不忙 —— --when-idle 无法生效，继续"
+    fi
+fi
+
 # ---------- 5. 安装 ----------
 
 step "5/6 安装到 $PREFIX"
@@ -440,6 +467,9 @@ ExecStart=$PREFIX/webterm serve --domain $DOMAIN$PORT_ARGS
 Restart=on-failure
 RestartSec=3
 
+# 热升级（ADR-0016）：reload = 原地 exec 新二进制，会话保留
+ExecReload=/bin/kill -USR2 \$MAINPID
+
 # 优雅关闭：给 agent 时间广播"即将重启"并关闭会话
 KillSignal=SIGTERM
 TimeoutStopSec=15
@@ -467,6 +497,23 @@ fi
 run systemctl --user daemon-reload
 run systemctl --user enable webterm
 
+if [ "$SWITCH" = reload ]; then
+    # ---------- 热升级（ADR-0016）----------
+    #
+    # 装好的新二进制让运行中的 agent 原地换掉自己：预检 → 冻结 → 交接 → exec。
+    # 预检失败它会中止并照常服务 —— 这里【不】退化成 restart：用户以为会话保住了、
+    # 回来发现全没了，比明确的失败更糟。要接受丢会话请显式 --force-restart。
+    IDLE_ARG=""
+    [ "$WHEN_IDLE" = 1 ] && IDLE_ARG="--when-idle"
+    if "$PREFIX/webterm" reload $IDLE_ARG; then
+        done_msg "热升级完成，会话保留：$("$PREFIX/webterm" version)"
+    else
+        die "热升级没有完成，运行中的仍是旧版本、会话照常。
+      看原因：  journalctl --user -u webterm -n 50 --no-pager
+      接受丢会话就：  webterm update --force-restart"
+    fi
+else
+
 # 【必须 restart，不能用 enable --now】。
 #
 # --now 只在服务【没在跑】时才启动它 —— 升级时它是个 no-op：
@@ -490,6 +537,7 @@ if [ "$DRY_RUN" != 1 ]; then
       journalctl --user -u webterm -n 30 --no-pager"
     done_msg "服务已重启：$("$PREFIX/webterm" version)"
 fi
+fi # SWITCH
 
 if [ "$DRY_RUN" = 1 ]; then
     step "完成（dry-run）"

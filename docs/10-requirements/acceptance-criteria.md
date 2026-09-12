@@ -47,6 +47,7 @@
 | AC-2.11 | 未订阅的会话在 agent 侧照常缓冲；切回时通过 resume 补齐，不丢输出 | E2E-6, IT-sub-1 |
 | AC-2.12 | `in_ack` 按 `(client_id, sid)` 记账并**跨重连存活**：重连后 client 按 `welcome.resumed[].in_ack` 重发，不触发 `input_gap` | IT-resume-3 |
 | AC-2.13 | `hello.instance_id` 与 agent 当前值不符时，所有 `resume` 项判 `gone`（防止 agent 重启后 sid 复用导致张冠李戴） | IT-resume-4 |
+| AC-2.14 | **热升级不丢会话**（ADR-0016）：agent 收到 `SIGUSR2` / `reexec` 后原地 exec 新二进制，PID 不变；所有会话的 shell 仍在跑、`instance_id` 不变、环形缓冲与 `in_ack` 原样交接；跨交接的字节级连续性与 AC-2.1 同标准（中途交接与不交接的序列化结果逐字节一致），未写完的输入不丢不重；预检失败时中止并照常服务，**不自动退化成重启** | IT-handoff-1, UT-ring-10, UT-osc-restore, E2E-26 |
 
 ---
 

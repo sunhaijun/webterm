@@ -162,8 +162,9 @@ func TestConfigKeysAllExistOnServe(t *testing.T) {
 
 // ★ 反向：serve 上那些"该能配"的 flag 都在白名单里。
 func TestServeFlagsAreConfigurable(t *testing.T) {
-	// 这几个刻意不进配置文件
-	excluded := map[string]bool{"dev": true, "config": true}
+	// 这几个刻意不进配置文件。handoff-fd 是热升级时旧进程在 exec 那一刻传的
+	// 内部参数（ADR-0016），写进配置文件只会让 serve 去读一个不存在的 fd
+	excluded := map[string]bool{"dev": true, "config": true, "handoff-fd": true}
 	fs := serveFlagSet()
 	fs.VisitAll(func(f *flag.Flag) {
 		if excluded[f.Name] || configKeys[f.Name] {

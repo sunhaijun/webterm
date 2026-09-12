@@ -98,13 +98,22 @@ journalctl --user -u webterm --since "5 min ago" | grep -A20 "配对码"
 ## 升级
 
 ```bash
-systemctl --user stop webterm
 sudo install -m755 webterm-new /usr/local/bin/webterm
 sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm   # 别忘了
-systemctl --user start webterm
+systemctl --user reload webterm    # 热升级：原地 exec 新二进制，会话保留（ADR-0016）
 ```
 
-> ⚠️ 会关闭所有会话（[ADR-0003](../20-architecture/adr/0003-no-tmux.md)）。先在 UI 上确认没有重要任务在跑。
+单元里 `ExecReload=/bin/kill -USR2 $MAINPID`：`reload` 给 agent 发 `SIGUSR2`，它预检新二进制、
+交接会话、原地 exec，PID 不变。等价的命令是 `webterm reload`（多了"等新进程接手"的确认与
+`--when-idle`）。预检失败时 agent 照常服务并在日志里说明原因 —— 那时要么修好再 reload，
+要么接受丢会话：
+
+```bash
+systemctl --user restart webterm   # 老路：关闭所有会话（ADR-0003）
+```
+
+> 注意：升级前的老版本 agent 不认 `SIGUSR2`（默认动作是终止），对它只能 restart。
+> `install.sh` / `webterm update` 会先探测再决定走哪条路。
 
 ## 系统级 service（不推荐，但如果必须）
 

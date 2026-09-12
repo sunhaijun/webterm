@@ -66,8 +66,7 @@ PTY 的 master fd 由 agent 持有。agent 一死，slave 端的 shell 收到 `S
 - `webterm serve` 收到 `SIGTERM` 时先向所有客户端广播 `notice{level:"warn"}`，再等 2 秒关闭，让用户至少知道发生了什么
 - 命令历史存在 SQLite 里，**跨重启存活** —— 所以"我刚才在跑什么"这个信息不会丢
 
-**未来可能的补法**（v0.3+，不在当前范围）：
-升级时用 `exec.Cmd.ExtraFiles` 把 PTY 的 fd 传递给新进程，并通过 unix socket 把会话元数据和环形缓冲交接过去，实现无损 re-exec。这是 nginx / systemd socket activation 的经典模式，在 Go 里可行。届时会写新的 ADR。
+**补法已落地**：[ADR-0016](0016-hot-reexec.md) 用原地 re-exec 交接 PTY fd、环形缓冲与会话元数据，升级不再丢会话。上面"负面后果"一段现在只对真正的进程重启（`SIGTERM`、崩溃、机器重启）成立。
 
 ## 用户仍然可以自己用 tmux
 

@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/sunhaijun/webterm/internal/agent"
+	"github.com/sunhaijun/webterm/internal/handoff"
 	"github.com/sunhaijun/webterm/internal/session"
 	"github.com/sunhaijun/webterm/internal/shellinit"
 	"github.com/sunhaijun/webterm/internal/store"
@@ -38,6 +42,7 @@ type serveOpts struct {
 	noLoginShell       bool
 	shell              string
 	logLevel           string
+	handoffFD          int
 }
 
 func (o *serveOpts) register(fs *flag.FlagSet) {
@@ -56,6 +61,7 @@ func (o *serveOpts) register(fs *flag.FlagSet) {
 	fs.BoolVar(&o.noLoginShell, "no-login-shell", false, "用非登录交互 shell（只读 ~/.bashrc）")
 	fs.StringVar(&o.shell, "shell", "bash", "shell（v0.1 只支持 bash）")
 	fs.StringVar(&o.logLevel, "log-level", "info", "debug / info / warn / error")
+	fs.IntVar(&o.handoffFD, handoff.FlagName, -1, "内部：热升级交接的快照 fd（由旧进程在 exec 时传入，ADR-0016）")
 }
 
 // serveFlagSet 是 serve 的完整 flag 集合。serve 的 flag 是所有子命令的超集，
@@ -93,18 +99,30 @@ func runServe(args []string) error {
 		return fmt.Errorf("生产模式必须指定 --domain（ACME 与 Origin 校验都要用它），本地开发用 --dev")
 	}
 
+	// 热升级（ADR-0016）：带 --handoff-fd 起来的是接手的新进程，先把快照读回来
+	var snap *handoff.Snapshot
+	if o.handoffFD >= 0 {
+		read, err := handoff.Read(o.handoffFD)
+		if err != nil {
+			return fmt.Errorf("热升级交接失败，无法恢复会话: %w", err)
+		}
+		snap = read
+	}
+
 	st, err := store.Open(c.dataDir)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 
-	// 清理上次崩溃残留的 rcfile
+	// 清理上次崩溃残留的 rcfile。【交接过来的不能清】—— 那些 rcfile 属于正在运行的会话
 	runDir := filepath.Join(c.dataDir, "run")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return fmt.Errorf("创建运行时目录失败: %w", err)
 	}
-	cleanupStaleRCFiles(runDir, log)
+	if snap == nil {
+		cleanupStaleRCFiles(runDir, log)
+	}
 
 	sessCfg := session.Config{
 		MaxSessions: o.maxSessions,
@@ -123,6 +141,13 @@ func runServe(args []string) error {
 	}
 	sessions := session.NewManager(sessCfg, st)
 	defer sessions.Shutdown()
+	if snap != nil {
+		if err := sessions.Restore(snap); err != nil {
+			return fmt.Errorf("热升级交接失败，无法恢复会话: %w", err)
+		}
+		log.Info("热升级完成，会话已接手", "generation", sessions.Generation(),
+			"sessions", len(snap.Sessions), "from", snap.FromVersion, "to", version)
+	}
 
 	a := agent.New(agent.Config{
 		Domain:     c.domain,
@@ -145,6 +170,7 @@ func runServe(args []string) error {
 		HTTPPort:    o.httpPort,
 		HTTPSPort:   o.httpsPort,
 		CertDir:     agent.CertDirDefault(c.dataDir),
+		Inherited:   inheritedListeners(snap),
 	}, a.Handler())
 	if err != nil {
 		return err
@@ -157,6 +183,35 @@ func runServe(args []string) error {
 	stopPurge := make(chan struct{})
 	go a.PurgeLoop(stopPurge)
 	defer close(stopPurge)
+
+	// 热升级控制面（ADR-0016）：探测 / 忙碌 / 触发 reexec。SIGUSR2 等价。
+	reexecReq := make(chan struct{}, 1)
+	var lastErr sync.Mutex
+	lastHandoffErr := ""
+	ctl, err := agent.ServeControl(filepath.Join(runDir, "agent.sock"), agent.ControlDeps{
+		Status: func() agent.ControlStatus {
+			lastErr.Lock()
+			le := lastHandoffErr
+			lastErr.Unlock()
+			return agent.ControlStatus{
+				Version: version, PID: os.Getpid(), Generation: sessions.Generation(),
+				InstanceID: sessions.InstanceID(), Sessions: len(sessions.List()), Busy: sessions.Busy(),
+				Handoff: true, LastError: le,
+			}
+		},
+		Reexec: func() error {
+			select {
+			case reexecReq <- struct{}{}:
+				return nil
+			default:
+				return errors.New("已有一次热升级在进行")
+			}
+		},
+	}, log)
+	if err != nil {
+		return err
+	}
+	defer ctl.Close()
 
 	// 首次启动若无已授权设备，打配对码 + 二维码（AC-1.3）
 	if has, err := st.HasAnyDevice(); err == nil && !has {
@@ -171,11 +226,31 @@ func runServe(args []string) error {
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case err := <-errCh:
-		return err
-	case s := <-sig:
-		log.Info("收到信号，正在关闭", "signal", s.String())
+	usr2 := make(chan os.Signal, 1)
+	signal.Notify(usr2, syscall.SIGUSR2)
+	exe := currentExe()
+	// exec 时的 argv：serve + 本次的全部参数（去掉上一轮的 --handoff-fd）。
+	// 【serve 子命令要自己带上】：args 是 serve 之后的部分
+	serveArgs := append([]string{"serve"}, handoff.StripFlag(args)...)
+loop:
+	for {
+		select {
+		case err := <-errCh:
+			return err
+		case s := <-sig:
+			log.Info("收到信号，正在关闭", "signal", s.String())
+			break loop
+		case <-usr2:
+		case <-reexecReq:
+		}
+		// 热升级：成功就不会回来（exec 了）；失败解冻、照常服务、把原因记下来
+		if err := hotReexec(exe, serveArgs, a, sessions, servers, log); err != nil {
+			lastErr.Lock()
+			lastHandoffErr = err.Error()
+			lastErr.Unlock()
+			log.Error("热升级中止，服务照常", "err", err)
+			a.Hub().NoticeAll("warn", "热升级中止："+err.Error()+"。会话照常，服务未重启")
+		}
 	}
 
 	// 优雅关闭：先告诉用户【为什么】会话会没，再关（ADR-0003 的缓解措施）
@@ -234,4 +309,84 @@ func cleanupStaleRCFiles(runDir string, log *slog.Logger) {
 	if n > 0 {
 		log.Debug("清理了上次残留的 rcfile", "count", n)
 	}
+}
+
+// currentExe 是本进程的可执行文件路径。【启动时就取】：升级把磁盘上的文件换掉之后，
+// /proc/self/exe 会变成 "…/webterm (deleted)"，那时再读就晚了 —— 而我们要 exec 的
+// 正是同一路径下的新文件。
+func currentExe() string {
+	p, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(p, " (deleted)")
+}
+
+// inheritedListeners 把快照里的监听 fd 变成 Listen 需要的 name → fd。
+func inheritedListeners(snap *handoff.Snapshot) map[string]int {
+	if snap == nil || len(snap.Listeners) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(snap.Listeners))
+	for _, l := range snap.Listeners {
+		out[l.Name] = l.FD
+	}
+	return out
+}
+
+// hotReexec 是热升级本身（ADR-0016）：预检 → 冻结 → 快照 → 关连接 → exec。
+// 只在失败时返回；成功则本进程映像已被替换。
+func hotReexec(exe string, serveArgs []string, a *agent.Agent, sessions *session.Manager, servers *agent.Servers, log *slog.Logger) error {
+	if exe == "" {
+		return errors.New("找不到自己的可执行文件路径")
+	}
+	if fi, err := os.Stat(exe); err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+		return fmt.Errorf("%s 不是可执行文件（升级是不是还没把新二进制装到这个位置？）", exe)
+	}
+	// ① 预检：新二进制读得懂这一版 schema 吗。exec 之后没有回头路，所以先问
+	probe := &handoff.Snapshot{Schema: handoff.Schema, InstanceID: sessions.InstanceID(), FromVersion: version}
+	if err := handoff.Check(exe, probe, 15*time.Second); err != nil {
+		return err
+	}
+	// ② 冻结：两个循环停在安全点
+	if err := sessions.Freeze(3 * time.Second); err != nil {
+		return err
+	}
+	// ③ 快照
+	snap, err := sessions.Export(version)
+	if err != nil {
+		sessions.Thaw()
+		return err
+	}
+	lns, lnFiles, err := servers.ExportListeners()
+	if err != nil {
+		snap.CloseFDs()
+		sessions.Thaw()
+		return err
+	}
+	snap.Listeners = lns
+	memf, err := handoff.Write(snap)
+	if err != nil {
+		for _, f := range lnFiles {
+			f.Close()
+		}
+		snap.CloseFDs()
+		sessions.Thaw()
+		return err
+	}
+	// ④ 告诉用户发生了什么，再关连接 —— 客户端按 out_seq 重连续传，前端无感
+	a.Hub().NoticeAll("info", "正在热升级，会话保留，稍后自动重连")
+	time.Sleep(300 * time.Millisecond)
+	a.Hub().CloseAll()
+	log.Info("热升级：exec 新二进制", "exe", exe, "sessions", len(snap.Sessions), "generation", snap.Generation)
+	// ⑤ exec。控制 socket 与 SQLite 的 fd 带 CLOEXEC，随旧映像消失；新进程自己重开
+	err = handoff.Exec(exe, serveArgs, int(memf.Fd()))
+	// 只有失败才走到这里：全部撤回
+	memf.Close()
+	for _, f := range lnFiles {
+		f.Close()
+	}
+	snap.CloseFDs()
+	sessions.Thaw()
+	return fmt.Errorf("exec %s: %w", exe, err)
 }

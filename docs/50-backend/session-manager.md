@@ -262,9 +262,37 @@ active  ──距上一个 133 标记超过 5 分钟──> inactive ──收�
 
 第 2 步很重要：会话必然会丢（[ADR-0003](../20-architecture/adr/0003-no-tmux.md)），至少要让用户知道**为什么**丢的，而不是看到一个莫名的重连失败。
 
+## 热升级交接（`SIGUSR2` / `reexec`，[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）
+
+升级**不走**上面的关闭流程。agent 原地 `exec` 新二进制，会话跟着进程一起活下来：
+
+```
+1. 预检：以子进程跑新二进制 `webterm handoff-check`，喂元数据快照；读不了 → 中止，服务照常
+2. Freeze：拒新连接；给每个会话的 ptmx 设一个已过期的读 / 写 deadline，把阻塞在
+   Read / Write 里的 readLoop / writeLoop 打断，两个循环停在安全点（consume 之后、
+   pop 之前）。写了一半的输入把剩下的部分放回队首
+3. Export：持 s.mu 拍快照 —— 见下表；ring 导出为 (base_seq, 字节)，OSC 解析器导出中间态，
+   输入队列导出未写完的条目
+4. 广播 notice{level:"info"} 「正在热升级，会话保留，稍后自动重连」，关闭所有 WebSocket
+5. 清 CLOEXEC，syscall.Exec(新二进制, serve …原参数… --handoff-fd N)
+6. 新进程：Manager.Restore —— os.NewFile 接回 ptmx（O_NONBLOCK 在 fd 上，接回来就是
+   可轮询的），os.FindProcess 接回 shell，ringbuf.Restore / oscparse.Restore，
+   输入队列重新入队，三个 goroutine 重新起
+```
+
+任何一步失败（预检、memfd、exec 返回）→ `Thaw`：清 deadline、放行两个循环、恢复接受连接，日志 + notice 明说原因。**不自动退化成 restart**。
+
+进快照的字段（`internal/handoff.Session`）就是 `Session` 结构体里"不能丢"的那部分：sid、ptmx fd、shell pid、rcPath、createdAt、name / nameManual、cwd、status / exitCode、cols / rows、integration / promptState / helloSeen / lastMark / lastInput、ring（base + 字节）、inQueued / inAck、OSC 解析器状态、pendCmd / curCmdID / curCmdAt、unmarkedRuns / unmarkedInput、未写完的输入。**不进**快照的：订阅者、探针（probe*）—— 连接会重建，探针重新武装。已退出的会话（ring 保留供回看）也交接，只是没有 fd 和 pid。
+
+Manager 级别：`instance_id`（**不变**，客户端才能 `resume` 成 `ok`）、`nextSID`、代数 `generation`（每交接一次 +1，`webterm reload` 靠它判断新进程已接手）。
+
+**冻结期间的不变式**：readLoop 停在 `consume` 之后，所以 ring 与 `out_seq` 一致；writeLoop 停在 `pop` 之前，所以 `inAck` 与真正写进 PTY 的字节一致；两者都不再动，`Export` 拍到的就是一个自洽的切面。新增会话字段时先问"要不要进快照"。
+
+控制 socket：`<data-dir>/run/agent.sock`（0600），一行 JSON 请求一行应答。`{"op":"status"}` → 版本、pid、generation、会话数、忙碌数（`promptState == running`）、`handoff: true`；`{"op":"reexec"}` → 触发上面的流程。`SIGUSR2` 等价。
+
 ## 崩溃残留清理
 
-agent 启动时：删除运行时目录下所有 `rc-*.bash` 文件（上次崩溃残留）。
+agent 启动时：删除运行时目录下所有 `rc-*.bash` 文件（上次崩溃残留）。**带 `--handoff-fd` 启动时跳过**：那些 rcfile 属于正被交接过来的会话，由它们各自关闭时删除。
 
 不需要清理 PTY 或进程 —— agent 死亡时 PTY master 关闭，shell 收到 `SIGHUP` 自行退出。
 

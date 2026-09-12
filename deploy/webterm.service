@@ -21,6 +21,9 @@ ExecStart=/usr/local/bin/webterm serve --domain term.example.com
 Restart=on-failure
 RestartSec=3
 
+# 热升级（ADR-0016）：reload = 原地 exec 新二进制，会话保留
+ExecReload=/bin/kill -USR2 $MAINPID
+
 # 优雅关闭：给 agent 时间广播"即将重启"并关闭会话
 KillSignal=SIGTERM
 TimeoutStopSec=15

@@ -46,6 +46,9 @@ func runUpdate(args []string) error {
 	// --script 用本地的 install.sh，不去下载。离线部署、自建源、
 	// 以及从源码树里验证改动时用得上。
 	local := fs.String("script", "", "用本地的 install.sh（默认从仓库取最新的）")
+	// 两个一次性开关（ADR-0016）：都不记进 install-state
+	whenIdle := fs.Bool("when-idle", false, "等所有会话都停在提示符再动")
+	forceRestart := fs.Bool("force-restart", false, "不热升级，走 systemctl restart（会关闭所有会话）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -85,6 +88,12 @@ func runUpdate(args []string) error {
 	// --if-newer 让 install.sh 在版本没变时【什么都不动】。
 	// 不能无条件重装：那会重启服务，把正在用的会话踢掉。
 	full := append([]string{scriptPath}, append(installArgs, "--if-newer")...)
+	if *whenIdle {
+		full = append(full, "--when-idle")
+	}
+	if *forceRestart {
+		full = append(full, "--force-restart")
+	}
 	if *dryRun {
 		fmt.Printf("  $ bash %s\n", strings.Join(full, " "))
 		return nil

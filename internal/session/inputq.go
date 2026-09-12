@@ -3,6 +3,8 @@ package session
 import (
 	"errors"
 	"sync"
+
+	"github.com/sunhaijun/webterm/internal/handoff"
 )
 
 // maxInputQueueBytes 是每会话输入队列的上限（协议 §5.5）。
@@ -101,5 +103,53 @@ func (q *inputQueue) close() {
 	select {
 	case q.notify <- struct{}{}:
 	default:
+	}
+}
+
+// pushFront 把一段没写完的输入放回队首（写被 deadline 打断时用，ADR-0016）。
+// 不受字节上限约束 —— 它本来就在队里。
+func (q *inputQueue) pushFront(it inputItem) {
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return
+	}
+	q.items = append([]inputItem{it}, q.items...)
+	q.bytes += len(it.data)
+	q.mu.Unlock()
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+// snapshot 导出还没写进 PTY 的全部输入（热升级交接）。
+func (q *inputQueue) snapshot() []handoff.PendingInput {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		return nil
+	}
+	out := make([]handoff.PendingInput, 0, len(q.items))
+	for _, it := range q.items {
+		out = append(out, handoff.PendingInput{ClientID: it.clientID, Data: append([]byte(nil), it.data...)})
+	}
+	return out
+}
+
+// restore 在新进程里把交接过来的输入原样排回队列。记账（inQueued）随会话一起
+// 恢复，这里不再计。
+func (q *inputQueue) restore(items []handoff.PendingInput) {
+	q.mu.Lock()
+	for _, it := range items {
+		q.items = append(q.items, inputItem{clientID: it.ClientID, data: append([]byte(nil), it.Data...)})
+		q.bytes += len(it.Data)
+	}
+	q.mu.Unlock()
+	if len(items) > 0 {
+		select {
+		case q.notify <- struct{}{}:
+		default:
+		}
 	}
 }

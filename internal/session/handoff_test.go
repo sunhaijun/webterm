@@ -1,0 +1,239 @@
+package session_test
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sunhaijun/webterm/internal/handoff"
+	"github.com/sunhaijun/webterm/internal/protocol"
+	"github.com/sunhaijun/webterm/internal/session"
+)
+
+// IT-handoff-1：跨交接的字节级连续性（ADR-0016，AC-2.14）。
+//
+// 与 TestByteLevelContinuity 同一把尺子：一段输出中途做一次 Freeze → Export →
+// 新 Manager Restore，同一个"客户端"接着订阅，最终屏幕与从未交接时逐字节一致。
+// 同进程内做而不真的 exec：fd 与 pid 在同一个进程里同样有效，测的正是状态
+// 搬运有没有漏、有没有重；真 exec 由 E2E-26 覆盖。
+//
+// 旧 Manager【不能 Shutdown】—— 那会杀掉 shell；交接之后它就是一具空壳。
+func TestHandoffByteLevelContinuity(t *testing.T) {
+	run := func(t *testing.T, handoffs int) string {
+		c := cfg()
+		c.RingBytes = 1 << 20
+		m := session.NewManager(c, nil)
+		s := create(t, m)
+		conn := newConn(t, m, "tab")
+		s.Subscribe(conn, 0)
+		waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+		if err := conn.Send(s, emitScript(400)); err != nil {
+			t.Fatal(err)
+		}
+		for range handoffs {
+			time.Sleep(3 * time.Millisecond)
+			// 断线 + 交接：连接层此刻会关掉所有 WebSocket
+			conn.Detach()
+			at := conn.OutSeq()
+			s.Unsubscribe(conn)
+			if err := m.Freeze(2 * time.Second); err != nil {
+				t.Fatal(err)
+			}
+			snap, err := m.Export("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.RemoveObserver(conn)
+
+			m2 := session.NewManager(c, nil)
+			if err := m2.Restore(snap); err != nil {
+				t.Fatal(err)
+			}
+			s2, ok := m2.Get(s.SID())
+			if !ok {
+				t.Fatal("交接后找不到会话")
+			}
+			if m2.InstanceID() != m.InstanceID() || m2.Generation() != m.Generation()+1 {
+				t.Fatalf("instance_id / generation 不对: %s→%s gen %d→%d", m.InstanceID(), m2.InstanceID(), m.Generation(), m2.Generation())
+			}
+			m, s = m2, s2
+			m.AddObserver(conn)
+			conn.Attach()
+			s.Subscribe(conn, at)
+		}
+		t.Cleanup(m.Shutdown)
+		waitScreen(t, conn, "EMIT-DONE")
+		waitQuiet(t, s, 300*time.Millisecond)
+		if conn.Resets() != 0 || conn.gaps != 0 || conn.dups != 0 {
+			t.Fatalf("seq 记账出错: resets=%d gaps=%d dups=%d", conn.Resets(), conn.gaps, conn.dups)
+		}
+		// shell 还活着：交接之后仍能执行命令
+		if handoffs > 0 {
+			if err := conn.Send(s, "echo ALIVE-$((40+2))\r"); err != nil {
+				t.Fatal(err)
+			}
+			waitScreen(t, conn, "ALIVE-42")
+			// 去掉这段尾巴再比较 —— 基准没有它
+			screen := conn.Screen()
+			return screen[:strings.Index(screen, "EMIT-DONE")+len("EMIT-DONE")]
+		}
+		screen := conn.Screen()
+		return screen[:strings.Index(screen, "EMIT-DONE")+len("EMIT-DONE")]
+	}
+
+	baseline := run(t, 0)
+	if len(baseline) < 4096 {
+		t.Fatalf("基准输出只有 %d 字节", len(baseline))
+	}
+	for _, n := range []int{1, 3} {
+		t.Run(itoa(n)+"次交接", func(t *testing.T) {
+			got := run(t, n)
+			if got == baseline {
+				return
+			}
+			i := 0
+			for i < len(got) && i < len(baseline) && got[i] == baseline[i] {
+				i++
+			}
+			t.Fatalf("跨交接的字节级连续性被破坏：第 %d 字节起分歧\n基准 %q\n实际 %q", i, sample(baseline, i), sample(got, i))
+		})
+	}
+}
+
+// 冻结期间到达的输入不丢不重：它躺在队列里随快照走，新进程写进 PTY 并 ack。
+func TestHandoffCarriesPendingInput(t *testing.T) {
+	m := session.NewManager(cfg(), nil)
+	s := create(t, m)
+	conn := newConn(t, m, "tab")
+	s.Subscribe(conn, 0)
+	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+	waitQuiet(t, s, 200*time.Millisecond)
+
+	if err := m.Freeze(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// 冻结中提交输入：只能入队，写不进 PTY
+	if err := conn.Send(s, "echo PEND-$((20+3))\r"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if s.InAck("tab") != 0 {
+		t.Fatalf("冻结期间不该写进 PTY，inAck=%d", s.InAck("tab"))
+	}
+	snap, err := m.Export("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Sessions) != 1 || len(snap.Sessions[0].Pending) != 1 {
+		t.Fatalf("待写输入没进快照: %+v", snap.Sessions)
+	}
+	at := conn.OutSeq()
+	conn.Detach()
+	s.Unsubscribe(conn)
+	m.RemoveObserver(conn)
+
+	m2 := session.NewManager(cfg(), nil)
+	t.Cleanup(m2.Shutdown)
+	if err := m2.Restore(snap); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := m2.Get(s.SID())
+	m2.AddObserver(conn)
+	conn.Attach()
+	s2.Subscribe(conn, at)
+	waitScreen(t, conn, "PEND-23")
+	waitFor(t, "ack 追上", func() bool { return s2.InAck("tab") == uint64(len("echo PEND-$((20+3))\r")) })
+	if conn.gaps != 0 || conn.dups != 0 {
+		t.Fatalf("seq 记账出错: gaps=%d dups=%d", conn.gaps, conn.dups)
+	}
+	// 回显里是未展开的 PEND-$((20+3))，展开后的 PEND-23 只能来自命令结果 —— 恰好一次。
+	// 多了就是同一段输入被写进 PTY 两遍
+	if n := strings.Count(conn.Screen(), "PEND-23"); n != 1 {
+		t.Fatalf("PEND-23 出现 %d 次，输入被重复写入了", n)
+	}
+}
+
+// 预检失败路径：Freeze 之后 Thaw，会话照常工作、输出不丢。
+func TestFreezeThawResumes(t *testing.T) {
+	m := newManager(t, cfg())
+	s := create(t, m)
+	conn := newConn(t, m, "tab")
+	s.Subscribe(conn, 0)
+	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+
+	if err := conn.Send(s, emitScript(200)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if err := m.Freeze(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Create(session.Spec{CWD: t.TempDir(), Cols: 80, Rows: 24}); err != session.ErrFrozen {
+		t.Fatalf("冻结期间 Create 应当返回 ErrFrozen，实际 %v", err)
+	}
+	head := s.HeadSeq()
+	time.Sleep(150 * time.Millisecond)
+	if s.HeadSeq() != head {
+		t.Fatal("冻结期间 ring 不该增长")
+	}
+	m.Thaw()
+	waitScreen(t, conn, "EMIT-DONE")
+	if conn.gaps != 0 || conn.dups != 0 || conn.Resets() != 0 {
+		t.Fatalf("解冻后记账出错: gaps=%d dups=%d resets=%d", conn.gaps, conn.dups, conn.Resets())
+	}
+	if !strings.Contains(conn.Screen(), "line 200") {
+		t.Fatal("解冻后输出不完整")
+	}
+}
+
+// 已退出的会话也交接：ring 保留供回看（AC-4.5），没有 fd 与进程。
+func TestHandoffKeepsExitedSession(t *testing.T) {
+	m := session.NewManager(cfg(), nil)
+	s := create(t, m)
+	conn := newConn(t, m, "tab")
+	s.Subscribe(conn, 0)
+	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+	if err := conn.Send(s, "echo BYE-$((1+1)); exit 7\r"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "会话退出", func() bool { return s.Status() == protocol.StatusExited })
+	waitScreen(t, conn, "BYE-2")
+
+	if err := m.Freeze(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := m.Export("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := snap.Sessions[0]
+	if hs.Status != protocol.StatusExited || hs.PtmxFD != -1 || hs.ShellPID != 0 || hs.ExitCode == nil || *hs.ExitCode != 7 {
+		t.Fatalf("已退出会话的快照不对: %+v", hs)
+	}
+	m2 := session.NewManager(cfg(), nil)
+	t.Cleanup(m2.Shutdown)
+	if err := m2.Restore(snap); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := m2.Get(s.SID())
+	info := s2.Snapshot()
+	if info.Status != protocol.StatusExited || info.HeadSeq != s.HeadSeq() {
+		t.Fatalf("恢复后状态不对: %+v", info)
+	}
+	c2 := newConn(t, m2, "tab2")
+	s2.Subscribe(c2, 0)
+	if !strings.Contains(c2.Screen(), "BYE-2") {
+		t.Fatal("恢复后回看不到退出前的输出")
+	}
+	if _, err := m2.Close(s2.SID()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Validate 挡住不完整的快照，Restore 不会带着半套状态起来。
+func TestRestoreRejectsBadSnapshot(t *testing.T) {
+	m := newManager(t, cfg())
+	if err := m.Restore(&handoff.Snapshot{Schema: handoff.Schema + 1, InstanceID: "x"}); err == nil {
+		t.Fatal("schema 太新必须拒绝")
+	}
+}

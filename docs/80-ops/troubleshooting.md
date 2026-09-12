@@ -26,6 +26,8 @@ ss -lntp | grep -E ':(80|443)\b'   # 必须为空（除了 webterm 自己）
 | `bind: address already in use` | 80 或 443 被占（nginx/apache/caddy） | 停掉它，或改用反代模式（[`install.md`](install.md#反向代理--隧道场景)） |
 | `bind: permission denied` | 没有绑特权端口的权限 | `sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm` |
 | 升级完行为没变，像是没装上 | 磁盘上是新的，跑着的还是旧进程。`webterm version` 看磁盘，`systemctl --user show webterm -p ExecMainStartTimestamp` 看进程什么时候起的 | `systemctl --user restart webterm`。（`install.sh` 现在会自动重启并确认起来了；这条留给手工替换二进制的情况） |
+| `webterm update` / `reload` 说「热升级中止」 | 新二进制的预检没过（`journalctl --user -u webterm -n 50` 里有 `热升级中止` 与原因：schema 不认、二进制不可执行、冻结超时）。此时**运行的仍是旧版本、会话照常** | 修好原因后重跑 `webterm reload`；或接受丢会话 `webterm update --force-restart`（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)） |
+| `webterm reload` 说「不支持热升级或没在跑」 | 运行中的是升级前的老版本，没有控制 socket（`<data-dir>/run/agent.sock`）；老版本不认 `SIGUSR2`（默认动作是终止，别手动发） | 这一次只能 `systemctl --user restart webterm`（会关闭会话）；之后的升级就能热升了 |
 | 配对成功但客户端【一直重试连接】 | `/ws` 被 Origin 校验 403。日志里搜 `WebSocket 被拒`，它会打出实际收到的 Origin 和期望值 | 二者不符时确认 `--https-port` 与对外访问用的端口一致 —— 浏览器在非默认端口上发的 Origin 带端口号 |
 | `install.sh` 说「找不到 setcap」 | 没装 libcap（`setcap` 在 `/usr/sbin`，普通用户 PATH 里没有 sbin，但脚本会去那儿找） | `sudo apt install libcap2-bin`，或换成 1024 以上的端口 |
 | `no viable challenge type found`（最常见）或 `Invalid response from http://...` | CA 连不上本机 —— 80 和 443 上的挑战都没过 | **先查云安全组**（最常漏的一步）：在别的机器上 `curl -sI http://<域名>/`，超时就是没放行。再查本机 `ufw status` |

@@ -474,19 +474,19 @@ $XDG_DATA_HOME/webterm/     （默认 ~/.local/share/webterm/）
 
 ## 升级
 
-> ⚠️ **升级会关闭所有会话。** 这是 [ADR-0003](../20-architecture/adr/0003-no-tmux.md) 的已知取舍：agent 持有 PTY，进程重启则 shell 收到 `SIGHUP`。
+**热升级不丢会话**（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）：agent 原地换成新二进制，PID 不变，各会话的 shell、环形缓冲、序号一并交接过去。浏览器只会看到状态灯闪一下然后自动重连，正在跑的 vim / claude / ssh 都在原处。
 
 ```bash
-# 1. UI 上确认没有正在跑的重要任务
-# 2. 替换二进制
+# 1. 替换二进制（file capability 会丢，要重做 setcap）
 sudo install -m755 webterm-new /usr/local/bin/webterm
-# 3. 重启
-systemctl --user restart webterm
+sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm
+# 2. 让运行中的 agent 原地换成新二进制
+webterm reload              # 或 systemctl --user reload webterm
 ```
 
-agent 收到 `SIGTERM` 时会先向所有客户端广播"agent 即将重启，所有会话将结束"再退出，所以你至少能看到发生了什么，而不是一个莫名的重连失败。
+`webterm reload` 先让新二进制预检快照能不能读，读不了就**中止、服务照常**，不会自动退化成重启。要接受丢会话就走老路：`systemctl --user restart webterm`。`webterm reload --when-idle` 等所有会话都停在提示符再动。
 
-**命令历史存在 SQLite 里，跨重启存活** —— "我刚才在跑什么"这个信息不会丢。
+真正的重启（`systemctl restart`、`SIGTERM`）仍会关闭所有会话；agent 会先向所有客户端广播"agent 即将重启，所有会话将结束"再退出。**命令历史存在 SQLite 里，跨重启存活**。
 
 ## 看一眼现在正不正常
 
@@ -519,11 +519,19 @@ webterm v0.1.0
 ## 升级
 
 ```bash
-webterm update
+webterm update                 # 默认热升级：会话保留（ADR-0016）
+webterm update --when-idle     # 等所有会话停在提示符再动
+webterm update --force-restart # 接受丢会话，走 systemctl restart（老版本 agent 也是这条路）
 ```
 
 按 **上次装成功时那套参数** 重跑一遍安装 —— 参数记在
-`~/.config/webterm/install-state`，`install.sh` 装完时写的。
+`~/.config/webterm/install-state`，`install.sh` 装完时写的。`--when-idle` / `--force-restart`
+是一次性开关，不记进去。
+
+装完二进制、重做 setcap 之后，`install.sh` 先问运行中的 agent 支不支持交接
+（`webterm reload --probe`）：支持就 `webterm reload`，会话保留；不支持（升级前的老版本）
+或指定了 `--force-restart` 才 `systemctl --user restart`，并保留原来的"将关闭会话"提示。
+热升级预检失败会**中止并报错**，不静默重启。
 
 ```
 webterm dev-2-g8cb0cdf

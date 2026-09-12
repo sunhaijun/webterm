@@ -283,3 +283,61 @@ func TestRing4_AttrPrefixOnlyOnReset(t *testing.T) {
 		}
 	})
 }
+
+// UT-ring-10：导出 / 恢复往返（ADR-0016 热升级交接）。
+//
+// 环形缓冲交接到新进程之后，序号与内容必须一个字节都不差 —— 否则客户端
+// 重连时按 out_seq 切片就会错位，AC-2.1 在跨进程这一步被破坏。
+func TestExportRestoreRoundTrip(t *testing.T) {
+	b := ringbuf.New(64)
+	// 写到回绕、裁剪都发生过
+	for i := 0; i < 30; i++ {
+		b.Append([]byte("line-" + string(rune('a'+i%26)) + "\n"))
+	}
+	base, data := b.Export()
+	if base != b.BaseSeq() || uint64(len(data)) != b.HeadSeq()-b.BaseSeq() {
+		t.Fatalf("Export 自相矛盾: base=%d BaseSeq=%d len=%d span=%d", base, b.BaseSeq(), len(data), b.HeadSeq()-b.BaseSeq())
+	}
+	r := ringbuf.Restore(64, base, data)
+	if r.BaseSeq() != b.BaseSeq() || r.HeadSeq() != b.HeadSeq() {
+		t.Fatalf("序号变了: base %d→%d head %d→%d", b.BaseSeq(), r.BaseSeq(), b.HeadSeq(), r.HeadSeq())
+	}
+	for from := b.BaseSeq(); from <= b.HeadSeq(); from++ {
+		want, ws := b.Slice(from)
+		got, gs := r.Slice(from)
+		if ws != gs || string(want) != string(got) {
+			t.Fatalf("Slice(%d) 不一致", from)
+		}
+	}
+	// 恢复之后继续 Append，行为与原缓冲一致（回绕位置不同不能影响语义）
+	b.Append([]byte("after"))
+	r.Append([]byte("after"))
+	if bs, _ := b.Slice(b.BaseSeq()); string(bs) != func() string { rs, _ := r.Slice(r.BaseSeq()); return string(rs) }() {
+		t.Fatal("恢复后继续写入的结果不一致")
+	}
+}
+
+// 升级时 --ring-bytes 改小：只保留末尾，HeadSeq 不变，base 前移。
+func TestRestoreIntoSmallerCapacity(t *testing.T) {
+	b := ringbuf.New(128)
+	for i := 0; i < 10; i++ {
+		b.Append([]byte("0123456789"))
+	}
+	base, data := b.Export()
+	r := ringbuf.Restore(32, base, data)
+	if r.HeadSeq() != b.HeadSeq() {
+		t.Fatalf("HeadSeq 变了: %d → %d", b.HeadSeq(), r.HeadSeq())
+	}
+	if r.BaseSeq() != b.HeadSeq()-32 {
+		t.Fatalf("base 应前移到 head-32=%d，实际 %d", b.HeadSeq()-32, r.BaseSeq())
+	}
+	got, st := r.Slice(r.BaseSeq())
+	want, _ := b.Slice(b.HeadSeq() - 32)
+	if st != ringbuf.StatusOK || string(got) != string(want) {
+		t.Fatalf("保留的不是末尾 32 字节")
+	}
+	// 老位置现在要走 reset
+	if _, st := r.Slice(base); st != ringbuf.StatusReset {
+		t.Fatal("裁掉的位置应当判 reset")
+	}
+}

@@ -34,6 +34,7 @@ feat/<docs编号>-<主题>      例：feat/30-protocol-core
 - 前端：`npm test` 全绿
 - E2E：本地 `npm run e2e` 全绿；若改动触及协议、重连、输入或布局，必须在 `docs/70-testing/e2e-scenarios.md` 里加/改场景，**并给 PR 打 `e2e` 标签**让 CI 也跑一遍（CI 上的 E2E 按需触发，太费额度，见 `docs/70-testing/strategy.md` §CI）
 - 涉及重连的改动，**必须**跑通「字节级连续性」测试（同一段输出，中途掐断 WebSocket 后的终端缓冲区序列化结果，与不掐断时逐字节一致）
+- 涉及会话状态（`internal/session` 的字段、ringbuf、oscparse）的改动，**必须**跑通「跨交接的字节级连续性」测试（`TestHandoffByteLevelContinuity`），并检查新字段是否要进 `internal/handoff.Session` 快照
 - 涉及连接层的改动，**必须**确认读写两侧的队列都不阻塞（一条 WebSocket 复用所有会话，任一侧阻塞都会波及全部会话）
 
 ## 不变式（改代码时别破坏）

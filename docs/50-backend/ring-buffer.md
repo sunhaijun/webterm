@@ -65,6 +65,13 @@ func (b *Buffer) HeadSeq() uint64   // 累计追加的总字节数
 
 **这两条都必须有单测**（UT-ring-4）。
 
+## 导出与恢复（ADR-0016）
+
+热升级把缓冲交接给新进程：`Export()` 返回 `(base_seq, 保留内容的拷贝)`，`Restore(capacity, base, data)` 在新进程里重建。不变式：
+
+- `Restore(Export())` 之后 `BaseSeq` / `HeadSeq` 与导出时**完全相等**，对任意 `from ∈ [base, head]`，`Slice(from)` 逐字节一致 —— 这是跨进程版的 AC-2.1
+- `data` 比新容量大时只保留末尾 `capacity` 字节、`base` 相应前移，`HeadSeq` 不变（与单次 `Append` 超容量的规则一致）—— 升级时 `--ring-bytes` 改小了也不会算错序号
+
 ## 已知限制（已接受）
 
 硬裁剪可能把一个转义序列切成两半，回放起点出现少量可见垃圾字符。
