@@ -422,6 +422,17 @@ Playwright 可以派发 composition 事件。
 1. 双指张开 → `__webterm.zoom() > 1`、`.xterm-screen` 有 `scale(...)`、`__webterm.size()`（PTY cols/rows）**不变**；双击复位到 1× 且 transform 清空
 2. 捏合（缩小）不放大：`zoom()` 保持 1、transform 为空
 
+## E2E-26 热升级不丢会话（ADR-0016）
+
+`web/e2e/reexec.spec.ts`。夹具给 agent 进程发 `SIGUSR2`（`Agent.reexec()`）——
+真二进制原地 exec 同一个文件，PID 不变，stdout 管道照旧。
+
+1. 起一条持续输出的命令（300 行、每行间隔 20ms、最后打 `REEXEC-DONE`），输出中途发 `SIGUSR2`
+2. 浏览器只看到一次重连：`conn-text` 短暂离开「在线」后回到「在线」；重连后的 `welcome.resumed[0].status == "ok"`（`instance_id` 没变）
+3. 命令跑完后终端里 300 行**每行恰好一次、顺序正确**（不丢不重），`REEXEC-DONE` 在
+4. shell 仍活着：再提交一条命令有输出；`webterm reload --probe` 对新进程返回 0，`status` 里的 `generation` 为 1
+5. 预检失败路径：把 `--handoff-check-fail` 之类的注入留给 Go 集成测试（IT-handoff-1），E2E 不模拟
+
 ## 不在 E2E 覆盖范围（放手工清单）
 
 - 真机中文输入法的实际候选框行为

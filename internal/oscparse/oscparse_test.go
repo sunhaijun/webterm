@@ -341,3 +341,44 @@ func TestOSC9_OffsetsResetOnFastPath(t *testing.T) {
 		t.Fatalf("快路径后 Offsets 残留了 %d 个", len(p.Offsets()))
 	}
 }
+
+// UT-osc-restore：在半条序列处导出再恢复，与一次喂完等价（ADR-0016）。
+func TestExportRestoreMidSequence(t *testing.T) {
+	stream := []byte("before\x1b]133;C\x07mid\x1b]1701;cmd;bHMgLWxh\x07\x1b]7;file://h/tmp/x\x1bafter")
+	// 基准：一个解析器一次喂完
+	ref := oscparse.New()
+	refOut, refEv := ref.Feed(stream)
+	refOut = append([]byte(nil), refOut...)
+	refEvents := append([]oscparse.Event(nil), refEv...)
+
+	// 在每一个切点：喂前半、导出、恢复到新解析器、喂后半 —— 输出与事件必须与基准一致
+	for cut := 1; cut < len(stream); cut++ {
+		a := oscparse.New()
+		out1, ev1 := a.Feed(stream[:cut])
+		got := append([]byte(nil), out1...)
+		events := append([]oscparse.Event(nil), ev1...)
+		b := oscparse.Restore(a.Export())
+		out2, ev2 := b.Feed(stream[cut:])
+		got = append(got, out2...)
+		events = append(events, ev2...)
+		if string(got) != string(refOut) {
+			t.Fatalf("切点 %d：输出不一致\n基准 %q\n实际 %q", cut, refOut, got)
+		}
+		if len(events) != len(refEvents) {
+			t.Fatalf("切点 %d：事件数 %d ≠ 基准 %d", cut, len(events), len(refEvents))
+		}
+		for i := range events {
+			if events[i] != refEvents[i] {
+				t.Fatalf("切点 %d：事件 %d 不一致: %#v ≠ %#v", cut, i, events[i], refEvents[i])
+			}
+		}
+	}
+}
+
+func TestRestoreRejectsUnknownState(t *testing.T) {
+	p := oscparse.Restore(oscparse.State{St: 99, ID: []byte("133")})
+	out, ev := p.Feed([]byte("plain"))
+	if string(out) != "plain" || len(ev) != 0 {
+		t.Fatalf("未知状态应退回正常态: out=%q ev=%v", out, ev)
+	}
+}

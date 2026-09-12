@@ -401,6 +401,8 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 
 **为什么要 `instance_id`**：`sid` 是 `uint16` 且 agent 重启后从头分配。没有实例标识时，一个 `resume{sid:1, out_seq:很大}` 会落进"client 领先"分支 —— 屏幕上留着旧会话的内容，之后接的却是一个**毫不相干的新会话**的输出，用户无从察觉。
 
+**热升级不算重启**（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）：agent 原地 re-exec 时把 `instance_id`、每会话的环形缓冲与 `in_ack` 一并交接给新进程，所以升级后客户端重连仍是 `status: "ok"` 的增量续传，不是 `gone`。client 侧对此**无感**，走的就是上面这条流程 —— 它只会看到一次普通的断线重连。只有真正的进程重启（`SIGTERM`、崩溃）才换 `instance_id`。
+
 **关键点**：只有当前可见的会话在 `resume` 里带 `out_seq` 并被立即回放。后台会话可以在 `resume` 里报进度但暂不订阅 —— 由 client 决定，避免重连瞬间涌入大量数据。推荐做法：`resume` 只列可见会话，其它会话在用户切过去时用 `subscribe{out_seq}` 补齐。
 
 ### 5.3 输入重发队列

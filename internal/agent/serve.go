@@ -18,6 +18,8 @@ import (
 
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+
+	"github.com/sunhaijun/webterm/internal/handoff"
 )
 
 // ServeConfig 是监听与 TLS 的配置。
@@ -37,12 +39,67 @@ type ServeConfig struct {
 	// ACMEDirectoryURL 只为集成测试而存在：指向本地假 CA
 	// （internal/acmetest）。生产留空，走 Let's Encrypt。
 	ACMEDirectoryURL string
+
+	// Inherited 是热升级交接过来的监听 fd（name → fd，name 为 "http" / "https"），
+	// 有就接着用而不是重新 bind —— 端口不会有一瞬间没人听（ADR-0016）。
+	Inherited map[string]int
 }
 
-// Servers 是启动后的服务器句柄，用于优雅关闭。
+// Servers 是启动后的服务器句柄，用于优雅关闭与热升级导出监听。
 type Servers struct {
 	https *http.Server
 	http  *http.Server
+	lns   map[string]net.Listener
+}
+
+// listen 按名字开监听：交接过来的 fd 优先，否则新 bind。
+func (s *Servers) listen(cfg ServeConfig, name, addr string) (net.Listener, error) {
+	if s.lns == nil {
+		s.lns = make(map[string]net.Listener)
+	}
+	if fd, ok := cfg.Inherited[name]; ok {
+		f := os.NewFile(uintptr(fd), name)
+		if f == nil {
+			return nil, fmt.Errorf("交接的监听 fd %d（%s）无效", fd, name)
+		}
+		ln, err := net.FileListener(f)
+		_ = f.Close() // FileListener 自己 dup 了一份
+		if err != nil {
+			return nil, fmt.Errorf("接回监听 %s: %w", name, err)
+		}
+		s.lns[name] = ln
+		return ln, nil
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	s.lns[name] = ln
+	return ln, nil
+}
+
+// ExportListeners 把监听 socket 复制成可继承的 fd（ADR-0016）。
+// 返回的 *os.File 要一直持有到 exec，之后由内核在旧映像销毁时关掉。
+func (s *Servers) ExportListeners() ([]handoff.Listener, []*os.File, error) {
+	var out []handoff.Listener
+	var files []*os.File
+	for name, ln := range s.lns {
+		tl, ok := ln.(*net.TCPListener)
+		if !ok {
+			continue
+		}
+		f, err := tl.File()
+		if err != nil {
+			return nil, nil, fmt.Errorf("导出监听 %s: %w", name, err)
+		}
+		if err := handoff.Inherit(int(f.Fd())); err != nil {
+			f.Close()
+			return nil, nil, err
+		}
+		files = append(files, f)
+		out = append(out, handoff.Listener{Name: name, FD: int(f.Fd())})
+	}
+	return out, files, nil
 }
 
 // Listen 按配置启动监听。阻塞直到出错或被 Shutdown。
@@ -55,7 +112,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 		addr := fmt.Sprintf("127.0.0.1:%d", cfg.HTTPPort)
 		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog: a.httpErrorLog()}
-		ln, err := net.Listen("tcp", addr)
+		ln, err := s.listen(cfg, "http", addr)
 		if err != nil {
 			return nil, nil, describeBindError(err, cfg.HTTPPort)
 		}
@@ -72,7 +129,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 		addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.HTTPPort)
 		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog: a.httpErrorLog()}
-		ln, err := net.Listen("tcp", addr)
+		ln, err := s.listen(cfg, "http", addr)
 		if err != nil {
 			return nil, nil, describeBindError(err, cfg.HTTPPort)
 		}
@@ -111,7 +168,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 			ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog:          a.httpErrorLog(),
 		}
-		httpsLn, err := net.Listen("tcp", httpsAddr)
+		httpsLn, err := s.listen(cfg, "https", httpsAddr)
 		if err != nil {
 			return nil, nil, describeBindError(err, cfg.HTTPSPort)
 		}
@@ -124,7 +181,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 			ReadHeaderTimeout: 10 * time.Second,
 			ErrorLog:          a.httpErrorLog(),
 		}
-		httpLn, err := net.Listen("tcp", httpAddr)
+		httpLn, err := s.listen(cfg, "http", httpAddr)
 		if err != nil {
 			httpsLn.Close()
 			return nil, nil, describeBindError(err, cfg.HTTPPort)

@@ -170,3 +170,28 @@ func (b *Buffer) Replay(from uint64) (data []byte, attrPrefix bool, st Status) {
 	data, st = b.Slice(from)
 	return data, st == StatusReset, st
 }
+
+// Export 导出缓冲的全部保留内容（拷贝）及其起始 seq，供热升级交接（ADR-0016）。
+// 与 Slice(BaseSeq()) 等价，单独命名是为了让调用点说清意图。
+func (b *Buffer) Export() (base uint64, data []byte) {
+	return b.base, b.copyRange(0, b.n)
+}
+
+// Restore 用 Export 的结果在新进程里重建缓冲。
+//
+// 不变式：Restore(capacity, Export()) 之后 BaseSeq / HeadSeq 与导出时完全相等，
+// 对任意 from ∈ [base, head]，Slice(from) 逐字节一致 —— 跨进程版的 AC-2.1。
+// data 比 capacity 大时只保留末尾 capacity 字节、base 相应前移，HeadSeq 不变
+// （与单次 Append 超容量的规则一致）—— 升级时 --ring-bytes 改小了也不会算错序号。
+func Restore(capacity int, base uint64, data []byte) *Buffer {
+	b := New(capacity)
+	if len(data) > capacity {
+		base += uint64(len(data) - capacity)
+		data = data[len(data)-capacity:]
+	}
+	copy(b.buf, data)
+	b.start = 0
+	b.n = len(data)
+	b.base = base
+	return b
+}

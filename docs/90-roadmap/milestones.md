@@ -221,7 +221,7 @@ m0 ──> m1 ──> m2 ──> m3 ──> m4 ──> m6 ──> m7
 
 ## v0.3+ 的候选
 
-- **无损升级**：`ExtraFiles` 传 PTY fd + unix socket 交接会话状态，让升级不杀会话（[ADR-0003](../20-architecture/adr/0003-no-tmux.md) 的补法）
+- ~~**无损升级**~~ —— 已做：[ADR-0016](../20-architecture/adr/0016-hot-reexec.md) 原地 re-exec 交接会话（`webterm reload`）。剩下的候选是拆前台 / 会话宿主两进程，让前台崩溃也不丢会话
 - **SSH 跳板**：agent 内加 SSH 出站，连没装 agent 的机器（[ADR-0001](../20-architecture/adr/0001-agent-first-no-ssh.md) 的分层）
 - **多用户**：需要数据模型迁移
 - **本地回显预测**（mosh 式）

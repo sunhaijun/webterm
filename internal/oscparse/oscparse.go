@@ -270,3 +270,31 @@ func (p *Parser) finish1701() {
 }
 
 func isTerm(c byte) bool { return c == bel }
+
+// State 是解析器可交接的中间态（ADR-0016）。序列可能被 PTY.Read() 切在任何
+// 一个字节上，热升级又可能恰好落在那一刻 —— 不带走这几个字段，新进程会把
+// 半条 OSC 的后半段当普通输出吐出来，或者把一条 133;C 吞掉。
+//
+// out / events / offs 是单次 Feed 的临时量，调用方在下次 Feed 前必已用完，不进快照。
+type State struct {
+	St  int    `json:"st"`
+	ID  []byte `json:"id,omitempty"`
+	Pay []byte `json:"pay,omitempty"`
+}
+
+// Export 导出中间态。
+func (p *Parser) Export() State {
+	return State{St: int(p.st), ID: append([]byte(nil), p.id...), Pay: append([]byte(nil), p.pay...)}
+}
+
+// Restore 用导出的中间态重建解析器。状态值越界（来自更新的 schema）时退回正常态，
+// 宁可漏一条事件也不能让解析器停在未知状态。
+func Restore(s State) *Parser {
+	p := New()
+	if s.St >= int(stNormal) && s.St <= int(stPassEsc) {
+		p.st = state(s.St)
+	}
+	p.id = append(p.id[:0], s.ID...)
+	p.pay = append(p.pay[:0], s.Pay...)
+	return p
+}

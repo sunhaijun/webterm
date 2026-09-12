@@ -3,13 +3,17 @@ package session
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
+	"github.com/sunhaijun/webterm/internal/handoff"
 	"github.com/sunhaijun/webterm/internal/oscparse"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/ringbuf"
@@ -42,13 +46,19 @@ var (
 
 // Session 是一个 PTY + 它上面跑的 shell + 它的输出环形缓冲。
 //
-// 注意：会话不跨 agent 重启存活（ADR-0003）。
+// 会话不跨 agent【重启】存活（ADR-0003），但跨【热升级】存活（ADR-0016）：
+// 原地 exec 时 ptmx fd 与 shell 进程原样交给新进程，状态走 export / restore。
+// 新增字段时先问一句"要不要进快照"（handoff.Session 是那张清单）。
 type Session struct {
-	mgr       *Manager
-	sid       uint16
+	mgr *Manager
+	sid uint16
+	// ptmx 是【可轮询】的 master：dup 出来、置 O_NONBLOCK、os.NewFile 包起来。
+	// 只有可轮询的文件 SetReadDeadline 才管用，热升级冻结靠它打断阻塞读。
+	// 【不要对它调 Fd()】—— 那会把它切回阻塞模式（见 winsize.go）。fd 单独记着。
 	ptmx      *os.File
-	cmd       *exec.Cmd
-	rcPath    string // 临时 rcfile，销毁时删除
+	fd        int
+	proc      *os.Process // shell；交接过来的会话用 os.FindProcess 接回
+	rcPath    string      // 临时 rcfile，销毁时删除
 	createdAt time.Time
 	store     *store.Store
 	// mgrHistory 报告此刻是否记录命令历史。取成函数是因为用户可以在会话
@@ -99,6 +109,11 @@ type Session struct {
 	inputQ    *inputQueue
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// 热升级冻结（ADR-0016）：见 freeze.go
+	fz         freezer
+	readAlive  atomic.Bool
+	writeAlive atomic.Bool
 }
 
 // SID 返回会话 id。
@@ -196,6 +211,9 @@ func (s *Session) Resize(cols, rows uint16) error {
 	s.mu.Lock()
 	s.cols, s.rows = cols, rows
 	s.mu.Unlock()
+	if s.Status() != protocol.StatusRunning {
+		return nil // 已退出：只记尺寸，PTY 可能已经没了
+	}
 	return setWinsize(s.ptmx, cols, rows)
 }
 
@@ -354,6 +372,10 @@ func (s *Session) consume(chunk []byte) {
 }
 
 func (s *Session) readLoop() {
+	defer func() {
+		s.fz.exiting()
+		s.readAlive.Store(false)
+	}()
 	buf := make([]byte, ptyReadBuf)
 	for {
 		n, err := s.ptmx.Read(buf)
@@ -361,6 +383,12 @@ func (s *Session) readLoop() {
 			s.consume(buf[:n])
 		}
 		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				// 热升级冻结：deadline 只有 freeze 会设。停在这里 —— consume 已做完，
+				// ring 与 out_seq 一致 —— 等解冻再回去读
+				s.fz.park()
+				continue
+			}
 			return // EIO = shell 退出
 		}
 	}
@@ -368,12 +396,20 @@ func (s *Session) readLoop() {
 
 // writeLoop：从输入队列取数据 → PTY.Write() → 更新 in_ack。
 func (s *Session) writeLoop() {
+	defer func() {
+		s.fz.exiting()
+		s.writeAlive.Store(false)
+	}()
 	for {
+		// 冻结点在 pop 之前：队里的东西原样进快照，inAck 与已写字节一致
+		s.fz.park()
 		it, ok := s.inputQ.pop()
 		if !ok {
 			select {
 			case <-s.inputQ.notify:
 				continue
+			case <-s.fz.wake:
+				continue // 去 park
 			case <-s.done:
 				return
 			}
@@ -388,6 +424,14 @@ func (s *Session) writeLoop() {
 			s.emitTo(it.clientID, &protocol.Ack{SID: s.sid, InAck: ack})
 		}
 		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				// 冻结时写被打断（前台程序不读 stdin、PTY 输入缓冲满）：
+				// 没写完的部分放回队首，随快照走，别丢也别重
+				if n < len(it.data) {
+					s.inputQ.pushFront(inputItem{clientID: it.clientID, data: it.data[n:]})
+				}
+				continue
+			}
 			return
 		}
 	}
@@ -395,13 +439,12 @@ func (s *Session) writeLoop() {
 
 // waitLoop：等 shell 退出，设置 exited 状态与退出码。
 func (s *Session) waitLoop() {
-	err := s.cmd.Wait()
-	code := 0
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		code = ee.ExitCode()
-	} else if err != nil {
-		code = -1
+	// 用 *os.Process 而不是 exec.Cmd.Wait：交接过来的会话只有 pid（os.FindProcess），
+	// 同 PID exec 之后它们仍是子进程，Wait 照常拿退出码。
+	st, err := s.proc.Wait()
+	code := -1
+	if err == nil && st != nil {
+		code = st.ExitCode() // 被信号杀掉时是 -1，与原来 exec.ExitError 的语义一致
 	}
 
 	s.mu.Lock()
@@ -708,8 +751,8 @@ func (s *Session) checkIntegrationIdle(now time.Time) {
 // 转发了，不扫的话作业会变成孤儿继续跑。见 killSession。
 func (s *Session) close() {
 	s.closeOnce.Do(func() {
-		if s.Status() == protocol.StatusRunning && s.cmd.Process != nil {
-			pid := s.cmd.Process.Pid
+		if s.Status() == protocol.StatusRunning && s.proc != nil {
+			pid := s.proc.Pid
 			_ = syscall.Kill(-pid, syscall.SIGHUP)
 			select {
 			case <-s.done:
@@ -725,7 +768,9 @@ func (s *Session) close() {
 			// 忽略 SIGHUP 的程序）时，这是最后一道。
 			killSession(pid, syscall.SIGKILL)
 		}
-		s.ptmx.Close()
+		if s.ptmx != nil {
+			s.ptmx.Close()
+		}
 		s.inputQ.close()
 		if s.rcPath != "" {
 			os.Remove(s.rcPath)
@@ -734,6 +779,51 @@ func (s *Session) close() {
 		s.subs = map[Subscriber]struct{}{}
 		s.mu.Unlock()
 	})
+}
+
+// export 拍会话快照（ADR-0016）。【必须在 freeze 之后调用】：readLoop 停了
+// osc / pendCmd / curCmd* 这些"只在 readLoop 里访问"的字段才能安全地读。
+//
+// ptmx 交出去的是一个【dup】：新 fd 号、已清 CLOEXEC。会话自己那份保持原样 ——
+// 交接中止时不用改回来；同进程内恢复（测试）也不会撞上 epoll 里已登记的同一个 fd。
+func (s *Session) export() (handoff.Session, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	base, data := s.ring.Export()
+	h := handoff.Session{
+		SID: s.sid, PtmxFD: -1, RCPath: s.rcPath, CreatedAt: s.createdAt,
+		Name: s.name, NameManual: s.nameManual, CWD: s.cwd, Status: s.status, ExitCode: s.exitCode,
+		Cols: s.cols, Rows: s.rows, Integration: s.integration, PromptState: s.promptState,
+		HelloSeen: s.helloSeen, LastMark: s.lastMark, LastInput: s.lastInput,
+		RingBase: base, RingData: data,
+		InQueued: cloneCounts(s.inQueued), InAck: cloneCounts(s.inAck),
+		OSC: s.osc.Export(), PendCmd: s.pendCmd, CurCmdID: s.curCmdID, CurCmdAt: s.curCmdAt,
+		UnmarkedRuns: s.unmarkedRuns, UnmarkedInput: s.unmarkedInput,
+		Pending: s.inputQ.snapshot(),
+	}
+	if s.status == protocol.StatusRunning {
+		nfd, err := unix.Dup(s.fd)
+		if err != nil {
+			return h, fmt.Errorf("session %d: dup ptmx: %w", s.sid, err)
+		}
+		if err := handoff.Inherit(nfd); err != nil {
+			unix.Close(nfd)
+			return h, err
+		}
+		h.PtmxFD = nfd
+		if s.proc != nil {
+			h.ShellPID = s.proc.Pid
+		}
+	}
+	return h, nil
+}
+
+func cloneCounts(m map[string]uint64) map[string]uint64 {
+	out := make(map[string]uint64, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // optStr 把空字符串转成 nil，让 JSON 里出现的是 null 而不是 ""。
