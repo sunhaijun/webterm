@@ -94,7 +94,7 @@
 - **块动作（分片 ④）**：展开的块底部有 重跑 / 填入命令 / 复制输出 / 在终端里看。「在终端里看」切到终端视图并**滚到该块输出的第一行**、高亮 1.6s；「最大化」把块铺满整屏细看、可滚动，「恢复」回内联。**最新一条命令的块自动展开**（只留最新一条，失败的与手动展开的不被自动收起） —— client 在写入 xterm 时按 `out_seq` 把帧切开、切口处登记 marker（agent 保证 `command.*` 先于对应帧到达，见 [websocket-protocol.md](../30-protocol/websocket-protocol.md)）
 - 没有 OSC 133 标记时（ssh 出去、集成不可用），最后一个块之后的输出作为一个**尾块** live-tail —— 降级就是块数变少，不是另一种界面
 - **没有标题栏**。会话名、CWD、连接状态挤在 28px 细条里，点击展开会话切换 sheet
-- `env(safe-area-inset-*)` 用于刘海与 Home 指示条
+- **安全区**：`index.html` 用 `viewport-fit=cover` + `black-translucent`，PWA 全屏时内容延伸到刘海与 Home 指示条底下，所以四边的 `env(safe-area-inset-*)` 必须**由 `.app` 的 padding 吃掉**（`box-sizing: border-box`，JS 写的高度就是整个可视视口，内容区自然变小）。写成自定义属性 `--sa-top/right/bottom/left`：一是让 E2E 能在没有真刘海的 Chromium 里覆盖它们验证几何（E2E-10 ⑦），二是软键盘弹起时 JS 把 `--sa-bottom` 置 0 —— 键盘已经盖住 Home 指示条，再留 34px 就是白白浪费输入区。盖在 `.app` 里的东西（底部抽屉、⋯ 菜单、面板）**不要再自己加一次** `env()`，否则双倍；`position: fixed` 的（toast）才自己加
 
 tablet（`640–1023px`）同样默认读视图；desktop 默认终端视图。
 
@@ -113,7 +113,8 @@ tablet（`640–1023px`）同样默认读视图；desktop 默认终端视图。
 
 ```
 应用容器高度 = visualViewport.height
-终端高度     = 容器高度 - 细条 - 横幅 - 底栏 - safe-area
+终端高度     = 容器高度 - safe-area 上下 - 细条 - 横幅 - 底栏
+               safe-area 由 .app 的 padding 承担（--sa-*），键盘弹起时下边按 0 算
                底栏：手机 / 平板恒为一个定高的槽（--slot-h：56px；short 40px）。
                      终端态的键行正好填满槽位、不盖终端；编辑面板往上长盖住终端、不挤画布（ADR-0015）；
                      桌面 = 快捷条 + 功能键条 + Composer（经典布局）

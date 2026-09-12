@@ -237,6 +237,7 @@ Playwright 可以派发 composition 事件。
 4. 聚焦 Composer（模拟 `visualViewport` 收缩）→ 终端区收缩，功能键条与 Composer 仍完全可见，布局无跳动
 5. 断言：`resize` 消息发出，cols/rows 更新
 6. 切到横屏（`844 × 390`）→ `short` 布局生效（功能键条 32px、快捷命令条隐藏）
+7. **安全区**（PWA 全屏刘海 / Home 指示条）：Chromium 里 `env(safe-area-inset-*)` 恒为 0，所以直接在 `.app` 上覆盖 `--sa-top: 47px`、`--sa-bottom: 34px` → 状态栏顶边落到 47px、键行底边离 `.app` 底边 34px、`.app` 高度不变（JS 写的可视视口高度）、终端正好矮 81px、页面不溢出；再把 `--sa-bottom` 清掉 → 全部复位
 
 > **注**：Playwright 无法真正弹出软键盘。这里通过直接修改容器高度并派发 `visualViewport` resize 事件来模拟。真机验证放在手工清单。
 

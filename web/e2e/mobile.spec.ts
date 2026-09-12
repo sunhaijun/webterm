@@ -147,3 +147,65 @@ test('功能键条横向可滚，且不撑破页面', async ({ page }) => {
   expect(kb!.scrollW, '键的总宽超过一屏才需要滚').toBeGreaterThan(kb!.clientW)
   expect(kb!.docScrollW, '但它不该把页面撑宽').toBeLessThanOrEqual(kb!.viewportW + 1)
 })
+
+/**
+ * E2E-10 ⑦ 安全区：PWA 全屏（viewport-fit=cover + black-translucent）时内容延伸到刘海
+ * 与 Home 指示条底下，四边的 inset 必须由 .app 的 padding 吃掉。Chromium 里
+ * env(safe-area-inset-*) 恒为 0，所以直接覆盖 .app 上的 --sa-* 自定义属性来验几何。
+ *
+ * 真机上出过：状态栏顶到刘海底下、键行压在 Home 指示条上 —— 因为没人吃 inset。
+ */
+test('PWA 安全区：刘海与 Home 指示条的 inset 落在 .app 上，终端相应变矮，页面不溢出', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await page.waitForTimeout(300)
+
+  const geo = () =>
+    page.evaluate(() => {
+      const r = (sel: string) => {
+        const el = document.querySelector(sel)
+        if (!el) return null
+        const b = el.getBoundingClientRect()
+        return { top: Math.round(b.top), bottom: Math.round(b.bottom), height: Math.round(b.height), left: Math.round(b.left) }
+      }
+      return {
+        app: r('.app')!, statusbar: r('.statusbar')!, term: r('.term')!, bottom: r('.bottom')!,
+        scrollH: document.documentElement.scrollHeight, vh: window.innerHeight,
+      }
+    })
+  const before = await geo()
+  expect(before.statusbar.top, '没有刘海时状态栏贴顶').toBe(0)
+
+  // 模拟 iPhone 竖屏：刘海 47px、Home 指示条 34px、横向 0
+  await page.evaluate(() => {
+    const app = document.querySelector('.app') as HTMLElement
+    app.style.setProperty('--sa-top', '47px')
+    app.style.setProperty('--sa-bottom', '34px')
+  })
+  await page.waitForTimeout(250)
+  const after = await geo()
+  expect(after.app.height, '.app 高度是 JS 写的可视视口高度，不该变').toBe(before.app.height)
+  expect(after.statusbar.top, '状态栏让出刘海').toBe(47)
+  expect(after.app.bottom - after.bottom.bottom, '键行让出 Home 指示条').toBe(34)
+  expect(after.term.height, '终端正好矮掉上下 inset').toBe(before.term.height - 81)
+  expect(after.scrollH, '页面不该因此溢出').toBeLessThanOrEqual(after.vh + 1)
+
+  // 横屏刘海在侧边：左右 inset 也要让
+  await page.evaluate(() => {
+    const app = document.querySelector('.app') as HTMLElement
+    app.style.setProperty('--sa-left', '44px')
+  })
+  await page.waitForTimeout(250)
+  expect((await geo()).term.left, '终端让出侧边刘海').toBe(44)
+
+  // 复位
+  await page.evaluate(() => {
+    const app = document.querySelector('.app') as HTMLElement
+    for (const p of ['--sa-top', '--sa-bottom', '--sa-left']) app.style.removeProperty(p)
+  })
+  await page.waitForTimeout(250)
+  const reset = await geo()
+  expect(reset.statusbar.top).toBe(0)
+  expect(reset.term.height).toBe(before.term.height)
+})
