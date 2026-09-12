@@ -567,16 +567,14 @@ export function App() {
   const running = mode.mode === 'raw' // 有命令在跑
   const degraded = active?.integration === 'inactive' // 没有集成：不知道在跑什么，键条常给（含 ^C）
   const showKeys = running || interactive || degraded // 底栏要不要挂功能键条
-  const forceTerminal = altScreen && coarse // 全屏 TUI：强制终端输入，编辑面板对它没意义
-  const editing = sheet !== 'closed' && !forceTerminal // 编辑面板是否显示（否则终端输入）
-  // 终端输入态底栏的前导键：互切（切到编辑面板；全屏 TUI 下不给）+ ⋯
+  const editing = sheet !== 'closed' // 编辑面板是否显示（否则终端输入）
+  // 终端输入态底栏的前导键：互切键（切到编辑面板）+ ⋯。互切键【始终给】——
+  // claude / codex 也走备用缓冲，但它们最需要编辑面板整段发 prompt，不能像 vim 那样藏掉。
   const termLead = (
     <>
-      {!forceTerminal && (
-        <button class="keybar-key keybar-lead input-toggle" data-testid="to-edit" aria-label="切到编辑面板" onClick={toEdit}>
-          ⌨▸编辑
-        </button>
-      )}
+      <button class="keybar-key keybar-lead input-toggle" data-testid="to-edit" aria-label="切到编辑面板" onClick={toEdit}>
+        ⌨▸编辑
+      </button>
       <button class="keybar-key keybar-lead" data-testid="open-more" aria-label="更多" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>
         ⋯
       </button>
@@ -793,9 +791,9 @@ export function App() {
             onEditKey={editKey}
             onSend={() => composerRef.current?.submit()}
             onSendHold={() => {
-              // 长按发送 = 只粘贴不回车：给 codex 的数字选项、y/n 这类想自己按回车的场合
+              // 长按发送 = 只粘贴不回车：给 codex 的数字选项、y/n 这类想自己按回车的场合。
+              // 发完【留在编辑面板】—— 连着发是常态，别每次把人踢回终端（用 ✎▸终端 才回）
               sendToProgram(composerRef.current?.take() ?? '')
-              changeSheet('closed')
             }}
             lead={
               <button class="input-toggle" data-testid="to-terminal" aria-label="切到终端输入" onPointerDown={(e) => e.preventDefault()} onClick={toTerminal}>
@@ -816,10 +814,7 @@ export function App() {
             <Composer
               hidden={false}
               placeholder={program ? `输入给 ${program}…` : '输入命令…'}
-              onSubmit={(text) => {
-                submitText(text)
-                changeSheet('closed')
-              }}
+              onSubmit={(text) => submitText(text)}
               onRaw={(bytes) => sendRawRef.current(bytes)}
               onHandle={(h) => {
                 composerRef.current = h
@@ -842,7 +837,7 @@ export function App() {
                 // 键条【单独一行、整行铺开】—— 前导键放上面那行，别把 ^C / 方向键挤出免滚区
                 <KeyBar
                   mode="raw"
-                  context={{ altScreen: forceTerminal, program }}
+                  context={{ altScreen, program }}
                   onRaw={(bytes) => sendRawRef.current(bytes)}
                   onComposerKey={() => {}}
                 />
