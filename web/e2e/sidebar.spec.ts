@@ -1,8 +1,9 @@
 /**
  * E2E-32 侧栏拖宽与收起（AC-5.12）
  *
- * 核心断言不是「宽度变了」，而是【拖动全程只发一条 resize】—— 侧栏是主栅格的一列，
- * 拖它就是在改终端几何，每帧 fit() 一次就会让 vim / claude 整屏重绘（layout-responsive.md §desktop）。
+ * 核心断言不是「宽度变了」，而是【拖动期间什么都没重排】—— 侧栏是主栅格的一列，
+ * 拖它就是在改终端几何。所以拖动只让分隔条自己跟手（transform 预览），
+ * 松手才落一次宽度、补一条 resize（ADR-0021 / layout-responsive.md §desktop）。
  */
 import { expect, test, type Page } from '@playwright/test'
 
@@ -38,6 +39,15 @@ async function handleAt(p: Page): Promise<{ x: number; y: number }> {
   return { x: Math.round((r.left + r.right) / 2), y: 400 }
 }
 
+/**
+ * 分隔条【视觉上】在哪儿 —— 拖动中它就是预览线（ADR-0021）。
+ * 量的是屏幕位置，所以 transform 平移算数；`.sidebar` 的宽度不算。
+ */
+async function edgeAt(p: Page): Promise<number> {
+  const r = (await rect(p, '.sidebar-resizer'))!
+  return Math.round((r.left + r.right) / 2)
+}
+
 async function open(page: Page) {
   await agent.pair(page)
   await page.goto(agent.baseURL)
@@ -54,28 +64,58 @@ async function open(page: Page) {
 test.describe('1440×900 鼠标键盘', () => {
   test.use({ viewport: { width: 1440, height: 900 } })
 
-  test('拖分隔条改宽：布局跟着手指走，但拖动全程只发一条 resize', async ({ page }) => {
+  test('拖分隔条只预览：拖动中一点不重排，松手才落宽度，全程只发一条 resize', async ({ page }) => {
     await open(page)
     expect(await sidebarWidth(page)).toBe(240)
     const before = await resizes(page)
     const wide = await cols(page)
 
     const h = await handleAt(page)
+    const e0 = await edgeAt(page)
     await page.mouse.move(h.x, h.y)
     await page.mouse.down()
     await page.mouse.move(h.x + 120, h.y, { steps: 12 })
 
-    // 松手【之前】：宽度已经跟过去了，但一条 resize 都没发
-    expect(await sidebarWidth(page), '拖动中布局实时跟随').toBeGreaterThan(330)
+    // 松手【之前】：跟着指针走的只有分隔条自己，侧栏与终端一点没动
+    expect(await edgeAt(page), '预览线跟着指针走').toBe(e0 + 120)
+    expect(await sidebarWidth(page), '拖动中侧栏不重排').toBe(240)
+    expect(await cols(page), '拖动中终端不重排').toBe(wide)
     expect(await resizes(page), '拖动中不发 resize').toBe(before)
 
     await page.mouse.up()
+    // 落点就是刚才预览线所在的位置
     await expect.poll(() => sidebarWidth(page)).toBe(360)
     await expect.poll(() => resizes(page), { message: '松手后补发一条' }).toBe(before + 1)
     // 再等一拍，确认没有第二条追进来
     await page.waitForTimeout(400)
     expect(await resizes(page)).toBe(before + 1)
     expect(await cols(page), '终端变窄了').toBeLessThan(wide)
+    expect(await edgeAt(page), '松手后清掉 transform，分隔条回到列边界上').toBe(e0 + 120)
+  })
+
+  test('预览 = 松手结果：吸附与收起判定在拖动中就看得见', async ({ page }) => {
+    await open(page)
+    const e0 = await edgeAt(page)
+
+    // 拖 10px：过了「算拖不算点」的 6px 门槛，又在吸附区（≤12px）里 ——
+    // 预览线【当场】吸附回 240，不等松手
+    let h = await handleAt(page)
+    await page.mouse.move(h.x, h.y)
+    await page.mouse.down()
+    await page.mouse.move(h.x + 10, h.y, { steps: 3 })
+    expect(await edgeAt(page), '预览线吸附回 240').toBe(e0)
+    await page.mouse.up()
+    await expect.poll(() => sidebarWidth(page)).toBe(240)
+
+    // 往左拖过收起门槛（200 × 0.6 = 120）：预览线【当场】贴到左缘
+    h = await handleAt(page)
+    await page.mouse.move(h.x, h.y)
+    await page.mouse.down()
+    await page.mouse.move(100, h.y, { steps: 8 })
+    expect(await edgeAt(page), '预览线贴左缘 = 松手会收起').toBe(e0 - 240)
+    expect(await sidebarWidth(page), '但此刻还没收起').toBe(240)
+    await page.mouse.up()
+    await expect.poll(() => state(page)).toBe('closed')
   })
 
   test('上下限：右拖撞 480，左拖过门槛即收起', async ({ page }) => {
@@ -116,6 +156,9 @@ test.describe('1440×900 鼠标键盘', () => {
     await page.mouse.move(h.x, h.y)
     await page.mouse.down()
     await page.mouse.move(320, h.y, { steps: 10 })
+    // 拖动中【不提前展开】：统一走预览，松手才落地（ADR-0021）
+    expect(await state(page), '拖动中还是收起态').toBe('closed')
+    expect(await edgeAt(page), '预览线已经跟到指针').toBe(320)
     await page.mouse.up()
     await expect.poll(() => state(page)).toBe('open')
     // 【拖的是相对位移】：抓住哪儿哪儿跟手，所以落点是「拖到的位置 − 起手点」，
