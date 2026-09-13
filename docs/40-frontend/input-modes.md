@@ -145,6 +145,29 @@ compositionend    → composing=false，隐藏浮层，把 event.data 一次性�
 
 内联预览浮层：绝对定位到 xterm 的当前光标屏幕坐标（`terminal.buffer.active.cursorX/cursorY` × cell 尺寸），显示未提交的组字内容 + 下划线。让用户知道自己在打什么。
 
+### 直接插入的文本（AC-3.14）
+
+组字只是一半。另一半是**软键盘不经过组字、直接插进来的字符** —— iOS 中文键盘的全角标点就走这条路。**这条路 xterm 5.5 接不住**，两头都不接：
+
+| xterm 的路 | 它的条件 | iOS 全角标点为什么落空 |
+|---|---|---|
+| `keydown` 直接取字 | `keyCode >= 48 && key.length === 1` | iOS 对这类直接插入报 **`keyCode` 0** |
+| `input` 事件兜底 | `!composed \|\| !_keyDownSeen` | keydown 已经发生过（`_keyDownSeen` 为真），整个 `input` 事件被忽略 |
+| `keyCode === 229` 的 textarea 差量 | 只在 `keyCode` 恰好是 229 时 | 不是 229 就不走这条 |
+
+于是「逗号进不去、句号能进」这种现象就出现了 —— 同一个键盘上，一个键报 `keyCode` 0（两头都不接，字丢掉），另一个键报 229（走差量路，能进）。
+
+**做法：非组字的 `insertText` 由 `RawIme` 自己接管**：在 `beforeinput` 上发送并 `preventDefault`。`preventDefault` 让字符**不落进 textarea**，于是 xterm 的 `input` 路径与 229 差量路径都不会再发一遍 —— 不重复，也不依赖它的启发式。
+
+三个不碰：
+- **组字中**（`isComposing`）不碰，那是 `compositionend` 的活；
+- `inputType` 不是 `insertText` 的不碰（`insertCompositionText` / 删除 / 替换各有各的路）；
+- xterm 在 `keydown` 里处理掉的键会 `preventDefault`，**根本不会有 `beforeinput`**，所以普通按键完全不受影响。
+
+两个去重：
+- `compositionend` 之后的极短窗口里，同内容的 `insertText` 吃掉不再发（WebKit 会在组字提交后补发一次）；
+- `keypress` 刚发过同一个字符时吃掉不再发（xterm 的 `_keyPress` 已经送过了）。
+
 ### 按键映射
 
 见 [`keymap.md`](keymap.md)。要点：

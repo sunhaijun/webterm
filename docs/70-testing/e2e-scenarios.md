@@ -156,7 +156,7 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 
 ## E2E-7 中文 IME 输入
 
-> AC-3.1, AC-3.3
+> AC-3.1, AC-3.3, AC-3.14
 
 Playwright 可以派发 composition 事件。
 
@@ -190,6 +190,22 @@ Playwright 可以派发 composition 事件。
    bug 的要害**：合成的 `CompositionEvent` 不会触发 xterm 的 `onData`，
    所以「`isComposing` 恒为 false → 组字字节直通 PTY，违反 AC-3.3」这个
    后果只有真输入法能演示（见 [自动化边界](../90-roadmap/milestones.md)）
+
+### Raw 模式 · 软键盘直接插入的标点（AC-3.14）
+
+iPhone 中文键盘下「逗号打不进终端，句号可以」—— 同一个键盘上两个键报的 `keyCode` 不同，
+xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input-modes.md) §直接插入的文本）。
+
+在终端直通输入下，对 helper textarea 按软键盘的样子派发 `keydown` → 插字符 → `input(insertText)` → `keyup`：
+
+1. `keyCode: 0` 的「，」「！」→ **必须进终端**（修复前这里丢字，是本 bug 的要害）
+2. `keyCode: 229` 的「。」→ 仍然进终端（xterm 的差量路，别被改坏）
+3. `keyCode: 191` 的「？」→ 仍然进终端（xterm 的 keydown 路）
+4. 组字提交「你好」紧跟一个 `keyCode: 0` 的「，」→ 两段都在，且**都只出现一次**（不重复发送）
+5. 提交后终端输出里没有 `，，` / `你好你好` 这类重复
+
+> 真机的事件序列没法在 headless 里完全复刻（`keyCode` 是 iOS 自己报的），
+> 但「keydown 发生过 + insertText」这个组合就是要害，合成事件能精确覆盖它。
 
 > 这个 bug 真的存在过（`attachIme` 里的 `if (ime) return` 让它只挂第一个会话），
 > 而且只在 CI 上暴露 —— 原来的实现靠 `setInterval(attachIme, 300)` 轮询挂载，
