@@ -156,7 +156,16 @@ export function App() {
     const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
     let store: SessionStore
     let lastWelcome: unknown = null
-    const pinch = installPinch(area)
+    // 横滑切会话（AC-4.7）：手势的仲裁在 pinch.ts，这里只回答「有没有得切」和「切过去」
+    const pinch = installPinch(area, {
+      canSwitch: () => store.list().length > 1,
+      onSwitch: (delta) => {
+        const next = store.step(delta)
+        if (next === null || next === store.active) return false
+        select(next)
+        return true
+      },
+    })
     const runningCmd = runningCmdRef.current
     // 前台程序名同步给 render（键条上下文 / Composer 占位符）
     const syncProgram = () => {
