@@ -64,6 +64,9 @@ test('iPad 横屏（1133×744，触屏）：侧栏常驻，但底栏是键行不
   expect(main!.right - menu!.right, '贴着主区右缘').toBeLessThanOrEqual(16)
   await page.getByTestId('open-settings').click()
   await expect(page.getByTestId('settings')).toBeVisible()
+  // 设置是模态浮层（ADR-0018）：关掉它再继续
+  await page.getByTestId('drawer-close').click()
+  await expect(page.getByTestId('settings')).toBeHidden()
 
   // 一键切编辑面板照样能用；互切键回终端
   await page.getByTestId('to-edit').click()

@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 
-import { installSwipeDismiss } from '../ui/swipe'
+import { Drawer } from '../ui/drawer'
 import { ellipsize, listCommands, type CommandRecord } from './api'
 import { fuzzyMatch, rankScore } from './fuzzy'
 
@@ -35,8 +35,6 @@ export function CommandPalette({
   onSelectSession,
 }: PaletteProps) {
   const [query, setQuery] = useState('')
-  const sheetRef = useRef<HTMLDivElement>(null)
-  useEffect(() => (sheetRef.current ? installSwipeDismiss(sheetRef.current, onClose) : undefined), [onClose])
   const [records, setRecords] = useState<CommandRecord[]>([])
   const [cursor, setCursor] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -103,8 +101,12 @@ export function CommandPalette({
   }
 
   return (
-    <div class="palette-backdrop" data-testid="palette" onClick={onClose}>
-      <div class="palette" ref={sheetRef} onClick={(e) => e.stopPropagation()}>
+    <Drawer
+      title="命令面板"
+      backdropTestid="palette"
+      bodyTestid="palette-list"
+      onClose={onClose}
+      tools={
         <input
           ref={inputRef}
           class="palette-input"
@@ -113,10 +115,7 @@ export function CommandPalette({
           value={query}
           onInput={(e) => setQuery(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              onClose()
-            } else if (e.key === 'ArrowDown') {
+            if (e.key === 'ArrowDown') {
               e.preventDefault()
               setCursor((c) => Math.min(c + 1, items.length - 1))
             } else if (e.key === 'ArrowUp') {
@@ -128,52 +127,49 @@ export function CommandPalette({
             }
           }}
         />
-        <div class="palette-list" data-testid="palette-list">
-          {items.length === 0 && <div class="palette-empty">没有匹配项</div>}
-          {items.map((item, i) => (
-            <div
-              key={keyOf(item)}
-              class="palette-item"
-              data-testid={`palette-item-${i}`}
-              data-kind={item.kind}
-              data-active={i === cursor}
-              onMouseEnter={() => setCursor(i)}
-              onClick={(e) => activate(item, e.shiftKey)}
-            >
-              {item.kind === 'command' && (
-                <>
-                  <span class="palette-icon">{item.record.pinned ? '★' : ' '}</span>
-                  <span class="palette-text">
-                    {item.record.label ?? ellipsize(item.record.text, 60)}
-                  </span>
-                  <span class="palette-hint">
-                    {item.record.exit_code !== null && item.record.exit_code !== 0
-                      ? `exit ${item.record.exit_code}`
-                      : item.record.cwd}
-                  </span>
-                </>
-              )}
-              {item.kind === 'session' && (
-                <>
-                  <span class="palette-icon">⧉</span>
-                  <span class="palette-text">会话：{item.name}</span>
-                  <span class="palette-hint">{item.cwd}</span>
-                </>
-              )}
-              {item.kind === 'action' && (
-                <>
-                  <span class="palette-icon">⚙</span>
-                  <span class="palette-text">{item.label}</span>
-                </>
-              )}
-            </div>
-          ))}
+      }
+      foot="Enter 填入 Composer · Shift+Enter 直接执行 · Esc 关闭"
+    >
+      {items.length === 0 && <div class="palette-empty">没有匹配项</div>}
+      {items.map((item, i) => (
+        <div
+          key={keyOf(item)}
+          class="palette-item"
+          data-testid={`palette-item-${i}`}
+          data-kind={item.kind}
+          data-active={i === cursor}
+          onMouseEnter={() => setCursor(i)}
+          onClick={(e) => activate(item, e.shiftKey)}
+        >
+          {item.kind === 'command' && (
+            <>
+              <span class="palette-icon">{item.record.pinned ? '★' : ' '}</span>
+              <span class="palette-text">
+                {item.record.label ?? ellipsize(item.record.text, 60)}
+              </span>
+              <span class="palette-hint">
+                {item.record.exit_code !== null && item.record.exit_code !== 0
+                  ? `exit ${item.record.exit_code}`
+                  : item.record.cwd}
+              </span>
+            </>
+          )}
+          {item.kind === 'session' && (
+            <>
+              <span class="palette-icon">⧉</span>
+              <span class="palette-text">会话：{item.name}</span>
+              <span class="palette-hint">{item.cwd}</span>
+            </>
+          )}
+          {item.kind === 'action' && (
+            <>
+              <span class="palette-icon">⚙</span>
+              <span class="palette-text">{item.label}</span>
+            </>
+          )}
         </div>
-        <div class="palette-foot">
-          Enter 填入 Composer · Shift+Enter 直接执行 · Esc 关闭
-        </div>
-      </div>
-    </div>
+      ))}
+    </Drawer>
   )
 }
 
