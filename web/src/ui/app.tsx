@@ -186,6 +186,13 @@ export function App() {
           store.resetTerm(sid)
           setTruncated(true)
         },
+        // 备用屏会话的重建（ADR-0019）：清屏 + 恢复粘性模式，内容等程序自己重画。
+        // 【不提示"历史已截断"】—— 备用屏本来就没有历史，那条提示是误导
+        onRedraw(sid, modes) {
+          store.resetTerm(sid)
+          store.write(sid, new TextEncoder().encode(modes), true)
+          setTruncated(false)
+        },
         onMessage(msg) {
           switch (msg.t) {
             case T.welcome: {

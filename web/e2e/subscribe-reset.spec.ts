@@ -23,8 +23,8 @@ async function openSessions(page: Page) {
 }
 
 interface Recorder {
-  /** 发出去的控制消息类型，按顺序。 */
-  ctl(): Promise<string[]>
+  /** 发出去的控制消息，按顺序（解析过的 JSON）。 */
+  ctl(): Promise<{ t: string; cols?: number; rows?: number }[]>
   /** 发出去的 INPUT 帧内容。 */
   input(): Promise<string[]>
   clear(): Promise<void>
@@ -33,14 +33,14 @@ interface Recorder {
 /** 记录客户端发出去的东西：控制消息的顺序 + INPUT 帧。必须在 goto 之前装。 */
 async function record(page: Page): Promise<Recorder> {
   await page.addInitScript(() => {
-    const w = window as unknown as { __ctl: string[]; __in: string[] }
+    const w = window as unknown as { __ctl: unknown[]; __in: string[] }
     w.__ctl = []
     w.__in = []
     const orig = WebSocket.prototype.send
     WebSocket.prototype.send = function (data: unknown) {
       if (typeof data === 'string') {
         try {
-          w.__ctl.push(String((JSON.parse(data) as { t: string }).t))
+          w.__ctl.push(JSON.parse(data))
         } catch {
           /* 不是 JSON 就不记 */
         }
@@ -52,11 +52,14 @@ async function record(page: Page): Promise<Recorder> {
     }
   })
   return {
-    ctl: () => page.evaluate(() => (window as unknown as { __ctl: string[] }).__ctl),
+    ctl: () =>
+      page.evaluate(
+        () => (window as unknown as { __ctl: { t: string; cols?: number; rows?: number }[] }).__ctl,
+      ),
     input: () => page.evaluate(() => (window as unknown as { __in: string[] }).__in),
     clear: () =>
       page.evaluate(() => {
-        const w = window as unknown as { __ctl: string[]; __in: string[] }
+        const w = window as unknown as { __ctl: unknown[]; __in: string[] }
         w.__ctl = []
         w.__in = []
       }),
@@ -118,13 +121,22 @@ test.describe('E2E-30 切走 → 积压超过 ring_bytes → 切回', () => {
     await waitFor(async () => (await activeSid(page)) === sidA, '切回 A')
     await expect(page.getByTestId('truncated')).toBeVisible()
 
-    // resize 必须排在 subscribe 前面，否则 agent 补的是按旧尺寸排版的积压
+    // 尺寸必须【在 subscribe 这条消息里】，而不是单发一条 resize（协议 §4.1）：
+    // 单发无论排前排后都有坑，见 session-ux.md §订阅策略
     const ctl = await rec.ctl()
-    const iResize = ctl.indexOf('resize')
-    const iSub = ctl.indexOf('subscribe')
-    expect(iSub, '切回时应当发 subscribe').toBeGreaterThanOrEqual(0)
-    expect(iResize, '切回时应当发 resize').toBeGreaterThanOrEqual(0)
-    expect(iResize, `resize 要排在 subscribe 之前，实际顺序：${ctl.join(' → ')}`).toBeLessThan(iSub)
+    const sub = ctl.find((m) => m.t === 'subscribe')
+    expect(sub, '切回时应当发 subscribe').toBeDefined()
+    expect(sub!.cols, 'subscribe 要带上 cols').toBeGreaterThan(0)
+    expect(sub!.rows, 'subscribe 要带上 rows').toBeGreaterThan(0)
+    // 切走 / 切回本身会改布局（抽屉开合），之后来一条 resize 是正常的；
+    // 要命的是【排在 subscribe 前面】那一条 —— 它会让全屏程序先重画一屏，
+    // 那批字节落在 redraw.seq 之前被跳过（协议 §4.1）
+    const iSub = ctl.findIndex((m) => m.t === 'subscribe')
+    const iResize = ctl.findIndex((m) => m.t === 'resize')
+    expect(
+      iResize >= 0 && iResize < iSub,
+      `resize 不能排在 subscribe 之前，实际顺序：${ctl.map((m) => m.t).join(' → ')}`,
+    ).toBe(false)
 
     // 清屏发生了：MARK-ONE 早被裁出窗口，它还在就说明回放被接在了旧屏幕后面
     const after = await terminalText(page)

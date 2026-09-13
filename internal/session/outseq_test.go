@@ -8,6 +8,7 @@ import (
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/ringbuf"
 	"github.com/sunhaijun/webterm/internal/store"
+	"github.com/sunhaijun/webterm/internal/termstate"
 )
 
 // command.start / command.end 的 out_seq 必须是标记在输出流里的【精确位置】。
@@ -27,6 +28,7 @@ func newStampSession(t *testing.T) (*Session, *[]any) {
 		sid:        1,
 		ring:       ringbuf.New(1 << 16),
 		osc:        oscparse.New(),
+		modes:      termstate.New(),
 		store:      st,
 		mgrHistory: func() bool { return true },
 		inQueued:   map[string]uint64{},

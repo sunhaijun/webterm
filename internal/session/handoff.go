@@ -12,6 +12,7 @@ import (
 	"github.com/sunhaijun/webterm/internal/oscparse"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/ringbuf"
+	"github.com/sunhaijun/webterm/internal/termstate"
 )
 
 // 热升级交接（ADR-0016）：Freeze → Export → （exec）→ Restore；出错走 Thaw。
@@ -158,6 +159,7 @@ func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
 		inQueued:      cloneCounts(hs.InQueued),
 		inAck:         cloneCounts(hs.InAck),
 		osc:           oscparse.Restore(hs.OSC),
+		modes:         termstate.Restore(hs.Modes),
 		pendCmd:       hs.PendCmd,
 		curCmdID:      hs.CurCmdID,
 		curCmdAt:      hs.CurCmdAt,

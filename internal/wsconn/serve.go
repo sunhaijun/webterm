@@ -305,10 +305,11 @@ func (c *Conn) subscribe(s *session.Session, fromSeq uint64) {
 	s.Subscribe(c, fromSeq)
 }
 
-// subscribeNotifyReset 用于 `subscribe` 消息：缓冲被覆盖时先发 reset 通知。
-func (c *Conn) subscribeNotifyReset(s *session.Session, fromSeq uint64) {
+// subscribeNotifyReset 用于 `subscribe` 消息：缓冲被覆盖时先发 reset 通知，
+// 并把客户端报上来的终端尺寸一起交给会话（cols/rows 为 0 表示沿用当前尺寸）。
+func (c *Conn) subscribeNotifyReset(s *session.Session, fromSeq uint64, cols, rows uint16) {
 	c.markSubscribed(s.SID())
-	s.SubscribeNotifyReset(c, fromSeq)
+	s.SubscribeNotifyReset(c, fromSeq, cols, rows)
 }
 
 func (c *Conn) markSubscribed(sid uint16) {

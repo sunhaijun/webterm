@@ -18,6 +18,7 @@ import (
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/ringbuf"
 	"github.com/sunhaijun/webterm/internal/store"
+	"github.com/sunhaijun/webterm/internal/termstate"
 )
 
 const (
@@ -93,7 +94,10 @@ type Session struct {
 	unmarkedInput bool          // 对外报告：输入正去往一个没有集成的子程序
 	sink          func(msg any) // 测试观察钩子，生产为 nil
 	ring          *ringbuf.Buffer
-	subs          map[Subscriber]struct{}
+	// modes 跟踪粘性终端模式（备用屏、鼠标、Kitty 键盘…）。它在锁内更新，
+	// 因为 subscribe 要在同一把锁下读它来决定回放还是重画（ADR-0019）。
+	modes *termstate.Tracker
+	subs  map[Subscriber]struct{}
 	// inAck/inQueued 按 client_id 记账，【跨重连存活】（协议 §5.3）。
 	// inQueued 是已接受入队的字节数（用于校验 seq 连续性），
 	// inAck 是已真正写进 PTY 的字节数（用于 ack 与重连后的重发起点）。
@@ -109,6 +113,9 @@ type Session struct {
 	inputQ    *inputQueue
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// repainting 保证同一时刻只有一次 winsize 抖动（ADR-0019）。
+	repainting atomic.Bool
 
 	// 热升级冻结（ADR-0016）：见 freeze.go
 	fz         freezer
@@ -228,7 +235,7 @@ func (s *Session) Resize(cols, rows uint16) error {
 // 补齐的那一次 Push 也在锁内完成，保证它排在后续实时 Push 之前。
 // Push 按契约是非阻塞的，所以这里不会卡住 PTY 读取。
 func (s *Session) Subscribe(sub Subscriber, fromSeq uint64) {
-	s.subscribe(sub, fromSeq, false)
+	s.subscribe(sub, fromSeq, subscribeOpts{})
 }
 
 // SubscribeNotifyReset 与 Subscribe 相同，但判定 reset 时先给 sub 发一条
@@ -241,30 +248,135 @@ func (s *Session) Subscribe(sub Subscriber, fromSeq uint64) {
 //
 // 清屏本身不靠这条消息，靠回放帧上的 ATTR_PREFIX（协议 §3）：帧自己就带着
 // "这是重建不是续写"的语义，少一条通知也不会把内容接歪。
-func (s *Session) SubscribeNotifyReset(sub Subscriber, fromSeq uint64) {
-	s.subscribe(sub, fromSeq, true)
+func (s *Session) SubscribeNotifyReset(sub Subscriber, fromSeq uint64, cols, rows uint16) {
+	s.subscribe(sub, fromSeq, subscribeOpts{notifyReset: true, cols: cols, rows: rows})
 }
 
-func (s *Session) subscribe(sub Subscriber, fromSeq uint64, notifyReset bool) {
+// subscribeOpts 是 subscribe 的可选参数。
+type subscribeOpts struct {
+	// notifyReset：判定 reset 时先发一条 protocol.Reset（只有切回那条路要）。
+	notifyReset bool
+	// cols/rows：客户端切回时的终端尺寸，0 = 沿用会话当前尺寸。
+	// 【它必须在这里而不是单发的 resize 里】，理由见协议 §4.1。
+	cols, rows uint16
+}
+
+func (s *Session) subscribe(sub Subscriber, fromSeq uint64, o subscribeOpts) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	data, attrPrefix, _ := s.ring.Replay(fromSeq)
 	s.subs[sub] = struct{}{}
+
+	var redrawAt uint64
+	needRedraw := false
+	switch {
+	case len(data) == 0:
+		// 客户端已经跟上了，没有要补的
+
+	case attrPrefix && s.modes.AltScreen():
+		// 【备用屏：不回放窗口，改成让程序自己重画】（ADR-0019）。
+		// 窗口里是一串离开 ESC[?1049h 就没有意义的差分补丁，回放必然画错；
+		// 而备用屏没有 scrollback，那段历史对用户本来就是零价值。
+		redrawAt = s.ring.HeadSeq()
+		needRedraw = true
+		sub.Event(&protocol.Redraw{SID: s.sid, Seq: redrawAt, Modes: string(s.modes.Prelude())})
+
+	default:
+		seq := fromSeq
+		if attrPrefix {
+			// reset 回放：起点是缓冲现存内容的开头，不是客户端要的位置
+			seq = s.ring.BaseSeq()
+			if o.notifyReset {
+				// 【必须排在 Push 之前】：事件与帧走同一条按序写队列，提示要在
+				// 重建之前到，否则用户先看见屏幕跳一下，才被告知发生了什么
+				sub.Event(&protocol.Reset{SID: s.sid, BaseSeq: seq})
+			}
+		}
+		sub.Push(s.sid, seq, data, attrPrefix)
+	}
+	s.mu.Unlock()
+
+	// 【尺寸必须在这之后应用】。反过来的话，程序被 SIGWINCH 逼出的整屏重画会落在
+	// redrawAt 之前，被客户端当历史跳过 —— 该看到的那一屏反而丢了（协议 §4.2）。
+	resized := false
+	if o.cols > 0 && o.rows > 0 {
+		resized = s.resizeIfChanged(o.cols, o.rows)
+	}
+	if needRedraw {
+		go s.forceRepaint(sub, redrawAt, resized)
+	}
+}
+
+// resizeIfChanged 应用尺寸，返回【是否真的变了】。
+//
+// 没变就别劳烦内核：`tty_do_resize` 对相同的 winsize 直接返回，不发 SIGWINCH
+// （实测：同尺寸的 TIOCSWINSZ 之后程序只吐 43 字节，没有重画）。
+func (s *Session) resizeIfChanged(cols, rows uint16) bool {
+	s.mu.RLock()
+	same := s.cols == cols && s.rows == rows
+	s.mu.RUnlock()
+	if same {
+		return false
+	}
+	return s.Resize(cols, rows) == nil
+}
+
+// forceRepaint 逼前台程序整屏重画，并在它不配合时兜底。
+//
+// 已经因为尺寸变化收到过 SIGWINCH 的，什么都不用做；否则抖一下 winsize。
+func (s *Session) forceRepaint(sub Subscriber, seq uint64, alreadyResized bool) {
+	if !alreadyResized {
+		s.jiggleWinsize()
+	}
+	time.Sleep(repaintGrace)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ring.HeadSeq() > seq {
+		return // 程序画了，正常路径
+	}
+	if _, ok := s.subs[sub]; !ok {
+		return // 用户又切走了
+	}
+	// 【兜底】：程序不响应 SIGWINCH（或已经退出）。退回主屏那条路，
+	// 把窗口内容按 reset 规则发出去 —— 内容陈旧，但总比一块清过屏的空白强。
+	base := s.ring.BaseSeq()
+	data, _, _ := s.ring.Replay(base)
 	if len(data) == 0 {
 		return
 	}
-	seq := fromSeq
-	if attrPrefix {
-		// reset 回放：起点是缓冲现存内容的开头，不是客户端要的位置
-		seq = s.ring.BaseSeq()
-		if notifyReset {
-			// 【必须排在 Push 之前】：事件与帧走同一条按序写队列，提示要在
-			// 重建之前到，否则用户先看见屏幕跳一下，才被告知发生了什么
-			sub.Event(&protocol.Reset{SID: s.sid, BaseSeq: seq})
-		}
-	}
-	sub.Push(s.sid, seq, data, attrPrefix)
+	sub.Push(s.sid, base, data, true)
 }
+
+// jiggleWinsize 抖一下窗口尺寸，逼前台程序整屏重画。
+//
+// 【两次之间必须留间隔】：SIGWINCH 是可合并的普通信号。无间隔地改回去，程序只
+// 会收到一个信号、读到的尺寸和原来一样，多半什么都不画（实测：无间隔 43 字节、
+// 不重画；隔 80ms 则是 2509 字节、重画两次）。
+//
+// 抖 rows 而不是 cols：改列宽会让客户端主屏的 scrollback 整体重排。
+func (s *Session) jiggleWinsize() {
+	if !s.repainting.CompareAndSwap(false, true) {
+		return // 已经有一次在抖了，别叠
+	}
+	defer s.repainting.Store(false)
+
+	s.mu.RLock()
+	cols, rows := s.cols, s.rows
+	s.mu.RUnlock()
+	if rows < 2 || cols == 0 || s.Status() != protocol.StatusRunning {
+		return
+	}
+	_ = setWinsize(s.ptmx, cols, rows-1)
+	time.Sleep(repaintJiggle)
+	_ = setWinsize(s.ptmx, cols, rows)
+}
+
+const (
+	// repaintJiggle 是抖动 winsize 时两次 ioctl 之间的间隔。见 jiggleWinsize。
+	repaintJiggle = 80 * time.Millisecond
+	// repaintGrace 是等程序重画的宽限期，超时走兜底（AC-2.18）。
+	repaintGrace = 300 * time.Millisecond
+)
 
 // Unsubscribe 把 sub 从订阅者集合里摘掉。会话在 agent 侧照常运行和缓冲。
 func (s *Session) Unsubscribe(sub Subscriber) {
@@ -362,6 +474,8 @@ func (s *Session) consume(chunk []byte) {
 	// 事件的精确位置 = seq + 偏移 —— 不能用 append 之后的 head，
 	// 否则同一块里的 133;C 与 133;D 会拿到同一个值，块区间为空。
 	seq = s.ring.Append(clean)
+	// 与 Append 在同一把锁下【观察】这批字节：只读，一个字节都不改（ADR-0019）
+	s.modes.Observe(clean)
 	if len(clean) > 0 {
 		if s.probeArmed {
 			s.probeOutput = true
@@ -821,6 +935,7 @@ func (s *Session) export() (handoff.Session, error) {
 		RingBase: base, RingData: data,
 		InQueued: cloneCounts(s.inQueued), InAck: cloneCounts(s.inAck),
 		OSC: s.osc.Export(), PendCmd: s.pendCmd, CurCmdID: s.curCmdID, CurCmdAt: s.curCmdAt,
+		Modes:        s.modes.Export(),
 		UnmarkedRuns: s.unmarkedRuns, UnmarkedInput: s.unmarkedInput,
 		Pending: s.inputQ.snapshot(),
 	}

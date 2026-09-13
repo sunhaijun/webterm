@@ -237,3 +237,51 @@ func TestRestoreRejectsBadSnapshot(t *testing.T) {
 		t.Fatal("schema 太新必须拒绝")
 	}
 }
+
+// IT-handoff-2：粘性模式跟着交接走（AC-2.19 / ADR-0019）。
+//
+// 【它推导不出来】：ESC[?1049h 只在会话开头出现一次，环形缓冲早把它裁掉了。
+// 交接丢了这份状态，升级之后备用屏判定就没了 —— 下一次切回会退化成把差分帧
+// 回放进主屏，正是 ADR-0019 要消灭的那个症状。
+func TestHandoffKeepsAltScreenState(t *testing.T) {
+	c := cfg()
+	c.RingBytes = 8192
+	m := session.NewManager(c, nil)
+	s := create(t, m)
+	conn := newConn(t, m, "tab")
+	s.Subscribe(conn, 0)
+	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+	enterAltScreen(t, s, conn, c.RingBytes)
+
+	conn.Detach()
+	s.Unsubscribe(conn)
+	if err := m.Freeze(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := m.Export("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.RemoveObserver(conn)
+
+	m2 := session.NewManager(c, nil)
+	if err := m2.Restore(snap); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m2.Shutdown)
+	s2, ok := m2.Get(s.SID())
+	if !ok {
+		t.Fatal("交接后找不到会话")
+	}
+
+	// 新进程里再来一次"切回且进度已被裁掉"：还应当走重画，不是回放
+	fresh := newConn(t, m2, "tab-2")
+	s2.SubscribeNotifyReset(fresh, 0, 0, 0)
+	waitFor(t, "交接之后仍判为备用屏（收到 redraw）", func() bool { return fresh.Redraws() == 1 })
+	if !strings.Contains(fresh.LastRedraw().Modes, "\x1b[?1049h") {
+		t.Fatal("交接之后模式前缀里没有备用屏开关")
+	}
+	if fresh.Resets() != 0 {
+		t.Fatal("交接之后退化成了字节回放 —— 模式状态没跟着走")
+	}
+}

@@ -31,6 +31,7 @@ type fakeConn struct {
 	gaps     int
 	dups     int
 	resets   int
+	redraws  int
 	detached bool // 连接已断开：迟到的 Push 应当石沉大海
 }
 
@@ -121,6 +122,35 @@ func (c *fakeConn) Event(msg any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.events = append(c.events, msg)
+	// 像真客户端那样处理 redraw（协议 §4.2）：清屏 → 写 modes → out_seq 跳到 seq。
+	// modes 不计入 seq，所以只写进"屏幕"，不动记账。
+	if r, ok := msg.(*protocol.Redraw); ok && !c.detached {
+		c.redraws++
+		c.screen.Reset()
+		c.screen.WriteString(r.Modes)
+		c.expected = r.Seq
+		c.haveSeq = true
+	}
+}
+
+// Redraws 返回收到过几条 redraw（备用屏的重建路径）。
+func (c *fakeConn) Redraws() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.redraws
+}
+
+// LastRedraw 返回最后一条 redraw 消息。
+func (c *fakeConn) LastRedraw() *protocol.Redraw {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var last *protocol.Redraw
+	for _, e := range c.events {
+		if r, ok := e.(*protocol.Redraw); ok {
+			last = r
+		}
+	}
+	return last
 }
 
 func (c *fakeConn) Screen() string {

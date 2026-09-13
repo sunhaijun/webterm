@@ -39,12 +39,16 @@ type Session = {
 切换到会话 X:
   1. unsubscribe(当前会话)
   2. 挂载 X.term 的 DOM → fit()
-  3. resize(X, 新尺寸)              ← 必须早于 subscribe，且【不防抖】
-  4. subscribe(X, out_seq: X.outSeq)
-  5. （未读随 outSeq 追上 headSeq 自动消失）
+  3. subscribe(X, out_seq: X.outSeq, cols, rows)   ← 尺寸【就在这条消息里】
+  4. （未读随 outSeq 追上 headSeq 自动消失）
 ```
 
-**第 3 步的位置是有讲究的。** `fit()` 一调用，xterm 就已经是新尺寸了；这时候先 `subscribe`，agent 回放的是**按旧尺寸排版**的积压 —— 全屏程序的绝对定位与超宽行的折行位置全部对不上，屏幕花掉，而且要等到下一次整屏重绘才自愈。`resize` 排在前面，agent 先把 PTY 调到新尺寸（程序收到 SIGWINCH 自己重画），回放与渲染才在同一套几何下。防抖也要去掉：防抖是给连续拖动用的，切会话是单次事件，晚 100ms 就晚在了 `subscribe` 后面。
+**尺寸必须和 `subscribe` 同一条消息，不能单发 `resize`。** `fit()` 一调用，xterm 就已经是新尺寸了，而尺寸要送到 agent 才能对齐 —— 但单发一条 `resize` 无论排在前后都有坑：
+
+- 排在后面（尤其还走 100ms 防抖）：agent 补的是按**旧尺寸**排版的积压，绝对定位与超宽行的折行全部错位，要等下一次整屏重绘才自愈；
+- 排在前面：PTY 先收到 `TIOCSWINSZ`，全屏程序**立刻整屏重画**，那批字节落在 `subscribe` 之前，会被 `redraw.seq` 跳过（协议 §4.2）—— 该看到的那一屏反而丢了。
+
+合成一条之后顺序就钉死了：agent 先算分支、先发 `redraw` 或回放，**再**应用尺寸。
 
 后台会话在 agent 侧照常运行和缓冲。切过去时用 `subscribe{out_seq}` 补齐增量（协议上与 `resume` 同源，见 [`../30-protocol/websocket-protocol.md`](../30-protocol/websocket-protocol.md#52-重连续传流程)）。
 
@@ -54,7 +58,15 @@ type Session = {
 
 如果只订阅可见会话，那么切走期间超过 `ring_bytes` 的输出就会走 reset（丢历史）。对于"我切走去看别的，回来想看完整构建日志"这个场景是有损的。
 
-**走 reset 时必须清屏重建，不能接在旧内容后面。** 这条路上客户端手里还留着切走前的那一屏，而 agent 回放的是缓冲窗口里一段**接不上**的内容 —— 直接写进去就是在旧屏幕后面叠一份，来回切几次叠几份（"很多份 logo"的由来）。清屏由回放帧上的 `ATTR_PREFIX` 驱动（协议 §3），`reset` 消息只负责"历史输出已截断"那条提示。备用屏程序（claude / vim / top）在这条路上还有更深的问题，见 [ADR-0019](../20-architecture/adr/0019-altscreen-redraw-not-replay.md)。
+**走 reset 时必须清屏重建，不能接在旧内容后面。** 这条路上客户端手里还留着切走前的那一屏，而 agent 回放的是缓冲窗口里一段**接不上**的内容 —— 直接写进去就是在旧屏幕后面叠一份，来回切几次叠几份（"很多份 logo"的由来）。清屏由回放帧上的 `ATTR_PREFIX` 驱动（协议 §3），`reset` 消息只负责"历史输出已截断"那条提示。
+
+**备用屏会话（claude / codex / vim / top）走的是另一条路**：agent 不回放窗口，改发 `redraw` —— 客户端清屏 + 恢复粘性模式，然后由程序自己整屏重画（[ADR-0019](../20-architecture/adr/0019-altscreen-redraw-not-replay.md)）。对用户的可见差别：
+
+- 切回来看到的是那个程序**当前**的一屏，而不是一段错位的历史残影；
+- 切走期间的字节**不补**了 —— 备用屏没有 scrollback，那段字节本来也翻不到；
+- 传输量从"整个 `ring_bytes`"降到一屏（实测 claude 的整屏重画约 1.2 KB）。
+
+因此"保持接收"（下面那条折中）对备用屏会话意义不大：它省下的历史本来就没有价值。它真正有用的场景是主屏的长输出 —— 构建日志、`tail -f`。
 
 **折中**：允许用户对某个会话开启"保持接收"（pin 订阅）。开启后即使切走也保持 `subscribe`，代价是流量。默认关闭，UI 上是会话卡片的一个小图标。
 

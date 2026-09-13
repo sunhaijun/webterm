@@ -81,8 +81,9 @@ func (c *Conn) handleControl(data []byte) {
 			return
 		}
 		// 切回会话：缓冲被覆盖时要额外发一条 reset 通知 —— 客户端没有
-		// welcome.resumed[] 那条渠道可以知道历史被截断了
-		c.subscribeNotifyReset(s, m.OutSeq)
+		// welcome.resumed[] 那条渠道可以知道历史被截断了。
+		// 尺寸跟着这条消息走，【不能单发 resize】，理由见协议 §4.1
+		c.subscribeNotifyReset(s, m.OutSeq, m.Cols, m.Rows)
 
 	case *protocol.Unsubscribe:
 		if s, ok := c.deps.Sessions.Get(m.SID); ok {

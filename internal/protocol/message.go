@@ -22,6 +22,7 @@ const (
 	TSessionUpdated = "session.updated"
 	TAck            = "ack"
 	TReset          = "reset"
+	TRedraw         = "redraw"
 	TCWD            = "cwd"
 	TPrompt         = "prompt"
 	TCommandStart   = "command.start"
@@ -117,6 +118,14 @@ type Subscribe struct {
 	T      string `json:"t"`
 	SID    uint16 `json:"sid"`
 	OutSeq uint64 `json:"out_seq"`
+	// Cols/Rows 是切回时的终端尺寸，0 表示"沿用会话当前尺寸"。
+	//
+	// 【尺寸必须和 subscribe 同一条消息】，不能单发 resize：排在后面 agent 补的
+	// 就是按旧尺寸排版的积压；排在前面，全屏程序被 SIGWINCH 逼出的整屏重画会落在
+	// subscribe 之前，被 redraw.seq 跳过。合成一条，agent 才能把顺序钉死
+	// （协议 §4.1 / ADR-0019）。
+	Cols uint16 `json:"cols,omitempty"`
+	Rows uint16 `json:"rows,omitempty"`
 }
 
 type Unsubscribe struct {
@@ -229,6 +238,23 @@ type Reset struct {
 	BaseSeq uint64 `json:"base_seq"`
 }
 
+// Redraw 代替 reset 回放，用于会话当前在【备用屏】的情况（ADR-0019）。
+//
+// 备用屏没有 scrollback，环形缓冲窗口里那些差分帧离开会话开头那一个
+// ESC[?1049h 就没有意义 —— 回放它必然画错。改成：客户端清屏 + 写 Modes
+// 恢复粘性模式 + 把 out_seq 跳到 Seq，然后由 agent 逼程序自己整屏重画。
+type Redraw struct {
+	T   string `json:"t"`
+	SID uint16 `json:"sid"`
+	// Seq 是发出时的 head_seq。客户端把 out_seq 直接跳到这里，跳过的字节
+	// 【有意丢弃】。
+	Seq uint64 `json:"seq"`
+	// Modes 是恢复粘性模式的转义序列（internal/termstate 生成，纯 ASCII、
+	// 几十字节、不含任何程序输出的原文）。这些字节【不计入 out_seq】，
+	// 规则与 ATTR_PREFIX 相同（协议 §3）。
+	Modes string `json:"modes"`
+}
+
 type CWD struct {
 	T    string `json:"t"`
 	SID  uint16 `json:"sid"`
@@ -318,6 +344,8 @@ func Encode(msg any) ([]byte, error) {
 		m.T = TAck
 	case *Reset:
 		m.T = TReset
+	case *Redraw:
+		m.T = TRedraw
 	case *CWD:
 		m.T = TCWD
 	case *Prompt:
@@ -380,6 +408,8 @@ func Decode(data []byte) (any, error) {
 		dst = &Ack{}
 	case TReset:
 		dst = &Reset{}
+	case TRedraw:
+		dst = &Redraw{}
 	case TCWD:
 		dst = &CWD{}
 	case TPrompt:
