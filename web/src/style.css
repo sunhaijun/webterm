@@ -248,7 +248,7 @@ body {
 
 /* ---------- 会话列表 ---------- */
 
-.sessionlist { display: flex; flex-direction: column; gap: 2px; padding: 6px; overflow-y: auto; }
+.sessionlist { display: flex; flex-direction: column; gap: 2px; padding: 6px; }
 .session-item {
   display: flex;
   align-items: center;
@@ -296,7 +296,7 @@ body {
 .app[data-bp='desktop'] .sidebar {
   grid-row: 1 / -1;
   border-right: 1px solid var(--line);
-  overflow: hidden;
+  overflow: hidden auto;
   min-width: 0;
 }
 /* .main 用 flex 而【不是】固定行数的 grid。
@@ -339,41 +339,11 @@ body {
 }
 .follow-pill:active { opacity: 0.85; }
 @media (pointer: coarse) { .follow-pill { min-height: 44px; font-size: 14px; } }
-.settings-renderer { color: var(--muted); }
 .canvas > .term[data-hidden='true'] { visibility: hidden; pointer-events: none; }
 .canvas > .stream { position: absolute; inset: 0; }
 
-/* tablet：覆盖式抽屉。打开时终端【不重排】—— 否则每次开关都触发 resize，
-   正在看的位置就跑了 */
-.app:not([data-bp='desktop']) .sidebar {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: min(280px, 80vw);
-  background: var(--bg);
-  border-right: 1px solid var(--line);
-  z-index: 20;
-  transform: translateX(-100%);
-  transition: transform 0.18s ease;
-  /* 绝对定位的 inset 是相对 .app 的 padding 盒，会伸到刘海底下：抽屉自己让出上边 */
-  padding-top: var(--sa-top);
-}
-.app:not([data-bp='desktop'])[data-sidebar='open'] .sidebar { transform: none; }
-.scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.4); z-index: 15; }
-@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
-
-/* phone：底部 sheet */
-.app[data-bp='phone'] .sidebar {
-  inset: auto 0 0 0;
-  width: auto;
-  max-height: 70%;
-  padding-top: 0;
-  padding-bottom: var(--sa-bottom); /* 底部 sheet 让出 Home 指示条 */
-  border-right: 0;
-  border-top: 1px solid var(--line);
-  border-radius: 12px 12px 0 0;
-  transform: translateY(100%);
-}
-.app[data-bp='phone'][data-sidebar='open'] .sidebar { transform: none; }
+/* phone / tablet 的会话列表不在这儿 —— 它和历史 / 命令面板 / 设置一样是 Drawer（ADR-0018）。
+   打开时终端【不重排】：浮层 fixed 覆盖，不进 .main 的 flex 列，不触发 resize。 */
 
 .term-host { height: 100%; }
 .statusbar { cursor: pointer; }
@@ -383,23 +353,47 @@ body {
    不让用户对着一个冻住的终端瞎猜。 */
 .app[data-short='true'] .statusbar[data-state='online'] { display: none; }
 
-/* ---------- 命令面板 ---------- */
-.palette-backdrop, .panel-backdrop {
+/* ---------- 浮层：会话 / 历史 / 命令面板 / 设置共用一个壳（ADR-0018） ---------- */
+.drawer-backdrop {
   position: fixed; inset: 0; z-index: 40;
   background: rgba(0, 0, 0, 0.45);
-  display: flex; justify-content: center;
+  display: flex; align-items: center; justify-content: center;
 }
-.palette-backdrop { align-items: flex-start; padding-top: 12vh; }
-.palette {
-  width: min(620px, 92vw); max-height: 60vh; display: flex; flex-direction: column;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+.drawer {
+  width: min(620px, 92vw); max-height: min(80vh, 720px);
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
-.palette-input {
-  font: inherit; font-size: 15px; padding: 12px 14px; border: 0;
-  border-bottom: 1px solid var(--line); background: transparent; color: var(--fg); outline: none;
+/* 列表型（历史）：定高，免得条目一多一少整个浮层就换尺寸 */
+.drawer[data-size='wide'] { width: min(760px, 94vw); height: min(76vh, 640px); max-height: none; }
+.drawer-grab { display: none; }
+.drawer-head {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 10px 8px 10px 14px; border-bottom: 1px solid var(--line);
 }
-.palette-list { overflow-y: auto; }
+.drawer-title { flex: 1; margin: 0; font-size: 14px; font-weight: 600; }
+.drawer-close {
+  flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted);
+  font: inherit; font-size: 15px; cursor: pointer;
+}
+.drawer-close:hover, .drawer-close:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
+.drawer-tools {
+  flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px;
+}
+/* 工具行里的搜索框 —— 历史与命令面板同款 */
+.drawer-tools .panel-search, .drawer-tools .palette-input {
+  flex: 1; min-width: 160px; font: inherit; font-size: 13px; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: transparent; color: var(--fg); outline: none;
+}
+.drawer-tools .panel-search:focus, .drawer-tools .palette-input:focus { border-color: var(--line-strong); }
+.drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.drawer-foot { flex: none; padding: 6px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+
+/* ---------- 命令面板 ---------- */
 .palette-item {
   display: flex; align-items: center; gap: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px;
 }
@@ -408,24 +402,10 @@ body {
 .palette-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-hint { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .palette-empty, .panel-empty { padding: 16px; color: var(--muted); font-size: 12px; }
-.palette-foot { padding: 6px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 
 /* ---------- 历史面板 ---------- */
-.panel-backdrop { align-items: center; }
-.panel {
-  width: min(760px, 94vw); height: min(76vh, 640px); display: flex; flex-direction: column;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
-  position: relative;
-}
-.panel-head {
-  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-  border-bottom: 1px solid var(--line); font-size: 12px; flex-wrap: wrap;
-}
-.panel-search { flex: 1; min-width: 160px; font: inherit; padding: 6px 8px;
-  border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--fg); }
-.panel-head button { font: inherit; font-size: 12px; border: 1px solid var(--line);
+.drawer-tools button { font: inherit; font-size: 12px; border: 1px solid var(--line);
   border-radius: 6px; background: transparent; color: var(--fg); padding: 5px 8px; cursor: pointer; }
-.panel-body { overflow-y: auto; flex: 1; }
 .panel-group { padding: 8px 12px 4px; font-size: 11px; color: var(--muted); position: sticky; top: 0;
   background: var(--bg); }
 .cmd-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; cursor: pointer; font-size: 12px; }
@@ -451,7 +431,26 @@ body {
   border: 1px solid var(--line); border-radius: 999px; background: transparent;
   color: var(--fg); cursor: pointer; white-space: nowrap;
 }
-.privacy-note { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+/* ---------- 设置浮层（ADR-0018：以前是挤在终端上方的一条 .banner） ---------- */
+.settings-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 14px; min-height: 44px;
+  border-bottom: 1px solid var(--line); font-size: 13px;
+}
+.settings-label { flex: 1; }
+.settings-row select, .settings-row input {
+  flex: none; font: inherit; font-size: 13px; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg);
+}
+.settings-row input[type='number'] { width: 84px; }
+.settings-value { color: var(--muted); }
+/* 用户不知道这条规则的话它等于不存在（privacy-history.md）—— 别缩成小字 */
+.privacy-note { margin: 0; padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+@media (pointer: coarse) {
+  .settings-row { min-height: 52px; font-size: 15px; }
+  .settings-row select, .settings-row input { font-size: 16px; min-height: 40px; }
+  .privacy-note { font-size: 13px; }
+}
 
 /* ---------- 命令块 ---------- */
 
@@ -742,23 +741,27 @@ body {
 
 /* 双指缩放读（ADR-0013）：放大只作用在 .xterm-screen 的 transform 上；.term 已 overflow:hidden 裁掉溢出。 */
 
-/* ---------- 触屏：命令面板 / 历史面板 也做成底部 sheet（和 ⋯ 操作面板一套） ---------- */
+/* ---------- 触屏：浮层一律是贴底整宽 sheet（和 ⋯ 操作面板一套，ADR-0018） ---------- */
 @media (pointer: coarse) {
-  .palette-backdrop, .panel-backdrop { align-items: flex-end; padding: 0; }
-  .palette, .panel {
-    width: 100%; max-width: none; border-radius: 16px 16px 0 0; border-bottom: 0;
+  .drawer-backdrop { align-items: flex-end; }
+  .drawer {
+    width: 100%; max-width: none; max-height: 80vh;
+    border-radius: 16px 16px 0 0; border-bottom: 0;
+    /* fixed 定位不在 .app 的 padding 里，自己让出 Home 指示条 */
     padding-bottom: env(safe-area-inset-bottom, 0px);
     animation: sheet-up 180ms ease;
   }
-  .palette { max-height: 80vh; }
-  .panel { height: 86vh; }
-  /* 顶部抓手（无需改结构） */
-  .palette::before, .panel::before {
-    content: ''; display: block; flex: none;
+  .drawer[data-size='wide'] { width: 100%; height: 86vh; }
+  .drawer-grab {
+    display: block; flex: none;
     width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong);
     margin: 8px auto 2px;
   }
+  .drawer-head { padding: 6px 8px 8px 14px; }
+  .drawer-title { font-size: 16px; }
+  .drawer-close { width: 44px; height: 44px; font-size: 17px; }
   .palette-item { min-height: 48px; font-size: 15px; }
   .cmd-row { min-height: 48px; font-size: 14px; }
   .palette-input, .panel-search { font-size: 16px; }
 }
+@media (prefers-reduced-motion: reduce) { .drawer { animation: none; } }

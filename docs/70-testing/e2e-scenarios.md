@@ -443,7 +443,7 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 `web/e2e/tablet.spec.ts`，iPad mini（触屏 UA，`hasTouch`）：
 
-5. **横屏 1133×744**：`data-bp=desktop`、侧栏可见（宽 ≥ 200px）；**没有 `modebar`**，有 `term-bar`，`to-edit` 是键行第一个键，`.bottom` ≤ `.bottom-slot`；点 `⋯` → `more-menu` 宽 ≤ 320px 且右缘贴着 `.main` 右缘（≤ 16px）；菜单里「设置」能打开 `settings`
+5. **横屏 1133×744**：`data-bp=desktop`、侧栏可见（宽 ≥ 200px）；**没有 `modebar`**，有 `term-bar`，`to-edit` 是键行第一个键，`.bottom` ≤ `.bottom-slot`；点 `⋯` → `more-menu` 宽 ≤ 320px 且右缘贴着 `.main` 右缘（≤ 16px）；菜单里「设置」能打开 `settings`（模态浮层，点 ✕ 关掉再继续）
 6. **竖屏 744×1133**：`data-bp=tablet`；提示符键集 12 个键全部免滚（`.keybar-scroll` 的 `scrollWidth ≤ clientWidth + 1`）；`to-edit` 升半屏后 `.bottom` 高度在 [190, 420]；`⋯` 菜单宽 ≤ 320px
 
 ## E2E-24 双指缩放读（ADR-0013）
@@ -463,6 +463,16 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 3. 命令跑完后终端里 300 行**每行恰好一次、顺序正确**（不丢不重），`REEXEC-DONE` 在
 4. shell 仍活着：再提交一条命令有输出；`webterm reload --probe` 对新进程返回 0，`status` 里的 `generation` 为 1
 5. 预检失败路径：把 `--handoff-check-fail` 之类的注入留给 Go 集成测试（IT-handoff-1），E2E 不模拟
+
+## E2E-28 浮层统一（ADR-0018）
+
+`web/e2e/drawer.spec.ts`，Pixel 5 与 iPad 竖屏（744×1133）视口。
+
+1. **四个入口是同一种壳**（Pixel 5）：⋯ → 会话 / 历史 / 命令面板 / 设置逐个打开，每个都满足：`.drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽（宽度 = 视口宽）、有抓手 `.drawer-grab`、标题栏里有标题与 ✕
+2. **关闭方式一致**：设置用三种都关得掉（点遮罩、`Esc`、✕）；会话、历史、命令面板各验一种
+3. **浮层不挤终端**（AC-5.11）：打开设置前后 `.term` 的矩形逐字段相同，`__webterm.size()` 的 cols/rows 不变 —— 老的设置横幅会把终端顶上去并触发 resize
+4. **平板上会话也从底部出来**（744×1133）：`sidebar` 浮层左缘为 0、宽度 = 视口宽（不是 280px 的左侧抽屉）
+5. **设置内容仍完整**：`theme-select` / `font-size` / `renderer`（文本为 WebGL 或 Canvas）/ `privacy-note` 都在；把字号改成 18 后 `__webterm.fontSize()` 为 18
 
 ## 不在 E2E 覆盖范围（放手工清单）
 

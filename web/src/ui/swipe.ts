@@ -7,13 +7,13 @@
 export interface SwipeDismissOptions {
   /** 拉过这么多像素松手就关。 */
   threshold?: number
-  /** 找内部滚动区：返回它的 scrollTop，用来判断「是否已到顶」。默认找 .panel-body / .palette-list。 */
+  /** 找内部滚动区：返回它的 scrollTop，用来判断「是否已到顶」。默认找 Drawer 的 .drawer-body。 */
   scroller?: (host: HTMLElement) => HTMLElement | null
 }
 
 export function installSwipeDismiss(host: HTMLElement, onDismiss: () => void, opts: SwipeDismissOptions = {}): () => void {
   const threshold = opts.threshold ?? 90
-  const findScroller = opts.scroller ?? ((h) => h.querySelector<HTMLElement>('.panel-body, .palette-list, .sessionlist'))
+  const findScroller = opts.scroller ?? ((h) => h.querySelector<HTMLElement>('.drawer-body'))
   let startY = 0
   let dy = 0
   let dragging = false

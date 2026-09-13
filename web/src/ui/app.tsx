@@ -16,7 +16,7 @@ import { KeyBar } from '../input/keybar'
 import { EDIT_INSERT, PROGRAM_EDIT_KEYS, PROMPT_KEYS, appAction, programOf } from '../input/keymap'
 import type { ModeState } from '../input/modes'
 import { RawIme, cursorPosition } from '../input/raw'
-import { installSwipeDismiss } from './swipe'
+import { Drawer } from './drawer'
 import type { FollowState } from '../term/outputqueue'
 import { installPinch } from '../term/pinch'
 import { SLOT_HEIGHT, WriteSheet, type SheetSize } from '../input/sheet'
@@ -42,7 +42,6 @@ function clientID(): string {
 
 export function App() {
   const termAreaRef = useRef<HTMLDivElement>(null)
-  const sidebarRef = useRef<HTMLElement>(null)
   const connRef = useRef<Connection | null>(null)
   const storeRef = useRef<SessionStore | null>(null)
   const composerRef = useRef<ComposerHandle | null>(null)
@@ -141,11 +140,6 @@ export function App() {
   useEffect(reloadQuick, [reloadQuick])
 
   useEffect(() => applyTheme(theme), [theme])
-  useEffect(() => {
-    // 只有抽屉式侧栏（phone / tablet）才能滑走；desktop 栅格里它是常驻的一栏（iPad 横屏也是）
-    if (bp === 'desktop' || !sidebarOpen || !sidebarRef.current) return
-    return installSwipeDismiss(sidebarRef.current, () => setSidebarOpen(false))
-  }, [sidebarOpen, bp])
 
   const refresh = useCallback(() => {
     const store = storeRef.current
@@ -522,6 +516,7 @@ export function App() {
       parked: () => (store.active === null ? null : store.followOf(store.active).parked),
       following: () => (store.active === null ? true : store.followOf(store.active).following),
       renderer: () => (store.active === null ? '' : (store.termOf(store.active)?.renderer() ?? '')),
+      fontSize: () => (store.active === null ? 0 : (store.termOf(store.active)?.term.options.fontSize ?? 0)),
       viewport: () => {
         const sid = store.active
         const term = sid === null ? undefined : store.termOf(sid)
@@ -650,36 +645,40 @@ export function App() {
     }
   }
   const sheetInset = 0 // 终端不被推：sheet 盖在它上面（ADR-0013）
+  const sessionList = (
+    <SessionList
+      sessions={sessions}
+      active={activeSid}
+      unread={(sid) => storeRef.current?.isUnread(sid) ?? false}
+      onSelect={(sid) => {
+        selectRef.current(sid)
+        if (bp !== 'desktop') setSidebarOpen(false)
+      }}
+      onClose={(sid) => closeRef.current(sid)}
+      onRename={(sid, current) => {
+        const name = prompt('会话名（留空 = 跟随目录）', current)
+        if (name === null) return
+        const trimmed = name.trim()
+        connRef.current?.send({ t: T.sessionRename, req_id: `rename-${sid}-${Date.now()}`, sid, name: trimmed === '' ? null : trimmed })
+      }}
+      onTogglePinned={(sid) => storeRef.current?.togglePinnedSubscription(sid)}
+      onNew={() => {
+        newSessionRef.current()
+        if (bp !== 'desktop') setSidebarOpen(false)
+      }}
+      atLimit={atLimit}
+      maxSessions={maxSessions}
+    />
+  )
   return (
     <div class="app" data-bp={bp} data-short={short} data-sidebar={sidebarOpen ? 'open' : 'closed'}>
-      {bp !== 'desktop' && sidebarOpen && (
-        <div class="scrim" data-testid="scrim" onClick={() => setSidebarOpen(false)} />
+      {/* desktop：会话是主栅格常驻的一栏（Ctrl+Shift+B 折叠）。
+          phone / tablet：它和历史 / 命令面板 / 设置一样是浮层（ADR-0018），在下面和它们放一起。 */}
+      {bp === 'desktop' && (
+        <aside class="sidebar" data-testid="sidebar">
+          {sessionList}
+        </aside>
       )}
-      <aside class="sidebar" data-testid="sidebar" ref={sidebarRef}>
-        <SessionList
-          sessions={sessions}
-          active={activeSid}
-          unread={(sid) => storeRef.current?.isUnread(sid) ?? false}
-          onSelect={(sid) => {
-            selectRef.current(sid)
-            if (bp !== 'desktop') setSidebarOpen(false)
-          }}
-          onClose={(sid) => closeRef.current(sid)}
-          onRename={(sid, current) => {
-            const name = prompt('会话名（留空 = 跟随目录）', current)
-            if (name === null) return
-            const trimmed = name.trim()
-            connRef.current?.send({ t: T.sessionRename, req_id: `rename-${sid}-${Date.now()}`, sid, name: trimmed === '' ? null : trimmed })
-          }}
-          onTogglePinned={(sid) => storeRef.current?.togglePinnedSubscription(sid)}
-          onNew={() => {
-            newSessionRef.current()
-            if (bp !== 'desktop') setSidebarOpen(false)
-          }}
-          atLimit={atLimit}
-          maxSessions={maxSessions}
-        />
-      </aside>
 
       <div class="main" data-occupied={altScreen ? 'true' : 'false'} style={{ '--sheet-inset': `${sheetInset}px` }}>
         <StatusBar
@@ -768,48 +767,6 @@ export function App() {
             设置
           </button>
         </div>
-        )}
-
-        {settingsOpen && (
-          <div class="banner" data-testid="settings">
-            <label>
-              主题
-              <select
-                data-testid="theme-select"
-                value={theme}
-                onChange={(e) => setTheme(e.currentTarget.value as Theme)}
-              >
-                <option value="system">跟随系统</option>
-                <option value="light">浅色</option>
-                <option value="dark">深色</option>
-              </select>
-            </label>
-            <label>
-              字号
-              <input
-                data-testid="font-size"
-                type="number"
-                min={8}
-                max={32}
-                value={fontSize}
-                onInput={(e) => {
-                  const n = Number(e.currentTarget.value)
-                  if (!Number.isFinite(n) || n < 8 || n > 32) return
-                  setFontSize(n)
-                  writeFontSize(n)
-                  storeRef.current?.setFontSize(n)
-                }}
-              />
-            </label>
-            {/* WebGL 失败会静默退回 canvas（AC-5.5）——滚动变卡时先看这一眼（AC-5.10） */}
-            <span class="settings-renderer" data-testid="renderer">
-              渲染 {activeSid !== null && storeRef.current?.termOf(activeSid)?.renderer() === 'canvas' ? 'Canvas' : 'WebGL'}
-            </span>
-            {/* 用户不知道这条规则的话，它等于不存在（privacy-history.md） */}
-            <p class="privacy-note" data-testid="privacy-note">
-              以空格开头的命令不会被记录。贴 token / 密码时在前面加个空格。
-            </p>
-          </div>
         )}
 
         {!classic && active?.status !== 'exited' && editing && (
@@ -933,6 +890,55 @@ export function App() {
         >
           {preview.text}
         </div>
+      )}
+      {bp !== 'desktop' && sidebarOpen && (
+        <Drawer title="会话" testid="sidebar" backdropTestid="scrim" onClose={() => setSidebarOpen(false)}>
+          {sessionList}
+        </Drawer>
+      )}
+      {settingsOpen && (
+        <Drawer title="设置" testid="settings" onClose={() => setSettingsOpen(false)}>
+          <label class="settings-row">
+            <span class="settings-label">主题</span>
+            <select
+              data-testid="theme-select"
+              value={theme}
+              onChange={(e) => setTheme(e.currentTarget.value as Theme)}
+            >
+              <option value="system">跟随系统</option>
+              <option value="light">浅色</option>
+              <option value="dark">深色</option>
+            </select>
+          </label>
+          <label class="settings-row">
+            <span class="settings-label">终端字号</span>
+            <input
+              data-testid="font-size"
+              type="number"
+              min={8}
+              max={32}
+              value={fontSize}
+              onInput={(e) => {
+                const n = Number(e.currentTarget.value)
+                if (!Number.isFinite(n) || n < 8 || n > 32) return
+                setFontSize(n)
+                writeFontSize(n)
+                storeRef.current?.setFontSize(n)
+              }}
+            />
+          </label>
+          {/* WebGL 失败会静默退回 canvas（AC-5.5）——滚动变卡时先看这一眼（AC-5.10） */}
+          <div class="settings-row">
+            <span class="settings-label">渲染器</span>
+            <span class="settings-value" data-testid="renderer">
+              {activeSid !== null && storeRef.current?.termOf(activeSid)?.renderer() === 'canvas' ? 'Canvas' : 'WebGL'}
+            </span>
+          </div>
+          {/* 用户不知道这条规则的话，它等于不存在（privacy-history.md） */}
+          <p class="privacy-note" data-testid="privacy-note">
+            以空格开头的命令不会被记录。贴 token / 密码时在前面加个空格。
+          </p>
+        </Drawer>
       )}
       {paletteOpen && (
         <CommandPalette

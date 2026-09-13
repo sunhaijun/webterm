@@ -17,7 +17,7 @@ import {
   reorderCommands,
   type CommandRecord,
 } from './api'
-import { installSwipeDismiss } from '../ui/swipe'
+import { Drawer } from '../ui/drawer'
 
 export interface HistoryPanelProps {
   /** 当前会话的 CWD，用于「仅当前目录」过滤。 */
@@ -30,8 +30,6 @@ export interface HistoryPanelProps {
 }
 
 export function HistoryPanel({ cwd, onClose, onFill, onRun, onPinnedChanged }: HistoryPanelProps) {
-  const sheetRef = useRef<HTMLDivElement>(null)
-  useEffect(() => (sheetRef.current ? installSwipeDismiss(sheetRef.current, onClose) : undefined), [onClose])
   const [q, setQ] = useState('')
   const [onlyCwd, setOnlyCwd] = useState(false)
   const [onlyFailed, setOnlyFailed] = useState(false)
@@ -85,9 +83,14 @@ export function HistoryPanel({ cwd, onClose, onFill, onRun, onPinnedChanged }: H
   }
 
   return (
-    <div class="panel-backdrop" data-testid="history-panel" onClick={onClose}>
-      <div class="panel" ref={sheetRef} onClick={(e) => e.stopPropagation()}>
-        <div class="panel-head">
+    <Drawer
+      title="历史"
+      size="wide"
+      backdropTestid="history-panel"
+      closeTestid="close-history"
+      onClose={onClose}
+      tools={
+        <>
           <input
             class="panel-search"
             data-testid="history-search"
@@ -116,77 +119,72 @@ export function HistoryPanel({ cwd, onClose, onFill, onRun, onPinnedChanged }: H
           <button data-testid="clear-history" onClick={() => void doClear()}>
             清空历史
           </button>
-          <button data-testid="close-history" onClick={onClose}>
-            关闭
+        </>
+      }
+    >
+      {pinned.length > 0 && (
+        <>
+          <div class="panel-group">快捷命令</div>
+          {pinned.map((r, i) => (
+            <Row
+              key={r.id}
+              r={r}
+              index={i}
+              draggable
+              onFill={onFill}
+              onRun={onRun}
+              onTogglePin={() => void togglePin(r)}
+              onDelete={() => void remove(r)}
+              onLabel={async () => {
+                const label = prompt('给这条快捷命令起个短名：', r.label ?? '')
+                if (label === null) return
+                await patchCommand(r.id, { label: label || null })
+                await reload()
+                onPinnedChanged()
+              }}
+              onDropAt={async (from, to) => {
+                const next = [...pinned]
+                const [moved] = next.splice(from, 1)
+                if (!moved) return
+                next.splice(to, 0, moved)
+                // 一次提交所有受影响的项，避免中间态出现重复的 pin_order
+                await reorderCommands(next.map((x, idx) => ({ id: x.id, pin_order: idx + 1 })))
+                await reload()
+                onPinnedChanged()
+              }}
+            />
+          ))}
+        </>
+      )}
+
+      {groupByDay(items).map(([day, group]) => (
+        <div key={day}>
+          <div class="panel-group">{day}</div>
+          {group.map((r) => (
+            <Row
+              key={r.id}
+              r={r}
+              onFill={onFill}
+              onRun={onRun}
+              onTogglePin={() => void togglePin(r)}
+              onDelete={() => void remove(r)}
+            />
+          ))}
+        </div>
+      ))}
+      {items.length === 0 && pinned.length === 0 && (
+        <div class="panel-empty">还没有命令记录。</div>
+      )}
+
+      {undo && (
+        <div class="toast" data-testid="undo-delete">
+          已删除「{ellipsize(undo.text, 30)}」
+          <button data-testid="undo-button" onClick={cancelUndo}>
+            撤销
           </button>
         </div>
-
-        <div class="panel-body">
-          {pinned.length > 0 && (
-            <>
-              <div class="panel-group">快捷命令</div>
-              {pinned.map((r, i) => (
-                <Row
-                  key={r.id}
-                  r={r}
-                  index={i}
-                  draggable
-                  onFill={onFill}
-                  onRun={onRun}
-                  onTogglePin={() => void togglePin(r)}
-                  onDelete={() => void remove(r)}
-                  onLabel={async () => {
-                    const label = prompt('给这条快捷命令起个短名：', r.label ?? '')
-                    if (label === null) return
-                    await patchCommand(r.id, { label: label || null })
-                    await reload()
-                    onPinnedChanged()
-                  }}
-                  onDropAt={async (from, to) => {
-                    const next = [...pinned]
-                    const [moved] = next.splice(from, 1)
-                    if (!moved) return
-                    next.splice(to, 0, moved)
-                    // 一次提交所有受影响的项，避免中间态出现重复的 pin_order
-                    await reorderCommands(next.map((x, idx) => ({ id: x.id, pin_order: idx + 1 })))
-                    await reload()
-                    onPinnedChanged()
-                  }}
-                />
-              ))}
-            </>
-          )}
-
-          {groupByDay(items).map(([day, group]) => (
-            <div key={day}>
-              <div class="panel-group">{day}</div>
-              {group.map((r) => (
-                <Row
-                  key={r.id}
-                  r={r}
-                  onFill={onFill}
-                  onRun={onRun}
-                  onTogglePin={() => void togglePin(r)}
-                  onDelete={() => void remove(r)}
-                />
-              ))}
-            </div>
-          ))}
-          {items.length === 0 && pinned.length === 0 && (
-            <div class="panel-empty">还没有命令记录。</div>
-          )}
-        </div>
-
-        {undo && (
-          <div class="toast" data-testid="undo-delete">
-            已删除「{ellipsize(undo.text, 30)}」
-            <button data-testid="undo-button" onClick={cancelUndo}>
-              撤销
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
+      )}
+    </Drawer>
   )
 }
 
