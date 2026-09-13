@@ -246,11 +246,19 @@ interface WebtermWindow {
  */
 export interface WSControl {
   goOffline(): Promise<void>
+  /**
+   * 僵尸连接（E2E-32 / AC-2.20）：**已建立的那条两个方向都不再转发，但不关闭**。
+   *
+   * 这是息屏、切网、NAT 回收的样子 —— TCP 上没有 FIN，浏览器那边 `readyState`
+   * 一直是 OPEN，页面自认在线。新连接则像线路断了一样直接失败。
+   */
+  goZombie(): void
   goOnline(): void
 }
 
 export async function installWSControl(page: Page): Promise<WSControl> {
   let online = true
+  let zombie = false
   const live = new Set<{ close(opts?: { code?: number }): void }>()
 
   await page.routeWebSocket('**/ws', (ws) => {
@@ -260,9 +268,20 @@ export async function installWSControl(page: Page): Promise<WSControl> {
     }
     const server = ws.connectToServer()
     live.add(ws)
-    ws.onMessage((m) => server.send(m))
-    server.onMessage((m) => ws.send(m))
-    ws.onClose(() => live.delete(ws))
+    ws.onMessage((m) => {
+      if (!zombie) server.send(m)
+    })
+    server.onMessage((m) => {
+      if (!zombie) ws.send(m)
+    })
+    // 【关闭必须自己转发】：注册了 onClose 之后 Playwright 就不再默认转发关闭，
+    // 页面自己调 ws.close()（心跳判死、探活判死走的就是这条）时，页面那边的
+    // close 事件根本不会来 —— 应用永远停在"在线"，测的就不是真实行为了
+    ws.onClose((code, reason) => {
+      live.delete(ws)
+      ws.close({ code, reason })
+      server.close({ code, reason })
+    })
   })
 
   return {
@@ -272,7 +291,12 @@ export async function installWSControl(page: Page): Promise<WSControl> {
       live.clear()
       await page.waitForTimeout(50)
     },
+    goZombie() {
+      zombie = true // 活着的那条：黑洞，但不关
+      online = false // 新连接：像线断了一样失败
+    },
     goOnline() {
+      zombie = false
       online = true
     },
   }
