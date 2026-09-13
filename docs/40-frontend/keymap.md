@@ -30,7 +30,8 @@ Raw 模式下**所有按键都要能进 PTY**。所以应用级快捷键必须�
 | `Ctrl+Shift+Enter` | 新建会话 |
 | `Ctrl+Shift+W` | 关闭当前会话（`running` 需确认） |
 | `Ctrl+Shift+↑` / `↓` | 上一个 / 下一个会话 |
-| `Ctrl+Shift+B` | 折叠/展开侧栏（desktop）/ 开关抽屉（tablet） |
+| `Ctrl+Shift+B` | 折叠/展开侧栏（desktop）/ 开关浮层（phone / tablet） |
+| `←` / `→` | **焦点在侧栏分隔条上时**：改侧栏宽度，步进 16px（`Shift` 加持 64px）；`Home` / `End` 到最小 / 最大；`Enter` / `Space` 收起或展开 |
 | `Ctrl+Shift+,` | 设置 |
 
 **被浏览器强占、不能用的组合**：`Ctrl+Shift+T/N`（新标签页/新窗口）、`Ctrl+Shift+P`（Firefox 隐私窗口）、`Ctrl+Shift+H`（Firefox 历史库）。快捷命令面板和历史面板因此**不设快捷键** —— `Ctrl/Cmd+K` 本来就是它们的总入口，这正是"只留极少快捷键"的意义。

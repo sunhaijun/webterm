@@ -291,8 +291,49 @@ body {
 /* ---------- 三档布局 ---------- */
 
 .app { position: relative; }
-.app[data-bp='desktop'] { display: grid; grid-template-columns: 240px 1fr; }
+.app[data-bp='desktop'] { display: grid; grid-template-columns: var(--sidebar-w, 240px) 1fr; }
 .app[data-bp='desktop'][data-sidebar='closed'] { grid-template-columns: 0 1fr; }
+/* 收起就该一点不剩。0 宽的列压不掉 border-right（box-sizing:border-box 下边框不参与收缩），
+   会在终端左缘留一条 1px 的线 —— 分隔条自己那条把手才是这时候该看见的东西。 */
+.app[data-bp='desktop'][data-sidebar='closed'] .sidebar { border-right: 0; }
+/* 【列宽不要加 transition】。改侧栏宽度就是改终端几何，过渡期间每一帧都会让
+   ResizeObserver 响一次 → fit() → 给 PTY 发 resize，比拖动本身还糟。
+   要动效只动侧栏内容的 opacity，不动列宽（layout-responsive.md §desktop）。 */
+
+/* 分隔条：拖 = 改宽，点 = 收起 / 展开（AC-5.12）。
+   【绝对定位，不占栅格列】—— 占一列的话收起时还得单独处理它自己的宽度，
+   而且每次改宽要动两处。.app 是 position:relative，left 的参照是它的 padding 盒，
+   safe-area 已经让过了，这里不再加 env()。 */
+.sidebar-resizer {
+  position: absolute; top: 0; bottom: 0; left: var(--sidebar-w, 240px);
+  width: 11px; margin-left: -5px; z-index: 6;
+  padding: 0; border: 0; background: transparent;
+  cursor: col-resize; touch-action: none;
+}
+.app:not([data-bp='desktop']) .sidebar-resizer { display: none; }
+.app[data-bp='desktop'][data-sidebar='closed'] .sidebar-resizer { left: 0; margin-left: 0; }
+.sidebar-resizer::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 2px; height: 28px; transform: translate(-50%, -50%);
+  border-radius: 999px; background: var(--line-strong); opacity: 0;
+  transition: opacity 120ms;
+}
+/* 收起时它是唯一的拉出把手，得常显；展开时侧栏自己的 border-right 已经画了那条线，
+   只在 hover / 聚焦 / 拖动时亮起来。 */
+.app[data-sidebar='closed'] .sidebar-resizer::after { opacity: 0.55; }
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.app[data-sidebar-drag='true'] .sidebar-resizer::after { opacity: 1; height: 44px; background: var(--link); }
+.sidebar-resizer:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+/* 拖动时全页统一光标 + 禁选：指针已被 capture，划过终端不该选中文本 */
+.app[data-sidebar-drag='true'] { cursor: col-resize; user-select: none; }
+@media (prefers-reduced-motion: reduce) { .sidebar-resizer::after { transition: none; } }
+@media (pointer: coarse) {
+  .sidebar-resizer { width: 24px; margin-left: -12px; }
+  /* 收起态下把手离屏幕左缘留 8px —— 贴边起手会被 Safari / PWA 当成返回手势 */
+  .app[data-bp='desktop'][data-sidebar='closed'] .sidebar-resizer { left: 8px; margin-left: 0; }
+  .sidebar-resizer::after { width: 3px; height: 36px; }
+}
 .app[data-bp='desktop'] .sidebar {
   grid-row: 1 / -1;
   border-right: 1px solid var(--line);
