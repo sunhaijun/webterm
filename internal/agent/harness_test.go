@@ -203,6 +203,20 @@ func (c *wsClient) sawAttrPrefix(sid uint16) bool {
 	return c.attrSeen[sid]
 }
 
+// headSeqOf 返回 session.updated 报过的最新 head_seq。
+// 未订阅期间字节不过网络，只有这条消息能告诉测试"积压涨到哪了"。
+func (c *wsClient) headSeqOf(sid uint16) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var v uint64
+	for _, m := range c.msgs {
+		if u, ok := m.(*protocol.SessionUpdated); ok && u.SID == sid && u.HeadSeq != nil {
+			v = *u.HeadSeq
+		}
+	}
+	return v
+}
+
 // stopReading 让客户端不再从 socket 上取数据，用来撑爆服务端的写队列。
 func (c *wsClient) stopReading() {
 	c.mu.Lock()

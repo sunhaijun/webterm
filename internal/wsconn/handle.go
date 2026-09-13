@@ -80,7 +80,9 @@ func (c *Conn) handleControl(data []byte) {
 			c.sendError("", &m.SID, protocol.CodeUnknownSession, "会话不存在", false)
 			return
 		}
-		c.subscribe(s, m.OutSeq)
+		// 切回会话：缓冲被覆盖时要额外发一条 reset 通知 —— 客户端没有
+		// welcome.resumed[] 那条渠道可以知道历史被截断了
+		c.subscribeNotifyReset(s, m.OutSeq)
 
 	case *protocol.Unsubscribe:
 		if s, ok := c.deps.Sessions.Get(m.SID); ok {

@@ -180,6 +180,12 @@ export function App() {
         onOutput(sid, data, isReplay) {
           store.write(sid, data, isReplay)
         },
+        // 带 ATTR_PREFIX 的帧 = 重建，不是续写：清屏再接（协议 §3）。
+        // 重连那条路 welcome.resumed[] 也会清一次，两次都发生在写入之前，无害
+        onResetScreen(sid) {
+          store.resetTerm(sid)
+          setTruncated(true)
+        },
         onMessage(msg) {
           switch (msg.t) {
             case T.welcome: {
@@ -297,7 +303,9 @@ export function App() {
       attachIme()
       pinch.reset()
       setTruncated(false)
-      sendResize()
+      // 【不在这里发 resize】。切会话的 resize 由 store.activate 同步发出，
+      // 而且必须排在 subscribe 前面；走这里的防抖会晚 100ms 落到 subscribe 之后，
+      // agent 补的积压就按旧尺寸排版了（session-ux.md §订阅策略）
       syncProgram()
       // 切到的会话如果正有程序占屏，键条要跟着它。回放（top 的 DECCKM 等）会稍后到达，
       // 到达时检测器的 CSI 处理器会补判；这里再延迟补一次 sync 兜底。

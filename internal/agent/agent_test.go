@@ -449,6 +449,130 @@ func TestITSub1_UnsubscribedSessionKeepsBuffering(t *testing.T) {
 	}
 }
 
+// IT-sub-2：切回时积压超过 ring_bytes → agent 先发 reset 通知，再发带属性修正前缀的
+// 回放帧；客户端据此【清屏重建】，而不是把一段接不上的内容追加在旧屏幕后面（AC-2.6）。
+//
+// 这条走的是 subscribe 路径。重连那半边（welcome.resumed[].status）由 IT-resume-* 覆盖
+// —— 两条是不同的代码，之前只有重连那边有测试，于是切回这边漏掉了"清屏"。
+func TestITSub2_SubscribeOverflowRebuildsScreen(t *testing.T) {
+	const ring = 16 << 10
+	h := newHarnessWith(t, harnessOpts{ringBytes: ring})
+	c := h.client()
+	h.pair(c).Body.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	cl.welcome()
+	sid := cl.createSession(t.TempDir())
+
+	cl.input(sid, "printf 'BEFORE-%s\\n' MARK\r")
+	waitFor(t, "切走前的标记出现", func() bool { return strings.Contains(cl.screenOf(sid), "BEFORE-MARK") })
+
+	cl.send(&protocol.Unsubscribe{SID: sid})
+	time.Sleep(200 * time.Millisecond)
+	cl.mu.Lock()
+	at := cl.outSeq[sid]
+	cl.mu.Unlock()
+
+	// 切走期间产出远超 ring_bytes，把 BEFORE-MARK 挤出窗口
+	cl.input(sid, "for i in $(seq 1 600); do printf 'pad %04d %s\\n' $i "+strings.Repeat("x", 60)+"; done\r")
+	// 涨过 base_seq 把 BEFORE-MARK 挤出窗口就够了。未订阅期间字节不过网络，
+	// 进度只能靠 session.updated{head_seq}
+	waitFor(t, "积压把窗口顶掉一轮", func() bool { return cl.headSeqOf(sid) > at+ring+2048 })
+
+	cl.send(&protocol.Subscribe{SID: sid, OutSeq: at})
+	waitFor(t, "收到 reset 通知", func() bool {
+		for _, m := range cl.messages() {
+			if r, ok := m.(*protocol.Reset); ok && r.SID == sid {
+				return true
+			}
+		}
+		return false
+	})
+	waitFor(t, "收到带属性修正前缀的回放帧", func() bool { return cl.sawAttrPrefix(sid) })
+
+	if s := cl.screenOf(sid); strings.Contains(s, "BEFORE-MARK") {
+		t.Fatal("reset 回放被接在了旧屏幕后面 —— 每切回一次就叠一份")
+	}
+
+	// 重建之后的实时输出照常正确
+	cl.input(sid, "printf 'AFTER-%s\\n' MARK\r")
+	waitFor(t, "重建后的新输出", func() bool { return strings.Contains(cl.screenOf(sid), "AFTER-MARK") })
+}
+
+// IT-unread-1：被节流吞掉的 head_seq 必须补发（AC-4.3）。
+//
+// 未订阅会话的输出常常是一阵一阵的：一秒内打完就安静了，后面再没有新输出来
+// 触发下一条通知。只节流不补发的话，客户端手里的 head_seq 永远停在那一阵之前
+// —— 未读点不亮，用户不知道后台会话有动静。ack 一直是补发的，head_seq 漏了。
+func TestHeadSeqThrottleFlushesLastValue(t *testing.T) {
+	h := newHarness(t)
+	c := h.client()
+	h.pair(c).Body.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	cl.welcome()
+	sid := cl.createSession(t.TempDir())
+	cl.input(sid, "printf 'READY-%s\\n' MARK\r")
+	waitFor(t, "会话可用", func() bool { return strings.Contains(cl.screenOf(sid), "READY-MARK") })
+
+	cl.send(&protocol.Unsubscribe{SID: sid})
+	time.Sleep(1200 * time.Millisecond) // 让节流窗口过期，下一条必然放行
+
+	// 第一阵：放行，把 lastHead 设到现在
+	cl.input(sid, "printf 'A%.0s' $(seq 1 500); printf '\\n'\r")
+	waitFor(t, "第一阵的 head_seq 到达", func() bool { return cl.headSeqOf(sid) > 0 })
+	h1 := cl.headSeqOf(sid)
+
+	// 第二阵：落在节流窗口内，必然被吞掉 —— 只能靠补发
+	cl.input(sid, "printf 'B%.0s' $(seq 1 500); printf '\\n'\r")
+	time.Sleep(2 * time.Second) // 输出早停了，不会再有新的触发
+
+	if got := cl.headSeqOf(sid); got < h1+500 {
+		t.Fatalf("head_seq 停在 %d（第一阵之后是 %d）—— 被节流吞掉的那条没有补发，未读会漏", got, h1)
+	}
+}
+
+// 重连那条路【不】重复发 reset 消息 —— welcome.resumed[].status 已经说过了，
+// 再发一条只会让客户端多清一次屏（协议 §4.2）。
+func TestResumeDoesNotSendRedundantResetMessage(t *testing.T) {
+	const ring = 16 << 10
+	h := newHarnessWith(t, harnessOpts{ringBytes: ring})
+	c := h.client()
+	h.pair(c).Body.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	first := cl.welcome()
+	sid := cl.createSession(t.TempDir())
+	cl.input(sid, "printf 'BEFORE-%s\\n' MARK\r")
+	waitFor(t, "标记出现", func() bool { return strings.Contains(cl.screenOf(sid), "BEFORE-MARK") })
+
+	cl.mu.Lock()
+	at := cl.outSeq[sid]
+	cl.mu.Unlock()
+	cl.stopReading()
+
+	cl.input(sid, "for i in $(seq 1 600); do printf 'pad %04d %s\\n' $i "+strings.Repeat("x", 60)+"; done\r")
+	time.Sleep(2 * time.Second)
+
+	again := h.connect(ctx, c, "tab-1", []protocol.ResumeReq{{SID: sid, OutSeq: at}}, first.InstanceID)
+	w := again.welcome()
+	if len(w.Resumed) != 1 || w.Resumed[0].Status != protocol.ResumeReset {
+		t.Fatalf("resumed = %+v, want status reset", w.Resumed)
+	}
+	waitFor(t, "收到带属性修正前缀的回放帧", func() bool { return again.sawAttrPrefix(sid) })
+	for _, m := range again.messages() {
+		if _, ok := m.(*protocol.Reset); ok {
+			t.Fatal("重连路径多发了一条 reset 消息")
+		}
+	}
+}
+
 // IT-hb-1：60 秒没收到任何帧的连接被关闭（AC-2.8）。
 // 用可注入的 idle timeout，免得测试真的等一分钟。
 func TestITHb1_IdleConnectionClosed(t *testing.T) {

@@ -50,6 +50,14 @@ export interface ConnectionHandlers {
    * （data 若带 reset 前缀，前 4 字节是渲染修正、不计入 seq，withPrefix 已处理。）
    */
   onOutput(sid: number, data: Uint8Array, isReplay: boolean): void
+  /**
+   * 该会话的屏幕要清掉重建：紧接着的那一帧与屏幕上现有的内容【接不上】。
+   *
+   * 由帧上的 ATTR_PREFIX 驱动（协议 §3），**不等** `reset` 控制消息 —— 帧自己
+   * 就带着"这是重建不是续写"的语义。少了这一步，一段接不上的内容会被叠在旧
+   * 屏幕后面，来回切几次会话就叠几份（"很多份 logo"的由来）。
+   */
+  onResetScreen(sid: number): void
   onMessage(msg: ServerMessage): void
   onState(state: ConnState, info: StateInfo): void
   /** 出现无法自行修补的错误（如 seq 空洞）。 */
@@ -162,6 +170,10 @@ export class Connection {
   subscribe(sid: number): void {
     const st = this.ensure(sid)
     st.subscribed = true
+    // 切回时 agent 补的那一段是【回放】，不是实时输出：outSeq 追到 headSeq
+    // 之前收到的都要抑制 xterm 对历史查询的自动应答（协议 §5.2）。
+    // 漏标的话，每切回一次就给前台程序喂一串乱码"按键"
+    st.catchupTo = Math.max(st.catchupTo, st.headSeq)
     this.send({ t: T.subscribe, sid, out_seq: st.outSeq })
   }
 
@@ -280,6 +292,10 @@ export class Connection {
       st.headSeq = Math.max(st.headSeq, st.outSeq)
       st.catchupTo = st.outSeq // reset 已重绘到当前，之后就是 live
       this.replayedBytes += data.length
+      // 【先清屏再写】。这一帧与屏幕上的内容接不上：它的起点是缓冲窗口的开头，
+      // 中间那段已经被裁掉了。不清屏就是把两段无关的内容首尾相接。
+      // 也【不做去重】—— 清屏之后屏幕是空的，重复到达的同一段必须照写一遍
+      this.opts.handlers.onResetScreen(f.sid)
       this.opts.handlers.onOutput(f.sid, withPrefix(data), true) // reset 回放 = isReplay
       return
     }

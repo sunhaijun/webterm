@@ -40,7 +40,7 @@
 | AC-2.3 | 重连时 client 上报 `out_seq`，agent 仅回放 `out_seq` 之后的字节，不重发已收到的字节 | UT-ring-1, IT-resume-2 |
 | AC-2.4 | 断线期间提交的输入在重连后按原顺序、不重复、不丢失地写入 PTY | E2E-3, IT-resume-3 |
 | AC-2.5 | `out_seq` 严格等于 agent 已发送的累计字节数；剥离 OSC 之后才计数 | UT-seq-1 |
-| AC-2.6 | client 的 `out_seq < base_seq` 时 agent 判 `reset`，client 先清屏再写入缓冲现存内容，并显示"历史输出已截断"提示 | E2E-4, UT-ring-2 |
+| AC-2.6 | client 的 `out_seq < base_seq` 时 agent 判 `reset`，client 先清屏再写入缓冲现存内容，并显示"历史输出已截断"提示。**重连（`welcome.resumed[].status`）与切回（`subscribe`）两条路都要满足**；清屏由帧上的 `ATTR_PREFIX` 驱动（协议 §3），不依赖控制消息先到，所以同一段回放收到两次也只是重建两次，不会叠在旧内容后面 | E2E-4, E2E-30, UT-ring-2, IT-sub-2, UT-replay-1 |
 | AC-2.7 | 环形缓冲裁剪优先在 `\n` 边界（64 KiB 窗口内找不到则硬裁）；`ESC[0m` 属性修正**只在 reset 回放时**前置，且不计入 `out_seq`（增量续传时注入会破坏 AC-2.1） | UT-ring-3, UT-ring-4 |
 | AC-2.8 | 心跳：client 每 30 秒发协议级 ping；agent 60 秒未收到任何帧则关闭连接 | UT-hb-1, IT-hb-1 |
 | AC-2.9 | client 重连采用指数退避（0.5s 起，上限 15s，带抖动），网络恢复事件触发立即重试 | UT-reconnect-1 |
@@ -49,6 +49,7 @@
 | AC-2.12 | `in_ack` 按 `(client_id, sid)` 记账并**跨重连存活**：重连后 client 按 `welcome.resumed[].in_ack` 重发，不触发 `input_gap` | IT-resume-3 |
 | AC-2.13 | `hello.instance_id` 与 agent 当前值不符时，所有 `resume` 项判 `gone`（防止 agent 重启后 sid 复用导致张冠李戴） | IT-resume-4 |
 | AC-2.14 | **热升级不丢会话**（ADR-0016）：agent 收到 `SIGUSR2` / `reexec` 后原地 exec 新二进制，PID 不变；所有会话的 shell 仍在跑、`instance_id` 不变、环形缓冲与 `in_ack` 原样交接；跨交接的字节级连续性与 AC-2.1 同标准（中途交接与不交接的序列化结果逐字节一致），未写完的输入不丢不重；预检失败时中止并照常服务，**不自动退化成重启** | IT-handoff-1, UT-ring-10, UT-osc-restore, E2E-26 |
+| AC-2.15 | **回放不得回声**：重连续传与**切回补课**的字节都标记为回放（client 侧 `catchup_to`，协议 §5.2）；回放期间终端对历史里那些查询（DSR / DA / `CSI ?u` …）的自动应答**不得写进 PTY**。切会话时 `resize` 排在 `subscribe` 之前且不防抖，避免按旧尺寸排版的积压灌进已改尺寸的终端 | E2E-30, UT-replay-1 |
 
 ---
 
@@ -85,7 +86,7 @@
 |---|---|---|
 | AC-4.1 | 可同时存在多个会话，各自独立 PTY、独立缓冲、独立序列号 | IT-session-1 |
 | AC-4.2 | 会话数达上限（默认 20，可配）时 `session.create` 返回 `session_limit` 错误，UI 显示提示 | IT-session-2, E2E-11 |
-| AC-4.3 | 未订阅会话产生输出时，agent 发 `session.updated{head_seq}`；client 按 `head_seq > out_seq` 显示未读标记 | E2E-6 |
+| AC-4.3 | 未订阅会话产生输出时，agent 发 `session.updated{head_seq}`；client 按 `head_seq > out_seq` 显示未读标记。**节流吞掉的那条必须补发最新值**（协议 §6.3）—— 输出一阵一阵的时候，最后一条被吞掉就意味着未读永远不亮 | E2E-6, IT-unread-1 |
 | AC-4.4 | 会话默认名为其 CWD 的 basename，CWD 变化时自动更新；手动改名后停止自动更新 | IT-session-3, UT-name-1 |
 | AC-4.5 | shell 退出后会话状态变 `exited` 并携带退出码；缓冲内容保留可查看，直到用户显式关闭 | IT-session-4, E2E-11 |
 | AC-4.6 | 关闭会话时先送 `SIGHUP`，2 秒后仍存活则 `SIGKILL`，并释放 PTY 与缓冲 | IT-session-5 |

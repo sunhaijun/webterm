@@ -62,6 +62,8 @@ interface Harness {
   conn: Connection
   socket: () => FakeSocket
   output: { sid: number; data: Uint8Array; isReplay: boolean }[]
+  /** 按到达顺序记的事件流（`reset:1` / `out:1`）：清屏必须排在写入【之前】。 */
+  events: string[]
   fatals: string[]
   states: { state: string; retryInMs?: number; replayedBytes?: number; rttMs?: number }[]
 }
@@ -69,6 +71,7 @@ interface Harness {
 function harness(opts: { backoff?: Backoff } = {}): Harness {
   const sockets: FakeSocket[] = []
   const output: Harness['output'] = []
+  const events: string[] = []
   const fatals: string[] = []
   const states: Harness['states'] = []
   const conn = new Connection({
@@ -81,13 +84,17 @@ function harness(opts: { backoff?: Backoff } = {}): Harness {
       return s
     },
     handlers: {
-      onOutput: (sid, data, isReplay) => output.push({ sid, data, isReplay }),
+      onOutput: (sid, data, isReplay) => {
+        output.push({ sid, data, isReplay })
+        events.push(`out:${sid}`)
+      },
+      onResetScreen: (sid) => events.push(`reset:${sid}`),
       onMessage: () => {},
       onState: (state, info) => states.push({ state, ...info }),
       onFatal: (r) => fatals.push(r),
     },
   })
-  return { conn, socket: () => sockets[sockets.length - 1]!, output, fatals, states }
+  return { conn, socket: () => sockets[sockets.length - 1]!, output, events, fatals, states }
 }
 
 function welcome(extra: Record<string, unknown> = {}) {
@@ -186,6 +193,88 @@ describe('UT-seq-1 输出 seq 记账', () => {
     expect(h.output[0]!.isReplay).toBe(true)
     // 但交给终端的字节【要】带上前缀，属性修正才生效
     expect(str(h.output[0]!.data)).toBe('\x1b[0mhello')
+  })
+})
+
+// UT-replay-1：回放的两条纪律 —— 接不上的内容先清屏，补课的字节算回放（AC-2.6 / AC-2.15）。
+describe('UT-replay-1 回放语义', () => {
+  const resetFrame = (seq: bigint, body: string) => ({
+    type: TYPE_OUTPUT,
+    flags: FLAG_ATTR_PREFIX,
+    sid: 1,
+    seq,
+    payload: new Uint8Array([...ATTR_PREFIX, ...text(body)]),
+  })
+
+  it('ATTR_PREFIX 帧先清屏再写，不依赖 reset 控制消息', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('old') })
+    h.socket().deliverFrame(resetFrame(1000n, 'rebuilt'))
+
+    // 没有任何 reset 控制消息，清屏也必须发生，而且排在写入之前 ——
+    // 否则这段接不上的内容会被叠在旧屏幕后面（"很多份 logo"的成因）
+    expect(h.events).toEqual(['out:1', 'reset:1', 'out:1'])
+  })
+
+  it('同一段 reset 回放到两次是重建两次，不是追加两次', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+
+    h.socket().deliverFrame(resetFrame(1000n, 'rebuilt'))
+    h.socket().deliverFrame(resetFrame(1000n, 'rebuilt'))
+
+    expect(h.events).toEqual(['reset:1', 'out:1', 'reset:1', 'out:1'])
+    // 记账不能因为重复而漂移
+    expect(h.conn.outSeqOf(1)).toBe(1007)
+  })
+
+  it('reset 之后回到 live：后续帧不再算回放', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+
+    h.socket().deliverFrame(resetFrame(1000n, 'rebuilt'))
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 1007n, payload: text('x') })
+
+    expect(h.output.map((o) => o.isReplay)).toEqual([true, false])
+  })
+
+  it('subscribe 把切回时补的那段标成回放', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome({ sessions: [], resumed: [] }))
+
+    // 切走期间 agent 用 session.updated 报进度（未读就是这么推导的）
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('ab') })
+    h.socket().deliverText({ t: 'session.updated', sid: 1, head_seq: 100 })
+    expect(h.conn.isUnread(1)).toBe(true)
+
+    h.conn.subscribe(1)
+    // 补课：追到 head_seq 之前都是回放 —— 历史里的 DSR/DA 应答不能被当成用户输入
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 2n, payload: text('c'.repeat(98)) })
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 100n, payload: text('live') })
+
+    expect(h.output.map((o) => o.isReplay)).toEqual([false, true, false])
+  })
+
+  it('subscribe 上报的是本地进度', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('abc') })
+
+    h.conn.subscribe(1)
+    const sub = h.socket().sent.filter((s) => typeof s === 'string' && s.includes('"subscribe"'))
+    expect(JSON.parse(sub[sub.length - 1] as string)).toMatchObject({ sid: 1, out_seq: 3 })
   })
 })
 

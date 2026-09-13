@@ -101,6 +101,7 @@ func (c *Conn) writeLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			c.flushPendingAcks()
+			c.flushPendingHeads()
 		case f := <-c.out:
 			c.mu.Lock()
 			c.queued -= len(f.data)
@@ -166,6 +167,43 @@ func (c *Conn) flushPendingAcks() {
 
 	for sid, inAck := range pend {
 		b, err := protocol.Encode(&protocol.Ack{SID: sid, InAck: inAck})
+		if err == nil {
+			c.enqueue(outFrame{data: b})
+		}
+	}
+}
+
+// flushPendingHeads 补发被节流吞掉的 head_seq（取最新值）。
+//
+// 【必须补发】：未订阅会话的输出常常是一阵一阵的 —— 一秒内打完就安静了，
+// 后面再没有新输出来触发下一条通知，客户端手里的 head_seq 就永远停在那一阵
+// 之前，未读标记不亮（AC-4.3）。ack 一直是这么补的，head_seq 漏了。
+func (c *Conn) flushPendingHeads() {
+	c.mu.Lock()
+	if len(c.pendHead) == 0 {
+		c.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	ready := make(map[uint16]uint64, len(c.pendHead))
+	for sid, head := range c.pendHead {
+		// 节流窗口还没过就继续等；期间又订阅了就直接丢（OUTPUT 帧自带进度）
+		if c.subs[sid] {
+			delete(c.pendHead, sid)
+			continue
+		}
+		if now.Sub(c.lastHead[sid]) < headSeqThrottle {
+			continue
+		}
+		ready[sid] = head
+		c.lastHead[sid] = now
+		delete(c.pendHead, sid)
+	}
+	c.mu.Unlock()
+
+	for sid, head := range ready {
+		h := head
+		b, err := protocol.Encode(&protocol.SessionUpdated{SID: sid, HeadSeq: &h})
 		if err == nil {
 			c.enqueue(outFrame{data: b})
 		}
@@ -263,10 +301,21 @@ func (c *Conn) handleHello(h *protocol.Hello) error {
 }
 
 func (c *Conn) subscribe(s *session.Session, fromSeq uint64) {
-	c.mu.Lock()
-	c.subs[s.SID()] = true
-	c.mu.Unlock()
+	c.markSubscribed(s.SID())
 	s.Subscribe(c, fromSeq)
+}
+
+// subscribeNotifyReset 用于 `subscribe` 消息：缓冲被覆盖时先发 reset 通知。
+func (c *Conn) subscribeNotifyReset(s *session.Session, fromSeq uint64) {
+	c.markSubscribed(s.SID())
+	s.SubscribeNotifyReset(c, fromSeq)
+}
+
+func (c *Conn) markSubscribed(sid uint16) {
+	c.mu.Lock()
+	c.subs[sid] = true
+	delete(c.pendHead, sid) // 订阅之后 head_seq 通知没有意义了
+	c.mu.Unlock()
 }
 
 func itoa(n int) string {
