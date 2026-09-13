@@ -57,6 +57,16 @@ export function settleSidebarWidth(raw: number, start: number, winW: number, coa
   return { width: clampSidebarWidth(snapped, winW, coarse), open: true }
 }
 
+/**
+ * 拖动中预览线的位置（距 `.app` 左缘的像素）—— 【就是松手的结果】，不是指针位置：
+ * 夹紧、吸附回默认宽、拖过门槛收起，全部在拖动中就显形（ADR-0021）。
+ * 收起意味着列宽 0，所以预览线落在左缘。
+ */
+export function previewEdge(raw: number, start: number, winW: number, coarse: boolean): number {
+  const st = settleSidebarWidth(raw, start, winW, coarse)
+  return st.open ? st.width : 0
+}
+
 /** 键盘步进后夹紧。 */
 export function stepSidebarWidth(cur: number, delta: number, winW: number, coarse: boolean): number {
   return clampSidebarWidth(cur + delta, winW, coarse)
