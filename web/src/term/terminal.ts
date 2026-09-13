@@ -22,6 +22,8 @@ export interface TermHandle {
   attachWebgl(): void
   /** 卸掉 WebGL —— 切走的会话必须放掉上下文，见下面的注释。 */
   detachWebgl(): void
+  /** 当前渲染器。WebGL 加载失败会静默回退到 canvas（AC-5.5），设置里把它显示出来（AC-5.10）。 */
+  renderer(): 'webgl' | 'canvas'
   /**
    * 备用屏幕缓冲是否激活（ADR-0011 分片 ②）。
    *
@@ -42,6 +44,11 @@ export function createTerminal(fontSize: number): TermHandle {
     allowProposedApi: true,
     convertEol: false,
     cursorBlink: true,
+    // 【不开 smoothScrollDuration】。试过 80ms：xterm 5.5 的平滑滚动是用 DOM scrollTop
+    // 动画实现的，持续输出时和它自己的 syncScrollArea 打架 —— 程序化 scrollLines 会被吞掉
+    // 或只动一格，onScroll 报出来的位置和最终视口对不上，回看暂停跟随（AC-5.9）据此判定
+    // 就会卡死。按行跳的台阶感是小事，判定出错是大事。
+    smoothScrollDuration: 0,
     theme: { background: '#111111', foreground: '#e6e6e6' },
   })
 
@@ -91,6 +98,7 @@ export function createTerminal(fontSize: number): TermHandle {
     serialize,
     attachWebgl,
     detachWebgl,
+    renderer: () => (webgl ? 'webgl' : 'canvas'),
     altScreen: () => term.buffer.active.type === 'alternate',
     dispose() {
       detachWebgl()

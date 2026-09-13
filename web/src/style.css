@@ -329,6 +329,17 @@ body {
    cols/rows，shell 按它折行；用 display:none 尺寸归零，cols/rows 会算错。 */
 .main > .canvas { flex: 1 1 0; min-height: 0; position: relative; }
 .canvas > .term { position: absolute; inset: 0; min-height: 0; }
+/* 回看暂停跟随的提示条（AC-5.9）：画布右下角，落在底部键行之上；是 .term 的兄弟，
+   不受 .xterm-screen 的双指缩放 transform 影响。触屏给足 44px */
+.follow-pill {
+  position: absolute; right: 12px; bottom: 12px; z-index: 6;
+  min-height: 40px; padding: 0 14px; border: 0; border-radius: 999px;
+  background: var(--fg); color: var(--bg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.follow-pill:active { opacity: 0.85; }
+@media (pointer: coarse) { .follow-pill { min-height: 44px; font-size: 14px; } }
+.settings-renderer { color: var(--muted); }
 .canvas > .term[data-hidden='true'] { visibility: hidden; pointer-events: none; }
 .canvas > .stream { position: absolute; inset: 0; }
 
