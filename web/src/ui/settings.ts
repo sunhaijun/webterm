@@ -37,7 +37,8 @@ export function writeFontSize(px: number, width = window.innerWidth): void {
 }
 
 // localStorage 在隐私窗口 / 禁用站点数据时会直接抛异常，全部包起来。
-function safeGet(k: string): string | null {
+// 侧栏几何（sidebar.ts）也用这两个，别再抄一份。
+export function safeGet(k: string): string | null {
   try {
     return localStorage.getItem(k)
   } catch {
@@ -45,7 +46,7 @@ function safeGet(k: string): string | null {
   }
 }
 
-function safeSet(k: string, v: string): void {
+export function safeSet(k: string, v: string): void {
   try {
     localStorage.setItem(k, v)
   } catch {

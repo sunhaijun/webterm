@@ -24,6 +24,19 @@ import { T } from '../protocol/messages'
 import { SessionStore, type SessionView } from '../sessions/store'
 import { ExitedBar, SessionList } from './sessionlist'
 import { applyTheme, readFontSize, readTheme, writeFontSize, type Theme } from './settings'
+import {
+  STEP,
+  STEP_BIG,
+  clampSidebarWidth,
+  readSidebarOpen,
+  readSidebarWidth,
+  settleSidebarWidth,
+  sidebarMax,
+  sidebarMin,
+  stepSidebarWidth,
+  writeSidebarOpen,
+  writeSidebarWidth,
+} from './sidebar'
 import { RecoveredToast, StatusBar } from './status'
 import { breakpoint, debounce, isCoarsePointer, isKeyboardUp, isShort, layoutViewportHeight, readViewport, type Breakpoint, watchViewport } from './viewport'
 
@@ -59,8 +72,31 @@ export function App() {
   const [preview, setPreview] = useState<{ text: string; left: number; top: number } | null>(null)
   const [bp, setBp] = useState<Breakpoint>(() => breakpoint(window.innerWidth))
   const [short, setShort] = useState(() => isShort(window.innerHeight))
-  const [sidebarOpen, setSidebarOpen] = useState(() => breakpoint(window.innerWidth) === 'desktop')
+  // 桌面：常驻侧栏的开合与宽度是【偏好】，记住（AC-5.12）。
+  // phone / tablet：同一个状态只是会话浮层的开关，【不读存储】—— 否则上次在桌面收起/展开
+  // 的选择会让手机一进来就自己弹出会话浮层。
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => breakpoint(window.innerWidth) === 'desktop' && readSidebarOpen(),
+  )
+  const [sidebarW, setSidebarW] = useState(() =>
+    clampSidebarWidth(readSidebarWidth(), window.innerWidth, isCoarsePointer()),
+  )
+  /** 拖动中的分隔条状态；非 null 时 ResizeObserver 短路（见下面的 measure）。 */
+  const sidebarDragRef = useRef<{ x0: number; w0: number; start: number; moved: boolean } | null>(null)
+  const [sidebarDragging, setSidebarDragging] = useState(false)
+  /** 拖完 / 收展之后补一次量算 —— 实体在下面那个大 effect 里。 */
+  const refitRef = useRef<() => void>(() => {})
   const [coarse] = useState(isCoarsePointer)
+  const bpRef = useRef(bp)
+  bpRef.current = bp
+  /** 开合侧栏。桌面才落盘（理由见上面 sidebarOpen 的注释）。 */
+  const setSidebar = useCallback((next: boolean | ((v: boolean) => boolean)) => {
+    setSidebarOpen((v) => {
+      const n = typeof next === 'function' ? next(v) : next
+      if (bpRef.current === 'desktop') writeSidebarOpen(n)
+      return n
+    })
+  }, [])
   // 经典底栏（模式条 + 常驻输入框 + 键条）只给鼠标键盘：宽度决定栅格，触摸决定输入层（ADR-0015 ⑥）
   const classicRef = useRef(breakpoint(window.innerWidth) === 'desktop' && !isCoarsePointer())
   const [theme, setTheme] = useState<Theme>(readTheme)
@@ -370,7 +406,7 @@ export function App() {
           break
         }
         case 'toggleSidebar':
-          setSidebarOpen((v) => !v)
+          setSidebar((v) => !v)
           break
         case 'palette':
           setPaletteOpen((v) => !v)
@@ -386,11 +422,13 @@ export function App() {
     window.addEventListener('keydown', onKey)
 
     // resize 控制消息做 100ms 防抖（AC-3.11）
+    let resizeCount = 0 // 发出去的条数，给 E2E 数（拖侧栏全程只该发一条）
     const sendResize = debounce(() => {
       const sid = store.active
       const term = sid === null ? undefined : store.termOf(sid)
       if (sid !== null && term) {
         conn.send({ t: T.resize, sid, cols: term.term.cols, rows: term.term.rows })
+        resizeCount++
       }
     }, 100)
 
@@ -399,7 +437,7 @@ export function App() {
     // 发 resize，程序被迫整屏重绘 —— 这就是终端视图里的"拖动抖动"。
     let lastW = 0
     let lastH = 0
-    const ro = new ResizeObserver(() => {
+    const measure = () => {
       const w = area.clientWidth
       const h = area.clientHeight
       if (w === lastW && h === lastH) return
@@ -408,8 +446,17 @@ export function App() {
       const sid = store.active
       store.termOf(sid ?? -1)?.fit.fit()
       sendResize()
+    }
+    // 【拖侧栏期间不量算】。侧栏是主栅格的一列，拖它就是在改终端几何 ——
+    // 每帧 fit() 一次，拖 600ms 就是六七条 resize，vim / claude 每条都整屏重绘。
+    // 拖动时布局跟着手指走但不重算 cols/rows，松手由 refitRef 补一次
+    // （layout-responsive.md §desktop）。拖动中画布被裁 / 留白是预期的。
+    const ro = new ResizeObserver(() => {
+      if (sidebarDragRef.current) return
+      measure()
     })
     ro.observe(area)
+    refitRef.current = measure
 
     // 软键盘：高度的唯一真相来源是 visualViewport（iOS 上 100vh 不随键盘变化）。
     // 【不在这个回调里直接 fit()】—— 布局还没稳定，交给上面的 ResizeObserver。
@@ -456,6 +503,9 @@ export function App() {
         }
         setBp(breakpoint(window.innerWidth))
         setShort(isShort(vp.height))
+        // 窗口变窄/换设备 → 宽度夹回区间。【不回写存储】：夹紧是当前窗口的事，
+        // 存的还是用户拖出来的那个值，换回大窗口要能回去（UT-sidebar-1）。
+        setSidebarW((w) => clampSidebarWidth(w, window.innerWidth, coarse))
       })
     }
     applyViewport()
@@ -520,6 +570,7 @@ export function App() {
         return sid === null ? '' : (store.termOf(sid)?.serialize.serialize() ?? '')
       },
       outSeq: () => (store.active === null ? 0 : conn.outSeqOf(store.active)),
+      resizes: () => resizeCount,
       sid: () => store.active,
       size: () => {
         const sid = store.active
@@ -669,6 +720,80 @@ export function App() {
     }
   }
   const sheetInset = 0 // 终端不被推：sheet 盖在它上面（ADR-0013）
+
+  // 拖完 / 收展之后补一次量算 —— 拖动期间 ResizeObserver 被短路了，松手才重排终端。
+  // effect 在 commit 之后跑，此时栅格列宽已是最终值；measure 自己按尺寸去重，
+  // 所以「收起 / 展开」这种 RO 本来就会响的路径不会重复发 resize。
+  useEffect(() => {
+    if (sidebarDragging) return
+    refitRef.current()
+  }, [sidebarDragging, sidebarW, sidebarOpen, bp])
+
+  // ---- 侧栏分隔条：拖 = 改宽，点 = 收起 / 展开（AC-5.12）----
+  // 手感全在 ui/sidebar.ts 的纯函数里（夹紧 / 吸附 / 收起门槛），这里只管指针。
+  const onResizerDown = (e: PointerEvent) => {
+    // 【preventDefault】：不让鼠标点击把焦点从终端抢走（键盘用户仍可 Tab 到它），
+    // 顺带掐掉拖动时的文本选中。pointer capture 不受影响。
+    e.preventDefault()
+    sidebarDragRef.current = { x0: e.clientX, w0: sidebarOpen ? sidebarW : 0, start: sidebarW, moved: false }
+    setSidebarDragging(true)
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  const onResizerMove = (e: PointerEvent) => {
+    const d = sidebarDragRef.current
+    if (!d) return
+    const dx = e.clientX - d.x0
+    if (Math.abs(dx) > 6) d.moved = true // 同 sheet 抓手：6px 以内算「点」不算「拖」
+    if (!d.moved) return
+    setSidebarW(clampSidebarWidth(d.w0 + dx, window.innerWidth, coarse))
+    // 从收起态拖出来：先展开给人看，是否留住等松手结算（所以这里【不落盘】）
+    if (!sidebarOpen) setSidebarOpen(true)
+  }
+  const onResizerUp = (e: PointerEvent) => {
+    const d = sidebarDragRef.current
+    sidebarDragRef.current = null
+    setSidebarDragging(false)
+    if (!d) return
+    if (!d.moved) {
+      setSidebar((v) => !v) // 点一下：收起 ⇄ 展开，同写态 sheet 抓手「点一下切档」
+      return
+    }
+    // start 是【拖动前】记住的宽度：拖没过门槛而收起时，宽度保持它不动，下次展开回得去
+    const st = settleSidebarWidth(d.w0 + (e.clientX - d.x0), d.start, window.innerWidth, coarse)
+    setSidebarW(st.width)
+    writeSidebarWidth(st.width)
+    setSidebar(st.open)
+  }
+  const onResizerKey = (e: KeyboardEvent) => {
+    const big = e.shiftKey ? STEP_BIG : STEP
+    let next: number
+    switch (e.key) {
+      case 'ArrowLeft':
+        next = stepSidebarWidth(sidebarW, -big, window.innerWidth, coarse)
+        break
+      case 'ArrowRight':
+        next = stepSidebarWidth(sidebarW, big, window.innerWidth, coarse)
+        break
+      case 'Home':
+        next = sidebarMin(coarse)
+        break
+      case 'End':
+        next = sidebarMax(window.innerWidth, coarse)
+        break
+      case 'Enter':
+      case ' ':
+        e.preventDefault()
+        setSidebar((v) => !v)
+        return
+      default:
+        return
+    }
+    e.preventDefault()
+    setSidebarW(next)
+    writeSidebarWidth(next)
+    if (!sidebarOpen) setSidebar(true)
+  }
+
   const sessionList = (
     <SessionList
       sessions={sessions}
@@ -676,7 +801,7 @@ export function App() {
       unread={(sid) => storeRef.current?.isUnread(sid) ?? false}
       onSelect={(sid) => {
         selectRef.current(sid)
-        if (bp !== 'desktop') setSidebarOpen(false)
+        if (bp !== 'desktop') setSidebar(false)
       }}
       onClose={(sid) => closeRef.current(sid)}
       onRename={(sid, current) => {
@@ -688,20 +813,46 @@ export function App() {
       onTogglePinned={(sid) => storeRef.current?.togglePinnedSubscription(sid)}
       onNew={() => {
         newSessionRef.current()
-        if (bp !== 'desktop') setSidebarOpen(false)
+        if (bp !== 'desktop') setSidebar(false)
       }}
       atLimit={atLimit}
       maxSessions={maxSessions}
     />
   )
   return (
-    <div class="app" data-bp={bp} data-short={short} data-sidebar={sidebarOpen ? 'open' : 'closed'}>
+    <div
+      class="app"
+      data-bp={bp}
+      data-short={short}
+      data-sidebar={sidebarOpen ? 'open' : 'closed'}
+      data-sidebar-drag={sidebarDragging ? 'true' : 'false'}
+      style={{ '--sidebar-w': `${sidebarW}px` }}
+    >
       {/* desktop：会话是主栅格常驻的一栏（Ctrl+Shift+B 折叠）。
           phone / tablet：它和历史 / 命令面板 / 设置一样是浮层（ADR-0018），在下面和它们放一起。 */}
       {bp === 'desktop' && (
         <aside class="sidebar" data-testid="sidebar">
           {sessionList}
         </aside>
+      )}
+      {/* 分隔条在收起时也要留着 —— 它就是那条拉出把手（layout-responsive.md §desktop） */}
+      {bp === 'desktop' && (
+        <div
+          class="sidebar-resizer"
+          data-testid="sidebar-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖动调整侧栏宽度；点一下收起或展开"
+          aria-valuenow={sidebarOpen ? sidebarW : 0}
+          aria-valuemin={0}
+          aria-valuemax={sidebarMax(window.innerWidth, coarse)}
+          tabIndex={0}
+          onPointerDown={onResizerDown}
+          onPointerMove={onResizerMove}
+          onPointerUp={onResizerUp}
+          onPointerCancel={onResizerUp}
+          onKeyDown={onResizerKey}
+        />
       )}
 
       <div class="main" data-occupied={altScreen ? 'true' : 'false'} style={{ '--sheet-inset': `${sheetInset}px` }}>
@@ -710,7 +861,7 @@ export function App() {
           info={info}
           sessionName={active?.name ?? 'webterm'}
           cwd={active?.cwd ?? ''}
-          onOpenSessions={() => setSidebarOpen((v) => !v)}
+          onOpenSessions={() => setSidebar((v) => !v)}
         />
         {fatal && (
           <div class="banner error" data-testid="fatal">
@@ -864,7 +1015,7 @@ export function App() {
             <div class="more-backdrop" data-testid="more-backdrop" onClick={() => setMoreOpen(false)} />
             <div class="action-sheet" data-testid="more-menu" role="menu">
               <div class="sheet-grabber" />
-              <button role="menuitem" data-testid="open-sessions" onClick={() => { setMoreOpen(false); setSidebarOpen(true) }}>
+              <button role="menuitem" data-testid="open-sessions" onClick={() => { setMoreOpen(false); setSidebar(true) }}>
                 <span class="sheet-ico">⧉</span><span class="sheet-label">会话</span><span class="sheet-chevron">›</span>
               </button>
               <button role="menuitem" data-testid="open-history" onClick={() => { setMoreOpen(false); setHistoryOpen(true) }}>
@@ -916,7 +1067,7 @@ export function App() {
         </div>
       )}
       {bp !== 'desktop' && sidebarOpen && (
-        <Drawer title="会话" testid="sidebar" backdropTestid="scrim" onClose={() => setSidebarOpen(false)}>
+        <Drawer title="会话" testid="sidebar" backdropTestid="scrim" onClose={() => setSidebar(false)}>
           {sessionList}
         </Drawer>
       )}
