@@ -143,6 +143,17 @@ compositionend    → composing=false，隐藏浮层，把 event.data 一次性�
 
 **`keydown` 处理器必须在 `composing === true` 时全部 return**（AC-3.3）。这是 Raw 模式下中文能用的唯一关键点。
 
+**`composing` 必须有兜底复位**（AC-3.3 / [ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)）。上面那张表里 `composing` 只有一个出口 —— `compositionend`。可它不保证来：切输入法、切窗口、候选框被系统吞掉，都可能让组字就这么停在半路。而 `composing` 卡在 true 的后果是**这个会话的终端输入永久失效**（`keydown` 全部 return），用户没有任何线索，只能刷新页面。两条兜底：
+
+| 兜底 | 为什么它成立 |
+|---|---|
+| `blur` | 元素都不是焦点了，组字不可能还在进行 |
+| 捕获阶段的 `keydown`，`isComposing === false` 且 `keyCode !== 229` | 浏览器自己说了这不是组字中的按键 |
+
+`keydown` 那条**必须挂在捕获阶段**：`RawIme` 是在 `term.open()` 之后构造的，冒泡阶段的监听排在 xterm 自己的 `keydown` 后面，等它跑完这一下按键已经被当成"组字中"丢掉了。复位要发生在 xterm 处理这个键**之前**。
+
+`blur` 复位不提交任何文本：`blur` 时拿不到组字内容（那是 `compositionend` 才带的 `data`）。如果浏览器随后仍然补发了 `compositionend`，它照常提交，不会丢字。
+
 内联预览浮层：绝对定位到 xterm 的当前光标屏幕坐标（`terminal.buffer.active.cursorX/cursorY` × cell 尺寸），显示未提交的组字内容 + 下划线。让用户知道自己在打什么。
 
 ### 直接插入的文本（AC-3.14）
@@ -175,6 +186,34 @@ compositionend    → composing=false，隐藏浮层，把 event.data 一次性�
 - 使用 xterm.js 的 `onData` 拿到已经映射好的字节（它处理了绝大多数控制键）
 - `attachCustomKeyEventHandler` 拦截应用级快捷键（`Ctrl+Shift+*`、`Ctrl/Cmd+K`），让它们不进 PTY
 - 粘贴（`onPaste`）也用 bracketed paste 包裹
+
+### 回放门只吞自动应答（AC-2.15 / ADR-0020）
+
+`onData` 上有两种东西，必须分开：
+
+| 来源 | 什么时候发生 | 该不该进 PTY |
+|---|---|---|
+| xterm 对历史查询（DSR / DA / `CSI ?u`）的**自动应答** | 同步发生在 `term.write()` 的解析里 | 回放期间**不该** —— 那不是用户输入，送进去就是给 claude / codex 喂乱码 |
+| 用户的按键 / 粘贴 | 同步发生在一次 DOM 输入事件的派发里 | **永远该** |
+
+所以判据是**谁产生的**，不是**什么时候**。按"会话此刻是否在回放"一刀切，就会把用户正在敲的字一起吞掉，而回放窗口在 `ring_bytes` 满载时是**秒级**的（1 MiB 的 reset 回放，xterm 按 12ms 分片让出主线程）。
+
+做法（`web/src/term/userinput.ts`）：问浏览器**此刻正在派发哪个事件** —— `window.event`。它在派发期间指向当前事件，派发一结束就恢复，不需要自己挂监听器、也就没有窗口关不掉的问题：
+
+```
+onData(data):
+  window.event?.type ∈ 用户输入事件表  → 放行（哪怕在回放）
+  否则 replayDepth > 0                  → 丢弃（自动应答）
+  否则                                  → 放行
+```
+
+用户输入事件表：`keydown` `keypress` `beforeinput` `input` `paste` `compositionend` `compositionupdate` —— 即 xterm 会在其中同步 `triggerDataEvent` 的那几个。
+
+**不自己开时间窗**：xterm 对它处理掉的按键 `preventDefault + stopPropagation`，冒泡阶段根本收不到，窗口只能靠定时器关，而定时器任务与网络任务之间没有顺序保证 —— 中间插进来的一次解析就会把自动应答放出去。
+
+顺带覆盖两个容易漏的情形：xterm 在用户刚输入过之后会**同步**解析下一次 `write()`（`_didUserInput` 优化），那次 write 发起自 WebSocket 的 `message` 事件，`type` 不在表里，照样拦住；`setTimeout` 驱动的分片解析没有正在派发的事件，也拦住。
+
+新增一种能产生 `onData` 的用户交互（例如鼠标跟踪）时，想让它在回放期间也放行就把对应事件加进这张表；不加也只是回到"回放期间丢弃"的旧行为，不会更糟。
 
 ---
 

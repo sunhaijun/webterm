@@ -42,14 +42,15 @@
 | AC-2.5 | `out_seq` 严格等于 agent 已发送的累计字节数；剥离 OSC 之后才计数 | UT-seq-1 |
 | AC-2.6 | client 的 `out_seq < base_seq` 时 agent 判 `reset`。**会话在主屏**：client 先清屏再写入缓冲现存内容，并显示"历史输出已截断"提示；**会话在备用屏**：改走 `redraw`（AC-2.16）。**重连（`welcome.resumed[].status`）与切回（`subscribe`）两条路都要满足**；清屏由帧上的 `ATTR_PREFIX` 驱动（协议 §3），不依赖控制消息先到，所以同一段回放收到两次也只是重建两次，不会叠在旧内容后面 | E2E-4, E2E-30, UT-ring-2, IT-sub-2, UT-replay-1 |
 | AC-2.7 | 环形缓冲裁剪优先在 `\n` 边界（64 KiB 窗口内找不到则硬裁）；`ESC[0m` 属性修正**只在 reset 回放时**前置，且不计入 `out_seq`（增量续传时注入会破坏 AC-2.1） | UT-ring-3, UT-ring-4 |
-| AC-2.8 | 心跳：client 每 30 秒发协议级 ping；agent 60 秒未收到任何帧则关闭连接 | UT-hb-1, IT-hb-1 |
+| AC-2.8 | 心跳：client 每 30 秒发协议级 ping，发出后 10 秒未收到 `pong` 则判死重连；agent 60 秒未收到任何帧则关闭连接 | UT-hb-1, IT-hb-1 |
 | AC-2.9 | client 重连采用指数退避（0.5s 起，上限 15s，带抖动），网络恢复事件触发立即重试 | UT-reconnect-1 |
+| AC-2.20 | **僵尸连接要被立刻戳穿**（ADR-0020）：`online` 事件 / 页面重新可见时，即使 client 自认在线也立刻发一次 `ping` 探活，**2 秒**内没有 `pong` 就关闭并走重连；线路已断但没有 `onclose` 时（息屏、切网、NAT 回收），从「用户回到前台」到状态条变「重连中」**不超过 5 秒**（改之前最坏 40 秒，期间打字全部写进死 socket 且无任何提示） | UT-hb-2, E2E-33 |
 | AC-2.10 | 连接状态在 UI 上有明确指示：在线 / 重连中（含下次重试倒计时）/ 已恢复（含补齐字节数） | E2E-5 |
 | AC-2.11 | 未订阅的会话在 agent 侧照常缓冲；切回时通过 resume 补齐，不丢输出。**例外是备用屏会话**（ADR-0019）：切回补的是"当前屏"而不是历史字节 —— 备用屏没有 scrollback，那段字节用户本来也翻不到 | E2E-6, IT-sub-1, E2E-31 |
 | AC-2.12 | `in_ack` 按 `(client_id, sid)` 记账并**跨重连存活**：重连后 client 按 `welcome.resumed[].in_ack` 重发，不触发 `input_gap` | IT-resume-3 |
 | AC-2.13 | `hello.instance_id` 与 agent 当前值不符时，所有 `resume` 项判 `gone`（防止 agent 重启后 sid 复用导致张冠李戴） | IT-resume-4 |
 | AC-2.14 | **热升级不丢会话**（ADR-0016）：agent 收到 `SIGUSR2` / `reexec` 后原地 exec 新二进制，PID 不变；所有会话的 shell 仍在跑、`instance_id` 不变、环形缓冲与 `in_ack` 原样交接；跨交接的字节级连续性与 AC-2.1 同标准（中途交接与不交接的序列化结果逐字节一致），未写完的输入不丢不重；预检失败时中止并照常服务，**不自动退化成重启** | IT-handoff-1, UT-ring-10, UT-osc-restore, E2E-26 |
-| AC-2.15 | **回放不得回声**：重连续传与**切回补课**的字节都标记为回放（client 侧 `catchup_to`，协议 §5.2）；回放期间终端对历史里那些查询（DSR / DA / `CSI ?u` …）的自动应答**不得写进 PTY**。切会话时**尺寸随 `subscribe` 一起发**（`cols`/`rows` 就在这条消息里，不单发 `resize`）：排在后面会让积压按旧尺寸排版，排在前面会让程序的整屏重画落在 `redraw.seq` 之前被跳过 | E2E-30, E2E-31, UT-replay-1 |
+| AC-2.15 | **回放不得回声**：重连续传与**切回补课**的字节都标记为回放（client 侧 `catchup_to`，协议 §5.2）；回放期间终端对历史里那些查询（DSR / DA / `CSI ?u` …）的自动应答**不得写进 PTY**。切会话时**尺寸随 `subscribe` 一起发**（`cols`/`rows` 就在这条消息里，不单发 `resize`）：排在后面会让积压按旧尺寸排版，排在前面会让程序的整屏重画落在 `redraw.seq` 之前被跳过 | E2E-30, E2E-31, E2E-34, UT-replay-1, UT-replay-2 |
 | AC-2.16 | **备用屏不回放历史，改为重画**（ADR-0019）：会话当前在备用屏而又要 reset 时，agent 发 `redraw{seq, modes}` 代替字节回放，随后逼出一次整屏重画（尺寸变了就直接 `TIOCSWINSZ`，没变就抖一下 winsize）。client 清屏 → 写 `modes` → `out_seq` 跳到 `seq`，**不显示"历史输出已截断"**。切走使积压超过 `ring_bytes` 后切回，终端显示的是该程序**当前**的完整一屏，scrollback 里不出现它界面的任何副本 | UT-termstate-*, IT-redraw-1, E2E-31 |
 | AC-2.17 | 同一场景下切回所传字节 < 8 KiB（改之前是整个 `ring_bytes`）；`modes` 不计入 `out_seq` | IT-redraw-2, E2E-31 |
 | AC-2.18 | 程序在 300ms 内没有重画（`head_seq` 没超过 `redraw.seq`）时退回主屏那条路（`ATTR_PREFIX` + 窗口内容），屏幕不留空白 | IT-redraw-3 |
@@ -63,7 +64,7 @@
 |---|---|---|
 | AC-3.1 | Composer 模式下，IME composition 事件不触发任何向 PTY 的写入；只有提交动作才写入 | E2E-7 |
 | AC-3.2 | Composer 提交：含换行时以 bracketed paste 包裹（不被逐条执行），单行与空输入不包裹；一律以 `CR` 结尾 | UT-input-1, E2E-8 |
-| AC-3.3 | Raw 模式下，composition 期间不向 PTY 写入；`compositionend` 时一次性写入最终文本 | UT-input-2, E2E-7 |
+| AC-3.3 | Raw 模式下，composition 期间不向 PTY 写入；`compositionend` 时一次性写入最终文本。**组字状态必须有兜底复位**（ADR-0020）：`blur`，以及捕获阶段一个 `isComposing === false` 的 `keydown`，都立即把 `composing` 置回 false —— 切输入法 / 切窗口时 `compositionend` 可能不来，少了兜底该会话的终端输入会**永久**失效，用户只能刷新页面 | UT-input-2, UT-raw-2, E2E-34 |
 | AC-3.14 | Raw 模式下**软键盘直接插入的字符**（iOS 中文键盘的全角标点等）必须进 PTY：非组字的 `beforeinput` / `insertText` 由前端自己接管发送并 `preventDefault`，不依赖 xterm 的 keydown/input 启发式；组字路径不受影响，同一段文字不重复发送 | UT-raw-1, E2E-7 |
 | AC-3.4 | Raw 模式下 `Ctrl+C` / `Ctrl+D` / 方向键 / `Esc` / 功能键正确映射为控制字节 | UT-keymap-1 |
 | AC-3.5（ADR-0013：仅内部，无 UI） | 输入模式随 shell 集成的 prompt 状态自动切换：`B`→Composer，`C`→Raw，`D`→Composer | UT-mode-1, E2E-9 |
@@ -94,6 +95,7 @@
 | AC-4.4 | 会话默认名为其 CWD 的 basename，CWD 变化时自动更新；手动改名后停止自动更新 | IT-session-3, UT-name-1 |
 | AC-4.5 | shell 退出后会话状态变 `exited` 并携带退出码；缓冲内容保留可查看，直到用户显式关闭 | IT-session-4, E2E-11 |
 | AC-4.6 | 关闭会话时先送 `SIGHUP`，2 秒后仍存活则 `SIGKILL`，并释放 PTY 与缓冲 | IT-session-5 |
+| AC-4.8 | **焦点跟着会话走**（ADR-0020）：切会话时 `activate()` 把上一个会话的 DOM 摘掉，焦点会落回 `body`；切换前焦点在终端里的，切换后必须还给新会话的终端，**桌面（非触摸）无条件还给终端**。少了这一步，用 `Ctrl+Shift+↑/↓`、横滑或会话列表切过去之后打字彻底没反应，且没有任何提示 | E2E-34 |
 | AC-4.7 | **左右滑动切会话**：终端区单指横向拖（轴锁：前 12px 横向占优才接管，放大态不接管）位移 > 80px 或速度 > 0.5 px/ms（另加 24px 位移下限）时切到相邻会话，左滑下一个 / 右滑上一个、到头回绕；只有一个会话时不接管。切换是纯 CSS 位移动画，**不 fit、不发 resize**，PTY 尺寸不变 | UT-swipe-1, E2E-29 |
 
 ---

@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Backoff } from '../src/conn/backoff'
-import { Connection, type WebSocketLike } from '../src/conn/connection'
+import { Connection, PROBE_TIMEOUT, type WebSocketLike } from '../src/conn/connection'
 import { PENDING_LIMIT, PendingFullError, ResendQueue } from '../src/conn/resend'
 import {
   ATTR_PREFIX,
@@ -540,6 +540,95 @@ describe('UT-hb-1 心跳', () => {
     vi.advanceTimersByTime(10_000)
     expect(h.socket().closed).toBe(false)
     expect(h.states.some((s) => s.state === 'online' && s.rttMs !== undefined)).toBe(true)
+  })
+})
+
+// UT-hb-2：僵尸连接 —— 自认在线时的即时探活（AC-2.20，ADR-0020）。
+//
+// 线路断了不一定有 onclose（息屏、切网、NAT 回收），socket 的 readyState 还是
+// OPEN，页面自认在线，打字全写进一条死 socket。唯一的暴露渠道原本只有心跳，
+// 最坏 30 + 10 = 40 秒。所以 online / 页面可见这两个【已知的可疑时刻】要立刻探活。
+describe('UT-hb-2 僵尸连接的即时探活', () => {
+  it('自认在线时 retryNow 发一次 ping 探活，而不是什么都不做', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+    const before = h.socket().sent.length
+
+    h.conn.retryNow()
+
+    const pings = h.socket().sent.filter((s) => typeof s === 'string' && s.includes('"ping"'))
+    expect(pings, '自认在线也要探一下，不能直接 return').toHaveLength(1)
+    expect(h.socket().sent.length).toBe(before + 1)
+    expect(h.socket().closed, '探针发出去的这一刻还不能关连接').toBe(false)
+  })
+
+  it('探针 2 秒内没有 pong 就关连接走重连', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+    const zombie = h.socket()
+
+    h.conn.retryNow()
+    vi.advanceTimersByTime(PROBE_TIMEOUT - 1)
+    expect(zombie.closed, '还没到点，不能提前判死').toBe(false)
+    vi.advanceTimersByTime(1)
+    expect(zombie.closed).toBe(true)
+    expect(h.states.some((s) => s.state === 'reconnecting')).toBe(true)
+  })
+
+  it('探针的 pong 按时回来就不关，连接照旧', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+
+    h.conn.retryNow()
+    h.socket().deliverText({ t: 'pong', ts: Date.now() })
+    vi.advanceTimersByTime(PROBE_TIMEOUT * 5)
+    expect(h.socket().closed).toBe(false)
+  })
+
+  it('探针比心跳判死快得多 —— 10 秒时早已判死并重连', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+    const zombie = h.socket()
+
+    h.conn.retryNow()
+    vi.advanceTimersByTime(5_000)
+    expect(zombie.closed, '心跳那条路这时候连 ping 都还没发').toBe(true)
+  })
+
+  it('不在线时保持原行为：立刻重连并重置退避，不发探针', () => {
+    const backoff = new Backoff()
+    const h = harness({ backoff })
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+    h.socket().close() // 断了 → reconnecting
+    const closedAt = h.socket()
+
+    h.conn.retryNow()
+
+    expect(h.socket(), '应当已经开了一条新 socket').not.toBe(closedAt)
+    expect(backoff.attempts, 'retryNow 要重置退避').toBe(0)
+  })
+
+  it('已经 close() 过的连接不探活', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+    h.conn.close()
+    const sentAfterClose = h.socket().sent.length
+
+    h.conn.retryNow()
+
+    expect(h.socket().sent.length).toBe(sentAfterClose)
   })
 })
 

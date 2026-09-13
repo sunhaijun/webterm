@@ -33,7 +33,7 @@ export class RawIme {
   private sentAt = 0
   private readonly el: HTMLTextAreaElement
   private readonly h: RawImeHandlers
-  private readonly listeners: [string, EventListener][] = []
+  private readonly listeners: [string, EventListener, boolean][] = []
 
   constructor(el: HTMLTextAreaElement, h: RawImeHandlers) {
     this.el = el
@@ -55,6 +55,27 @@ export class RawIme {
       // 清掉 textarea，避免 xterm 自己再把同一段内容当成输入发一遍
       this.el.value = ''
     })
+
+    // 【兜底复位】（AC-3.3 / ADR-0020）。上面那三条里 composing 只有一个出口 ——
+    // compositionend。可它不保证来：切输入法、切窗口、候选框被系统吞掉，都可能让
+    // 组字停在半路。而 composing 卡在 true 的后果是【这个会话的终端输入永久失效】
+    // （keydown 处理器全部 return），用户没有任何线索，只能刷新页面。
+    //
+    // blur：元素都不是焦点了，组字不可能还在进行。
+    this.on('blur', () => this.stopComposing())
+    // keydown：浏览器自己说了这不是组字中的按键（isComposing=false 且不是输入法
+    // 占用的 229）。【必须挂在捕获阶段】—— RawIme 是 term.open() 之后才构造的，
+    // 冒泡阶段排在 xterm 的 keydown 后面，等它跑完这一下按键已经被当成"组字中"
+    // 丢掉了。复位要发生在 xterm 处理这个键【之前】。
+    this.on(
+      'keydown',
+      (e) => {
+        const ke = e as KeyboardEvent
+        if (ke.isComposing || ke.keyCode === 229) return
+        this.stopComposing()
+      },
+      true,
+    )
 
     // xterm 的 _keyPress 在它自己处理掉一个可打印字符时【不会】preventDefault
     //（cancelEvents 默认 false），那个字符还是会插进 textarea、再发一次 beforeinput。
@@ -89,6 +110,13 @@ export class RawIme {
     })
   }
 
+  /** 组字结束（正常的 compositionend 走的是自己那条路，这里是兜底）。 */
+  private stopComposing(): void {
+    if (!this.composing) return
+    this.composing = false
+    this.h.onPreview('') // 浮层也要收掉，否则留一片没人管的预览挂在屏幕上
+  }
+
   /** 发出去，并记下来用于去重。 */
   private commit(text: string): void {
     this.mark(text)
@@ -106,13 +134,13 @@ export class RawIme {
   }
 
   dispose(): void {
-    for (const [type, fn] of this.listeners) this.el.removeEventListener(type, fn)
+    for (const [type, fn, capture] of this.listeners) this.el.removeEventListener(type, fn, capture)
     this.listeners.length = 0
   }
 
-  private on(type: string, fn: (e: Event) => void): void {
-    this.el.addEventListener(type, fn)
-    this.listeners.push([type, fn])
+  private on(type: string, fn: (e: Event) => void, capture = false): void {
+    this.el.addEventListener(type, fn, capture)
+    this.listeners.push([type, fn, capture])
   }
 }
 

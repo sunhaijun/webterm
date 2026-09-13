@@ -10,6 +10,7 @@ import type { SessionInfo } from '../protocol/messages'
 import { installInteractive, type InteractiveDetector } from '../term/interactive'
 import { type FollowState, OutputQueue } from '../term/outputqueue'
 import { createTerminal, type TermHandle } from '../term/terminal'
+import { inUserInputEvent } from '../term/userinput'
 
 export interface SessionView extends SessionInfo {
   /** 用户开了"保持接收"：切走也保持订阅，代价是流量。 */
@@ -117,8 +118,13 @@ export class SessionStore {
     // 每个终端实例创建时就把输入绑好，不用事后轮询去找它。
     // 回放（重连续传 / 刷新重放）灌进来的历史输出里可能有终端查询（DSR/DA…），
     // xterm 会自动应答 —— 那不是用户输入，回放期间别把它送进 PTY（否则 claude 收到乱码）。
+    //
+    // 【但要拦的只是自动应答，不是用户的按键】（ADR-0020）。两者都从 onData 出来，
+    // 区别在于谁产生的：按键同步发生在一次输入事件的派发里，自动应答发生在
+    // term.write() 的解析里。按"此刻是否在回放"一刀切，就会把用户正在敲的字
+    // 一起吞掉 —— 而回放窗口在 ring_bytes 满载时是【秒级】的。
     term.term.onData((data) => {
-      if ((this.entries.get(info.sid)?.replayDepth ?? 0) > 0) return
+      if (!inUserInputEvent() && (this.entries.get(info.sid)?.replayDepth ?? 0) > 0) return
       this.h.onTermData(info.sid, data)
     })
     term.term.attachCustomKeyEventHandler((e) => e.type !== 'keydown' || this.h.allowKey(e))

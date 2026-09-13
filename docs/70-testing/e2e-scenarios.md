@@ -560,6 +560,51 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 5. **持久化**：刷新页面，宽度与收起状态还在；把窗口缩到 tablet 再放回 desktop，宽度按上下限夹紧且不写坏存储
 6. **只在 desktop 生效**：phone（390×844）加载时 `data-sidebar` 必须是 `closed`（不因为 localStorage 里存着 open 就自己弹出会话浮层），且**没有** `.sidebar-resizer`
 7. **键盘**：聚焦分隔条按 `→` 三次 → 宽度 +48px；`Home` → 最小宽
+## E2E-33 僵尸连接：回到前台立刻戳穿（AC-2.20，ADR-0020）
+
+> `web/e2e/zombie.spec.ts`。
+
+**僵尸连接 = 线路断了但没有 `onclose`。** 手机息屏、切 App、Wi-Fi 切蜂窝、NAT / 反向代理静默回收，TCP 上都没有 FIN，浏览器那边 `readyState` 一直是 OPEN。页面自认在线，打字全写进一条死 socket，屏幕上什么都不变。
+
+夹具：`installWSControl` 的第三种状态 `goZombie()` —— **已建立的那条连接两个方向都不再转发，但不关闭**；新连接像线路断了一样直接 `close(1006)`。这比 CDP 的 offline 精确：CDP 那条路对 `routeWebSocket` 代理过的连接不成立，而"不关闭"正是要测的要害。
+
+1. 配对、打开、等「在线」
+2. `net.goZombie()`。断言状态条**还是**「在线」—— 这就是问题的样子，页面根本不知道线断了
+3. 派发一次 `visibilitychange`（页面回到前台）
+4. 断言 **5 秒内**状态条离开「在线」（变成「重连中」/「连接中」）。改之前这里要等 40 秒（30s 心跳 + 10s pong 超时）
+5. `net.goOnline()`，断言回到「在线」
+6. 断言僵尸期间敲进去的那行命令**最终执行了**（按 `in_ack` 重发，AC-2.4）—— 探活不能把输入弄丢
+
+## E2E-34 打字不该消失（AC-4.8 / AC-2.15 / AC-3.3，ADR-0020）
+
+> `web/e2e/inputalive.spec.ts`。三个用例，三条互相独立、症状完全相同的路：敲下去没反应。
+
+### ① 切会话之后直接打字（AC-4.8）
+
+1. 建会话 A，点一下终端，打一行 `echo ONE`，确认回显
+2. `Ctrl+Shift+Enter` 新建会话 B（焦点在终端上）
+3. **不点终端**，直接 `keyboard.type('echo TWO')` + 回车 → `TWO` 必须出现
+4. `Ctrl+Shift+↑` 切回 A，同样不点终端，打 `echo THREE` → 必须出现
+
+> `activate()` 的 `prev.host.remove()` 把焦点丢回 `body`，改之前第 3 步起键全落在 `body` 上。
+
+### ② 回放期间打字（AC-2.15）
+
+1. 会话 A 里起后台输出，产 **1.5 MiB**（默认 ring 1 MiB，保证切回时走满窗口的 reset 回放）
+2. 切到 B，等完成文件出现
+3. 切回 A，**不等任何东西**，立刻 `keyboard.type('echo REPLAYKEY')` + 回车
+4. 断言 `REPLAYKEY` 的回显出现
+
+> 回放门原本按会话一刀切，这几百毫秒到几秒里的按键全被丢掉。这一步和 E2E-30 ② 是一对：那条断言自动应答**不**进 PTY，这条断言用户按键**要**进 PTY。
+
+### ③ `compositionend` 没来（AC-3.3）
+
+1. 在终端的隐藏 `textarea` 上派发 `compositionstart` + `compositionupdate`，**不派发 `compositionend`**
+2. 断言此时打字确实不进 PTY（组字期间一个字节都不发，AC-3.3 的原有语义不能破）
+3. 派发 `blur` → 再打字 → 必须进得去
+4. 再来一轮，这次用一个 `isComposing === false` 的普通 `keydown` 兜底 → 必须进得去
+
+> 改之前 `composing` 只有 `compositionend` 一个出口，它不来就永久卡住，该会话的终端输入到刷新为止都是死的。
 
 ## 不在 E2E 覆盖范围（放手工清单）
 
