@@ -315,11 +315,12 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 6. 点 ☆ 置顶 `echo two` → 出现在置顶区
 7. 设置 label 为 `测试二` → 显示 label
 8. 拖动排序 → 刷新后顺序保持
-9. `Ctrl+K` 命令面板：输入 `ech` → 快捷命令排在前面；输入会话名 → 能切换
-10. Composer 里按 `↑` → 翻到 `echo two`；输入 `echo ` 后按 `↑` → 只翻以此开头的
-11. 删除单条 → 3 秒撤销 toast，撤销后恢复
-12. 清空全部 → 二次确认，告知保留 N 条快捷命令；执行后置顶仍在
-13. 移动端视口：快捷命令条可见、可横滑、点击填入、长按执行
+9. Composer 里按 `↑` → 翻到 `echo two`；输入 `echo ` 后按 `↑` → 只翻以此开头的
+10. 删除单条 → 3 秒撤销 toast，撤销后恢复
+11. 清空全部 → 二次确认，告知保留 N 条快捷命令；执行后置顶仍在
+12. 移动端视口：快捷命令条可见、可横滑、点击填入、长按执行
+
+> 命令面板（原第 9 条：`Ctrl+K` 模糊搜索）已随 [ADR-0021](../20-architecture/adr/0021-drop-command-palette.md) 删除，用例一并移除。
 
 ---
 
@@ -390,7 +391,7 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 1. **档位**：默认终端输入，底栏一条键行（< 70px），`to-edit` 与 `open-more` 可见、没有编辑键；`to-edit` 升半屏（主区高的 35%–60%），`to-terminal` 是 `editkeys` 的第一个键；抓手点一下到全屏（> 80%），全屏时 composer 高度 ≥ `.bottom` 的 70%；`to-terminal` 回终端输入。全程 `.canvas` 的矩形与 `__webterm.size()` 一个字不变
 2. **收回的时机**：提交后（harness）回终端；有内容时 `Esc` 只清空、空输入时 `Esc` 收回；命令跑起来（`sleep 30`）是终端输入 + 通用键集（`key-Escape` `key-CtrlC`），`^C` 回到 prompt 后键区换回提示符键集（`key-Escape` 退场、`key-Tab` 仍在）
 3. **chips**：`mktemp -d` 造 `src/commands`、`docs`、`src/a.go` 并 `cd` 进去；空输入出现同目录历史、没有路径 chip；敲 `cd s` 出现 `src/`（没有 `docs`），点一下变 `cd src/` 且焦点不丢；`Tab` 编辑键补成 `cd src/commands/`；`|` 插 ` | `，`⌫词` 删词；发送键提交后留在面板、输入框清空
-4. **⋯ 菜单**：会话 / 历史 / 命令面板 / 设置从这里进；点外面收起
+4. **⋯ 菜单**：会话 / 历史 / 设置从这里进；点外面收起
 
 ## E2E-11b 占屏程序自动进控（已随 ADR-0013 移除；占屏改为换键条上下文，见 control.spec）
 
@@ -468,8 +469,8 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 `web/e2e/drawer.spec.ts`，Pixel 5 与 iPad 竖屏（744×1133）视口。
 
-1. **四个入口是同一种壳**（Pixel 5）：⋯ → 会话 / 历史 / 命令面板 / 设置逐个打开，每个都满足：`.drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽（宽度 = 视口宽）、有抓手 `.drawer-grab`、标题栏里有标题与 ✕
-2. **关闭方式一致**：设置用三种都关得掉（点遮罩、`Esc`、✕），每次打开都先确认**焦点已进浮层**（`document.activeElement.closest('.drawer')`）；会话、历史、命令面板各验一种
+1. **三个入口是同一种壳**（Pixel 5）：⋯ → 会话 / 历史 / 设置逐个打开，每个都满足：`.drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽（宽度 = 视口宽）、有抓手 `.drawer-grab`、标题栏里有标题与 ✕
+2. **关闭方式一致**：设置用三种都关得掉（点遮罩、`Esc`、✕），每次打开都先确认**焦点已进浮层**（`document.activeElement.closest('.drawer')`）；会话、历史各验一种
 3. **浮层不挤终端**（AC-5.11）：打开设置前后 `.term` 的矩形逐字段相同，`__webterm.size()` 的 cols/rows 不变 —— 老的设置横幅会把终端顶上去并触发 resize
 4. **平板上会话也从底部出来**（744×1133）：`sidebar` 浮层左缘为 0、宽度 = 视口宽（不是 280px 的左侧抽屉）
 5. **设置内容仍完整**：`theme-select` / `font-size` / `renderer`（文本为 WebGL 或 Canvas）/ `privacy-note` 都在；把字号改成 18 后 `__webterm.fontSize()` 为 18

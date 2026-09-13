@@ -116,7 +116,7 @@ web/
     term/               xterm 封装、渲染、搜索、滚动
     input/              Composer、Raw、IME、keymap、功能键条
     sessions/           会话列表、切换、未读
-    commands/           历史、快捷命令、命令面板
+    commands/           历史、快捷命令
     ui/                 布局、断点、主题
     protocol/           消息类型、编解码（前后端契约的 TS 侧）
   tests/                Vitest
