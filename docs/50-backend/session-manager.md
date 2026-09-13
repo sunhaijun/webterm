@@ -121,6 +121,20 @@ for {
 
 `clean` 为空（这一批全是 OSC）时不 append、不推送，但仍处理事件。
 
+### 粘性模式观察器（[ADR-0019](../20-architecture/adr/0019-altscreen-redraw-not-replay.md)）
+
+`clean` 在进环形缓冲的同时喂给 `internal/termstate` 的观察器，与 `ring.Append` 在同一把锁下：
+
+```
+clean ──┬──> ring.Append(clean)      计数、缓冲
+        └──> modes.Observe(clean)    只读，一个字节都不改
+```
+
+- **必须只读**。它不返回改写过的字节，也不吞任何东西 —— 一旦改写，[ADR-0006](../20-architecture/adr/0006-agent-side-osc-parsing.md) 的 `out_seq` 不变式就破了。单测直接断言"观察前后逐字节相等"
+- **位置在剥离之后**：观察的必须是客户端将要看到的那份字节，否则模式判定与客户端的终端状态对不上
+- 跟踪的是**粘性**模式（`?1049` 备用屏、`?1` DECCKM、鼠标、括号粘贴、Kitty 键盘栈、DECSTBM…）。完整表与"哪些绝不恢复"见 ADR-0019 §1
+- 状态要**进热升级快照**（`handoff.Session.Modes`）：它推导不出来 —— 模式开关只在会话开头出现一次，环形缓冲早把它裁掉了，这正是 ADR-0019 的起因
+
 ### `writeLoop`
 
 ```
