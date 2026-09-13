@@ -7,13 +7,26 @@
  *
  * 放大【锚在双指中点】：手指按住哪儿就放大哪儿，捏合时那一点不跑；放大后单指可平移；
  * 双击在点下处放大到 2×，再双击复位；缩回 1× 也复位。隐藏 textarea 不在变换内，打字照常。
+ *
+ * 单指手势在 1× 下还要和【横滑切会话】(AC-4.7) 分家：前 12px 谁占优谁拿走整段手势
+ * （`hswipe.ts` 的轴锁），纵向 → 滚 scrollback，横向 → 跟手位移 + 松手切会话。
+ * 放大态不参与：那时单指是平移画面。仲裁表见 docs/40-frontend/session-ux.md §左右滑动切换。
  */
+import { lockAxis, switchDelta, type Axis } from './hswipe'
+
+/** 切换 / 弹回的位移动画时长。 */
+const SLIDE_MS = 160
 
 /** 缩放上下限。1× = 原样；3× 已经很大了。 */
 export const MIN_SCALE = 1
 export const MAX_SCALE = 3
 /** 双击放大到的倍数。 */
 export const TAP_SCALE = 2
+/** 算「一次轻点」的上限：动得比这多、按得比这久，就不是点，是拖或长按。 */
+const TAP_SLOP_PX = 10
+const TAP_MS = 250
+/** 两次轻点之间不超过它才算双击。 */
+const DOUBLE_TAP_MS = 300
 
 export function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s))
@@ -51,8 +64,18 @@ export interface Pinch {
   dispose(): void
 }
 
-/** 给 `.term` 容器装上双指缩放。host 是 `.term`（xterm 挂在它里面）。 */
-export function installPinch(host: HTMLElement): Pinch {
+export interface PinchOptions {
+  /**
+   * 横滑切会话（AC-4.7）。`delta` 是 `+1` 下一个 / `-1` 上一个。
+   * 返回【是否真的切了】—— 没切就把跟手的位移弹回去。
+   */
+  onSwitch?(delta: -1 | 1): boolean
+  /** 现在有没有可切的目标。只有一个会话时不接管横向手势，别给假反馈。 */
+  canSwitch?(): boolean
+}
+
+/** 给 `.term` 容器装上双指缩放 + 单指横滑切会话。host 是 `.term`（xterm 挂在它里面）。 */
+export function installPinch(host: HTMLElement, opts: PinchOptions = {}): Pinch {
   let scale = 1
   let tx = 0
   let ty = 0
@@ -66,9 +89,26 @@ export function installPinch(host: HTMLElement): Pinch {
   // 单指平移
   let panX = 0
   let panY = 0
-  let lastTap = 0
+  /** 上一次【确实是轻点】的结束时刻。
+   *  【不能记 touchstart 的时刻】：那样任何两次快速触摸都算双击 —— 连着横滑两次切会话，
+   *  第二下会被吃掉变成放大（E2E-29 抓到的就是这个）。 */
+  let lastTapAt = 0
+  /** 本次手势走过的最大位移，用来判断它是不是轻点。 */
+  let moved = 0
+  /** 这一下被双击吃掉了：后面的 move / end 都不再当成拖动。 */
+  let consumed = false
+  // 单指手势的轴锁与横滑（AC-4.7）
+  let axis: Axis = 'none'
+  let startX = 0
+  let startY = 0
+  let startAt = 0
+  let dragX = 0
 
   const screen = () => host.querySelector<HTMLElement>('.xterm-screen')
+  // 当前会话的容器（`.term` 里只挂着活动会话那一个）。横滑位移作用在它身上：
+  // 纯 transform，不改 clientWidth/Height，所以 ResizeObserver 不响、不 fit、不发 resize。
+  const pageEl = () => host.querySelector<HTMLElement>('.term-host')
+  const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
   // xterm 的滚动容器。它和触点所在的 .xterm-screen 是【兄弟】—— 触点不在它里面，
   // 所以原生触摸滚不动它（会漏给页面），单指回滚只能 JS 直接改它的 scrollTop。
   const viewport = () => host.querySelector<HTMLElement>('.xterm-viewport')
@@ -95,6 +135,46 @@ export function installPinch(host: HTMLElement): Pinch {
     host.setAttribute('data-zoom', scale.toFixed(2))
   }
 
+  /** 把某一页横移到 px。animate 时补一个收尾把 inline 样式清干净（别留下常驻 transform）。 */
+  const slideTo = (el: HTMLElement, px: number, animate: boolean) => {
+    const clear = () => {
+      if (el.style.transform === 'translateX(0px)') {
+        el.style.transform = ''
+        el.style.transition = ''
+      }
+    }
+    el.style.transition = animate ? `transform ${SLIDE_MS}ms ease-out` : 'none'
+    el.style.transform = `translateX(${px}px)`
+    if (px === 0) {
+      if (!animate) clear()
+      else {
+        el.addEventListener('transitionend', clear, { once: true })
+        setTimeout(clear, SLIDE_MS + 80) // transitionend 不保证来（元素被摘掉 / 动画被跳过）
+      }
+    }
+  }
+
+  /** 松手：过阈值就切会话并让新的一页接着滑进来，否则弹回。 */
+  const endSwipe = (cancelled: boolean) => {
+    const el = pageEl()
+    const w = host.clientWidth || 1
+    const delta = cancelled ? 0 : switchDelta(dragX, Date.now() - startAt)
+    const reduced = reducedMotion()
+    if (delta !== 0 && opts.onSwitch?.(delta)) {
+      // onSwitch 里已经把新会话挂上来了（store.activate 是同步的）
+      const next = pageEl()
+      // 旧的那一页还在 store 里留着（切回来还用它），它的 inline 位移必须清掉
+      if (el && el !== next) slideTo(el, 0, false)
+      if (next && next !== el && !reduced) {
+        // 接着手指的位置进场：旧页被推到哪儿，新页的边就在哪儿
+        slideTo(next, dragX + (delta === 1 ? w : -w), false)
+        requestAnimationFrame(() => slideTo(next, 0, true))
+      }
+      return
+    }
+    if (el) slideTo(el, 0, !reduced && dragX !== 0)
+  }
+
   const beginPinch = (a: Touch, b: Touch) => {
     startDist = dist(a.clientX, a.clientY, b.clientX, b.clientY)
     startScale = scale
@@ -111,17 +191,24 @@ export function installPinch(host: HTMLElement): Pinch {
     } else if (e.touches.length === 1) {
       const now = Date.now()
       const t = e.touches[0]!
-      if (now - lastTap < 300) {
+      if (now - lastTapAt < DOUBLE_TAP_MS) {
         // 双击：1× → 在点下处放大到 2×；已放大 → 复位
         if (scale > 1) reset()
         else zoomAt(localX(t.clientX), localY(t.clientY), TAP_SCALE)
-        lastTap = 0
+        lastTapAt = 0
+        consumed = true
         return
       }
-      lastTap = now
-      // 记下起点：放大态用来平移画面，1× 用来滚回滚
+      consumed = false
+      moved = 0
+      // 记下起点：放大态用来平移画面，1× 用来滚回滚 / 横滑切会话
       panX = t.clientX
       panY = t.clientY
+      startX = t.clientX
+      startY = t.clientY
+      startAt = now
+      dragX = 0
+      axis = 'none'
     }
   }
 
@@ -137,16 +224,30 @@ export function installPinch(host: HTMLElement): Pinch {
       apply()
       e.preventDefault()
     } else if (e.touches.length === 1) {
+      if (consumed) return // 这一下是双击，不是拖
       const t = e.touches[0]!
+      moved = Math.max(moved, dist(t.clientX, t.clientY, startX, startY))
       if (scale > 1) {
         // 放大态：单指平移画面
         tx += t.clientX - panX
         ty += t.clientY - panY
         apply()
       } else {
-        // 1× 态：单指纵向拖 = 滚终端回滚（拖下露出上文）。JS 代劳，见 viewport 注释。
-        const vp = viewport()
-        if (vp) vp.scrollTop -= t.clientY - panY
+        // 1× 态：先定方向（前 12px），再一路走到底 —— 中途不改判，否则滚着滚着就切会话了
+        if (axis === 'none') {
+          const a = lockAxis(t.clientX - startX, t.clientY - startY)
+          // 没有可切的目标时横向手势降级成纵向：拖不动，但也不会有假的跟手位移
+          axis = a === 'x' && opts.canSwitch?.() === false ? 'y' : a
+        }
+        if (axis === 'x') {
+          dragX = t.clientX - startX
+          const el = pageEl()
+          if (el && !reducedMotion()) slideTo(el, dragX, false)
+        } else if (axis === 'y') {
+          // 单指纵向拖 = 滚终端回滚（拖下露出上文）。JS 代劳，见 viewport 注释。
+          const vp = viewport()
+          if (vp) vp.scrollTop -= t.clientY - panY
+        }
       }
       panX = t.clientX
       panY = t.clientY
@@ -155,15 +256,27 @@ export function installPinch(host: HTMLElement): Pinch {
     }
   }
 
-  const onEnd = () => {
+  const finish = (cancelled: boolean) => (e: TouchEvent) => {
     startDist = 0
+    // 还有手指在屏幕上（双指里松了一根）就不算手势结束
+    if (e.touches.length === 0) {
+      // 只有【没被吃掉、几乎没动、按得短】才算一次轻点，才有资格参与双击
+      const tapped = !consumed && moved < TAP_SLOP_PX && Date.now() - startAt < TAP_MS
+      lastTapAt = tapped ? Date.now() : 0
+      if (axis === 'x') endSwipe(cancelled)
+      axis = 'none'
+      dragX = 0
+      consumed = false
+    }
     apply()
   }
+  const onEnd = finish(false)
+  const onCancel = finish(true)
 
   host.addEventListener('touchstart', onStart, { passive: false })
   host.addEventListener('touchmove', onMove, { passive: false })
   host.addEventListener('touchend', onEnd)
-  host.addEventListener('touchcancel', onEnd)
+  host.addEventListener('touchcancel', onCancel)
 
   function zoomAt(mx: number, my: number, to: number) {
     // 从当前状态放大到 to，保持 (mx,my) 下的内容点不动
@@ -187,7 +300,9 @@ export function installPinch(host: HTMLElement): Pinch {
       host.removeEventListener('touchstart', onStart)
       host.removeEventListener('touchmove', onMove)
       host.removeEventListener('touchend', onEnd)
-      host.removeEventListener('touchcancel', onEnd)
+      host.removeEventListener('touchcancel', onCancel)
+      const el = pageEl()
+      if (el) slideTo(el, 0, false)
       reset()
     },
   }

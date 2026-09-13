@@ -474,6 +474,17 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 4. **平板上会话也从底部出来**（744×1133）：`sidebar` 浮层左缘为 0、宽度 = 视口宽（不是 280px 的左侧抽屉）
 5. **设置内容仍完整**：`theme-select` / `font-size` / `renderer`（文本为 WebGL 或 Canvas）/ `privacy-note` 都在；把字号改成 18 后 `__webterm.fontSize()` 为 18
 
+## E2E-29 左右滑动切会话（AC-4.7）
+
+`web/e2e/swipe.spec.ts`，Pixel 5 视口。先建第二个会话（两个会话才有得切），在 `.term` 上派发单指 `touchstart`/`touchmove`/`touchend`：
+
+1. **左滑切到下一个**：横向拖 140px → `__webterm.sid()` 变成相邻会话；终端里是那个会话的内容
+2. **右滑切回来**：反方向同样的拖 → `sid()` 回到原来那个
+3. **纵向拖不切会话**：垂直拖 140px → `sid()` 不变（走的是滚 scrollback 那一路）
+4. **短拖不切**：横向只拖 30px（慢速，逐帧给时间戳）→ `sid()` 不变，终端 transform 弹回空
+5. **切换不动 PTY**：整段过程前后 `__webterm.size()` 的 cols/rows 完全一致
+6. **只有一个会话时横滑什么也不发生**：关掉第二个会话后横拖 140px，`sid()` 不变
+
 ## 不在 E2E 覆盖范围（放手工清单）
 
 - 真机中文输入法的实际候选框行为
