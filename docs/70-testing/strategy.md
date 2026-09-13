@@ -158,15 +158,37 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 两个 workflow（`.github/workflows/`）：
 
 ```yaml
-ci.yml   # 每个 PR 的每次 push、每次合并进 main 都跑
-  go:      go vet, go test ./... (+ -race)
-  web:     npm run typecheck, npm test
-  static:  CGO_ENABLED=0 go build; ldd 断言 "not a dynamic executable"   # AC-8.1
-  fmt:     gofmt -l
-  docs:    scripts/check-doc-links.py
+ci.yml   # 【只在 PR 上跑】，一个 job：
+  check:   gofmt · 文档链接 · go vet · 前端类型检查与单测
+           · npm run build · go test ./... -race · 单二进制断言（AC-8.1/8.2）
 
 e2e.yml  # 【CI 上不自动跑】：只留手动触发，见下
 ```
+
+### 为什么是一个 job、为什么只在 PR 上跑
+
+**Actions 按 job 分别向上取整计费。** 原来拆成五个 job（`go` / `web` / `static` /
+`fmt` / `docs`），实测耗时 3.6 / 0.7 / 1.9 / 0.3 / 0.1 分钟 —— 光取整就白花两分钟，
+而 `go` 与 `static` 还各自跑了一遍 `npm ci && npm run build`。合成一个 job 之后
+构建一次，后面全部复用。
+
+三条省法，都不换掉覆盖面：
+
+1. **五个 job 合成一个**（取整浪费 + 重复构建）。便宜的检查排在前面 ——
+   gofmt / 坏链 / 类型检查失败得越早，这一轮花掉的分钟数越少。
+2. **只跑带 `-race` 的那一遍 `go test`**。原先普通跑一遍、带 race 再跑一遍，
+   等于把整套测试跑了两次；`-race` 本来就把所有测试都跑了。这个项目 goroutine 很重
+   （`session` / `wsconn` / `ringbuf`），该丢的是那遍重复，不是竞态检测。
+3. **合并进 main 不再重跑**。`pull_request` 事件跑的本来就是 **merge ref**
+   （main 与 PR 合并之后的树），main 上那一轮是同一棵树跑第二遍。
+   `Release` 仍在 main 上照跑（dev 预发布不受影响），它自己也会做完整构建与嵌入断言。
+
+另外两条防漏：`concurrency` 让同一分支上被顶掉的旧 run 立刻取消（连推几个 commit 时
+不再并排烧）；`timeout-minutes` 给 job 封顶 —— Actions 的默认上限是 **360 分钟**，
+一个卡住的 job 能把一个月的额度烧掉。
+
+代价：**main 上没有独立的 CI 结论**。前提是 [CLAUDE.md](../../CLAUDE.md) 的
+「不在 `main` 上直接开发」—— 所有改动都经 PR，PR 上跑的就是合并后的树。
 
 **E2E 在 CI 上不跑，本地跑。** 一次约 6 分钟（装浏览器 + 构建 + 90 条用例），而 Actions 额度有限；
 自动触发（合并进 main、PR 打标签）被取消，`e2e.yml` 只保留 `workflow_dispatch`：想要 CI 上的结论时
@@ -177,7 +199,7 @@ e2e.yml  # 【CI 上不自动跑】：只留手动触发，见下
 - 本地跑不动 E2E（缺库、没浏览器）就**不要提 PR**，先把环境修好 —— 见 [development.md §E2E 的两个坑](../80-ops/development.md#e2e-的两个坑)
 - E2E 的前置是完整构建（`npm run build` → `go build`），这保证 `go:embed` 的路径是真的通的；本地跑的正是同一条路
 - 放弃的是「只在 CI 环境才暴露的差异」这张安全网。历史上它抓到过两次：Go job 不构建前端 → `go:embed` 空目录 → `GET /` 503；浮层刚打开时焦点还在 body → Esc 关不掉（[ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)）。**代价是知情的**：往后这类差异要靠手动触发那一次去抓 —— 改动触及协议 / 重连 / 输入 / 布局、或改了 E2E 与构建本身时，值得手动跑一次再合
-- `ci.yml` 不变：`go vet` / `go test`（含 `-race`）/ 前端类型检查与单测 / 单二进制断言 / gofmt / 文档链接，仍然每次 push 都跑
+- `ci.yml` 的覆盖面不变：`go vet` / `go test -race` / 前端类型检查与单测 / 单二进制断言 / gofmt / 文档链接，每个 PR 的每次 push 都跑（合进 main 不重跑，理由见上）
 
 ## 覆盖率
 
