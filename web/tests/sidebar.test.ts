@@ -6,6 +6,7 @@ import {
   STEP,
   STEP_BIG,
   clampSidebarWidth,
+  previewEdge,
   readSidebarOpen,
   readSidebarWidth,
   settleSidebarWidth,
@@ -71,6 +72,32 @@ describe('松手结算', () => {
   it('吸附之后仍受上限约束', () => {
     // 窗口窄到上限 200（500×40%）以下时，240 也要被夹回去
     expect(settleSidebarWidth(236, 240, 500, false)).toEqual({ width: 200, open: true })
+  })
+})
+
+describe('拖动预览（ADR-0021）', () => {
+  // 预览线的位置就是松手的结果 —— 同一个 settleSidebarWidth，拖动中先显形一次
+  const cases: Array<[string, number, number]> = [
+    ['常规', 360, 360],
+    ['吸附回默认宽', 233, 240],
+    ['撞上限', 9999, 480],
+    ['撞下限', 150, 200],
+    ['过了收起门槛 → 预览线贴左缘', 119, 0],
+    ['指针跑到窗口外（负数）', -80, 0],
+  ]
+  it.each(cases)('%s：预览位置 = 松手结果', (_name, raw, want) => {
+    expect(previewEdge(raw, 240, 1440, false)).toBe(want)
+    const st = settleSidebarWidth(raw, 240, 1440, false)
+    expect(previewEdge(raw, 240, 1440, false)).toBe(st.open ? st.width : 0)
+  })
+
+  it('收起态拖出来：起手宽度是 0，预览位置就是拖到的宽度', () => {
+    expect(previewEdge(314, 240, 1440, false)).toBe(314)
+  })
+
+  it('触屏的下限与收起门槛跟着抬高', () => {
+    expect(previewEdge(150, 300, 1440, true)).toBe(0) // 260 × 0.6 = 156，没到
+    expect(previewEdge(160, 300, 1440, true)).toBe(260) // 过了门槛，夹到最小宽
   })
 })
 

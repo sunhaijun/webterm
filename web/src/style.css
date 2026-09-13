@@ -322,9 +322,16 @@ body {
    只在 hover / 聚焦 / 拖动时亮起来。 */
 .app[data-sidebar='closed'] .sidebar-resizer::after { opacity: 0.55; }
 .sidebar-resizer:hover::after,
-.sidebar-resizer:focus-visible::after,
-.app[data-sidebar-drag='true'] .sidebar-resizer::after { opacity: 1; height: 44px; background: var(--link); }
+.sidebar-resizer:focus-visible::after { opacity: 1; height: 44px; background: var(--link); }
 .sidebar-resizer:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+/* 拖动时分隔条【就是预览线】：它自己 translateX 跟手，松手落在哪儿现在就画在哪儿
+   （ADR-0021）。整列高亮才读得出「这是新的列边界」，28px 的小握把读不出来。
+   will-change 把它提成独立合成层 —— 拖动期间主线程一次样式重算都不欠。 */
+.app[data-sidebar-drag='true'] .sidebar-resizer { will-change: transform; }
+.app[data-sidebar-drag='true'] .sidebar-resizer::after {
+  opacity: 1; top: 0; bottom: 0; height: auto;
+  border-radius: 0; background: var(--link); transform: translateX(-50%);
+}
 /* 拖动时全页统一光标 + 禁选：指针已被 capture，划过终端不该选中文本 */
 .app[data-sidebar-drag='true'] { cursor: col-resize; user-select: none; }
 @media (prefers-reduced-motion: reduce) { .sidebar-resizer::after { transition: none; } }
