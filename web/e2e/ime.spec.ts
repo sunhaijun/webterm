@@ -129,3 +129,68 @@ test('反复弹出收起不会越缩越小', async ({ page }) => {
 
   expect(await appH(), '三轮之后高度不能漂').toBe(base)
 })
+
+/**
+ * E2E-7 · Raw 模式软键盘直接插入的标点（AC-3.14）。
+ *
+ * iPhone 中文键盘下「逗号打不进终端，句号可以」：同一个键盘上两个键报的 keyCode 不同，
+ * xterm 一个接得住一个接不住。这里按软键盘的样子派发
+ * keydown → 插字符 → input(insertText) → keyup，三种 keyCode 都要进终端。
+ * 真机的 keyCode 是 iOS 自己报的、没法在 headless 里复刻，但
+ *【keydown 发生过 + insertText】这个组合就是要害，合成事件能精确覆盖。
+ */
+test('E2E-7 软键盘直接插入的全角标点进得了终端，且不重复', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  // 终端直通输入：点终端区，键直送 PTY（ADR-0013+）
+  await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
+  await page.keyboard.type('echo ')
+
+  /** 软键盘按下一个键：keydown → 浏览器把字插进 textarea → input → keyup。
+   * keydown 没被 preventDefault 才会真的插进去 —— xterm 处理掉的键会 cancel。 */
+  const softKey = (ch: string, keyCode: number) =>
+    page.evaluate(
+      ([ch, keyCode]) => {
+        const ta = document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!
+        ta.focus()
+        const opts = { bubbles: true, cancelable: true, composed: true }
+        const kd = new KeyboardEvent('keydown', { key: ch as string, keyCode: keyCode as number, ...opts })
+        ta.dispatchEvent(kd)
+        if (!kd.defaultPrevented) {
+          const bi = new InputEvent('beforeinput', { inputType: 'insertText', data: ch as string, ...opts })
+          ta.dispatchEvent(bi)
+          if (!bi.defaultPrevented) {
+            ta.value += ch as string
+            ta.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: ch as string, bubbles: true, composed: true }))
+          }
+        }
+        ta.dispatchEvent(new KeyboardEvent('keyup', { key: ch as string, keyCode: keyCode as number, bubbles: true, composed: true }))
+      },
+      [ch, keyCode] as [string, number],
+    )
+
+  // keyCode 0 = iOS 对直接插入报的值（本 bug 的要害）；229 = 差量路；191 = keydown 路
+  await softKey('，', 0)
+  await softKey('。', 229)
+  await softKey('！', 0)
+  await softKey('？', 191)
+
+  // 组字提交之后紧跟一个 keyCode 0 的标点 —— 打完中文接着打逗号是常事
+  await page.evaluate(() => {
+    const ta = document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!
+    ta.dispatchEvent(new CompositionEvent('compositionstart', { data: '', bubbles: true }))
+    ta.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'nihao', bubbles: true }))
+    ta.dispatchEvent(new CompositionEvent('compositionend', { data: '你好', bubbles: true }))
+  })
+  await softKey('，', 0)
+
+  await page.keyboard.press('Enter')
+  const want = '，。！？你好，'
+  await waitFor(async () => (await terminalText(page)).split('\n').some((l) => l.trim() === want), `终端回显 ${want}`)
+
+  const text = await terminalText(page)
+  expect(text, '重复发送会变成「，，」').not.toContain('，，')
+  expect(text, '组字结果不能发两遍').not.toContain('你好你好')
+})
