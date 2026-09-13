@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { OutputQueue, type Parked } from '../src/term/outputqueue'
+import { type FollowState, OutputQueue, type Parked } from '../src/term/outputqueue'
 
 const enc = (s: string) => new TextEncoder().encode(s)
 const dec = (u: Uint8Array) => new TextDecoder().decode(u)
@@ -38,7 +38,7 @@ describe('OutputQueue：按帧合并 + 回看时暂停跟随', () => {
     const writes: string[] = []
     const parked: (Parked | null)[] = []
     const s = manualScheduler()
-    const q = new OutputQueue((d) => writes.push(dec(d)), { schedule: s.schedule, onParked: (p) => parked.push(p) })
+    const q = new OutputQueue((d) => writes.push(dec(d)), { schedule: s.schedule, onState: (st) => parked.push(st.parked) })
     q.setFollowing(false)
     expect(q.push(enc('line1\nline2\n'))).toBe('parked')
     expect(q.push(enc('line3\n'))).toBe('parked')
@@ -50,6 +50,38 @@ describe('OutputQueue：按帧合并 + 回看时暂停跟随', () => {
     expect(writes).toEqual(['line1\nline2\nline3\n'])
     expect(q.parked).toBeNull()
     expect(parked.at(-1)).toBeNull()
+  })
+
+  it('离开底部立刻通知 following=false（还没有新输出也通知 —— 提示条要写「回到底部」）', () => {
+    const states: FollowState[] = []
+    const q = new OutputQueue(() => {}, { schedule: () => {}, onState: (s) => states.push(s) })
+    expect(q.state).toEqual({ following: true, parked: null })
+    q.setFollowing(false)
+    expect(states.at(-1)).toEqual({ following: false, parked: null })
+    q.push(enc('x\n'))
+    expect(states.at(-1)).toEqual({ following: false, parked: { lines: 1, bytes: 2 } })
+    q.setFollowing(true)
+    expect(states.at(-1)).toEqual({ following: true, parked: null })
+    // 重复设置同一状态不重复通知
+    const n = states.length
+    q.setFollowing(true)
+    expect(states.length).toBe(n)
+  })
+
+  it('强制写入后提示条计数不清零 —— 那些行用户还没看到', () => {
+    const writes: string[] = []
+    const q = new OutputQueue((d) => writes.push(dec(d)), { maxLines: 2, schedule: () => {} })
+    q.setFollowing(false)
+    q.push(enc('1\n'))
+    q.push(enc('2\n'))
+    expect(q.push(enc('3\n'))).toBe('flushed')
+    expect(writes).toEqual(['1\n2\n3\n'])
+    expect(q.parked, '写出去了但计数保留').toEqual({ lines: 3, bytes: 6 })
+    expect(q.push(enc('4\n')), '队列清空后重新开始攒').toBe('parked')
+    expect(q.parked).toEqual({ lines: 4, bytes: 8 })
+    q.setFollowing(true)
+    expect(writes).toEqual(['1\n2\n3\n', '4\n'])
+    expect(q.parked).toBeNull()
   })
 
   it('攒过上限就强制写入，视口不由队列干涉', () => {

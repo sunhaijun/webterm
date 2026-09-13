@@ -8,7 +8,7 @@ import { Connection } from '../conn/connection'
 import { ModeMachine, type ModeState } from '../input/modes'
 import type { SessionInfo } from '../protocol/messages'
 import { installInteractive, type InteractiveDetector } from '../term/interactive'
-import { OutputQueue, type Parked } from '../term/outputqueue'
+import { type FollowState, OutputQueue } from '../term/outputqueue'
 import { createTerminal, type TermHandle } from '../term/terminal'
 
 export interface SessionView extends SessionInfo {
@@ -32,6 +32,8 @@ interface Entry {
   replayDepth: number
   /** 输出写入队列：按帧合并；用户滚上去读旧输出时暂停写入（session-ux.md §回看时暂停跟随）。 */
   queue: OutputQueue
+  /** 解绑 .xterm-viewport 的 DOM scroll 监听 —— 那个元素 open() 之后才有。 */
+  unhookScroll?: () => void
 }
 
 export interface SessionStoreHandlers {
@@ -43,8 +45,8 @@ export interface SessionStoreHandlers {
   allowKey(e: KeyboardEvent): boolean
   /** 占屏状态切换（ADR-0011 ②：驱动读 ⇄ 控的自动切换）。备用缓冲 或 主屏就地重绘。 */
   onInteractive(sid: number, on: boolean): void
-  /** 回看暂停中攒下的输出量变了（null = 没有暂停中的内容）。给「已暂停跟随」提示条用。 */
-  onParked?(sid: number, parked: Parked | null): void
+  /** 跟随状态变了（离开 / 回到底部，或暂停中攒下的新增量变了）。给右下角提示条用。 */
+  onFollow?(sid: number, s: FollowState): void
 }
 
 export class SessionStore {
@@ -132,11 +134,14 @@ export class SessionStore {
       detector: installInteractive(term.term),
       replayDepth: 0,
       queue: new OutputQueue((data) => term.term.write(data), {
-        onParked: (p) => this.h.onParked?.(info.sid, p),
+        onState: (s) => this.h.onFollow?.(info.sid, s),
       }),
     }
     // 跟随 / 回看：视口贴底就跟随，滚上去就暂停写入（session-ux.md §回看时暂停跟随）。
-    // onScroll 在用户滚动、xterm 自动滚、scrollToBottom（输入、占屏程序启动）时都会来；
+    // xterm 的 onScroll 只在【程序化】滚动时来：scrollLines / scrollToBottom（输入、占屏程序
+    // 启动）以及输出把缓冲推着走。滚轮、触屏拖动、拖滚动条这些 DOM 驱动的滚动它【不报】
+    // （xterm 5.5 的 Viewport 一律标 suppressScrollEvent），那一路在 activate() 里挂在
+    // .xterm-viewport 的 DOM scroll 事件上。两路都不看事件带的位置，只按真实视口判定。
     // 备用缓冲没有 scrollback，永远算贴底
     term.term.onScroll(() => entry.queue.setFollowing(atBottom(term)))
     term.term.buffer.onBufferChange((buf) => {
@@ -182,6 +187,7 @@ export class SessionStore {
   remove(sid: number): void {
     const e = this.entries.get(sid)
     if (!e) return
+    e.unhookScroll?.()
     e.modes.dispose()
     e.detector.dispose()
     e.term.dispose()
@@ -217,6 +223,14 @@ export class SessionStore {
     if (!e.opened) {
       e.term.term.open(e.host)
       e.opened = true
+      // 滚轮 / 触屏拖动 / 拖滚动条：xterm 不发 onScroll 的那一路（见 upsert 里的注释）。
+      // xterm 自己的 scroll 监听在 open() 时先挂上，先跑、先把 viewportY 更新好，这里再读
+      const vp = e.host.querySelector<HTMLElement>('.xterm-viewport')
+      if (vp) {
+        const onScroll = () => e.queue.setFollowing(atBottom(e.term))
+        vp.addEventListener('scroll', onScroll, { passive: true })
+        e.unhookScroll = () => vp.removeEventListener('scroll', onScroll)
+      }
     }
     e.term.attachWebgl()
     e.term.fit.fit()
@@ -257,9 +271,9 @@ export class SessionStore {
     })
   }
 
-  /** 某会话回看暂停中攒下的量（null = 没有）。 */
-  parkedOf(sid: number): Parked | null {
-    return this.entries.get(sid)?.queue.parked ?? null
+  /** 某会话的跟随状态（切会话时给提示条对齐用）。 */
+  followOf(sid: number): FollowState {
+    return this.entries.get(sid)?.queue.state ?? { following: true, parked: null }
   }
 
   /** 回到底部并恢复跟随（提示条点击）。scrollToBottom 在已经贴底时不发 onScroll，所以显式恢复。 */
@@ -273,9 +287,10 @@ export class SessionStore {
   resetTerm(sid: number): void {
     const e = this.entries.get(sid)
     if (!e) return
-    // 屏幕要按服务端缓冲重建，攒着的旧字节没有意义了
+    // 屏幕要按服务端缓冲重建，攒着的旧字节没有意义了；重建完视口在底部，恢复跟随
     e.queue.clear()
     e.term.term.reset()
+    e.queue.setFollowing(true)
   }
 
   /** 改字号：所有实例一起改，并重新 fit。 */
@@ -311,6 +326,7 @@ export class SessionStore {
 
   dispose(): void {
     for (const e of this.entries.values()) {
+      e.unhookScroll?.()
       e.queue.clear()
       e.modes.dispose()
       e.term.dispose()

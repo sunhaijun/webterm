@@ -117,6 +117,36 @@ async function scrollbackRows(page: import('@playwright/test').Page): Promise<nu
   return page.evaluate(() => (window as unknown as { __webterm: { viewport(): { y: number } } }).__webterm.viewport().y)
 }
 
+/**
+ * E2E-12 ⑥ 的空闲版：命令跑完、没有新输出，用【真实滚轮】往上滚 —— xterm 对 DOM 驱动的
+ * 滚动不发 onScroll，只用 scrollLines 钩子的用例测不到这条。此时也要有提示条，
+ * 写「回到底部」；点它回到 baseY、提示条消失。
+ */
+test('E2E-12 空闲时滚轮回滚也有「回到底部」提示条，点它回底', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  await submit(page, 'for i in $(seq 1 200); do printf "IDLE-%03d\\n" $i; done; printf "IDLE-%s\\n" END')
+  await waitFor(async () => (await terminalText(page)).includes('IDLE-END'), '命令跑完')
+  await page.waitForTimeout(300)
+  const pill = page.getByTestId('follow-pill')
+  await expect(pill, '贴底时没有提示条').toHaveCount(0)
+  const bottomY = await scrollbackRows(page)
+  expect(bottomY).toBeGreaterThan(20)
+
+  const box = (await page.getByTestId('terminal').boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.wheel(0, -400)
+  await expect(pill).toBeVisible()
+  await expect(pill).toHaveText(/回到底部/)
+  expect(await scrollbackRows(page), '真的滚上去了').toBeLessThan(bottomY)
+
+  await pill.click()
+  await expect(pill).toHaveCount(0)
+  expect(await scrollbackRows(page), '回到了底部').toBe(bottomY)
+})
+
 test('E2E-12 ⑦ 设置里能看到渲染器', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)

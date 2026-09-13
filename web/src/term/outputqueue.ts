@@ -15,15 +15,25 @@ export interface Parked {
   bytes: number
 }
 
+/**
+ * 跟随状态 —— 右下角提示条按它渲染。
+ * `following=false` 提示条就在（哪怕还没有新输出，写「回到底部」）；
+ * `parked` 是暂停以来用户还没看到的新增量（null = 还没有新输出）。
+ */
+export interface FollowState {
+  following: boolean
+  parked: Parked | null
+}
+
 export interface OutputQueueOptions {
-  /** 暂停期间最多攒多少字节，超过就强制写入（内存上限）。默认 2 MiB。 */
+  /** 暂停期间队列最多攒多少字节，超过就强制写入（内存上限）。默认 2 MiB。 */
   maxBytes?: number
-  /** 暂停期间最多攒多少行，超过就强制写入 —— 再多也会被 scrollback 裁掉。默认 4000。 */
+  /** 暂停期间队列最多攒多少行，超过就强制写入 —— 再多也会被 scrollback 裁掉。默认 4000。 */
   maxLines?: number
   /** 合并写入的调度器。默认下一帧（页面隐藏时退到 setTimeout）。测试注入同步版。 */
   schedule?: (fn: () => void) => void
-  /** 暂停计数变化时的通知（给提示条用）。null = 没有暂停中的内容。 */
-  onParked?: (p: Parked | null) => void
+  /** 跟随状态 / 新增量变化时的通知（给提示条用）。 */
+  onState?: (s: FollowState) => void
 }
 
 const defaultSchedule = (fn: () => void) => {
@@ -36,14 +46,18 @@ const defaultSchedule = (fn: () => void) => {
 
 export class OutputQueue {
   private chunks: Uint8Array[] = []
-  private bytes = 0
-  private lines = 0
+  /** 队列里的量 —— 内存上限按它算，写出去就清零。 */
+  private queuedBytes = 0
+  private queuedLines = 0
+  /** 暂停以来的新增总量 —— 提示条按它计数。强制写入不清零：那些行用户还没看到。 */
+  private unseenBytes = 0
+  private unseenLines = 0
   private following = true
   private scheduled = false
   private readonly maxBytes: number
   private readonly maxLines: number
   private readonly schedule: (fn: () => void) => void
-  private readonly onParked?: (p: Parked | null) => void
+  private readonly onState?: (s: FollowState) => void
 
   constructor(
     private readonly sink: (data: Uint8Array) => void,
@@ -52,7 +66,7 @@ export class OutputQueue {
     this.maxBytes = opts.maxBytes ?? 2 << 20
     this.maxLines = opts.maxLines ?? 4000
     this.schedule = opts.schedule ?? defaultSchedule
-    this.onParked = opts.onParked
+    this.onState = opts.onState
   }
 
   /** 是否在跟随（视口贴底）。 */
@@ -60,10 +74,14 @@ export class OutputQueue {
     return this.following
   }
 
-  /** 暂停中攒下的量；跟随中或没有内容时为 null。 */
+  /** 暂停以来用户还没看到的新增量；跟随中或还没有新输出时为 null。 */
   get parked(): Parked | null {
-    if (this.following || this.chunks.length === 0) return null
-    return { lines: this.lines, bytes: this.bytes }
+    if (this.following || this.unseenBytes === 0) return null
+    return { lines: this.unseenLines, bytes: this.unseenBytes }
+  }
+
+  get state(): FollowState {
+    return { following: this.following, parked: this.parked }
   }
 
   /**
@@ -73,21 +91,23 @@ export class OutputQueue {
   setFollowing(f: boolean): boolean {
     if (f === this.following) return false
     this.following = f
+    let had = false
     if (f) {
-      const had = this.chunks.length > 0
+      had = this.chunks.length > 0
       this.drain()
-      this.notify()
-      return had
+      this.unseenBytes = 0
+      this.unseenLines = 0
     }
     this.notify()
-    return false
+    return had
   }
 
   /** 收到一帧输出。返回它的去向，测试用。 */
   push(data: Uint8Array): 'batched' | 'parked' | 'flushed' {
     this.chunks.push(data)
-    this.bytes += data.length
-    this.lines += countNewlines(data)
+    const lines = countNewlines(data)
+    this.queuedBytes += data.length
+    this.queuedLines += lines
     if (this.following) {
       if (!this.scheduled) {
         this.scheduled = true
@@ -98,7 +118,9 @@ export class OutputQueue {
       }
       return 'batched'
     }
-    if (this.bytes > this.maxBytes || this.lines > this.maxLines) {
+    this.unseenBytes += data.length
+    this.unseenLines += lines
+    if (this.queuedBytes > this.maxBytes || this.queuedLines > this.maxLines) {
       // 攒过头了：强制写入。视口位置由 xterm 维持，用户不会被拽到底部
       this.drain()
       this.notify()
@@ -115,7 +137,7 @@ export class OutputQueue {
     if (this.chunks.length === 1) {
       out = this.chunks[0]!
     } else {
-      out = new Uint8Array(this.bytes)
+      out = new Uint8Array(this.queuedBytes)
       let off = 0
       for (const c of this.chunks) {
         out.set(c, off)
@@ -123,21 +145,23 @@ export class OutputQueue {
       }
     }
     this.chunks = []
-    this.bytes = 0
-    this.lines = 0
+    this.queuedBytes = 0
+    this.queuedLines = 0
     this.sink(out)
   }
 
   /** 丢掉队列（终端 reset 时：屏幕要按服务端缓冲重建，攒着的旧字节没有意义）。 */
   clear(): void {
     this.chunks = []
-    this.bytes = 0
-    this.lines = 0
+    this.queuedBytes = 0
+    this.queuedLines = 0
+    this.unseenBytes = 0
+    this.unseenLines = 0
     this.notify()
   }
 
   private notify(): void {
-    this.onParked?.(this.parked)
+    this.onState?.(this.state)
   }
 }
 

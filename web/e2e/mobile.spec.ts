@@ -249,3 +249,34 @@ test('手机：回看时暂停跟随，提示条在键行之上，点一下补�
   expect(new Set(lines).size).toBe(150)
   expect(lines.length).toBe(150)
 })
+
+/**
+ * 手机空闲回滚（AC-5.9）：单指拖动在 1× 时是 pinch.ts 直接改 .xterm-viewport.scrollTop，
+ * 这里就直接改它。没有新输出也要有「回到底部」提示条，点一下回底。
+ */
+test('手机：空闲时单指回滚也有「回到底部」提示条', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  await submit(page, 'for i in $(seq 1 120); do printf "MI-%03d\\n" $i; done; printf "MI-%s\\n" END')
+  await waitFor(async () => (await terminalText(page)).includes('MI-END'), '命令跑完')
+  await page.waitForTimeout(300)
+  const y = () => page.evaluate(() => (window as unknown as { __webterm: { viewport(): { y: number } } }).__webterm.viewport().y)
+  const bottomY = await y()
+  expect(bottomY).toBeGreaterThan(15)
+  const pill = page.getByTestId('follow-pill')
+  await expect(pill).toHaveCount(0)
+
+  await page.evaluate(() => {
+    const vp = document.querySelector<HTMLElement>('.xterm-viewport')!
+    vp.scrollTop -= 200
+  })
+  await expect(pill).toBeVisible()
+  await expect(pill).toHaveText(/回到底部/)
+  expect(await y()).toBeLessThan(bottomY)
+
+  await pill.click()
+  await expect(pill).toHaveCount(0)
+  expect(await y()).toBe(bottomY)
+})
