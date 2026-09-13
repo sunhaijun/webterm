@@ -91,6 +91,10 @@ test.describe('Pixel 5', () => {
     for (const close of ['backdrop', 'escape', 'x'] as const) {
       await openFromMore(page, 'open-settings')
       await expect(page.getByTestId('settings')).toBeVisible()
+      // 模态浮层要把焦点收进来（无障碍；也让 Esc 有确定的接收者）
+      await expect
+        .poll(() => page.evaluate(() => !!document.activeElement?.closest('.drawer')), { message: '焦点进浮层' })
+        .toBe(true)
       if (close === 'backdrop') await page.locator('.drawer-backdrop').click({ position: { x: 5, y: 5 } })
       else if (close === 'escape') await page.keyboard.press('Escape')
       else await page.getByTestId('drawer-close').click()

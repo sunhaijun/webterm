@@ -8,7 +8,7 @@
  * 不触发 fit / resize（设置横幅是这条老约束唯一的漏网之鱼，见 ADR-0018）。
  */
 import type { ComponentChildren } from 'preact'
-import { useEffect, useRef } from 'preact/hooks'
+import { useLayoutEffect, useRef } from 'preact/hooks'
 
 import { installSwipeDismiss } from './swipe'
 
@@ -48,9 +48,20 @@ export function Drawer({
   children,
 }: DrawerProps) {
   const sheetRef = useRef<HTMLDivElement>(null)
-  useEffect(() => (sheetRef.current ? installSwipeDismiss(sheetRef.current, onClose) : undefined), [onClose])
-  useEffect(() => {
-    // 捕获阶段：浮层开着的时候 Esc 归浮层，不落到终端 / Composer 里
+  // 【用 useLayoutEffect 而不是 useEffect】：Preact 的 useEffect 排在绘制之后
+  // （rAF，最坏 100ms 后才跑），浮层已经能点了、手势与 Esc 还没挂上。
+  useLayoutEffect(() => (sheetRef.current ? installSwipeDismiss(sheetRef.current, onClose) : undefined), [onClose])
+  useLayoutEffect(() => {
+    // 【焦点收进浮层】。它是模态：焦点留在外面的话，键盘 / 读屏用户还在背后那一层，
+    // Esc 也没有明确的接收者 —— 触发它的那个按钮（⋯ 菜单项）已经随菜单卸载，
+    // activeElement 退回 body，键事件全靠 window 上的兜底监听接。
+    // preventScroll：别因为聚焦把背后的终端滚走。
+    const el = sheetRef.current
+    if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true })
+  }, [])
+  useLayoutEffect(() => {
+    // 捕获阶段兜底：焦点万一不在浮层里（比如刚打开就有别的东西抢了焦点），
+    // Esc 仍归浮层，不落到终端 / Composer 里
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       e.preventDefault()
@@ -71,7 +82,13 @@ export function Drawer({
         aria-modal="true"
         aria-label={title}
         ref={sheetRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          e.preventDefault()
+          onClose()
+        }}
       >
         <div class="drawer-grab" />
         <div class="drawer-head">

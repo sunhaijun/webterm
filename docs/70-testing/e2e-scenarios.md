@@ -469,7 +469,7 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 `web/e2e/drawer.spec.ts`，Pixel 5 与 iPad 竖屏（744×1133）视口。
 
 1. **四个入口是同一种壳**（Pixel 5）：⋯ → 会话 / 历史 / 命令面板 / 设置逐个打开，每个都满足：`.drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽（宽度 = 视口宽）、有抓手 `.drawer-grab`、标题栏里有标题与 ✕
-2. **关闭方式一致**：设置用三种都关得掉（点遮罩、`Esc`、✕）；会话、历史、命令面板各验一种
+2. **关闭方式一致**：设置用三种都关得掉（点遮罩、`Esc`、✕），每次打开都先确认**焦点已进浮层**（`document.activeElement.closest('.drawer')`）；会话、历史、命令面板各验一种
 3. **浮层不挤终端**（AC-5.11）：打开设置前后 `.term` 的矩形逐字段相同，`__webterm.size()` 的 cols/rows 不变 —— 老的设置横幅会把终端顶上去并触发 resize
 4. **平板上会话也从底部出来**（744×1133）：`sidebar` 浮层左缘为 0、宽度 = 视口宽（不是 280px 的左侧抽屉）
 5. **设置内容仍完整**：`theme-select` / `font-size` / `renderer`（文本为 WebGL 或 Canvas）/ `privacy-note` 都在；把字号改成 18 后 `__webterm.fontSize()` 为 18
