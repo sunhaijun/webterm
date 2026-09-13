@@ -68,9 +68,16 @@ describe('应用级快捷键', () => {
     ...mods,
   })
 
-  it('Ctrl/Cmd+K 是命令面板总入口', () => {
-    expect(appAction(key('k', { ctrlKey: true }))).toBe('palette')
-    expect(appAction(key('k', { metaKey: true }))).toBe('palette')
+  it('Ctrl/Cmd+K 归还终端（readline 的「删到行尾」，ADR-0021）', () => {
+    // 命令面板删掉之后这个键不再被应用层拦截 —— 拦它等于拦了一个终端真正在用的键
+    expect(appAction(key('k', { ctrlKey: true }))).toBeNull()
+    expect(appAction(key('K', { ctrlKey: true }))).toBeNull()
+    expect(appAction(key('k', { metaKey: true }))).toBeNull()
+  })
+
+  it('Ctrl/Cmd+F 仍然是会话内搜索（终端不用它）', () => {
+    expect(appAction(key('f', { ctrlKey: true }))).toBe('search')
+    expect(appAction(key('f', { metaKey: true }))).toBe('search')
   })
 
   it('Ctrl+Shift+* 是应用快捷键', () => {
@@ -82,7 +89,8 @@ describe('应用级快捷键', () => {
 
   it('【绝不能】拦截终端要用的组合', () => {
     // Ctrl+C / Ctrl+D / Ctrl+R 必须原样进 PTY，否则 vim、less、Ctrl+C 全废
-    for (const k of ['c', 'd', 'r', 'a', 'e', 'u', 'z']) {
+    // Ctrl+K 是 readline 的"删到行尾"，同样不能拦（ADR-0021）
+    for (const k of ['c', 'd', 'r', 'a', 'e', 'u', 'z', 'k']) {
       expect(appAction(key(k, { ctrlKey: true })), `Ctrl+${k} 被应用层吃掉了`).toBeNull()
     }
     // Alt+<字母> 是 TUI 的 Meta 键

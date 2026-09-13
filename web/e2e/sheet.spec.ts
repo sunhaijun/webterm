@@ -164,7 +164,7 @@ test('chips：空输入给同目录历史；敲 cd s 给真实路径，点一下
   expect(await sheet(page)).toBe('closed')
 })
 
-test('⋯ 菜单：会话 / 历史 / 命令面板 / 设置 从这里进', async ({ page }) => {
+test('⋯ 菜单：会话 / 历史 / 设置 从这里进', async ({ page }) => {
   await agent.pair(page)
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('conn-text')).toHaveText('在线')

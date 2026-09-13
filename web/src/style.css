@@ -383,7 +383,7 @@ body {
 .canvas > .term[data-hidden='true'] { visibility: hidden; pointer-events: none; }
 .canvas > .stream { position: absolute; inset: 0; }
 
-/* phone / tablet 的会话列表不在这儿 —— 它和历史 / 命令面板 / 设置一样是 Drawer（ADR-0018）。
+/* phone / tablet 的会话列表不在这儿 —— 它和历史 / 设置一样是 Drawer（ADR-0018）。
    打开时终端【不重排】：浮层 fixed 覆盖，不进 .main 的 flex 列，不触发 resize。 */
 
 .term-host { height: 100%; }
@@ -394,7 +394,7 @@ body {
    不让用户对着一个冻住的终端瞎猜。 */
 .app[data-short='true'] .statusbar[data-state='online'] { display: none; }
 
-/* ---------- 浮层：会话 / 历史 / 命令面板 / 设置共用一个壳（ADR-0018） ---------- */
+/* ---------- 浮层：会话 / 历史 / 设置共用一个壳（ADR-0018） ---------- */
 .drawer-backdrop {
   position: fixed; inset: 0; z-index: 40;
   background: rgba(0, 0, 0, 0.45);
@@ -424,27 +424,18 @@ body {
   flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px;
 }
-/* 工具行里的搜索框 —— 历史与命令面板同款 */
-.drawer-tools .panel-search, .drawer-tools .palette-input {
+/* 工具行里的搜索框 */
+.drawer-tools .panel-search {
   flex: 1; min-width: 160px; font: inherit; font-size: 13px; padding: 7px 10px;
   border: 1px solid var(--line); border-radius: 8px;
   background: transparent; color: var(--fg); outline: none;
 }
-.drawer-tools .panel-search:focus, .drawer-tools .palette-input:focus { border-color: var(--line-strong); }
+.drawer-tools .panel-search:focus { border-color: var(--line-strong); }
 .drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .drawer-foot { flex: none; padding: 6px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 
-/* ---------- 命令面板 ---------- */
-.palette-item {
-  display: flex; align-items: center; gap: 8px; padding: 7px 14px; cursor: pointer; font-size: 13px;
-}
-.palette-item[data-active='true'] { background: color-mix(in srgb, var(--fg) 12%, transparent); }
-.palette-icon { width: 14px; flex: none; color: var(--warn); }
-.palette-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.palette-hint { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.palette-empty, .panel-empty { padding: 16px; color: var(--muted); font-size: 12px; }
-
 /* ---------- 历史面板 ---------- */
+.panel-empty { padding: 16px; color: var(--muted); font-size: 12px; }
 .drawer-tools button { font: inherit; font-size: 12px; border: 1px solid var(--line);
   border-radius: 6px; background: transparent; color: var(--fg); padding: 5px 8px; cursor: pointer; }
 .panel-group { padding: 8px 12px 4px; font-size: 11px; color: var(--muted); position: sticky; top: 0;
@@ -801,8 +792,7 @@ body {
   .drawer-head { padding: 6px 8px 8px 14px; }
   .drawer-title { font-size: 16px; }
   .drawer-close { width: 44px; height: 44px; font-size: 17px; }
-  .palette-item { min-height: 48px; font-size: 15px; }
   .cmd-row { min-height: 48px; font-size: 14px; }
-  .palette-input, .panel-search { font-size: 16px; }
+  .panel-search { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .drawer { animation: none; } }

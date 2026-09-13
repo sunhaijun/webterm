@@ -1,7 +1,7 @@
 /**
  * E2E-28 浮层统一（ADR-0018 / AC-5.11）
  *
- * 会话 / 历史 / 命令面板 / 设置共用一个 Drawer：触屏贴底整宽 + 抓手 + 标题栏 + ✕，
+ * 会话 / 历史 / 设置共用一个 Drawer：触屏贴底整宽 + 抓手 + 标题栏 + ✕，
  * 四种关法一致，且浮层【不挤终端】—— 老的设置横幅会把终端顶上去并触发 resize。
  */
 import { devices, expect, test, type Browser, type Page } from '@playwright/test'
@@ -54,7 +54,7 @@ async function settled(page: Page, sel: string, what: string) {
 test.describe('Pixel 5', () => {
   test.use(PIXEL)
 
-  test('⋯ 里四项打开的是同一种壳：贴底整宽 + 抓手 + 标题栏 + ✕', async ({ page }) => {
+  test('⋯ 里三项打开的是同一种壳：贴底整宽 + 抓手 + 标题栏 + ✕', async ({ page }) => {
     await agent.pair(page)
     await page.goto(agent.baseURL)
     await expect(page.getByTestId('conn-text')).toHaveText('在线')
@@ -62,7 +62,6 @@ test.describe('Pixel 5', () => {
     const entries: [string, string][] = [
       ['open-sessions', '会话'],
       ['open-history', '历史'],
-      ['open-palette', '命令面板'],
       ['open-settings', '设置'],
     ]
     for (const [entry, title] of entries) {

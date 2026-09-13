@@ -7,7 +7,6 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 
 import { listCommands, type CommandRecord } from '../commands/api'
 import { HistoryPanel, QuickBar } from '../commands/history'
-import { CommandPalette } from '../commands/palette'
 import { Connection, type ConnState, type StateInfo } from '../conn/connection'
 import { useChips } from '../input/chips'
 import { type Chip, tokenAt } from '../input/complete'
@@ -102,7 +101,6 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(readTheme)
   const [fontSize, setFontSize] = useState(readFontSize)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [paletteOpen, setPaletteOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   // 块存储活在 ref 里（它不参与渲染），用一个计数器把它的变化推给 UI。
   // 读视图 / 终端视图（ADR-0011）。手机、平板默认读；桌面默认终端。选择持久化。
@@ -153,7 +151,7 @@ export function App() {
     const sid = s?.active
     if (sid != null) s?.termOf(sid)?.term.focus()
   }, [changeSheet])
-  // 从历史 / 命令面板 / chip 填入 Composer：终端输入态下先把编辑面板升起来
+  // 从历史 / chip 填入 Composer：终端输入态下先把编辑面板升起来
   // （否则 Composer 还没挂载，填了个寂寞）。桌面经典底栏的 Composer 常在，直接填。
   const fillComposer = useCallback((text: string) => {
     if (!classicRef.current && sheetRef.current === 'closed') {
@@ -415,9 +413,6 @@ export function App() {
         }
         case 'toggleSidebar':
           setSidebar((v) => !v)
-          break
-        case 'palette':
-          setPaletteOpen((v) => !v)
           break
         case 'settings':
           setSettingsOpen((v) => !v)
@@ -837,7 +832,7 @@ export function App() {
       style={{ '--sidebar-w': `${sidebarW}px` }}
     >
       {/* desktop：会话是主栅格常驻的一栏（Ctrl+Shift+B 折叠）。
-          phone / tablet：它和历史 / 命令面板 / 设置一样是浮层（ADR-0018），在下面和它们放一起。 */}
+          phone / tablet：它和历史 / 设置一样是浮层（ADR-0018），在下面和它们放一起。 */}
       {bp === 'desktop' && (
         <aside class="sidebar" data-testid="sidebar">
           {sessionList}
@@ -940,9 +935,6 @@ export function App() {
 
         {classic && (
         <div class="modebar" data-testid="modebar" data-mode={mode.mode}>
-          <button data-testid="open-palette" onClick={() => setPaletteOpen(true)}>
-            命令面板
-          </button>
           <button data-testid="open-history" onClick={() => setHistoryOpen(true)}>
             历史
           </button>
@@ -1028,9 +1020,6 @@ export function App() {
               </button>
               <button role="menuitem" data-testid="open-history" onClick={() => { setMoreOpen(false); setHistoryOpen(true) }}>
                 <span class="sheet-ico">↺</span><span class="sheet-label">历史</span><span class="sheet-chevron">›</span>
-              </button>
-              <button role="menuitem" data-testid="open-palette" onClick={() => { setMoreOpen(false); setPaletteOpen(true) }}>
-                <span class="sheet-ico">⌘</span><span class="sheet-label">命令面板</span><span class="sheet-chevron">›</span>
               </button>
               <button role="menuitem" data-testid="open-settings" onClick={() => { setMoreOpen(false); setSettingsOpen((v) => !v) }}>
                 <span class="sheet-ico">⚙</span><span class="sheet-label">设置</span><span class="sheet-chevron">›</span>
@@ -1122,25 +1111,6 @@ export function App() {
             以空格开头的命令不会被记录。贴 token / 密码时在前面加个空格。
           </p>
         </Drawer>
-      )}
-      {paletteOpen && (
-        <CommandPalette
-          sessions={sessions.map((s) => ({ sid: s.sid, name: s.name, cwd: s.cwd }))}
-          actions={[
-            { id: 'new', label: '新建会话', run: () => newSessionRef.current() },
-            { id: 'history', label: '打开历史面板', run: () => setHistoryOpen(true) },
-            { id: 'settings', label: '设置', run: () => setSettingsOpen(true) },
-            {
-              id: 'theme',
-              label: '切换主题',
-              run: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')),
-            },
-          ]}
-          onClose={() => setPaletteOpen(false)}
-          onFill={fillComposer}
-          onRun={runText}
-          onSelectSession={(sid) => selectRef.current(sid)}
-        />
       )}
       {historyOpen && (
         <HistoryPanel

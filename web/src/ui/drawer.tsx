@@ -1,5 +1,5 @@
 /**
- * 浮层原语 —— 会话 / 历史 / 命令面板 / 设置共用这一个壳（ADR-0018）。
+ * 浮层原语 —— 会话 / 历史 / 设置共用这一个壳（ADR-0018）。
  *
  * 触屏：贴底整宽 sheet（抓手 + 下滑关闭）；桌面：居中浮窗。四种关法完全一致：
  * 点遮罩 · `Esc` · ✕ ·（触屏）下滑。
@@ -15,11 +15,11 @@ import { installSwipeDismiss } from './swipe'
 export interface DrawerProps {
   title: string
   onClose(): void
-  /** 遮罩的 testid：会话沿用 `scrim`，历史 `history-panel`，命令面板 `palette`。 */
+  /** 遮罩的 testid：会话沿用 `scrim`，历史 `history-panel`。 */
   backdropTestid?: string
   /** sheet 本体的 testid。 */
   testid?: string
-  /** 正文容器的 testid：命令面板的列表沿用 `palette-list`。 */
+  /** 正文容器的 testid。 */
   bodyTestid?: string
   /** ✕ 的 testid，默认 `drawer-close`；历史沿用 `close-history`。 */
   closeTestid?: string
@@ -27,7 +27,7 @@ export interface DrawerProps {
   size?: 'auto' | 'wide'
   /** 标题右侧的附加控件。 */
   actions?: ComponentChildren
-  /** 标题栏下面的工具行（搜索 / 过滤 / 命令面板的输入框）。 */
+  /** 标题栏下面的工具行（搜索 / 过滤）。 */
   tools?: ComponentChildren
   /** 底部脚注（快捷键提示之类）。 */
   foot?: ComponentChildren
