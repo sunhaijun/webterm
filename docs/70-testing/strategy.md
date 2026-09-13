@@ -144,6 +144,9 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 | `UT-keymap-1` | 控制键映射表（对照 [`../40-frontend/keymap.md`](../40-frontend/keymap.md)） |
 | `UT-reconnect-1` | 指数退避序列、抖动范围、`online` 事件立即重试 |
 | `UT-hb-1` | 心跳间隔、pong 超时判死 |
+| `UT-hb-2` | 自认在线时的即时探活：`online` / 页面可见 → 发 `ping`，2 秒无 `pong` → 关连接；`pong` 来了就不关（AC-2.20） |
+| `UT-replay-2` | 回放门：用户输入事件派发期间的 `onData` 放行，`message` / 定时器里产生的在回放中丢弃（AC-2.15） |
+| `UT-raw-2` | 组字兜底复位：`blur` / `isComposing === false` 的 `keydown` 都把 `composing` 置回 false（AC-3.3） |
 | `UT-resize-1` | resize 防抖 |
 | `UT-render-1` | WebGL 失败时回退不抛异常 |
 | `UT-name-1` | 会话自动命名规则（home → `~`、`/` → `/`、手动名优先） |
