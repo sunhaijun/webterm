@@ -29,6 +29,8 @@ import { PendingFullError, ResendQueue } from './resend'
 /** 心跳与判死（协议 §5.4 / AC-2.8）。 */
 export const PING_INTERVAL = 30_000
 export const PONG_TIMEOUT = 10_000
+/** 回到前台 / 网络恢复时那一次即时探活的超时（协议 §5.4 / AC-2.20）。 */
+export const PROBE_TIMEOUT = 2_000
 
 export type ConnState = 'connecting' | 'online' | 'reconnecting' | 'closed'
 
@@ -272,9 +274,24 @@ export class Connection {
     this.retryTimer = setTimeout(() => this.open(), delay)
   }
 
-  /** 网络恢复 / 页面重新可见：立即重试一次并重置退避（AC-2.9）。 */
+  /**
+   * 网络恢复 / 页面重新可见：立即重试一次并重置退避（AC-2.9）。
+   *
+   * **自认在线时不能直接返回**（AC-2.20 / ADR-0020）。线路断了不一定有
+   * `onclose` —— 息屏、切 App、Wi-Fi 切蜂窝、NAT 回收，TCP 上都没有 FIN，
+   * socket 的 `readyState` 一直是 OPEN。这种【僵尸连接】自认在线，打字全写进
+   * 一条死 socket，屏幕上什么都不变，而唯一的暴露渠道只有心跳，最坏 40 秒。
+   *
+   * 而 `online` / 页面重新可见是**已知的可疑时刻**：此时连接要么活着（本机
+   * RTT 远小于 2 秒），要么就是死的。所以这里立刻探一次，2 秒没有 pong 就判死。
+   * 判错的代价只是多一次重连，而重连是无损的（续传 + 按 in_ack 重发）。
+   */
   retryNow(): void {
-    if (this.stopped || this.state === 'online') return
+    if (this.stopped) return
+    if (this.state === 'online') {
+      this.sendPing(PROBE_TIMEOUT)
+      return
+    }
     this.backoff.reset()
     this.clearTimers()
     this.open()
@@ -422,14 +439,21 @@ export class Connection {
 
   private startHeartbeat(): void {
     if (this.pingTimer) clearInterval(this.pingTimer)
-    this.pingTimer = setInterval(() => {
-      if (!this.ws || this.ws.readyState !== 1) return
-      this.lastPingAt = this.now()
-      this.send({ t: T.ping, ts: this.lastPingAt })
-      if (this.pongTimer) clearTimeout(this.pongTimer)
-      // 发出 ping 后 10 秒没收到 pong → 主动关闭并重连
-      this.pongTimer = setTimeout(() => this.ws?.close(4000, 'pong timeout'), PONG_TIMEOUT)
-    }, PING_INTERVAL)
+    this.pingTimer = setInterval(() => this.sendPing(PONG_TIMEOUT), PING_INTERVAL)
+  }
+
+  /**
+   * 发一个 ping 并武装判死定时器：`timeout` 内没有 pong 就主动关闭并重连。
+   *
+   * 心跳（10 秒）与即时探活（2 秒）走同一条路 —— 区别只有超时长短，
+   * 因为它们问的是同一个问题：这条连接还活着吗。
+   */
+  private sendPing(timeout: number): void {
+    if (!this.ws || this.ws.readyState !== 1) return
+    this.lastPingAt = this.now()
+    this.send({ t: T.ping, ts: this.lastPingAt })
+    if (this.pongTimer) clearTimeout(this.pongTimer)
+    this.pongTimer = setTimeout(() => this.ws?.close(4000, 'pong timeout'), timeout)
   }
 
   // ---------- 杂项 ----------

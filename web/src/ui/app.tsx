@@ -340,10 +340,18 @@ export function App() {
       }
     }
     const select = (sid: number) => {
+      // 焦点跟着会话走（AC-4.8 / ADR-0020）。activate() 第一件事就是把上一个会话的
+      // host 从 DOM 摘掉，焦点随之落回 body —— 不还给终端的话，切过去之后打字
+      // 彻底没反应（键落在 body 上，onData 根本不会触发），而且没有任何提示
+      const hadFocus = area.contains(document.activeElement)
       store.activate(sid, area)
       setFollow(store.followOf(sid))
       // activate 里的 term.open() 是同步的，此刻 textarea 已经在 DOM 里
       attachIme()
+      // 桌面（非触摸）无条件还给终端：那里没有软键盘要顾虑，从会话列表点过去就想直接打字。
+      // 触摸设备只在原本就在终端里时才还 —— 凭空 focus() 会弹出软键盘遮掉半屏，
+      // 而用户点的是"切会话"不是"我要打字"（要打字有底栏的互切键）
+      if (hadFocus || !isCoarsePointer()) store.termOf(sid)?.term.focus()
       pinch.reset()
       setTruncated(false)
       // 【不在这里发 resize】。切会话的 resize 由 store.activate 同步发出，

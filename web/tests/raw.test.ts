@@ -151,3 +151,93 @@ describe('UT-raw-1 Raw 模式：直接插入的文本', () => {
     expect(e.defaultPrevented).toBe(false)
   })
 })
+
+/**
+ * UT-raw-2：组字状态的兜底复位（AC-3.3 / ADR-0020）。
+ *
+ * `composing` 原本只有 compositionend 一个出口，而它不保证来 —— 切输入法、
+ * 切窗口、候选框被系统吞掉都可能让组字停在半路。卡在 true 的后果是
+ * 【这个会话的终端输入永久失效】（keydown 处理器全部 return），用户没有任何
+ * 线索，只能刷新页面。
+ */
+describe('UT-raw-2 组字兜底复位', () => {
+  const start = (el: HTMLTextAreaElement) => {
+    el.dispatchEvent(composition('compositionstart', ''))
+    el.dispatchEvent(composition('compositionupdate', 'ni'))
+  }
+
+  it('blur：元素都不是焦点了，组字不可能还在进行', () => {
+    const el = makeTextarea()
+    const onPreview = vi.fn()
+    const ime = new RawIme(el, { onCommit: vi.fn(), onPreview })
+
+    start(el)
+    expect(ime.isComposing).toBe(true)
+
+    el.dispatchEvent(new FocusEvent('blur'))
+
+    expect(ime.isComposing, 'blur 之后必须放行输入').toBe(false)
+    expect(onPreview).toHaveBeenLastCalledWith('') // 浮层也要收掉
+  })
+
+  it('一个 isComposing=false 的 keydown 就证明组字已经结束', () => {
+    const el = makeTextarea()
+    const ime = new RawIme(el, { onCommit: vi.fn(), onPreview: vi.fn() })
+
+    start(el)
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', keyCode: 65, isComposing: false }))
+
+    expect(ime.isComposing).toBe(false)
+  })
+
+  it('组字中的按键不误复位：isComposing=true 或 keyCode 229 都还在组字', () => {
+    const el = makeTextarea()
+    const ime = new RawIme(el, { onCommit: vi.fn(), onPreview: vi.fn() })
+
+    start(el)
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', keyCode: 78, isComposing: true }))
+    expect(ime.isComposing, 'isComposing=true 的键就是在组字').toBe(true)
+
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Process', keyCode: 229 }))
+    expect(ime.isComposing, '229 是输入法占用的按键').toBe(true)
+  })
+
+  it('复位【必须发生在 xterm 之前】—— 所以挂在捕获阶段', () => {
+    const el = makeTextarea()
+    const ime = new RawIme(el, { onCommit: vi.fn(), onPreview: vi.fn() })
+    // xterm 的监听器挂在冒泡阶段（RawIme 是 term.open() 之后才构造的，排在它后面）
+    let composingSeenByXterm: boolean | null = null
+    el.addEventListener('keydown', () => (composingSeenByXterm = ime.isComposing))
+
+    start(el)
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', keyCode: 65, isComposing: false }))
+
+    expect(composingSeenByXterm, '轮到 xterm 时组字必须已经复位，否则这一下按键还是丢').toBe(false)
+  })
+
+  it('兜底复位之后 compositionend 仍然来了：照常提交，不丢字', () => {
+    const el = makeTextarea()
+    const onCommit = vi.fn()
+    const ime = new RawIme(el, { onCommit, onPreview: vi.fn() })
+
+    start(el)
+    el.dispatchEvent(new FocusEvent('blur'))
+    el.dispatchEvent(composition('compositionend', '你好'))
+
+    expect(onCommit).toHaveBeenCalledWith('你好')
+    expect(ime.isComposing).toBe(false)
+  })
+
+  it('dispose 之后不再有任何监听', () => {
+    const el = makeTextarea()
+    const onPreview = vi.fn()
+    const ime = new RawIme(el, { onCommit: vi.fn(), onPreview })
+    ime.dispose()
+
+    start(el)
+    el.dispatchEvent(new FocusEvent('blur'))
+
+    expect(onPreview).not.toHaveBeenCalled()
+    expect(ime.isComposing).toBe(false)
+  })
+})
