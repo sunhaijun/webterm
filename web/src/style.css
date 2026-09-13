@@ -293,6 +293,9 @@ body {
 .app { position: relative; }
 .app[data-bp='desktop'] { display: grid; grid-template-columns: var(--sidebar-w, 240px) 1fr; }
 .app[data-bp='desktop'][data-sidebar='closed'] { grid-template-columns: 0 1fr; }
+/* 收起就该一点不剩。0 宽的列压不掉 border-right（box-sizing:border-box 下边框不参与收缩），
+   会在终端左缘留一条 1px 的线 —— 分隔条自己那条把手才是这时候该看见的东西。 */
+.app[data-bp='desktop'][data-sidebar='closed'] .sidebar { border-right: 0; }
 /* 【列宽不要加 transition】。改侧栏宽度就是改终端几何，过渡期间每一帧都会让
    ResizeObserver 响一次 → fit() → 给 PTY 发 resize，比拖动本身还糟。
    要动效只动侧栏内容的 opacity，不动列宽（layout-responsive.md §desktop）。 */
