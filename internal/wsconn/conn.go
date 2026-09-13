@@ -81,7 +81,8 @@ type Conn struct {
 	lastAck   map[uint16]time.Time // ack 节流
 	pendAck   map[uint16]uint64
 	lastHead  map[uint16]time.Time // head_seq 节流
-	queued    int                  // 写队列已占字节数
+	pendHead  map[uint16]uint64
+	queued    int // 写队列已占字节数
 	closed    bool
 	closeCode websocket.StatusCode
 	closeMsg  string
@@ -115,6 +116,7 @@ func New(ws *websocket.Conn, deps Deps) *Conn {
 		lastAck:  make(map[uint16]time.Time),
 		pendAck:  make(map[uint16]uint64),
 		lastHead: make(map[uint16]time.Time),
+		pendHead: make(map[uint16]uint64),
 		out:      make(chan outFrame, 256),
 		done:     make(chan struct{}),
 		flushed:  make(chan struct{}),
@@ -168,7 +170,7 @@ func (c *Conn) Event(msg any) {
 			c.mu.Lock()
 			subscribed := c.subs[m.SID]
 			c.mu.Unlock()
-			if subscribed || !c.allowHeadSeq(m.SID) {
+			if subscribed || !c.allowHeadSeq(m.SID, *m.HeadSeq) {
 				return
 			}
 		}
@@ -194,14 +196,16 @@ func (c *Conn) allowAck(sid uint16, inAck uint64) bool {
 	return true
 }
 
-func (c *Conn) allowHeadSeq(sid uint16) bool {
+func (c *Conn) allowHeadSeq(sid uint16, head uint64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now()
 	if now.Sub(c.lastHead[sid]) < headSeqThrottle {
+		c.pendHead[sid] = head // 记下最新值，由 writeLoop 的 ticker 补发
 		return false
 	}
 	c.lastHead[sid] = now
+	delete(c.pendHead, sid)
 	return true
 }
 

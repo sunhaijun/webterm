@@ -169,3 +169,12 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0008](adr/0008-pinned-history-as-snippets.md) | 快捷命令 = 置顶的历史 |
 | [0009](adr/0009-hybrid-ws-framing.md) | WebSocket 混合帧（二进制数据 + JSON 控制） |
 | [0010](adr/0010-bash-rcfile-injection.md) | 通过临时 rcfile 注入 shell 集成 |
+| [0011](adr/0011-read-first-layout.md) | 读态优先的三态布局（移动端部分已被 0013 取代） |
+| [0012](adr/0012-ai-cli-conversation-first.md) | 面向 claude / codex 的「对话优先」读写（移动端部分已被 0013 取代） |
+| [0013](adr/0013-terminal-only.md) | 终端是唯一显示面 |
+| [0014](adr/0014-input-toggle.md) | 底栏输入互切键（终端输入 ⇄ 编辑面板） |
+| [0015](adr/0015-bottom-keyrow.md) | 底栏单行键行，互切键永远在行首 |
+| [0016](adr/0016-hot-reexec.md) | 热升级：原地 re-exec 交接会话 |
+| [0017](adr/0017-numeric-pairing-code.md) | 数字配对码，二维码之外可以手输 |
+| [0018](adr/0018-one-drawer-primitive.md) | 次要界面共用一个浮层原语 |
+| [0019](adr/0019-altscreen-redraw-not-replay.md) | 备用屏不回放历史，改为重画 |

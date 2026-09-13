@@ -228,6 +228,24 @@ func (s *Session) Resize(cols, rows uint16) error {
 // 补齐的那一次 Push 也在锁内完成，保证它排在后续实时 Push 之前。
 // Push 按契约是非阻塞的，所以这里不会卡住 PTY 读取。
 func (s *Session) Subscribe(sub Subscriber, fromSeq uint64) {
+	s.subscribe(sub, fromSeq, false)
+}
+
+// SubscribeNotifyReset 与 Subscribe 相同，但判定 reset 时先给 sub 发一条
+// protocol.Reset。
+//
+// 切回会话（`subscribe` 消息）走这条：客户端手里还留着切走前的那一屏，接下来
+// 收到的却是一段【接不上】的内容，得有人告诉用户"历史输出已截断"。重连走
+// Subscribe —— `welcome.resumed[].status` 已经带了这个信息，再发一条只会让
+// 客户端多清一次屏（协议 §4.2）。
+//
+// 清屏本身不靠这条消息，靠回放帧上的 ATTR_PREFIX（协议 §3）：帧自己就带着
+// "这是重建不是续写"的语义，少一条通知也不会把内容接歪。
+func (s *Session) SubscribeNotifyReset(sub Subscriber, fromSeq uint64) {
+	s.subscribe(sub, fromSeq, true)
+}
+
+func (s *Session) subscribe(sub Subscriber, fromSeq uint64, notifyReset bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data, attrPrefix, _ := s.ring.Replay(fromSeq)
@@ -239,6 +257,11 @@ func (s *Session) Subscribe(sub Subscriber, fromSeq uint64) {
 	if attrPrefix {
 		// reset 回放：起点是缓冲现存内容的开头，不是客户端要的位置
 		seq = s.ring.BaseSeq()
+		if notifyReset {
+			// 【必须排在 Push 之前】：事件与帧走同一条按序写队列，提示要在
+			// 重建之前到，否则用户先看见屏幕跳一下，才被告知发生了什么
+			sub.Event(&protocol.Reset{SID: s.sid, BaseSeq: seq})
+		}
 	}
 	sub.Push(s.sid, seq, data, attrPrefix)
 }
