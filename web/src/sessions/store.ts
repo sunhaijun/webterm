@@ -6,7 +6,7 @@
  */
 import { Connection } from '../conn/connection'
 import { ModeMachine, type ModeState } from '../input/modes'
-import { T, type SessionInfo } from '../protocol/messages'
+import type { SessionInfo } from '../protocol/messages'
 import { installInteractive, type InteractiveDetector } from '../term/interactive'
 import { type FollowState, OutputQueue } from '../term/outputqueue'
 import { createTerminal, type TermHandle } from '../term/terminal'
@@ -235,12 +235,11 @@ export class SessionStore {
     e.term.attachWebgl()
     e.term.fit.fit()
     this.activeSid = sid
-    // 【resize 必须排在 subscribe 前面，而且不防抖】。fit() 一调用 xterm 就已经是新
-    // 尺寸了；这时先 subscribe，agent 补的是按【旧尺寸】排版的积压 —— 全屏程序的绝对
-    // 定位、超宽行的折行位置全对不上，屏幕花掉，还得等下一次整屏重绘才自愈。
+    // 【尺寸就在 subscribe 这条消息里，不单发 resize】。单发无论排前排后都有坑：
+    // 排后面 agent 补的是按旧尺寸排版的积压；排前面，全屏程序被 SIGWINCH 逼出的
+    // 整屏重画会落在 subscribe 之前、被 redraw.seq 跳过，那一屏反而丢了。
     // 见 docs/40-frontend/session-ux.md §订阅策略
-    this.conn.send({ t: T.resize, sid, cols: e.term.term.cols, rows: e.term.term.rows })
-    this.conn.subscribe(sid)
+    this.conn.subscribe(sid, e.term.term.cols, e.term.term.rows)
     this.h.onChange()
   }
 

@@ -18,6 +18,7 @@ import {
   T,
   decodeMessage,
   encodeMessage,
+  type Redraw,
   type ResumeReq,
   type ServerMessage,
   type Welcome,
@@ -58,6 +59,15 @@ export interface ConnectionHandlers {
    * 屏幕后面，来回切几次会话就叠几份（"很多份 logo"的由来）。
    */
   onResetScreen(sid: number): void
+  /**
+   * 备用屏会话的重建（协议 §4.2 `redraw`，ADR-0019）：清屏 → 写 `modes` 恢复
+   * 粘性模式 → 等程序自己整屏重画。
+   *
+   * 与 onResetScreen 的区别是**不回放历史**：备用屏没有 scrollback，窗口里的
+   * 差分帧离开会话开头那一个 ESC[?1049h 就没有意义。也【不提示"历史已截断"】——
+   * 那条提示在这里是误导。
+   */
+  onRedraw(sid: number, modes: string): void
   onMessage(msg: ServerMessage): void
   onState(state: ConnState, info: StateInfo): void
   /** 出现无法自行修补的错误（如 seq 空洞）。 */
@@ -167,14 +177,24 @@ export class Connection {
     if (this.ws && this.ws.readyState === 1) this.ws.send(encodeMessage(msg))
   }
 
-  subscribe(sid: number): void {
+  /**
+   * 订阅某个会话。cols/rows 是当前终端尺寸 —— **必须和 subscribe 在同一条消息里**
+   * （协议 §4.1）：单发 resize 无论排前排后都有坑，排后面 agent 补的是按旧尺寸
+   * 排版的积压，排前面程序的整屏重画会落在 redraw.seq 之前被跳过。
+   */
+  subscribe(sid: number, cols = 0, rows = 0): void {
     const st = this.ensure(sid)
     st.subscribed = true
     // 切回时 agent 补的那一段是【回放】，不是实时输出：outSeq 追到 headSeq
     // 之前收到的都要抑制 xterm 对历史查询的自动应答（协议 §5.2）。
     // 漏标的话，每切回一次就给前台程序喂一串乱码"按键"
     st.catchupTo = Math.max(st.catchupTo, st.headSeq)
-    this.send({ t: T.subscribe, sid, out_seq: st.outSeq })
+    const msg: Record<string, unknown> = { t: T.subscribe, sid, out_seq: st.outSeq }
+    if (cols > 0 && rows > 0) {
+      msg.cols = cols
+      msg.rows = rows
+    }
+    this.send(msg)
   }
 
   unsubscribe(sid: number): void {
@@ -328,6 +348,18 @@ export class Connection {
       case T.ack: {
         const st = this.ensure(msg.sid)
         st.resend.ack(msg.in_ack)
+        break
+      }
+
+      case T.redraw: {
+        const m = msg as Redraw
+        const st = this.ensure(m.sid)
+        // modes 不计入 seq（协议 §3）；out_seq 直接跳到 seq，
+        // 跳过的那些字节是备用屏的差分帧，【有意丢弃】
+        st.outSeq = m.seq
+        st.headSeq = Math.max(st.headSeq, m.seq)
+        st.catchupTo = m.seq // 重画之后就是 live
+        this.opts.handlers.onRedraw(m.sid, m.modes)
         break
       }
 

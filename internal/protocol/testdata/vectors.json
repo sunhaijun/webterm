@@ -255,8 +255,19 @@
       "json": {
         "t": "subscribe",
         "sid": 1,
-        "out_seq": 483920
+        "out_seq": 483920,
+        "cols": 90,
+        "rows": 30
       }
+    },
+    {
+      "name": "subscribe_no_size",
+      "json": {
+        "t": "subscribe",
+        "sid": 1,
+        "out_seq": 483920
+      },
+      "note": "省略 cols/rows = 沿用会话当前尺寸（老客户端就是这样）"
     },
     {
       "name": "unsubscribe",
@@ -289,6 +300,16 @@
         "sid": 1,
         "base_seq": 512000
       }
+    },
+    {
+      "name": "redraw",
+      "json": {
+        "t": "redraw",
+        "sid": 1,
+        "seq": 991337,
+        "modes": "\u001b[0m\u001b(B\u001b[?1049h\u001b[?1h\u001b[?1000h\u001b[?1006h\u001b[?2004h"
+      },
+      "note": "备用屏会话的 reset 改走这条（ADR-0019）。modes 不计入 out_seq，客户端把 out_seq 跳到 seq"
     },
     {
       "name": "cwd",

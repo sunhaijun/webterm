@@ -24,6 +24,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/sunhaijun/webterm/internal/oscparse"
+	"github.com/sunhaijun/webterm/internal/termstate"
 )
 
 // Schema 是快照格式的版本。规则：只加字段不删字段，新进程对缺失字段取零值；
@@ -73,10 +74,13 @@ type Session struct {
 	InQueued map[string]uint64 `json:"in_queued,omitempty"`
 	InAck    map[string]uint64 `json:"in_ack,omitempty"`
 
-	OSC      oscparse.State `json:"osc"`
-	PendCmd  string         `json:"pend_cmd,omitempty"`
-	CurCmdID *int64         `json:"cur_cmd_id,omitempty"`
-	CurCmdAt time.Time      `json:"cur_cmd_at"`
+	OSC oscparse.State `json:"osc"`
+	// Modes 是粘性终端模式（ADR-0019）。【必须交接】：它推导不出来 —— 模式开关
+	// 只在会话开头出现一次，环形缓冲早把它裁掉了。丢了它，升级之后备用屏判定就没了。
+	Modes    termstate.State `json:"modes,omitempty"`
+	PendCmd  string          `json:"pend_cmd,omitempty"`
+	CurCmdID *int64          `json:"cur_cmd_id,omitempty"`
+	CurCmdAt time.Time       `json:"cur_cmd_at"`
 
 	UnmarkedRuns  int  `json:"unmarked_runs,omitempty"`
 	UnmarkedInput bool `json:"unmarked_input,omitempty"`

@@ -18,6 +18,7 @@ import (
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/ringbuf"
 	"github.com/sunhaijun/webterm/internal/store"
+	"github.com/sunhaijun/webterm/internal/termstate"
 )
 
 // ErrSessionLimit 表示会话数已达上限。
@@ -301,6 +302,7 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 		inQueued:    make(map[string]uint64),
 		inAck:       make(map[string]uint64),
 		osc:         oscparse.New(),
+		modes:       termstate.New(),
 		inputQ:      newInputQueue(),
 		done:        make(chan struct{}),
 		fz:          newFreezer(),

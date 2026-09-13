@@ -40,16 +40,20 @@
 | AC-2.3 | 重连时 client 上报 `out_seq`，agent 仅回放 `out_seq` 之后的字节，不重发已收到的字节 | UT-ring-1, IT-resume-2 |
 | AC-2.4 | 断线期间提交的输入在重连后按原顺序、不重复、不丢失地写入 PTY | E2E-3, IT-resume-3 |
 | AC-2.5 | `out_seq` 严格等于 agent 已发送的累计字节数；剥离 OSC 之后才计数 | UT-seq-1 |
-| AC-2.6 | client 的 `out_seq < base_seq` 时 agent 判 `reset`，client 先清屏再写入缓冲现存内容，并显示"历史输出已截断"提示。**重连（`welcome.resumed[].status`）与切回（`subscribe`）两条路都要满足**；清屏由帧上的 `ATTR_PREFIX` 驱动（协议 §3），不依赖控制消息先到，所以同一段回放收到两次也只是重建两次，不会叠在旧内容后面 | E2E-4, E2E-30, UT-ring-2, IT-sub-2, UT-replay-1 |
+| AC-2.6 | client 的 `out_seq < base_seq` 时 agent 判 `reset`。**会话在主屏**：client 先清屏再写入缓冲现存内容，并显示"历史输出已截断"提示；**会话在备用屏**：改走 `redraw`（AC-2.16）。**重连（`welcome.resumed[].status`）与切回（`subscribe`）两条路都要满足**；清屏由帧上的 `ATTR_PREFIX` 驱动（协议 §3），不依赖控制消息先到，所以同一段回放收到两次也只是重建两次，不会叠在旧内容后面 | E2E-4, E2E-30, UT-ring-2, IT-sub-2, UT-replay-1 |
 | AC-2.7 | 环形缓冲裁剪优先在 `\n` 边界（64 KiB 窗口内找不到则硬裁）；`ESC[0m` 属性修正**只在 reset 回放时**前置，且不计入 `out_seq`（增量续传时注入会破坏 AC-2.1） | UT-ring-3, UT-ring-4 |
 | AC-2.8 | 心跳：client 每 30 秒发协议级 ping；agent 60 秒未收到任何帧则关闭连接 | UT-hb-1, IT-hb-1 |
 | AC-2.9 | client 重连采用指数退避（0.5s 起，上限 15s，带抖动），网络恢复事件触发立即重试 | UT-reconnect-1 |
 | AC-2.10 | 连接状态在 UI 上有明确指示：在线 / 重连中（含下次重试倒计时）/ 已恢复（含补齐字节数） | E2E-5 |
-| AC-2.11 | 未订阅的会话在 agent 侧照常缓冲；切回时通过 resume 补齐，不丢输出 | E2E-6, IT-sub-1 |
+| AC-2.11 | 未订阅的会话在 agent 侧照常缓冲；切回时通过 resume 补齐，不丢输出。**例外是备用屏会话**（ADR-0019）：切回补的是"当前屏"而不是历史字节 —— 备用屏没有 scrollback，那段字节用户本来也翻不到 | E2E-6, IT-sub-1, E2E-31 |
 | AC-2.12 | `in_ack` 按 `(client_id, sid)` 记账并**跨重连存活**：重连后 client 按 `welcome.resumed[].in_ack` 重发，不触发 `input_gap` | IT-resume-3 |
 | AC-2.13 | `hello.instance_id` 与 agent 当前值不符时，所有 `resume` 项判 `gone`（防止 agent 重启后 sid 复用导致张冠李戴） | IT-resume-4 |
 | AC-2.14 | **热升级不丢会话**（ADR-0016）：agent 收到 `SIGUSR2` / `reexec` 后原地 exec 新二进制，PID 不变；所有会话的 shell 仍在跑、`instance_id` 不变、环形缓冲与 `in_ack` 原样交接；跨交接的字节级连续性与 AC-2.1 同标准（中途交接与不交接的序列化结果逐字节一致），未写完的输入不丢不重；预检失败时中止并照常服务，**不自动退化成重启** | IT-handoff-1, UT-ring-10, UT-osc-restore, E2E-26 |
-| AC-2.15 | **回放不得回声**：重连续传与**切回补课**的字节都标记为回放（client 侧 `catchup_to`，协议 §5.2）；回放期间终端对历史里那些查询（DSR / DA / `CSI ?u` …）的自动应答**不得写进 PTY**。切会话时 `resize` 排在 `subscribe` 之前且不防抖，避免按旧尺寸排版的积压灌进已改尺寸的终端 | E2E-30, UT-replay-1 |
+| AC-2.15 | **回放不得回声**：重连续传与**切回补课**的字节都标记为回放（client 侧 `catchup_to`，协议 §5.2）；回放期间终端对历史里那些查询（DSR / DA / `CSI ?u` …）的自动应答**不得写进 PTY**。切会话时**尺寸随 `subscribe` 一起发**（`cols`/`rows` 就在这条消息里，不单发 `resize`）：排在后面会让积压按旧尺寸排版，排在前面会让程序的整屏重画落在 `redraw.seq` 之前被跳过 | E2E-30, E2E-31, UT-replay-1 |
+| AC-2.16 | **备用屏不回放历史，改为重画**（ADR-0019）：会话当前在备用屏而又要 reset 时，agent 发 `redraw{seq, modes}` 代替字节回放，随后逼出一次整屏重画（尺寸变了就直接 `TIOCSWINSZ`，没变就抖一下 winsize）。client 清屏 → 写 `modes` → `out_seq` 跳到 `seq`，**不显示"历史输出已截断"**。切走使积压超过 `ring_bytes` 后切回，终端显示的是该程序**当前**的完整一屏，scrollback 里不出现它界面的任何副本 | UT-termstate-*, IT-redraw-1, E2E-31 |
+| AC-2.17 | 同一场景下切回所传字节 < 8 KiB（改之前是整个 `ring_bytes`）；`modes` 不计入 `out_seq` | IT-redraw-2, E2E-31 |
+| AC-2.18 | 程序在 300ms 内没有重画（`head_seq` 没超过 `redraw.seq`）时退回主屏那条路（`ATTR_PREFIX` + 窗口内容），屏幕不留空白 | IT-redraw-3 |
+| AC-2.19 | 粘性模式观察器**只读**：观察前后的字节逐字节相等；状态进热升级快照，交接后备用屏判定不丢；`?2026`（同步输出）**绝不恢复** | UT-termstate-*, IT-handoff-2 |
 
 ---
 

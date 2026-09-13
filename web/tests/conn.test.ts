@@ -62,8 +62,9 @@ interface Harness {
   conn: Connection
   socket: () => FakeSocket
   output: { sid: number; data: Uint8Array; isReplay: boolean }[]
-  /** 按到达顺序记的事件流（`reset:1` / `out:1`）：清屏必须排在写入【之前】。 */
+  /** 按到达顺序记的事件流（`reset:1` / `redraw:1` / `out:1`）：清屏必须排在写入【之前】。 */
   events: string[]
+  redraws: { sid: number; modes: string }[]
   fatals: string[]
   states: { state: string; retryInMs?: number; replayedBytes?: number; rttMs?: number }[]
 }
@@ -72,6 +73,7 @@ function harness(opts: { backoff?: Backoff } = {}): Harness {
   const sockets: FakeSocket[] = []
   const output: Harness['output'] = []
   const events: string[] = []
+  const redraws: Harness['redraws'] = []
   const fatals: string[] = []
   const states: Harness['states'] = []
   const conn = new Connection({
@@ -89,12 +91,16 @@ function harness(opts: { backoff?: Backoff } = {}): Harness {
         events.push(`out:${sid}`)
       },
       onResetScreen: (sid) => events.push(`reset:${sid}`),
+      onRedraw: (sid, modes) => {
+        events.push(`redraw:${sid}`)
+        redraws.push({ sid, modes })
+      },
       onMessage: () => {},
       onState: (state, info) => states.push({ state, ...info }),
       onFatal: (r) => fatals.push(r),
     },
   })
-  return { conn, socket: () => sockets[sockets.length - 1]!, output, events, fatals, states }
+  return { conn, socket: () => sockets[sockets.length - 1]!, output, events, redraws, fatals, states }
 }
 
 function welcome(extra: Record<string, unknown> = {}) {
@@ -263,6 +269,47 @@ describe('UT-replay-1 回放语义', () => {
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 100n, payload: text('live') })
 
     expect(h.output.map((o) => o.isReplay)).toEqual([false, true, false])
+  })
+
+  it('redraw：out_seq 跳到 seq，modes 不计入 seq，之后是 live', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('old') })
+
+    const modes = '\x1b[0m\x1b(B\x1b[?1049h'
+    h.socket().deliverText({ t: 'redraw', sid: 1, seq: 5000, modes })
+
+    expect(h.redraws).toEqual([{ sid: 1, modes }])
+    // modes 是渲染修正，不是流内容：seq 只认 redraw.seq，不加 modes 的长度
+    expect(h.conn.outSeqOf(1)).toBe(5000)
+
+    // 紧接着的实时帧从 seq 开始，不该被判成空洞
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 5000n, payload: text('fresh') })
+    expect(h.fatals).toEqual([])
+    expect(h.conn.outSeqOf(1)).toBe(5005)
+    // 重画之后就是 live —— 程序此刻画的东西不是历史，查询该答就答
+    expect(h.output[h.output.length - 1]!.isReplay).toBe(false)
+    expect(h.events).toEqual(['out:1', 'redraw:1', 'out:1'])
+  })
+
+  it('subscribe 把尺寸带在同一条消息里', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().deliverText(welcome())
+
+    h.conn.subscribe(1, 90, 30)
+    const sub = h.socket().sent.filter((s) => typeof s === 'string' && s.includes('"subscribe"'))
+    expect(JSON.parse(sub[sub.length - 1] as string)).toMatchObject({ sid: 1, cols: 90, rows: 30 })
+
+    // 拿不到尺寸时就别发 —— agent 会沿用会话当前尺寸
+    h.conn.subscribe(2)
+    const sub2 = h.socket().sent.filter((s) => typeof s === 'string' && s.includes('"subscribe"'))
+    const last = JSON.parse(sub2[sub2.length - 1] as string)
+    expect(last.cols).toBeUndefined()
+    expect(last.rows).toBeUndefined()
   })
 
   it('subscribe 上报的是本地进度', () => {

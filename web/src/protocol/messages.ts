@@ -16,6 +16,7 @@ export const T = {
   sessionUpdated: 'session.updated',
   ack: 'ack',
   reset: 'reset',
+  redraw: 'redraw',
   cwd: 'cwd',
   prompt: 'prompt',
   commandStart: 'command.start',
@@ -142,6 +143,18 @@ export interface ResetMsg {
   sid: number
   base_seq: number
 }
+/**
+ * 备用屏会话的 reset 走这条：不回放窗口，清屏 + 恢复模式 + 等程序自己重画
+ * （协议 §4.2 / ADR-0019）。
+ */
+export interface Redraw {
+  t: 'redraw'
+  sid: number
+  /** 把 out_seq 直接跳到这里；跳过的字节【有意丢弃】。 */
+  seq: number
+  /** 恢复粘性模式的转义序列。这些字节【不计入 out_seq】。 */
+  modes: string
+}
 export interface Cwd {
   t: 'cwd'
   sid: number
@@ -194,6 +207,7 @@ export type ServerMessage =
   | SessionUpdated
   | Ack
   | ResetMsg
+  | Redraw
   | Cwd
   | Prompt
   | CommandStart
