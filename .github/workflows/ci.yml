@@ -1,7 +1,7 @@
 name: CI
 
-# E2E 不在这里：它太费 Actions 额度，单独放在 e2e.yml 按需触发
-# （PR 打 e2e 标签 / 合并进 main 的代码改动 / 手动），见 docs/70-testing/strategy.md §CI。
+# E2E 不在这里，也不在 CI 上自动跑：它太费 Actions 额度，本地 `make e2e` 跑。
+# e2e.yml 只剩手动触发（gh workflow run E2E），见 docs/70-testing/strategy.md §CI。
 on:
   push:
     branches: [main]

@@ -1,31 +1,19 @@
 name: E2E
 
-# E2E（真二进制 + 真浏览器）单独一个 workflow，【按需】跑 —— 每次约 6 分钟，
-# 放在每个 PR 的每次 push 上太费 Actions 额度（docs/70-testing/strategy.md §CI）。
-# 本地 `make e2e` 仍是每个 PR 的硬要求（CLAUDE.md）；这里是安全网，抓只在 CI 环境
-# 才暴露的差异（go:embed 空目录、时序）。触发条件三种：
-#   1. 合并进 main 且改了代码（docs-only 的合并不跑）
-#   2. PR 打了 `e2e` 标签：打标签那一刻跑一次，之后每次 push 再跑
-#   3. 手动：gh workflow run E2E --ref <分支>
+# E2E（真二进制 + 真浏览器）【在 CI 上不自动跑】—— 一次约 6 分钟，太费 Actions 额度。
+# 本地 `make e2e` 全绿是每个 PR 的硬门槛（CLAUDE.md），没有 CI 兜底。
+# 这里只留【手动】触发，想要 CI 上的结论时自己点一次：
+#
+#   gh workflow run E2E --ref <分支>
+#
+# 值得手动跑一次的场合：改动触及协议 / 重连 / 输入 / 布局，或改了 E2E 与构建本身。
+# 见 docs/70-testing/strategy.md §CI。
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'web/**'
-      - 'internal/**'
-      - 'cmd/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/e2e.yml'
-  pull_request:
-    types: [labeled, synchronize, reopened]
   workflow_dispatch:
 
 jobs:
   e2e:
     name: E2E（真二进制 + 真浏览器）
-    # PR 只在带 e2e 标签时跑；被跳过的 job 不计费
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
