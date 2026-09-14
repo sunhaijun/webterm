@@ -379,7 +379,7 @@ sheet 顶上一排，横滑（`data-testid="chip"`，`data-kind` = `pin` / `cmd`
 
 ### ⋯ 菜单
 
-模式条上的次要入口（会话、历史、命令面板、设置）在手机 / 平板上收进终端态键行**行尾**的 ⋯（`data-testid="open-more"` → `more-menu`，从底部滑起的操作面板），各项 testid 不变。四项打开的是**同一种浮层**（`Drawer`：贴底 sheet、抓手、标题栏 + ✕、点遮罩 / `Esc` / 下滑都能关，见 [ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md) 与 [layout-responsive.md §浮层](layout-responsive.md#浮层adr-0018)）。编辑面板里没有 ⋯（行尾是「发送」）；历史与快捷命令在面板里以 chips 的形式出现。
+模式条上的次要入口（会话、历史、设置）在手机 / 平板上收进终端态键行**行尾**的 ⋯（`data-testid="open-more"` → `more-menu`，从底部滑起的操作面板），各项 testid 不变。三项打开的是**同一种浮层**（`Drawer`：贴底 sheet、抓手、标题栏 + ✕、点遮罩 / `Esc` / 下滑都能关，见 [ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md) 与 [layout-responsive.md §浮层](layout-responsive.md#浮层adr-0018)）。编辑面板里没有 ⋯（行尾是「发送」）；历史与快捷命令在面板里以 chips 的形式出现。
 
 ## 降级（AC-3.7 / US-7.1）
 

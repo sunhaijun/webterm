@@ -17,7 +17,6 @@ export const ESC = '\x1b'
  * 浏览器占用 —— 都不能用。Ctrl+Shift+* 不是合法的终端控制码，安全。
  */
 export type AppAction =
-  | 'palette'
   | 'search'
   | 'newSession'
   | 'closeSession'
@@ -38,8 +37,8 @@ export interface KeyEventLike {
 export function appAction(e: KeyEventLike): AppAction | null {
   const mod = e.ctrlKey || e.metaKey
   if (mod && !e.shiftKey && !e.altKey) {
-    // Ctrl/Cmd+K 是命令面板的通用习惯，可拦截
-    if (e.key === 'k' || e.key === 'K') return 'palette'
+    // 唯一一个非 Ctrl+Shift 的应用快捷键：终端程序不用 Ctrl+F。
+    // 【Ctrl/Cmd+K 不在这里】—— 它是 readline 的"删到行尾"，必须原样进 PTY（ADR-0022）
     if (e.key === 'f' || e.key === 'F') return 'search'
   }
   if (!(e.ctrlKey && e.shiftKey) || e.altKey) return null

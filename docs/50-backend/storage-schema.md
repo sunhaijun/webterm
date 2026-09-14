@@ -137,19 +137,6 @@ ORDER BY started_at DESC LIMIT 50;
 
 `DISTINCT` 很重要 —— 否则连按 `↑` 会翻到同一条命令十几次。
 
-### 命令面板（去重 + 时间衰减）
-
-```sql
-SELECT text, MAX(started_at) AS last_at, MAX(pinned) AS pinned
-FROM commands
-WHERE text LIKE '%' || :q || '%'
-GROUP BY text
-ORDER BY pinned DESC, last_at DESC
-LIMIT 200;
-```
-
-模糊匹配的打分在 Go 侧（或前端）做，SQL 只负责粗筛。
-
 ## 写入路径
 
 命令记录分两次写（对应 `133;C` 和 `133;D`）：

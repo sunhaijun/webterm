@@ -1,5 +1,5 @@
 /**
- * E2E-14 命令历史与快捷命令 —— AC-6.1、AC-6.4 – AC-6.9。
+ * E2E-14 命令历史与快捷命令 —— AC-6.1、AC-6.4 – AC-6.7、AC-6.9。
  */
 import { expect, test, type Page } from '@playwright/test'
 
@@ -114,45 +114,6 @@ test('E2E-14 快捷命令：手机读视图里是写态 sheet 顶上的 ★ chip
   await expect(page.getByTestId('composer'), '点 chip 不抢焦点').toBeFocused()
 
   await ctx.close()
-})
-
-test('E2E-14 命令面板：模糊搜索、快捷命令优先、会话与动作', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  await seedHistory(page)
-
-  await page.keyboard.press('Control+k')
-  await expect(page.getByTestId('palette')).toBeVisible()
-
-  // 模糊搜索：子序列匹配
-  await page.getByTestId('palette-input').fill('ptw')
-  await waitFor(
-    async () => ((await page.getByTestId('palette-list').textContent()) ?? '').includes('two-'),
-    '模糊匹配到 printf two',
-  )
-
-  // 会话与动作也在同一个入口里
-  await page.getByTestId('palette-input').fill('新建')
-  await expect(page.getByTestId('palette-list')).toContainText('新建会话')
-
-  // Enter = 填入 Composer，不执行
-  await page.getByTestId('palette-input').fill('ptw')
-  await waitFor(
-    async () => ((await page.getByTestId('palette-list').textContent()) ?? '').includes('two-'),
-    '候选就绪',
-  )
-  const before = await terminalText(page)
-  await page.getByTestId('palette-input').press('Enter')
-  await expect(page.getByTestId('palette')).toBeHidden()
-  await waitFor(async () => (await composerValue(page)).includes('two-'), 'Enter 填入 Composer')
-  expect(await terminalText(page), 'Enter 不该直接执行').toBe(before)
-
-  // Esc 关闭
-  await page.keyboard.press('Control+k')
-  await expect(page.getByTestId('palette')).toBeVisible()
-  await page.getByTestId('palette-input').press('Escape')
-  await expect(page.getByTestId('palette')).toBeHidden()
 })
 
 test('E2E-14 清空历史保留快捷命令，并明确告知', async ({ page }) => {
