@@ -6,7 +6,7 @@
 # 【只认 v* tag】。main 上还挂着一个滚动的 dev tag（release.yml 每次提交都重建它），
 # 它和正式 tag 会落在【同一个提交】上 —— 不加 --match 的话 git describe 可能挑中 dev，
 # 正式构建就被标成 "webterm dev"（v0.1.0 第一次发布踩过）。
-VERSION ?= $(shell git describe --tags --always --dirty --match 'v[0-9]*' 2>/dev/null || echo dev)
+VERSION ?= $(shell git describe --tags --dirty --match 'v[0-9]*' 2>/dev/null || echo "dev-$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)")
 LDFLAGS := -s -w -X main.version=$(VERSION)
 RELEASE_DIR := release
 PLATFORMS := amd64 arm64

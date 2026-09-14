@@ -6,12 +6,9 @@
 scp webterm user@server:  →  ./webterm serve --domain term.example.com  →  扫码 →  开工
 ```
 
-> 装：`install.sh` 默认取最近的正式 release（`--channel dev` 取 `main` 的滚动构建）。
-> **仓库还是私有的**，`raw.githubusercontent.com` 与 `releases/download` 都不带凭据，
-> 取脚本和二进制都要 `gh auth login` 或 `GH_TOKEN` —— 命令见 [安装文档](docs/80-ops/install.md)。
-> 也可以从源码构建（Go 1.27+ 与 Node 22+）：
+> 还没有 release，先从源码构建（需要 Go 1.27+ 与 Node 22+）：
 > `cd web && npm ci && npm run build && cd .. && CGO_ENABLED=0 go build -o webterm ./cmd/webterm`
-> 本地试跑：`./webterm serve --dev`。
+> 本地试跑：`./webterm serve --dev`。详见 [安装文档](docs/80-ops/install.md)。
 
 ## 它解决什么
 

@@ -74,7 +74,7 @@ curl -sI http://term.example.com/ | head -1
 ```bash
 gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
   -H 'Accept: application/vnd.github.raw' \
-  | bash -s -- --domain term.example.com
+  | bash -s -- --domain term.example.com --channel dev
 ```
 
 裸 `curl` 那条（`raw.githubusercontent.com`）要等仓库转公开才能用 ——
@@ -156,7 +156,7 @@ journalctl --user -u webterm -n 20                     # 有"证书已就绪"
 # 私有仓库：需要 gh auth login。公开之后换成 curl -fsSL https://raw.githubusercontent.com/... 即可
 gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
   -H 'Accept: application/vnd.github.raw' \
-  | bash -s -- --dev
+  | bash -s -- --dev --channel dev
 webterm serve --dev
 # → http://127.0.0.1:8080，stdout 有配对 URL 和二维码
 ```
@@ -244,9 +244,8 @@ curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/inst
 webterm serve --dev      # → http://127.0.0.1:8080
 ```
 
-> 默认 `--channel latest` 装最近的正式 `v*` release。加 `--channel dev` 装 `main` 的
-> 滚动构建（每次提交刷新）——它是 prerelease，GitHub 的 `latest` 不含预发布，
-> 所以两条互不干扰。
+> 正式 `v*` tag 之前 `latest` 是空的（GitHub 的 `latest` 不含预发布）——
+> 加 `--channel dev` 装 `main` 的滚动构建。main 上每次提交都会刷新它。
 
 > **自己的下载源**：`--base-url <地址>` 直接指向放着
 > `webterm-linux-<arch>` 和 `SHA256SUMS` 的任意 HTTP 服务。

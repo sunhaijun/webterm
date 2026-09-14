@@ -106,11 +106,14 @@ cd web && npm run dev          # Vite 在 5173，代理 /api /auth /ws 到 8080
 
 两条都走 `make release`：交叉编译 amd64/arm64、断言静态链接（AC-8.1）与前端已嵌入（AC-8.2）。
 
-**版本号来自 `git describe --tags --always --dirty --match 'v[0-9]*'`（Makefile）。**
-`--match` 不能省：`dev` 是个滚动的**轻量 tag**，正式 tag 打在同一个提交上时，
+**版本号来自 `git describe --tags --dirty --match 'v[0-9]*'`（Makefile），没有 `v*` tag
+时退成 `dev-<短 sha>`。**
+
+`--match` 不能省：`dev` 是个滚动的**轻量 tag**，正式 tag 会打在**同一个提交**上，
 不带 `--match` 的 `git describe` 可能挑中它，正式构建就被标成 `webterm dev` ——
-v0.1.0 第一次发布就是这么发出去的（本机 describe 挑的是注解 tag，CI 挑的是 `dev`，
-所以本地怎么试都试不出来）。工作流里那条「断言正式构建的版本号就是 tag」是它的看门人。
+2026-09-14 第一次打 v0.1.0 就是这么发出去的（本机 describe 挑注解 tag、CI 挑了 `dev`，
+所以本地怎么试都试不出来；那个 tag 已撤回）。工作流里那条「断言正式构建的版本号就是
+tag」是它的看门人：版本号错了在别处一点都看不出来。
 
 打正式 tag 之前先看 [`../90-roadmap/milestones.md`](../90-roadmap/milestones.md) 的出口标准：
 自动化验不了的那几条（真机输入法、软键盘、真实网络切换、真 Let's Encrypt、PWA 安装）
