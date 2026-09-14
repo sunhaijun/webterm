@@ -275,16 +275,17 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 ## E2E-12 阅读输出
 
-> AC-5.1, AC-5.2, AC-5.3, AC-5.4
+> AC-5.1, AC-5.2, AC-5.3, AC-5.4, AC-5.13
 
 1. 跑 `emit.sh 3000` → 向上滚动能看到早期输出（无需进入任何模式）
 2. `Ctrl+F` 搜索一个已知字符串 → 命中数正确、`Enter` 逐个跳转、高亮可见
-3. 调整字号 → 生效并持久化（刷新后保持）
+3. 调整字号 → 生效并持久化（刷新后保持），并且**补了一条 `resize`**（`__webterm.resizes()` 加 1）—— cell 尺寸变了而容器没变，`ResizeObserver` 不会响
 4. 选中一段文本，此时有新输出到达 → **选择不被破坏**，自动滚动暂停
 5. 复制 → 剪贴板内容正确
 6. **回看时暂停跟随**（AC-5.9，桌面与 Pixel 5 各跑一遍）：跑一条持续输出的命令，中途 `__webterm.scrollLines(-N)` 把视口滚上去 → 之后终端缓冲里的行数**不再增长**，`follow-pill` 出现且「新增 N 行」在涨；点提示条 → 全部行一次到齐、每行恰好一次、顺序正确，提示条消失
    - **空闲时回滚也要有提示条**，且必须走**真实的滚动路径**（不是 `scrollLines` 钩子）：命令跑完、没有新输出 → 桌面用 `mouse.wheel` 往上滚，Pixel 5 直接改 `.xterm-viewport.scrollTop`（单指拖动就是这么做的）→ `follow-pill` 出现、文本是「回到底部」；点它 → 视口回到 `baseY`、提示条消失。xterm 对 DOM 驱动的滚动不发 `onScroll`，只用钩子滚的用例测不出这条
 7. **渲染器可见**（AC-5.10）：⋯ → 设置 里有 `renderer`，文本是 WebGL 或 Canvas 之一
+8. **换终端字体**（AC-5.13）：设置里的 `font-family` 下拉至少有「系统默认」，且列出的每一项都是**本机装得到**的（把清单里的一个字体名塞进探测函数验证：没装的不出现）；换成另一项 → xterm 的 `options.fontFamily` 换成对应 stack、`__webterm.size().cols` 跟着变、`resizes()` 加 1；刷新后仍是它；把 `localStorage['webterm.font.family']` 写成不存在的 id 再刷新 → 回落「系统默认」，不报错
 
 ---
 
@@ -607,6 +608,17 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 4. 再来一轮，这次用一个 `isComposing === false` 的普通 `keydown` 兜底 → 必须进得去
 
 > 改之前 `composing` 只有 `compositionend` 一个出口，它不来就永久卡住，该会话的终端输入到刷新为止都是死的。
+
+## E2E-35 会话选中态一眼可辨（AC-4.9）
+
+> `web/e2e/sessionactive.spec.ts`，1440×900。**断言的是"看得出来"，所以量计算样式，不量 class 名。**
+
+1. 建三个会话（侧栏常驻）
+2. **只有一个选中**：`[aria-current="true"]` 恰好一条，且 `data-sid` = `__webterm.sid()`
+3. **选中 ≠ hover ≠ 普通**：把鼠标悬到某个未选中项上，取三处 `backgroundColor` —— 选中项、hover 项、既不选中也不 hover 的项，**两两不相等**；选中项的左侧强调条存在（`box-shadow` 含 inset 且不是 `none`）
+4. **选中态跟着切换搬家**：`Ctrl+Shift+↓` → `aria-current` 落到相邻会话，原来那条不再有
+5. **滚进可视区**：注入 `.sidebar{max-height:140px}` 把列表压到放不下，建到 6 个会话后 `Ctrl+Shift+↓` 切到列表末尾那个 → 该行的矩形**完全落在** `.sidebar` 的矩形内（上下都不越界）；再切回第一个 → 同样完全可见
+6. **已经可见时不滚**：列表恢复正常高度（全部行可见）后来回切两次，`.sidebar` 的 `scrollTop` 始终是 0
 
 ## 不在 E2E 覆盖范围（放手工清单）
 

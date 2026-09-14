@@ -219,6 +219,8 @@ CSS 自定义属性 + `prefers-color-scheme`，支持三态：跟随系统 / 强
 
 xterm 的主题（前景/背景/16 色）从同一组 CSS 变量读取并在切换时更新 `terminal.options.theme`。
 
+强调色是 `--accent`（`:root` 上写成 `var(--link)`，跟着主题一起变，不必在三处各抄一份）。**它专门用来表达「选中的是这个」** —— 目前只有会话列表的选中态（AC-4.9）用它。中性灰（`--fg` 的低透明度混色）留给 hover：选中和 hover 必须靠**色相**分开，靠深浅分不开。
+
 ## 字体
 
 **界面 chrome 用比例字体，命令 / 输出用等宽**（精致终端区分 chrome 与内容的做法）。`body` 默认 `--font-ui`；命令原文（`.block-cmd` / 历史 / 快捷命令）、命令输出（`.block-out`）、Composer 与直发输入行、CWD、chips 显式回到 `--font-mono`。xterm 自己用等宽（`term/terminal.ts`）。
@@ -233,6 +235,32 @@ xterm 的主题（前景/背景/16 色）从同一组 CSS 变量读取并在切�
 ```
 
 不打包 webfont（体积 + 首屏闪烁）。必须含中文等宽回退以保证 CJK 对齐。启用 xterm 的 `unicode11` addon 正确计算 CJK 与 emoji 宽度。
+
+### 终端字体可选（AC-5.13）
+
+上面那串 `--font-mono` 是**没得选时**的默认。终端字体在设置里可换，规则见
+[ADR-0023](../20-architecture/adr/0023-terminal-font-list.md)：**清单硬编码，本机装了才列**。
+
+| 组 | 清单 |
+|---|---|
+| 系统默认 | 上面那串 `--font-mono`，永远在第一位、永远可选 |
+| 编程字体 | JetBrains Mono · Fira Code · Iosevka · Hack · IBM Plex Mono · Source Code Pro · Cascadia Mono |
+| 平台自带 | SF Mono · Menlo · Monaco（macOS）· Consolas（Windows）· Roboto Mono · DejaVu Sans Mono · Ubuntu Mono |
+| 中英等宽 | Sarasa Mono SC · Noto Sans Mono CJK SC（汉字与西文严格 2:1，`tree` / 表格类输出对齐最稳） |
+
+- **每一项都是一整段 stack，尾巴恒为 `"Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace`。**
+  编程字体基本不带汉字，少了这条尾巴汉字会掉进比例字体，中英混排的列宽当场歪掉。
+- **探测**：canvas `measureText` 量同一段探针文本，把 `"X", <基线>` 和 `<基线>` 比宽度，
+  三条基线（`monospace` / `serif` / `sans-serif`）里有一条不同就算装了。结果按页面缓存一次。
+  拿不到 2d 上下文时清单退化成只有"系统默认"。
+- **持久化**：`webterm.font.family`，存 id，**全局一份不按断点分**（字号才按断点分）。
+- **改字体后**：所有 xterm 实例一起换 `options.fontFamily` → 对挂着的那个 `fit()` →
+  **补一条 `resize`**。cell 尺寸变了但容器没变，`ResizeObserver` 不会响，漏发就意味着
+  客户端和 PTY 的 cols/rows 分家。**改字号同理。**
+- **连字（ligature）不生效**：xterm 的连字要 `addon-ligatures` + DOM 渲染器，我们用 WebGL
+  （AC-5.5）。所以清单优先收不带连字的变体（Cascadia Mono 而非 Cascadia Code），带连字的
+  字体也能选，只是显示成普通字形 —— 设置面板里明说这一条。
+- 界面 chrome 的 `--font-ui` 不进这个设置。
 
 ## 渲染
 
