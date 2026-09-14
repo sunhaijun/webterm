@@ -39,7 +39,7 @@ function info(sid: number): SessionInfo {
 
 function makeStore() {
   const sent: string[] = []
-  const store = new SessionStore({} as unknown as Connection, () => 14, {
+  const store = new SessionStore({} as unknown as Connection, () => ({ size: 14, family: 'monospace' }), {
     onChange() {},
     onModeChange() {},
     onTermData: (_sid, data) => sent.push(data),

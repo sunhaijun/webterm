@@ -6,14 +6,16 @@ describe('UT-render-1 渲染回退', () => {
     // jsdom 没有 WebGL2，构造 WebglAddon 必然失败 —— 正好是要测的场景
     vi.resetModules()
     const { createTerminal } = await import('../src/term/terminal')
-    const handle = createTerminal(14)
+    const { SYSTEM_STACK } = await import('../src/ui/fonts')
+    const handle = createTerminal(14, SYSTEM_STACK)
     expect(() => handle.attachWebgl()).not.toThrow()
     handle.dispose()
   })
 
   it('detachWebgl 可以重复调用', async () => {
     const { createTerminal } = await import('../src/term/terminal')
-    const handle = createTerminal(14)
+    const { SYSTEM_STACK } = await import('../src/ui/fonts')
+    const handle = createTerminal(14, SYSTEM_STACK)
     expect(() => {
       handle.detachWebgl()
       handle.detachWebgl()
@@ -21,10 +23,18 @@ describe('UT-render-1 渲染回退', () => {
     handle.dispose()
   })
 
+  it('字体是传进来的那一段，不是写死在终端里的（AC-5.13）', async () => {
+    const { createTerminal } = await import('../src/term/terminal')
+    const handle = createTerminal(14, '"JetBrains Mono", monospace')
+    expect(handle.term.options.fontFamily).toBe('"JetBrains Mono", monospace')
+    handle.dispose()
+  })
+
   it('scrollback 至少 5000 行', async () => {
     const { SCROLLBACK, createTerminal } = await import('../src/term/terminal')
+    const { SYSTEM_STACK } = await import('../src/ui/fonts')
     expect(SCROLLBACK).toBeGreaterThanOrEqual(5000)
-    const handle = createTerminal(14)
+    const handle = createTerminal(14, SYSTEM_STACK)
     expect(handle.term.options.scrollback).toBe(SCROLLBACK)
     handle.dispose()
   })

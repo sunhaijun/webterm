@@ -21,6 +21,14 @@ import { installPinch } from '../term/pinch'
 import { SLOT_HEIGHT, WriteSheet, type SheetSize } from '../input/sheet'
 import { T } from '../protocol/messages'
 import { SessionStore, type SessionView } from '../sessions/store'
+import {
+  GROUP_LABEL,
+  availableFonts,
+  fontStack,
+  readFontFamily,
+  writeFontFamily,
+  type FontGroup,
+} from './fonts'
 import { ExitedBar, SessionList } from './sessionlist'
 import { applyTheme, readFontSize, readTheme, writeFontSize, type Theme } from './settings'
 import {
@@ -93,8 +101,8 @@ export function App() {
     el: HTMLElement
   } | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
-  /** 拖完 / 收展之后补一次量算 —— 实体在下面那个大 effect 里。 */
-  const refitRef = useRef<() => void>(() => {})
+  /** 拖完 / 收展之后补一次量算 —— 实体在下面那个大 effect 里。`force` 见 measure()。 */
+  const refitRef = useRef<(force?: boolean) => void>(() => {})
   const [coarse] = useState(isCoarsePointer)
   const bpRef = useRef(bp)
   bpRef.current = bp
@@ -110,6 +118,12 @@ export function App() {
   const classicRef = useRef(breakpoint(window.innerWidth) === 'desktop' && !isCoarsePointer())
   const [theme, setTheme] = useState<Theme>(readTheme)
   const [fontSize, setFontSize] = useState(readFontSize)
+  const [fontFamily, setFontFamily] = useState(readFontFamily)
+  /**
+   * 新建的会话也要用【当前】字体 —— store 的 getter 活在只跑一次的挂载 effect 里，
+   * 直接闭包 state 拿到的是首帧那份。
+   */
+  const fontRef = useRef({ size: fontSize, family: fontStack(fontFamily) })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   // 块存储活在 ref 里（它不参与渲染），用一个计数器把它的变化推给 UI。
@@ -313,7 +327,7 @@ export function App() {
     })
     connRef.current = conn
 
-    store = new SessionStore(conn, () => fontSize, {
+    store = new SessionStore(conn, () => fontRef.current, {
       onChange: refresh,
       onModeChange: (sid, s) => {
         if (store.active === sid) setMode(s)
@@ -450,10 +464,12 @@ export function App() {
     // 发 resize，程序被迫整屏重绘 —— 这就是终端视图里的"拖动抖动"。
     let lastW = 0
     let lastH = 0
-    const measure = () => {
+    // force：容器没变但 cell 变了（改字号 / 改字体，AC-5.3 / AC-5.13）—— 那条路上
+    // 尺寸去重会把整次量算吞掉，客户端与 PTY 的 cols/rows 就分了家
+    const measure = (force = false) => {
       const w = area.clientWidth
       const h = area.clientHeight
-      if (w === lastW && h === lastH) return
+      if (!force && w === lastW && h === lastH) return
       lastW = w
       lastH = h
       const sid = store.active
@@ -605,6 +621,7 @@ export function App() {
       following: () => (store.active === null ? true : store.followOf(store.active).following),
       renderer: () => (store.active === null ? '' : (store.termOf(store.active)?.renderer() ?? '')),
       fontSize: () => (store.active === null ? 0 : (store.termOf(store.active)?.term.options.fontSize ?? 0)),
+      fontFamily: () => (store.active === null ? '' : (store.termOf(store.active)?.term.options.fontFamily ?? '')),
       viewport: () => {
         const sid = store.active
         const term = sid === null ? undefined : store.termOf(sid)
@@ -741,6 +758,28 @@ export function App() {
     if (sidebarDragging) return
     refitRef.current()
   }, [sidebarDragging, sidebarW, sidebarOpen, bp])
+
+  /**
+   * 改字号 / 改字体（AC-5.3 / AC-5.13）。
+   *
+   * 两件事共用一条路，因为它们改的是同一样东西：cell 尺寸。而容器一个像素都没变，
+   * `ResizeObserver` 不会响 —— 所以这里必须自己强制量一次，把新的 cols/rows 发给 PTY。
+   */
+  const applyFont = (next: { size?: number; family?: string }) => {
+    const size = next.size ?? fontSize
+    const family = next.family ?? fontFamily
+    if (next.size !== undefined) {
+      setFontSize(size)
+      writeFontSize(size)
+    }
+    if (next.family !== undefined) {
+      setFontFamily(family)
+      writeFontFamily(family)
+    }
+    fontRef.current = { size, family: fontStack(family) }
+    storeRef.current?.setFont(fontRef.current)
+    refitRef.current(true)
+  }
 
   // ---- 侧栏分隔条：拖 = 预览新边界，点 = 收起 / 展开（AC-5.12）----
   // 手感全在 ui/sidebar.ts 的纯函数里（夹紧 / 吸附 / 收起门槛），这里只管指针。
@@ -1115,12 +1154,50 @@ export function App() {
               onInput={(e) => {
                 const n = Number(e.currentTarget.value)
                 if (!Number.isFinite(n) || n < 8 || n > 32) return
-                setFontSize(n)
-                writeFontSize(n)
-                storeRef.current?.setFontSize(n)
+                applyFont({ size: n })
               }}
             />
           </label>
+          {/* 清单里只有【这台设备装了的】等宽字体（AC-5.13，ADR-0023） */}
+          <label class="settings-row">
+            <span class="settings-label">终端字体</span>
+            <select
+              data-testid="font-family"
+              value={fontFamily}
+              onChange={(e) => applyFont({ family: e.currentTarget.value })}
+            >
+              {(['default', 'coding', 'platform', 'cjk'] as FontGroup[]).map((g) => {
+                const items = availableFonts().filter((c) => c.group === g)
+                if (items.length === 0) return null
+                const opts = items.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))
+                return g === 'default' ? (
+                  opts
+                ) : (
+                  <optgroup key={g} label={GROUP_LABEL[g]}>
+                    {opts}
+                  </optgroup>
+                )
+              })}
+            </select>
+          </label>
+          <div class="settings-row">
+            <span class="settings-label">预览</span>
+            <span
+              class="settings-value font-sample"
+              data-testid="font-sample"
+              style={{ fontFamily: fontStack(fontFamily), fontSize: `${fontSize}px` }}
+            >
+              il1 O0 -&gt;= 中文对齐
+            </span>
+          </div>
+          {/* 不写出来的话，装了 Fira Code 的人会把"连字没了"当成 bug（ADR-0023） */}
+          <p class="settings-note" data-testid="font-note">
+            只列出这台设备装了的等宽字体。连字不会生效 —— WebGL 渲染器不画连字。
+          </p>
           {/* WebGL 失败会静默退回 canvas（AC-5.5）——滚动变卡时先看这一眼（AC-5.10） */}
           <div class="settings-row">
             <span class="settings-label">渲染器</span>

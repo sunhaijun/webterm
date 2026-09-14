@@ -4,7 +4,10 @@
  * desktop 常驻侧栏 / tablet 覆盖式抽屉 / phone 底部 sheet，三档共用这一份
  * 列表，只是外层容器不同。
  */
+import { useLayoutEffect, useRef } from 'preact/hooks'
+
 import type { SessionView } from '../sessions/store'
+import { revealActive } from './reveal'
 
 export interface SessionListProps {
   sessions: SessionView[]
@@ -32,14 +35,25 @@ export function SessionList({
   atLimit,
   maxSessions,
 }: SessionListProps) {
+  // 切会话的路不止点击一条（`Ctrl+Shift+↑/↓`、横滑、关掉当前会话后自动切），
+  // 那几条路指针都不在列表上 —— 选中项跑到视区外就等于没有反馈（AC-4.9）。
+  const listRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    if (active === null) return
+    revealActive(listRef.current?.querySelector<HTMLElement>(`[data-sid="${active}"]`))
+  }, [active])
+
   return (
-    <div class="sessionlist" data-testid="session-list">
+    <div class="sessionlist" data-testid="session-list" ref={listRef}>
       {sessions.map((s) => (
         <div
           key={s.sid}
           class="session-item"
           data-testid={`session-${s.sid}`}
+          data-sid={s.sid}
           data-active={active === s.sid}
+          // 选中态不只是样式：焦点按 AC-4.8 在终端里，读屏器只能靠这个知道"当前是哪个"
+          aria-current={active === s.sid ? 'true' : undefined}
           data-status={s.status}
           onClick={() => onSelect(s.sid)}
         >

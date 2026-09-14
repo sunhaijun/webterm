@@ -10,6 +10,12 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
 
+/** 终端字体：字号 + 一整段 family stack（AC-5.3 / AC-5.13）。 */
+export interface TermFont {
+  size: number
+  family: string
+}
+
 /** scrollback 至少 5000 行（AC-5.1）。 */
 export const SCROLLBACK = 5000
 
@@ -35,11 +41,11 @@ export interface TermHandle {
   dispose(): void
 }
 
-export function createTerminal(fontSize: number): TermHandle {
+/** 字体来自设置（AC-5.13）：清单与探测在 `ui/fonts.ts`，默认是 `SYSTEM_STACK`。 */
+export function createTerminal(fontSize: number, fontFamily: string): TermHandle {
   const term = new Terminal({
     fontSize,
-    fontFamily:
-      'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace',
+    fontFamily,
     scrollback: SCROLLBACK,
     allowProposedApi: true,
     convertEol: false,

@@ -9,6 +9,9 @@
   --line-strong: #cfcfd4;
   --ring: rgba(26, 26, 26, 0.35);
   --link: #2563eb;
+  /* 强调色 = 「选中的是这个」。写成 var(--link) 就不必在三处主题块里各抄一份，
+     自定义属性是在用的地方求值的，--link 换了它跟着换。 */
+  --accent: var(--link);
   --term-bg: #111111;
   --ok: #2ea043;
   --warn: #d29922;
@@ -253,14 +256,23 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 6px 8px 6px 11px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
   min-height: 36px;
 }
+/* 【hover 是中性灰，选中是强调色】。原来两个都是 --fg 的低透明度混色（8% / 14%），
+   差六个百分点 —— 鼠标一放上去就分不清"我在看的是哪个"，而键盘切换时指针根本不在
+   列表上，等于没有反馈。选中必须靠色相分开，不能靠深浅（AC-4.9）。 */
 .session-item:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
-.session-item[data-active='true'] { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+.session-item[data-active='true'] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  /* 左侧强调条：不用伪元素，圆角天然裁好 */
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.session-item[data-active='true']:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+.session-item[data-active='true'] .session-name { color: var(--accent); font-weight: 700; }
 .session-item[data-status='exited'] .session-name { opacity: 0.6; }
 .session-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
 .session-dot[data-status='exited'] { background: var(--muted); }
@@ -280,6 +292,9 @@ body {
 }
 .session-pin[data-on='true'] { color: var(--ok); opacity: 1; }
 .session-item:hover .session-pin, .session-item:hover .session-close { opacity: 1; }
+/* 字体预览：换字体时"到底长什么样"只能看出来，说不出来 */
+.font-sample { font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 .session-new {
   margin-top: 4px; padding: 8px; border: 1px dashed var(--line); border-radius: 6px;
   background: transparent; color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
@@ -484,11 +499,12 @@ body {
 .settings-row input[type='number'] { width: 84px; }
 .settings-value { color: var(--muted); }
 /* 用户不知道这条规则的话它等于不存在（privacy-history.md）—— 别缩成小字 */
-.privacy-note { margin: 0; padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+/* 面板里的小字说明（隐私规则、字体的连字限制…） */
+.privacy-note, .settings-note { margin: 0; padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 @media (pointer: coarse) {
   .settings-row { min-height: 52px; font-size: 15px; }
   .settings-row select, .settings-row input { font-size: 16px; min-height: 40px; }
-  .privacy-note { font-size: 13px; }
+  .privacy-note, .settings-note { font-size: 13px; }
 }
 
 /* ---------- 命令块 ---------- */
@@ -763,7 +779,7 @@ body {
   .statusbar .cwd { font-size: 13px; }
   .banner { font-size: 14px; }
 
-  .session-item { font-size: 15px; min-height: 52px; gap: 10px; padding: 10px 12px; }
+  .session-item { font-size: 15px; min-height: 52px; gap: 10px; padding: 10px 12px 10px 15px; }
   .session-name { font-size: 16px; }
   .session-cwd, .session-exit { font-size: 13px; }
   .session-dot { width: 10px; height: 10px; }

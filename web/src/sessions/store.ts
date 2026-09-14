@@ -9,7 +9,7 @@ import { ModeMachine, type ModeState } from '../input/modes'
 import type { SessionInfo } from '../protocol/messages'
 import { installInteractive, type InteractiveDetector } from '../term/interactive'
 import { type FollowState, OutputQueue } from '../term/outputqueue'
-import { createTerminal, type TermHandle } from '../term/terminal'
+import { createTerminal, type TermFont, type TermHandle } from '../term/terminal'
 import { inUserInputEvent } from '../term/userinput'
 
 export interface SessionView extends SessionInfo {
@@ -54,13 +54,13 @@ export class SessionStore {
   private readonly entries = new Map<number, Entry>()
   private readonly conn: Connection
   private readonly h: SessionStoreHandlers
-  private readonly fontSize: () => number
+  private readonly font: () => TermFont
   private activeSid: number | null = null
 
-  constructor(conn: Connection, fontSize: () => number, h: SessionStoreHandlers) {
+  constructor(conn: Connection, font: () => TermFont, h: SessionStoreHandlers) {
     this.conn = conn
     this.h = h
-    this.fontSize = fontSize
+    this.font = font
   }
 
   get active(): number | null {
@@ -106,7 +106,8 @@ export class SessionStore {
       this.h.onChange()
       return
     }
-    const term = createTerminal(this.fontSize())
+    const f = this.font()
+    const term = createTerminal(f.size, f.family)
     const host = document.createElement('div')
     host.className = 'term-host'
     host.dataset.sid = String(info.sid)
@@ -303,10 +304,16 @@ export class SessionStore {
     e.queue.setFollowing(true)
   }
 
-  /** 改字号：所有实例一起改，并重新 fit。 */
-  setFontSize(px: number): void {
+  /**
+   * 改字号 / 字体：所有实例一起改，并重新 fit。
+   *
+   * 【调用方还欠一条 `resize`】。cell 尺寸变了但容器一个像素没变，`ResizeObserver`
+   * 不会响 —— 只 fit 不发的话客户端与 PTY 的 cols/rows 就分了家（AC-5.3 / AC-5.13）。
+   */
+  setFont(f: TermFont): void {
     for (const e of this.entries.values()) {
-      e.term.term.options.fontSize = px
+      e.term.term.options.fontSize = f.size
+      e.term.term.options.fontFamily = f.family
       if (e.opened) e.term.fit.fit()
     }
   }
