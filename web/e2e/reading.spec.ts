@@ -1,9 +1,14 @@
 /**
- * E2E-5 连接状态指示（AC-2.10）与 E2E-12 阅读输出（AC-5.1/5.2/5.4）。
+ * E2E-5 连接状态指示（AC-2.10）与 E2E-12 阅读输出（AC-5.1/5.2/5.3/5.4/5.13）。
  */
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
-import { Agent, installWSControl, submit, terminalText, waitFor } from './harness'
+import { Agent, installWSControl, submit, terminalText, termSize, waitFor } from './harness'
+
+type Hooks = { __webterm: { resizes(): number; fontSize(): number; fontFamily(): string } }
+const resizes = (p: Page) => p.evaluate(() => (window as unknown as Hooks).__webterm.resizes())
+const fontSize = (p: Page) => p.evaluate(() => (window as unknown as Hooks).__webterm.fontSize())
+const fontFamily = (p: Page) => p.evaluate(() => (window as unknown as Hooks).__webterm.fontFamily())
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -145,6 +150,70 @@ test('E2E-12 空闲时滚轮回滚也有「回到底部」提示条，点它回�
   await pill.click()
   await expect(pill).toHaveCount(0)
   expect(await scrollbackRows(page), '回到了底部').toBe(bottomY)
+})
+
+test('E2E-12 ③ 改字号会补一条 resize（AC-5.3）', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  const before = await resizes(page)
+  const cols = (await termSize(page)).cols
+  await page.getByTestId('open-settings').click()
+  await page.getByTestId('font-size').fill('20')
+
+  // cell 尺寸变了而容器没变，ResizeObserver 不会响 —— 漏发就是客户端与 PTY 的 cols/rows 分家
+  await expect.poll(() => resizes(page), { message: '补了一条 resize' }).toBeGreaterThan(before)
+  expect((await termSize(page)).cols, '字号变大，列数变少').toBeLessThan(cols)
+  expect(await fontSize(page)).toBe(20)
+})
+
+test('E2E-12 ⑧ 换终端字体（AC-5.13）', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await page.getByTestId('open-settings').click()
+
+  const select = page.getByTestId('font-family')
+  await expect(select).toBeVisible()
+  const opts = await select.locator('option').evaluateAll((els) =>
+    els.map((e) => ({ id: (e as HTMLOptionElement).value, label: (e as HTMLOptionElement).textContent ?? '' })),
+  )
+  expect(opts[0]?.id, '系统默认永远在第一位').toBe('system')
+
+  // 【只列本机装了的】：把列出来的名字拿回页面里再量一遍，一个都不该是"没装"
+  // 【只用同一套判据再量一遍】：和 fonts.ts 的探测是同一个算法，跑在同一个浏览器里
+  const missing = await page.evaluate((names) => {
+    const ctx = document.createElement('canvas').getContext('2d')
+    if (!ctx) return names
+    const probe = 'mmmmmmmmmmlliWWWWWW0O中文'
+    const w = (f: string) => {
+      ctx.font = `72px ${f}`
+      return ctx.measureText(probe).width
+    }
+    return names.filter((n) => ['monospace', 'serif', 'sans-serif'].every((b) => w(`"${n}", ${b}`) === w(b)))
+  }, opts.slice(1).map((o) => o.label))
+  expect(missing, '列出来的字体本机必须真的装着').toEqual([])
+
+  test.skip(opts.length < 2, '这台机器一个清单里的字体都没装，换字体这半边测不了')
+  const pick = opts[1]!
+
+  const before = await resizes(page)
+  await select.selectOption(pick.id)
+  await expect.poll(() => fontFamily(page)).toContain(pick.label)
+  expect(await fontFamily(page), 'stack 尾巴永远带 CJK 等宽').toContain('monospace')
+  await expect.poll(() => resizes(page), { message: '换字体也要补一条 resize' }).toBeGreaterThan(before)
+
+  // 持久化
+  await page.reload()
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await expect.poll(() => fontFamily(page)).toContain(pick.label)
+
+  // 野值回落系统默认，不报错
+  await page.evaluate(() => localStorage.setItem('webterm.font.family', 'comic-sans'))
+  await page.reload()
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await expect.poll(() => fontFamily(page)).toContain('ui-monospace')
 })
 
 test('E2E-12 ⑦ 设置里能看到渲染器', async ({ page }) => {
