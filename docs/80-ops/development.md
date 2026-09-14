@@ -94,3 +94,24 @@ cd web && npm run dev          # Vite 在 5173，代理 /api /auth /ws 到 8080
 - 改动触及协议、重连、输入或布局时，要在
   [`../70-testing/e2e-scenarios.md`](../70-testing/e2e-scenarios.md) 里加/改场景
 - 涉及重连的改动必须跑通 **E2E-2a 字节级连续性**
+
+## 发布
+
+两个渠道，都由 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) 出：
+
+| 触发 | 产出 | 谁装到 |
+|---|---|---|
+| 合并进 `main` | 覆盖重建 `dev` 预发布（滚动） | `install.sh --channel dev` |
+| 推 `v*` tag | 正式 release，`--generate-notes` | `install.sh`（默认 `latest`） |
+
+两条都走 `make release`：交叉编译 amd64/arm64、断言静态链接（AC-8.1）与前端已嵌入（AC-8.2）。
+
+**版本号来自 `git describe --tags --always --dirty --match 'v[0-9]*'`（Makefile）。**
+`--match` 不能省：`dev` 是个滚动的**轻量 tag**，正式 tag 打在同一个提交上时，
+不带 `--match` 的 `git describe` 可能挑中它，正式构建就被标成 `webterm dev` ——
+v0.1.0 第一次发布就是这么发出去的（本机 describe 挑的是注解 tag，CI 挑的是 `dev`，
+所以本地怎么试都试不出来）。工作流里那条「断言正式构建的版本号就是 tag」是它的看门人。
+
+打正式 tag 之前先看 [`../90-roadmap/milestones.md`](../90-roadmap/milestones.md) 的出口标准：
+自动化验不了的那几条（真机输入法、软键盘、真实网络切换、真 Let's Encrypt、PWA 安装）
+在 [`../70-testing/manual-checklist.md`](../70-testing/manual-checklist.md) 里，得人去跑。

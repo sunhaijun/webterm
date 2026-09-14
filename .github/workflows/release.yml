@@ -42,6 +42,15 @@ jobs:
           grep -qa 'id="app"' release/webterm-linux-amd64
           release/webterm-linux-amd64 version
 
+      # 版本号错了在别处一点都看不出来（install.sh 的升级提示、诊断、troubleshooting
+      # 全靠它），只有这一步能把它变成红色
+      - name: 断言正式构建的版本号就是 tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          got="$(release/webterm-linux-amd64 version)"
+          echo "$got"
+          test "$got" = "webterm ${GITHUB_REF_NAME}"
+
       - uses: actions/upload-artifact@v4
         with:
           name: webterm-binaries
