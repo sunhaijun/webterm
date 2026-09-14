@@ -68,7 +68,7 @@ describe('应用级快捷键', () => {
     ...mods,
   })
 
-  it('Ctrl/Cmd+K 归还终端（readline 的「删到行尾」，ADR-0021）', () => {
+  it('Ctrl/Cmd+K 归还终端（readline 的「删到行尾」，ADR-0022）', () => {
     // 命令面板删掉之后这个键不再被应用层拦截 —— 拦它等于拦了一个终端真正在用的键
     expect(appAction(key('k', { ctrlKey: true }))).toBeNull()
     expect(appAction(key('K', { ctrlKey: true }))).toBeNull()
@@ -89,7 +89,7 @@ describe('应用级快捷键', () => {
 
   it('【绝不能】拦截终端要用的组合', () => {
     // Ctrl+C / Ctrl+D / Ctrl+R 必须原样进 PTY，否则 vim、less、Ctrl+C 全废
-    // Ctrl+K 是 readline 的"删到行尾"，同样不能拦（ADR-0021）
+    // Ctrl+K 是 readline 的"删到行尾"，同样不能拦（ADR-0022）
     for (const k of ['c', 'd', 'r', 'a', 'e', 'u', 'z', 'k']) {
       expect(appAction(key(k, { ctrlKey: true })), `Ctrl+${k} 被应用层吃掉了`).toBeNull()
     }

@@ -27,6 +27,7 @@ import {
   STEP,
   STEP_BIG,
   clampSidebarWidth,
+  previewEdge,
   readSidebarOpen,
   readSidebarWidth,
   settleSidebarWidth,
@@ -81,7 +82,16 @@ export function App() {
     clampSidebarWidth(readSidebarWidth(), window.innerWidth, isCoarsePointer()),
   )
   /** 拖动中的分隔条状态；非 null 时 ResizeObserver 短路（见下面的 measure）。 */
-  const sidebarDragRef = useRef<{ x0: number; w0: number; start: number; moved: boolean } | null>(null)
+  // winW / el 在按下时取一次：拖动期间【不读布局也不查 DOM】—— window.innerWidth 会
+  // 强制同步布局，而拖动的全部意义就是每帧只碰合成器（ADR-0021）。窗口尺寸在一次拖动里不会变。
+  const sidebarDragRef = useRef<{
+    x0: number
+    w0: number
+    start: number
+    moved: boolean
+    winW: number
+    el: HTMLElement
+  } | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
   /** 拖完 / 收展之后补一次量算 —— 实体在下面那个大 effect 里。 */
   const refitRef = useRef<() => void>(() => {})
@@ -732,15 +742,23 @@ export function App() {
     refitRef.current()
   }, [sidebarDragging, sidebarW, sidebarOpen, bp])
 
-  // ---- 侧栏分隔条：拖 = 改宽，点 = 收起 / 展开（AC-5.12）----
+  // ---- 侧栏分隔条：拖 = 预览新边界，点 = 收起 / 展开（AC-5.12）----
   // 手感全在 ui/sidebar.ts 的纯函数里（夹紧 / 吸附 / 收起门槛），这里只管指针。
   const onResizerDown = (e: PointerEvent) => {
     // 【preventDefault】：不让鼠标点击把焦点从终端抢走（键盘用户仍可 Tab 到它），
     // 顺带掐掉拖动时的文本选中。pointer capture 不受影响。
     e.preventDefault()
-    sidebarDragRef.current = { x0: e.clientX, w0: sidebarOpen ? sidebarW : 0, start: sidebarW, moved: false }
+    const el = e.currentTarget as HTMLElement
+    sidebarDragRef.current = {
+      x0: e.clientX,
+      w0: sidebarOpen ? sidebarW : 0,
+      start: sidebarW,
+      moved: false,
+      winW: window.innerWidth,
+      el,
+    }
     setSidebarDragging(true)
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    el.setPointerCapture(e.pointerId)
   }
   const onResizerMove = (e: PointerEvent) => {
     const d = sidebarDragRef.current
@@ -748,21 +766,25 @@ export function App() {
     const dx = e.clientX - d.x0
     if (Math.abs(dx) > 6) d.moved = true // 同 sheet 抓手：6px 以内算「点」不算「拖」
     if (!d.moved) return
-    setSidebarW(clampSidebarWidth(d.w0 + dx, window.innerWidth, coarse))
-    // 从收起态拖出来：先展开给人看，是否留住等松手结算（所以这里【不落盘】）
-    if (!sidebarOpen) setSidebarOpen(true)
+    // 【拖动只预览，不重排】（ADR-0021）。这一行是整个拖动期间唯一的 DOM 写入：
+    // 分隔条自己 translateX 跟手，栅格列、侧栏、终端全程不动 —— 不进 state 也就没有
+    // 重渲染，不写 --sidebar-w 也就没有「根节点自定义属性把整棵子树判脏」那 1.1~1.4ms。
+    // 预览位置 = 松手结果，所以夹紧 / 吸附 / 收起判定在拖动中就看得见。
+    d.el.style.transform = `translateX(${previewEdge(d.w0 + dx, d.start, d.winW, coarse) - d.w0}px)`
   }
   const onResizerUp = (e: PointerEvent) => {
     const d = sidebarDragRef.current
     sidebarDragRef.current = null
     setSidebarDragging(false)
     if (!d) return
+    d.el.style.transform = '' // 预览让位给真实布局；下面这一次 setSidebarW 是整次拖动唯一的重排
     if (!d.moved) {
       setSidebar((v) => !v) // 点一下：收起 ⇄ 展开，同写态 sheet 抓手「点一下切档」
       return
     }
-    // start 是【拖动前】记住的宽度：拖没过门槛而收起时，宽度保持它不动，下次展开回得去
-    const st = settleSidebarWidth(d.w0 + (e.clientX - d.x0), d.start, window.innerWidth, coarse)
+    // start 是【拖动前】记住的宽度：拖没过门槛而收起时，宽度保持它不动，下次展开回得去。
+    // winW 用按下时那次 —— 必须和预览用的是同一个数，否则落点会跟预览线差一截。
+    const st = settleSidebarWidth(d.w0 + (e.clientX - d.x0), d.start, d.winW, coarse)
     setSidebarW(st.width)
     writeSidebarWidth(st.width)
     setSidebar(st.open)

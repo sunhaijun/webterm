@@ -179,3 +179,4 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0018](adr/0018-one-drawer-primitive.md) | 次要界面共用一个浮层原语 |
 | [0019](adr/0019-altscreen-redraw-not-replay.md) | 备用屏不回放历史，改为重画 |
 | [0020](adr/0020-input-never-silently-dropped.md) | 输入路径绝不静默丢弃 |
+| [0021](adr/0021-drag-preview-not-live-relayout.md) | 跟手的手势只做预览，布局改动推到松手 |

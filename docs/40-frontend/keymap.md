@@ -18,7 +18,7 @@ Raw 模式下**所有按键都要能进 PTY**。所以应用级快捷键必须�
 
 快捷键保持**极少**是刻意的，不做几十个快捷键：入口本来就少，而且都在屏幕上。
 
-**`Ctrl/Cmd+K` 不拦。** 它一度是命令面板的总入口，但 readline 的 `Ctrl+K` 是「删到行尾」（bash / zsh / emacs / fish 通用）—— 拦它等于拦了一个终端真正在用的键。命令面板已随 [ADR-0021](../20-architecture/adr/0021-drop-command-palette.md) 删除，这个键归还终端。
+**`Ctrl/Cmd+K` 不拦。** 它一度是命令面板的总入口，但 readline 的 `Ctrl+K` 是「删到行尾」（bash / zsh / emacs / fish 通用）—— 拦它等于拦了一个终端真正在用的键。命令面板已随 [ADR-0022](../20-architecture/adr/0022-drop-command-palette.md) 删除，这个键归还终端。
 
 ## 应用级快捷键
 

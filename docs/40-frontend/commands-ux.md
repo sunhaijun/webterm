@@ -36,7 +36,7 @@
 
 ## 历史面板
 
-从侧栏/菜单打开的完整列表 —— 历史与快捷命令的**唯一**浏览与管理入口（曾经还有个命令面板做"快速入口"，[ADR-0021](../20-architecture/adr/0021-drop-command-palette.md) 已删除）。外壳是公共的 `Drawer`（[ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)：触屏贴底 sheet、桌面居中浮窗），标题栏「历史」+ ✕；搜索框、两个过滤器与「清空历史」在工具行（`data-size="wide"`：列表型，定高）。
+从侧栏/菜单打开的完整列表 —— 历史与快捷命令的**唯一**浏览与管理入口（曾经还有个命令面板做"快速入口"，[ADR-0022](../20-architecture/adr/0022-drop-command-palette.md) 已删除）。外壳是公共的 `Drawer`（[ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)：触屏贴底 sheet、桌面居中浮窗），标题栏「历史」+ ✕；搜索框、两个过滤器与「清空历史」在工具行（`data-size="wide"`：列表型，定高）。
 
 ```
 ┌────────────────────────────────────────────────────────┐

@@ -1,4 +1,4 @@
-# ADR-0021 去掉命令面板
+# ADR-0022 去掉命令面板
 
 状态：已接受（2026-09-13）。**收回 [ADR-0018](0018-one-drawer-primitive.md) 收进 `Drawer` 的四个次要界面之一**，作废 AC-6.8 / US-6.6。历史面板、快捷命令（[ADR-0008](0008-pinned-history-as-snippets.md)）、`Drawer` 原语本身、其余快捷键都不变。
 

@@ -162,7 +162,7 @@ feat/<docs编号>-<主题>
 | 历史面板（搜索、过滤、分组、退出码显示） | [commands-ux.md](../40-frontend/commands-ux.md#历史面板) |
 | 置顶（☆）→ 快捷命令；label、拖动排序 | 同上 |
 | 移动端快捷命令条 | 同上 |
-| ~~命令面板（`Ctrl/Cmd+K`，模糊搜索会话/快捷命令/历史/动作）~~ | 已随 [ADR-0021](../20-architecture/adr/0021-drop-command-palette.md) 删除 |
+| ~~命令面板（`Ctrl/Cmd+K`，模糊搜索会话/快捷命令/历史/动作）~~ | 已随 [ADR-0022](../20-architecture/adr/0022-drop-command-palette.md) 删除 |
 | Composer 历史导航接真实数据源 | [input-modes.md](../40-frontend/input-modes.md#历史导航) |
 | 删除 / 清空 / 淘汰保护置顶 | [storage-schema.md](../50-backend/storage-schema.md#淘汰ac-610) |
 | 隐私说明（空格前缀）进设置页与引导 | [privacy-history.md](../60-security/privacy-history.md) |

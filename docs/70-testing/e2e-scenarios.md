@@ -320,7 +320,7 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 11. 清空全部 → 二次确认，告知保留 N 条快捷命令；执行后置顶仍在
 12. 移动端视口：快捷命令条可见、可横滑、点击填入、长按执行
 
-> 命令面板（原第 9 条：`Ctrl+K` 模糊搜索）已随 [ADR-0021](../20-architecture/adr/0021-drop-command-palette.md) 删除，用例一并移除。
+> 命令面板（原第 9 条：`Ctrl+K` 模糊搜索）已随 [ADR-0022](../20-architecture/adr/0022-drop-command-palette.md) 删除，用例一并移除。
 
 ---
 
@@ -551,16 +551,17 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 > `web/e2e/sidebar.spec.ts`。两个 context：1440×900 鼠标键盘、iPad 横屏 1133×744 触屏（`pointer: coarse`，最小宽 260px 那条分支）。
 
-1. **拖宽**：从分隔条按下、右移 120px、抬起。断言
-   - 拖动过程中 `.sidebar` 宽度跟着走（松手前就量一次）
+1. **拖宽只预览**（[ADR-0021](../20-architecture/adr/0021-drag-preview-not-live-relayout.md)）：从分隔条按下、右移 120px、抬起。断言
+   - 拖动过程中 `.sidebar` 宽度**一点不变**，跟着指针走的是**分隔条自己的视觉位置**（`.sidebar-resizer` 的 `getBoundingClientRect().left`）—— 拖动期间不重排是这条的要害
    - **拖动全程 `__webterm.resizes()` 不变**，松手后只加 1 —— 这是这条场景的核心，别的都是附带
-   - 松手后 `__webterm.size().cols` 比拖之前小
+   - 松手后 `.sidebar` 宽度落在预览线所在的位置，`__webterm.size().cols` 比拖之前小
 2. **上下限**：一直拖到窗口右侧，宽度停在 `min(480, 窗口宽 × 40%)`；往左拖到 100px 以下松手 → 变成收起态
 3. **点一下收起 / 展开**：不移动地点分隔条 → `data-sidebar='closed'`、`.sidebar` 宽度 0、终端变宽；再点左缘把手 → 回到收起前的宽度
-4. **收起态仍可拖出**：收起后直接从把手拖到 320px，断言展开且宽度 = 320
+4. **收起态仍可拖出**：收起后直接从把手拖到 320px。拖动中 `data-sidebar` **仍是 `closed`**（不再「先展开给人看」，统一走预览），松手后展开且宽度 = 320 − 起手点
 5. **持久化**：刷新页面，宽度与收起状态还在；把窗口缩到 tablet 再放回 desktop，宽度按上下限夹紧且不写坏存储
 6. **只在 desktop 生效**：phone（390×844）加载时 `data-sidebar` 必须是 `closed`（不因为 localStorage 里存着 open 就自己弹出会话浮层），且**没有** `.sidebar-resizer`
-7. **键盘**：聚焦分隔条按 `→` 三次 → 宽度 +48px；`Home` → 最小宽
+7. **键盘**：聚焦分隔条按 `→` 三次 → 宽度 +48px；`Home` → 最小宽。键盘**不走预览**，按一下就改宽
+8. **预览 = 松手结果**：同一次拖动里，松手前分隔条的视觉位置就是松手后的边界 —— 拖到离 240 只差几像素时预览线已经吸附在 240；拖到最小宽 60% 以下时预览线已经贴到左缘（看得出松手会收起）
 ## E2E-33 僵尸连接：回到前台立刻戳穿（AC-2.20，ADR-0020）
 
 > `web/e2e/zombie.spec.ts`。
