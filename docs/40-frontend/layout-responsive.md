@@ -267,7 +267,9 @@ xterm 的主题（前景/背景/16 色）从同一组 CSS 变量读取并在切�
 - **只有当前可见的终端挂 `WebglAddon`**，切走时 `dispose()`。浏览器的 WebGL 上下文数有上限（Chrome 约 16 个，超了会静默丢弃最老的），而会话上限是 20 且切走的 xterm 实例不销毁（[`session-ux.md`](session-ux.md#会话在-client-侧的表示)）—— 全挂上必然撞线，症状是别的终端莫名变黑
 - `webgl2` 上下文创建失败或 addon 抛异常时**静默回退**到默认 canvas renderer（AC-5.5）
 - 监听 `webglcontextlost`，丢失时也回退，不要留一个黑屏
-- `scrollback: 5000`（AC-5.1）
+- `scrollback: 5000`（AC-5.1）。**刷新之后**能滚回多远由客户端快照决定（2000 行，[session-ux.md §刷新后的回滚](session-ux.md#刷新后的回滚ac-514)）
+- **滚动落地每帧一次**（AC-5.15）：触屏纵向拖只累加位移，`requestAnimationFrame` 里统一改一次 `.xterm-viewport.scrollTop`；手势开始时缓存该元素，不要每个 `touchmove` 都 `querySelector`。松手按末速度做惯性衰减，碰到边界或再次触摸即停；`prefers-reduced-motion` 下不做惯性
+- **大块写入有预算**（AC-5.16）：回放、快照恢复、回看期间的强制写入共用一个带预算的写入器，每帧 ≤ 64 KiB。**顺序绝不改** —— xterm 不能前插，"先写最后一屏再补历史"只会把顺序搞乱
 - 选中文本时暂停自动滚动（`terminal.onSelectionChange` → 有选区则不 `scrollToBottom`）（AC-5.4）
 
 ## PWA

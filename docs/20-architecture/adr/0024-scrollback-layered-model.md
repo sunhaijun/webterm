@@ -1,0 +1,224 @@
+# ADR-0024 回滚历史的分层模型：先把内容留在追加流里
+
+状态：已接受（2026-09-14）· **待落地**（四步，独立可交付、独立可回退，见[§决定](#决定)）
+
+**不新增协议消息**：四步加起来一条 `t` 都不加，`out_seq` 记账口径（[CLAUDE.md](../../../CLAUDE.md) 不变式 ④）、增量续传（`resumed[].status == "ok"`）、[ADR-0019](0019-altscreen-redraw-not-replay.md) 的两类模型（主屏 = 追加流 / 备用屏 = 状态）全部原样保留。本 ADR 是在那两类模型之上回答一个新问题：**怎么让用户真的有东西可以往回拖。**
+
+## 背景
+
+### 诉求拆成四条
+
+| | 要求 |
+|---|---|
+| **R1 能回滚** | 往上拖能看到更早的内容，**刷新之后仍然能** |
+| **R2 不重复** | 同一段内容只出现一份 |
+| **R3 不错乱** | 折行与对齐和产出时一致，不出现被差分帧打歪的画面 |
+| **R4 不卡顿** | 拖动跟手，回放 / 恢复不把主线程占死 |
+
+### 症状
+
+- 刷新页面后终端**只剩最后一屏**，往上拖是空的 —— 哪怕刷新前 xterm 缓冲里有几千行。
+- 手机上在 claude 里纵向拖**什么都不会发生**（死手势）。
+- 桌面上滚轮在 claude 里"能动"，但那是 claude 自己在滚它的对话，不是终端的 scrollback；刷新一下就没了。
+
+刷新为什么只剩一屏：刷新把前端状态清空，每会话的 `outSeq` 回到 0（`web/src/conn/connection.ts:464`），`subscribe{out_seq: 0}` 让 agent 把环形缓冲里**全部**字节发过来；这些字节里有一次 `ESC[?1049h`，之后的所有内容都画在**备用缓冲**上 —— 它没有 scrollback，几千帧绝对定位的差分重绘互相覆盖，**重放 1 MiB 的终态与只画最后一帧的终态逐字节相同**。不是加载完又丢掉，是本来就全画在同一屏上。
+
+### 判据：能不能回滚，取决于内容是不是追加流
+
+[ADR-0019](0019-altscreen-redraw-not-replay.md) 把会话输出分成两类。这条分类同样决定"有没有历史可回滚"：
+
+- **追加流**（主屏、有 LF）：行会滚出屏幕进 scrollback，"往回拖"这件事才存在，回放与恢复也才有正确的模型。
+- **状态**（备用屏差分帧）：终端从来没见过历史，只见过一屏屏覆盖。scrollback 里没有，环形缓冲里那堆字节也拼不出来。**tmux / mosh / iTerm 一样做不到** —— 备用屏程序的历史在程序自己的进程里。
+
+所以"可靠地做到 R1–R3"不是找一个更聪明的回放算法，而是**先让想回滚的内容待在追加流里**，再补上刷新时的重建纪律。R4 与这一切正交，得单独做。
+
+### 实测：claude 2.1.270 的两种渲染器
+
+pty 100×30，`TERM=xterm-256color`，cwd 为仓库根，**清掉从父进程继承的 `CLAUDE_*` / `AI_AGENT` 变量**（不清的话它会进"嵌套会话"降级态，测出来的不是真实形状）。
+
+| | 默认（fullscreen） | `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` |
+|---|---|---|
+| 启动字节 | 1383 B | 1430 B |
+| `ESC[?1049h` | **1 次**（启动头 20 B 内） | **0 次** |
+| LF（`0x0a`） | **0** | **10** |
+| DECSET 模式 | 1000 · 1002 · 1003 · 1004 · 1006 · 2004 · 2031 · 25 | 1004 · 2004 · 2031 · 25（**不开鼠标跟踪**） |
+| 按键稳态 | 差分帧、绝对定位（[ADR-0019](0019-altscreen-redraw-not-replay.md) 实测 ~40 B） | 45–66 B，`ESC[A`/`ESC[B` + `ESC[K`：**相对**光标移动的就地重绘 |
+| 改 winsize | 1.2 KB 整屏重画 | 1402 B 整屏重画 |
+| 一次 SGR 滚轮上报 | 52 B 重画（它自己在滚） | — |
+
+三条结论：
+
+1. 默认渲染器下 claude 的输出是**状态**，终端层面没有历史可回滚 —— 这不是 webterm 的缺陷，本机终端里也一样。
+2. `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` 把它变回**追加流**，而且就地重绘用的是**相对**光标移动而不是绝对定位 —— 从任意干净起点重放都会自洽收敛，这正是 webterm 现有回放模型成立的前提。
+3. classic 渲染器仍然响应 SIGWINCH（1402 B 整屏重画），[ADR-0019](0019-altscreen-redraw-not-replay.md) §6 的兜底路径照常有效。
+
+两条边界要写在这里，免得后人把结论用过头：
+
+- 探测用的是**空会话**。"默认渲染器下滚轮回 52 B"只能证明它**收到了**滚轮并重画，**不能**证明它能回滚多远。二进制里有 `CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL` / `CLAUDE_CODE_SCROLL_SPEED`，说明备用屏下的回滚是它自己实现的 virtual scroll。
+- `CLAUDE_CODE_*` 是**上游私有开关**，没有兼容承诺（二进制里的原话：the next launch will use the classic renderer (`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` forces that any time)）。所以它必须**可关**、必须**可验证**（见[§排障口径](#排障口径)）。
+
+### 实测：xterm.js 5.5 这一侧
+
+- 鼠标协议表里 `VT200 events:19`、`DRAG events:23`、`ANY events:31`，bit4（=16）是 WHEEL。**只要程序开了 `?1000` 以上的跟踪，滚轮就归程序**，本地 scrollback 不动。claude 开的是 1000+1002+1003+1006。
+- 备用缓冲没有 scrollback，`.xterm-viewport` 没有可滚内容 —— 这就是那个死手势的机械原因：`web/src/term/pinch.ts:249` 的纵向拖直接改 `scrollTop`，而备用屏下它恒为 0。
+
+### 卡顿的三处来源（与历史模型无关，单独存在）
+
+1. **触屏纵向拖是纯主线程 JS。** `web/src/style.css:132` 给 `.term` 设了 `touch-action: none`（触点落在 `.xterm-screen` 上，它和滚动容器是兄弟节点，原生触摸滚不动它），`pinch.ts:249` 每个 `touchmove` 同步改一次 `scrollTop`，还每次 `querySelector` 一次。合成器完全不参与，**松手即停、没有惯性**。
+2. **回看期间的强制写入会打断滚动。** `web/src/term/outputqueue.ts:29-33`：暂停跟随时攒到 2 MiB 或 4000 行就**一次性** drain。正在读旧输出时被一次大 write 打断。第 1 步之后 claude 输出变成真正的行流，触发概率变高。
+3. **回放一次写完。** `web/src/sessions/store.ts:278-283` 的回放路径绕开队列直接 `write`，最多 1 MiB。xterm 的 WriteBuffer 按 ~12 ms 预算分片解析，所以页面不会冻住，但会占掉几十帧，期间滚动就是卡的。
+
+## 决定
+
+四步，**按此顺序落地**。前两步就能兑现日常体感，后两步补齐边角。
+
+### 1. 内容层：把全屏 TUI 拉回主屏
+
+新增两个开关：
+
+```
+--session-env KEY=VAL     # 可重复。注入会话 PTY 的环境变量
+--no-altscreen-compat     # 关掉下面这份内置清单
+```
+
+内置清单（会话创建时注入，`internal/session/manager.go` 的 `cmd.Env`）：
+
+| 变量 | 值 | 为什么 |
+|---|---|---|
+| `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` | `1` | 让 claude 走 classic 渲染器，输出回到追加流 |
+
+三条规则：
+
+- **用户已经设过的不覆盖。** agent 自己的环境里（或 `--session-env`）已有同名键时，以用户的为准 —— 这是他的机器，不是我们的。
+- **`--session-env` 优先于内置清单**，`--no-altscreen-compat` 整份关掉。两者都进 `configKeys`，可以写进配置文件。
+- **清单只放"把全屏 TUI 拉回主屏"这一类变量**，不放任何改变程序行为的东西（模型、权限、遥测一概不碰）。
+
+为什么默认开：webterm 的定位就是[手机上用 AI CLI](0012-ai-cli-conversation-first.md)，而备用屏在这个场景里是**纯损失** —— 没有 scrollback、拖不动、刷新只剩一屏、切回还要靠 `redraw` 重画一遍。为什么必须能关：上游开关没有兼容承诺；也有人就是喜欢钉在底部的输入框。
+
+代价（要写进[install.md](../../80-ops/install.md)，不能让用户自己撞上）：**输入框从"钉在屏幕底部"变成"输出流的最后几行"**。
+
+实测把它说清楚（classic 渲染器，100×30，跑一条产出 60 行的命令，把字节流喂进一个最小 VT 渲染器复原）：
+
+```
+scrollback  ……  40  41                    ← 滚出屏幕的 47 行，全是真实输出
+屏幕 0-18   42 … 60                        ← 剩下的输出
+屏幕 20     ● 助手消息
+屏幕 24-26  ───────  ❯ hi  ───────          ← 输入框：贴底时就在屏幕底部
+屏幕 27-28  ⏵⏵ auto mode on · 状态提示
+```
+
+三条结论：
+
+- **贴底时输入框照样在屏幕底部**，看得见、能打字 —— 与今天没有区别。
+- **只有滚上去回看时它会跟着滚出视野**（备用屏下滚不动，所以它"永远在"）。回到底部就回来；而且手机上真正打字用的是 webterm 自己的[底部键条与编辑面板](0015-bottom-keyrow.md)，那是网页 UI，永远在屏幕底部，不依赖终端里那个框。
+- **这一轮实测里 scrollback 没有旧输入框的残影**：classic 渲染器在追加新内容前会擦掉自己的活动区（每次按键那 45–66 B 里的 `ESC[K` 就是干这个），滚出去的 47 行全是命令的真实输出。所以 R2 在这条路上比预期还干净 —— 但这是一次观测，不是承诺，E2E-36 第 5 步会把它钉成断言。
+
+### 2. 手势与渲染层：让滚动跟手
+
+三处，都在前端，互不依赖：
+
+- **拖动落地改成每帧一次。** 手势开始时缓存 `.xterm-viewport` 元素（别每个 `touchmove` 都 `querySelector`）；`touchmove` 只累加位移，`requestAnimationFrame` 里统一落一次 `scrollTop`；`touchend` 按末速度做**惯性衰减**（速度算法复用 `web/src/term/hswipe.ts` 的那套），碰到边界或下一次 `touchstart` 立刻停。`prefers-reduced-motion` 下不做惯性（直接停），与横滑切会话的处理一致。
+- **回看期间的强制写入改成分片慢写。** 攒到上限后不再一次 drain，而是每帧写一小块（预算见下），队列继续接收。视口位置由 xterm 维持，用户不会被拽到底部 —— 这条不变。
+- **所有大块写入都走同一个带预算的写入器。** 回放、快照恢复、强制写入共用：每帧最多写 `WRITE_BUDGET`（初值 64 KiB，按实测调），排完为止。**顺序绝不改**：xterm 不能前插，"先写最后一屏再补历史"是错的，只会把顺序搞乱。
+
+门槛（进验收标准）：拖动期间**没有 > 50 ms 的长任务**，每帧至多一次 `scrollTop` 写入。这台开发机没有 GPU，**只信主线程毫秒数**，掉帧数只能横向比；真机数值另外记进[手工清单](../../70-testing/manual-checklist.md)。
+
+### 3. 持久层：刷新之后仍有历史可滚
+
+客户端快照，**纯前端，不动协议**。`SerializeAddon` 已经加载在 `web/src/term/terminal.ts:63`，今天只在测试里用。
+
+**存**（`pagehide`，外加 `visibilitychange:hidden` 兜底 —— iOS 只保证前者）：
+
+```
+1. 先 queue.drain()          // 攒着的字节必须先落进缓冲，否则快照与 outSeq 对不上
+2. serialize.serialize({scrollback: SNAPSHOT_LINES})
+3. 读 connection.outSeqOf(sid)
+4. 一起写 IndexedDB：{ key: `${instance_id}:${sid}`, data, outSeq, cols, savedAt }
+```
+
+**取**（页面加载、`welcome` 到达之后、`subscribe` 之前）：
+
+```
+instance_id 不匹配 → 丢弃（agent 重启过，sid 会张冠李戴 —— 与 AC-2.13 同一条理由）
+超过 24h / 超过体积上限 → 丢弃
+命中 → terminal.reset() → 分片写入快照 → outSeq = 快照里的值 → subscribe{out_seq}
+```
+
+四条纪律：
+
+- **快照与 `outSeq` 必须来自同一时刻**，任何一步失败就整条不存（宁可退回今天的行为）。这是 R2 的命门：一旦出现"用了快照却报 `out_seq: 0`"，agent 会把整段历史**再追加一遍** —— 那才是真正的重复来源。
+- **备用屏会话不存快照**（`term.buffer.active.type === 'alternate'`）。状态不是流，存下来就是 [ADR-0019](0019-altscreen-redraw-not-replay.md) 那种残影。第 1 步之后 claude 不在这条路上，vim / less 仍在。
+- **`SNAPSHOT_LINES` 取 2000，不是 5000。** 序列化 5000 行带 SGR 属性可能几 MB，`pagehide` 里做不完；2000 行已经覆盖"往回翻一翻"的真实需求。
+- **只存活动会话 + 最近 K 个**（K 取 3），其余丢弃；IndexedDB 不是无限的。
+
+ring 已经翻轮时照旧走 `ATTR_PREFIX`：清屏重建，快照被覆盖 —— 协议里已有的语义，不需要改。
+
+### 4. 备用屏层：把回滚交给程序
+
+只服务 vim / less / htop，以及不愿关备用屏的人。
+
+- 备用缓冲 **且** `term.modes.mouseTrackingMode !== 'none'` 时，纵向拖不再改 `scrollTop`，而是按行步长累积、合成 `WheelEvent` 派发到 `.xterm-screen`，**让 xterm 按它当前的协议（x10 / vt200 / 1006 / 1015）自己编码上报** —— 我们不自己拼 SGR 序列，那等于把协议选择重写一遍。
+- **有节流上限**（每 16 ms 最多 3 行）：一次滑动可能对应几十行，不节流就是往 PTY 灌。
+- **没开鼠标跟踪的备用屏程序保持现状**（拖不动）。**绝不**退化成发 PageUp / 方向键 —— 那会改程序状态（vim 会移动光标），比没反应更糟。
+
+这条路天然满足 R2/R3（每一屏都是程序自己画的完整帧），但**天然做不到 R4**：每次滚动是一个 RTT + 程序重画（实测 52 B ~ 1.2 KB），只能是"翻页"手感。要跟手只有第 1 步。
+
+### 不做的
+
+- **不做服务端 headless VT / 行级历史。** 它是彻底方案（能把回滚深度从"字节"变成"可预期的行数"，还能顺带解决硬裁剪切断转义序列、回放按客户端宽度重排两条已知限制），但要引入新依赖、每会话几十 KB 起步的常驻状态、每字节多一次解析，且热升级要交接整屏 + 历史。**仍是 v0.2 候选**（[ADR-0019](0019-altscreen-redraw-not-replay.md) §7 已记），等这四步的实际效果再决定。
+- **不改回放的宽度语义。** 刷新时 `subscribe` 带的是客户端 `fit()` 之后的尺寸，agent 先算分支再应用尺寸（协议 §4.1），所以那段字节是按**旧宽度**产出、在**新宽度**里重新折行的 —— 横竖屏切换后刷新，框线会歪一屏，直到下一次整屏重画自愈。**接受**：它不产生重复、会自愈，消灭它的成本是上一条。
+- **不动增量续传。** `status == "ok"` 那条路一个字节都不碰，AC-2.1 是本 ADR 的回归红线。
+- **不给备用屏合成假的 scrollback。** 把差分帧攒起来"猜"哪些行滚出去了，等于在客户端做半个终端模拟器，错一次就是永久错位。
+
+## 代价与取舍
+
+- **依赖一个上游私有变量**（第 1 步）。它失效时表现为"claude 又回到备用屏"，不是崩溃；`--no-altscreen-compat` 与[排障口径](#排障口径)是退路。
+- **输入框从钉底变成流的最后几行**（第 1 步）。贴底时看得见、能打字，只有回看时会滚出视野（实测见 §1）。这是用户能看见的最大变化，必须写进文档。
+- **多一份客户端存储**（第 3 步）：每会话最多 2000 行序列化内容躺在 IndexedDB 里。终端输出**仍然不落 agent 的盘**（不变式 ③ 说的是 agent 侧），但"浏览器本地留了一份"要写进[隐私文档](../../60-security/privacy-history.md)。
+- **惯性滚动是新手感**（第 2 步），跟今天"松手即停"不一样。`prefers-reduced-motion` 下保持旧行为。
+- **备用屏的回滚仍然是翻页手感**（第 4 步），且深度由程序决定。这是终端模型的下限，不是实现偷懒。
+
+## 影响
+
+### 排障口径
+
+判断第 1 步有没有生效，两问，都要能在真会话里当场回答：
+
+1. **变量注入到位了吗** —— 会话里 `env | grep CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN`。
+2. **程序真的留在主屏了吗** —— 浏览器控制台 `__webterm.altScreen()`（`web/src/ui/app.tsx` 的调试钩子，生产构建里也在），`false` = 生效。UI 上的等价信号：键条控态（`data-context`）不再切成 TUI 那一档。
+
+**不要用 `script -c claude` 抓 `ESC[?1049h` 来验。** 实测：`script` 拿不到 winsize 时 claude **自己**就退回 classic 渲染器（`?1049h` 0 次），这个 0 与注入无关。顺带说明 classic 渲染器是上游支持的正常路径 —— 它本来就是终端能力不足时的降级目标，不是我们撬出来的旁门。
+
+### 要改的文档
+
+| 文档 | 改动 |
+|---|---|
+| `10-requirements/acceptance-criteria.md` | 新增 AC-5.14 ~ AC-5.17、AC-7.8；AC-5.9 的"强制写入"改成分片慢写 |
+| `40-frontend/session-ux.md` | 手势仲裁表加备用屏那一行；§回看时暂停跟随 改写入策略；新增 §刷新后的回滚 |
+| `40-frontend/layout-responsive.md` | §渲染 加滚动与大块写入的预算规则 |
+| `50-backend/session-manager.md` | §创建 的环境那一行加 `--session-env` 与内置清单 |
+| `80-ops/install.md` | 参数表加两个开关 + 写清 claude 观感变化 |
+| `80-ops/troubleshooting.md` | 加"往回拖不动 / 刷新只剩一屏"的排查条目 |
+| `60-security/privacy-history.md` | 浏览器本地会留一份终端快照 |
+| `70-testing/e2e-scenarios.md` | 新增 E2E-36 / 37 / 38 |
+| `90-roadmap/milestones.md` | v0.2 清单置顶本 ADR 的四步 |
+| `20-architecture/overview.md` | 决策记录表加 0024 |
+
+### 新增验收标准
+
+- **AC-5.14**：刷新页面后能往回滚到刷新前缓冲的**最后 2000 行**（不足则全部）；恢复内容与刷新前逐行一致；整段内容**只出现一份**；`instance_id` 变了时快照被丢弃。
+- **AC-5.15**：触屏纵向拖每帧至多一次 `scrollTop` 写入，拖动期间**无 > 50 ms 长任务**；松手有惯性，碰边界或再次触摸即停；`prefers-reduced-motion` 下不做惯性。
+- **AC-5.16**：回放 / 快照恢复 / 强制写入共用带预算的写入器，每帧 ≤ 64 KiB，**顺序不变、不丢不重**；期间输入不被丢。
+- **AC-5.17**：备用屏且程序开了鼠标跟踪时，纵向拖转成滚轮上报（按行步长、有节流上限）；**没开鼠标跟踪时不发任何按键**。
+- **AC-7.8**：`--session-env` 注入到会话 PTY；内置清单可用 `--no-altscreen-compat` 关掉；**用户已设过的同名变量不被覆盖**。
+
+### 测试要求
+
+- **UT**：快照存取（原子性 —— 序列化失败 / 写库失败时整条不存；`instance_id` 不匹配即丢弃；备用屏不存）；带预算的写入器（顺序、边界、预算耗尽后继续）；惯性衰减函数。
+- **UT/IT**（Go）：`--session-env` 解析与优先级（用户 > 内置清单）、`--no-altscreen-compat`、不覆盖已有值。
+- **E2E**：见下面三条场景。
+- **回归红线**：`TestByteLevelContinuity` / E2E-2（字节级连续性，AC-2.1）与 `TestHandoffByteLevelContinuity` 必须原样通过 —— 这四步都没碰增量路径，一旦它们红了就是碰到了不该碰的地方。
+
+### 代码落点
+
+`cmd/webterm/flags.go` · `cmd/webterm/config.go`（两个开关，进 `configKeys`）· `internal/session/manager.go`（`cmd.Env`）· `web/src/term/pinch.ts`（rAF + 惯性 + 备用屏转滚轮）· `web/src/term/outputqueue.ts`（分片慢写）· `web/src/sessions/store.ts`（带预算的写入器、快照存取）· `web/src/term/snapshot.ts`（新，IndexedDB）· `web/src/ui/app.tsx`（`pagehide` / 恢复时机）

@@ -166,7 +166,8 @@ name = nameIsManual ? 手动名 : (cwd ? basename(cwd) : "shell")
 
 | 条件 | 手势 | 动作 |
 |---|---|---|
-| 1×，纵向占优 | 单指上下拖 | 滚 scrollback（`.xterm-viewport.scrollTop`） |
+| 1×，纵向占优，**主屏** | 单指上下拖 | 滚 scrollback（`.xterm-viewport.scrollTop`，每帧落一次、松手带惯性，[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)） |
+| 1×，纵向占优，**备用屏且程序开了鼠标跟踪** | 单指上下拖 | 按行步长转成**滚轮上报**交给程序自己滚（AC-5.17）。没开跟踪就拖不动 —— **不发任何按键** |
 | 1×，横向占优 | 单指左右拖 | **切会话**（本节） |
 | 放大态（> 1×） | 单指拖 | 平移放大后的画面（横向也不切会话） |
 | 任意 | 双指 | 缩放（[ADR-0013](../20-architecture/adr/0013-terminal-only.md) §4） |
@@ -226,7 +227,7 @@ shell 退出后：
 - **怎么知道视口动了**：两路都听。xterm 的 `onScroll` 只在**程序化**滚动时来（`scrollLines` / `scrollToBottom`、以及输出把缓冲推着走）；滚轮、触屏拖动、拖滚动条这些 **DOM 驱动的滚动它不报** —— xterm 5.5 的 Viewport 把它们一律标成 `suppressScrollEvent`。所以另外监听 `.xterm-viewport` 的 DOM `scroll` 事件（终端 `open()` 之后才有这个元素）。两路回调都不看事件本身带的位置，只按当时的真实视口位置判定 —— 单靠 `onScroll` 的版本 e2e 能过（用的是程序化 `scrollLines`）而真机不过，教训在此。
 - 终端右下角的提示条（`data-testid="follow-pill"`）**视口一离开底部就出现，与有没有新输出无关**：还没有新输出时写 **「回到底部 ↓」**；有新输出后写 **「已暂停跟随 · 新增 N 行 ↓」**（没有换行的整屏重绘写「有新输出」）。用户滚上去读完旧输出，总要有个一键回底的东西，不能只在输出流动时才给。点它 = `scrollToBottom()`。
 - **回到底部一次写完**：顺序不变、一个字节不丢。序号与 ack 在连接层收到时就记好了，跟这里写不写无关（续传的字节级一致性不受影响）。触发写入的时刻：用户滚到底、点提示条、**输入**（xterm `scrollOnUserInput` 会滚到底）、占屏程序启动（`applyInteractive` 滚到底）、回放帧到达（回放前先把队列排空，保证顺序）。
-- **上限**：暂停期间队列攒到 2 MiB 或 4000 行就强制写入 —— 再多也会被 scrollback 裁掉；强制写入不动视口。提示条的计数是**暂停以来的新增总量**，强制写入不清零 —— 那些行用户还没看到，提示条也不该因此闪一下变成「回到底部」。
+- **上限**：暂停期间队列攒到 2 MiB 或 4000 行后转入**分片慢写** —— 每帧写一小块（与回放、快照恢复共用同一个带预算的写入器，每帧 ≤ 64 KiB，AC-5.16），不再一次性 drain。一次性 drain 的问题是它恰好打断用户正在读的那一屏；分片之后队列继续接收，视口位置照旧由 xterm 维持、不动。提示条的计数是**暂停以来的新增总量**，强制写入不清零 —— 那些行用户还没看到，提示条也不该因此闪一下变成「回到底部」。
 - **回放帧不暂停也不合并**：它是一段有界的补课。`terminal.reset()`（reset 续传）时清空队列并恢复跟随 —— 屏幕要按服务端缓冲重建，重建完视口在底部。
 - 贴底时的实时帧也走这个队列，**同一帧内到达的多个包合成一次 `write`**：解析与渲染次数按帧算而不是按包算。
 
@@ -235,6 +236,33 @@ shell 退出后：
 多端：手机 / 平板的单指滚动是 `pinch.ts` 直接改 `.xterm-viewport` 的 `scrollTop`，走的正是上面说的 DOM `scroll` 那一路，判定与提示和桌面一致；提示条在 `.canvas` 里绝对定位，落在底部键行之上、不被双指缩放的 transform 影响；编辑面板升起时会盖住它 —— 那时用户在写不在读。
 
 **不开 `smoothScrollDuration`**。试过 80ms：xterm 5.5 的平滑滚动用 DOM `scrollTop` 动画实现，持续输出时和它自己的 `syncScrollArea` 打架，程序化 `scrollLines` 会被吞掉或只动一格，`onScroll` 报的位置与最终视口对不上。滚轮按行跳的台阶感是小事，跟随判定出错是大事。
+
+## 刷新后的回滚（AC-5.14）
+
+刷新把前端状态清空：每会话的 `outSeq` 回到 0，于是 `subscribe{out_seq: 0}` 让 agent 把环形缓冲里**全部**字节发过来。后果是两条 —— 刷新前 xterm 里的几千行一行都回不来（agent 手里只有 `ring_bytes` 那个字节窗口），而会话在备用屏时那堆字节还会全部画在同一屏上互相覆盖，终态与只画最后一帧完全相同（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §背景）。
+
+所以**刷新前存一份快照，刷新后先写回去，再用快照里的 `out_seq` 走增量续传**。纯客户端，协议一个字段都不加 —— agent 看到的就是一条普通的 `subscribe`。
+
+```
+存（pagehide，visibilitychange:hidden 兜底 —— iOS 只保证前者）:
+  1. queue.drain()                       // 攒着的字节先落进缓冲，否则与 out_seq 对不上
+  2. serialize.serialize({scrollback: 2000})
+  3. 读 connection.outSeqOf(sid)
+  4. 一起写 IndexedDB: { key: `${instance_id}:${sid}`, data, outSeq, cols, savedAt }
+
+取（welcome 之后、subscribe 之前）:
+  instance_id 不匹配 / 超 24h / 超体积 → 丢弃
+  命中 → terminal.reset() → 分片写回 → outSeq = 快照值 → subscribe{out_seq}
+```
+
+四条纪律，少一条就会变成"重复"或"错乱"：
+
+- **快照与 `out_seq` 必须同刻生成**，任何一步失败就整条不存（宁可退回今天的行为）。一旦出现"用了快照却报 `out_seq: 0`"，agent 会把整段历史**再追加一遍** —— 那才是重复的真正来源。
+- **`instance_id` 不匹配就丢弃**。agent 重启过，`sid` 会被重新分配，接上去就是张冠李戴（与 AC-2.13 同一条理由）。
+- **备用屏会话不存快照**（`buffer.active.type === 'alternate'`）。那是状态不是流，存下来就是 [ADR-0019](../20-architecture/adr/0019-altscreen-redraw-not-replay.md) 治过的那种残影。
+- **配对失效 / 设备被吊销时清掉本地快照**，见 [privacy-history.md](../60-security/privacy-history.md#浏览器本地的一份快照adr-0024)。
+
+ring 已经翻轮时照旧走 `ATTR_PREFIX`：清屏重建，快照被覆盖 —— 协议里已有的语义，不需要改。
 
 ## 渲染器可见（AC-5.10）
 
