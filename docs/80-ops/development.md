@@ -62,6 +62,20 @@ sudo apt install -y libnss3 libnspr4
 缺库时 Chromium 直接起不来（`error while loading shared libraries: libnspr4.so`），
 E2E 全部失败，看起来像代码坏了。
 
+**拿不到 sudo 时**（共享机器、容器里没 root）不用放弃，把库解到自己目录就行：
+
+```bash
+apt-get download libnspr4 libnss3                   # 下载本身不需要 sudo
+for f in *.deb; do dpkg-deb -x "$f" ./root; done
+export LD_LIBRARY_PATH=$PWD/root/usr/lib/x86_64-linux-gnu
+# 验证：没有输出就是齐了
+ldd ~/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell | grep 'not found'
+```
+
+`LD_LIBRARY_PATH` 只对当前 shell 有效，**每开一个新终端都要再 export 一次**。
+忘了它的表现与根本没装一模一样：整套 E2E 全红、错误都在浏览器启动那一行，
+和代码没关系 —— 先按上面那条 `ldd` 验一遍再去怀疑自己的改动。
+
 **2. 别把三套测试串在一条命令里跑。**
 
 `go test ./...` 会起一堆真 PTY 与 SQLite，Playwright 会起 Chromium。在小内存
