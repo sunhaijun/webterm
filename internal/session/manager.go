@@ -40,6 +40,90 @@ type Config struct {
 	// RCFileFor 生成会话的临时 rcfile，返回路径。nil 表示不注入 shell 集成
 	// （--no-shell-integration）。m5 由 internal/shellinit 提供实现。
 	RCFileFor func(sid uint16) (string, error)
+
+	// SessionEnv 是 --session-env 给的 KEY=VAL，注入每个会话的 PTY（AC-7.8）。
+	// 同一个键出现多次时后面的胜出 —— 配置文件先灌、命令行后 Parse，
+	// 于是"命令行压过配置文件"这条规则在这里自然成立。
+	SessionEnv []string
+
+	// NoAltScreenCompat 关掉内置的备用屏兼容清单（--no-altscreen-compat）。
+	//
+	// 【故意是反的】：零值 = 清单生效。默认开的布尔项写成正向字段，
+	// 任何忘了填 Config 的调用方都会静默失去默认行为。
+	NoAltScreenCompat bool
+}
+
+// altScreenCompat 是"把全屏 AI CLI 拉回主屏"的内置清单
+// （AC-7.8，ADR-0024 §1）。
+//
+// 为什么要有它：只有主屏的输出是**追加流**，才有 scrollback 可以往回拖；备用屏
+// 的差分帧离开 ESC[?1049h 就没有意义，刷新后回放它只会画出同一屏（ADR-0019）。
+//
+// 边界写死在这里：清单里**只放"把 TUI 拉回主屏"这一类开关**，任何改变程序行为
+// 的（模型、权限、遥测）一概不放。这些还都是上游的私有变量、没有兼容承诺，
+// 所以它必须能关（--no-altscreen-compat），也必须能验证
+// （docs/80-ops/troubleshooting.md 的两问）。
+var altScreenCompat = []string{
+	"CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1",
+}
+
+// buildEnv 组装会话 PTY 的环境（AC-7.8）。优先级从高到低：
+//
+//	fixed        webterm 自己的口径（TERM / WEBTERM_SESSION），不可覆盖
+//	sessionEnv   --session-env，用户显式指定
+//	base         agent 继承来的环境，用户机器上本来就有的
+//	compat       内置兼容清单，只在前三者都没有这个键时才生效
+//
+// 返回值里每个键只出现一次。exec 自己也会去重（保留最后一条），但"最后一条
+// 胜出"是隐式规则，不该成为正确性的依据 —— 显式去重才能让单测断言得起来。
+func buildEnv(base, compat, sessionEnv, fixed []string) []string {
+	at := make(map[string]int, len(base)+len(compat)+len(sessionEnv)+len(fixed))
+	out := make([]string, 0, len(base)+len(compat)+len(sessionEnv)+len(fixed))
+	put := func(kv string, overwrite bool) {
+		k := envKey(kv)
+		if k == "" {
+			return
+		}
+		if i, ok := at[k]; ok {
+			if overwrite {
+				out[i] = kv
+			}
+			return
+		}
+		at[k] = len(out)
+		out = append(out, kv)
+	}
+	for _, kv := range base {
+		put(kv, true)
+	}
+	for _, kv := range compat {
+		put(kv, false) // 用户已经设过的不覆盖 —— 这是他的机器
+	}
+	for _, kv := range sessionEnv {
+		put(kv, true)
+	}
+	for _, kv := range fixed {
+		put(kv, true)
+	}
+	return out
+}
+
+// envKey 取 KEY=VAL 的键；没有 = 的条目没有键，调用方会丢掉它。
+func envKey(kv string) string {
+	for i := 0; i < len(kv); i++ {
+		if kv[i] == '=' {
+			return kv[:i]
+		}
+	}
+	return ""
+}
+
+// compatEnv 返回本次要注入的兼容清单。
+func (c *Config) compatEnv() []string {
+	if c.NoAltScreenCompat {
+		return nil
+	}
+	return altScreenCompat
 }
 
 func (c *Config) withDefaults() {
@@ -255,12 +339,17 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 
 	cmd := exec.Command(m.cfg.Shell, args...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(),
-		"TERM=xterm-256color", // xterm.js 的能力集与它最匹配
-		fmt.Sprintf("WEBTERM_SESSION=%d", sid),
+	// 会话环境（AC-7.8）：继承的环境先清掉干扰 shell 初始化的两个键，
+	// 再叠兼容清单 / --session-env / webterm 自己的口径。优先级见 buildEnv。
+	cmd.Env = buildEnv(
+		filterEnv(os.Environ(), "BASH_ENV", "ENV"),
+		m.cfg.compatEnv(),
+		m.cfg.SessionEnv,
+		[]string{
+			"TERM=xterm-256color", // xterm.js 的能力集与它最匹配
+			fmt.Sprintf("WEBTERM_SESSION=%d", sid),
+		},
 	)
-	// 清理可能干扰 shell 初始化的变量
-	cmd.Env = filterEnv(cmd.Env, "BASH_ENV", "ENV")
 
 	raw, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
 	if err != nil {

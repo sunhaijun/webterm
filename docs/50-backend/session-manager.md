@@ -198,7 +198,8 @@ os.Remove(rcPath)
 
 - **用户已经设过的同名变量不覆盖**（agent 自己的环境里有，或 `--session-env` 给了）—— 这是他的机器；
 - `--session-env` 优先于清单，`--no-altscreen-compat` 整份关掉；
-- 清单里**只放"把 TUI 拉回主屏"这一类变量**，任何改变程序行为的（模型、权限、遥测）一概不放。
+- 清单里**只放"把 TUI 拉回主屏"这一类变量**，任何改变程序行为的（模型、权限、遥测）一概不放；
+- `TERM` 与 `WEBTERM_SESSION` 是 webterm 自己的口径（前者决定 xterm.js 那侧的能力匹配，后者是 shell 集成的会话标识），**不接受覆盖** —— `--session-env` 写了这两个键会在解析时直接报错，`internal/session` 里还有第二道兜底。
 
 这些是上游的私有开关，没有兼容承诺，所以必须能关、也必须能验证（[troubleshooting.md](../80-ops/troubleshooting.md#往回拖不动--刷新后只剩最后一屏)）。
 

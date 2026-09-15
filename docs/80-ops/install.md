@@ -386,7 +386,7 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | `--shell` | `bash` | v0.1 只支持 bash |
 | `--log-level` | `info` | `debug` / `info` / `warn` / `error`。公网扫描器制造的 TLS 握手失败记在 `debug`，默认看不到 |
 
-> **`--session-env` 与 `--no-altscreen-compat` 会改变 AI CLI 的观感。** webterm 默认注入一份内置清单（目前只有 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`），把全屏 AI CLI 拉回主屏 —— 只有主屏的输出才是可以往回拖的追加流（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）。可见的变化只有一条：**输入框从"钉在屏幕底部"变成"输出流的最后几行"** —— 贴底时它照样在屏幕底部、照样能打字，只有你滚上去回看时它会跟着滚出视野，回到底部就回来。换来的是 5000 行可以拖着看的历史。不想要就 `--no-altscreen-compat`。
+> **`--session-env` 与 `--no-altscreen-compat` 会改变 AI CLI 的观感。** webterm 默认注入一份内置清单（目前只有 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`），把全屏 AI CLI 拉回主屏 —— 只有主屏的输出才是可以往回拖的追加流（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）。可见的变化只有一条：**输入框从"钉在屏幕底部"变成"输出流的最后几行"** —— 贴底时它照样在屏幕底部、照样能打字，只有你滚上去回看时它会跟着滚出视野，回到底部就回来。换来的是 5000 行可以拖着看的历史。不想要就 `--no-altscreen-compat`。`--session-env` 可以重复给，也可以写进配置文件（多行）—— 两边是**合并**，同名键以后出现的为准，所以命令行照样压过配置文件；`TERM` 和 `WEBTERM_SESSION` 由 webterm 定死，写了会直接报错。
 
 ### 其它子命令
 

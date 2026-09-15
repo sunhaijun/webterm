@@ -154,7 +154,7 @@
 | AC-7.5 | OSC 解析器正确处理跨读边界分片、`BEL` 与 `ST` 两种终止符、超长负载（截断保护）、畸形负载（忽略不崩溃）、无关 OSC 原样透传 | UT-osc-2..9 |
 | AC-7.6 | 集成握手（`OSC 1701;hello`）10 秒内未收到时，会话标记 `integration: inactive`，UI 显示降级提示 | IT-shell-6, E2E-13 |
 | AC-7.7 | 集成脚本执行失败或语法错误不导致 shell 启动失败（终端仍可用） | IT-shell-7 |
-| AC-7.8 | **会话环境注入**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：`--session-env KEY=VAL`（可重复）注入到会话 PTY；内置清单（把已知全屏 TUI 拉回主屏，目前只有 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`）默认生效、可用 `--no-altscreen-compat` 关掉；**用户已经设过的同名变量不被覆盖**，`--session-env` 优先于内置清单 | IT-sessionenv-1..3 |
+| AC-7.8 | **会话环境注入**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：`--session-env KEY=VAL`（可重复）注入到会话 PTY；内置清单（把已知全屏 TUI 拉回主屏，目前只有 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`）默认生效、可用 `--no-altscreen-compat` 关掉；**用户已经设过的同名变量不被覆盖**，`--session-env` 优先于内置清单；`TERM` / `WEBTERM_SESSION` 由 webterm 定死，`--session-env` 给这两个键**在解析时就报错**（不静默忽略）；配置文件与命令行的 `session-env` 是**合并**，同名键后出现的胜出（于是命令行照样压过配置文件） | IT-sessionenv-1..3 |
 
 ---
 
