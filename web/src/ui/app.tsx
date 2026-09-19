@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { listCommands, type CommandRecord } from '../commands/api'
 import { HistoryPanel, QuickBar } from '../commands/history'
 import { Connection, type ConnState, type StateInfo } from '../conn/connection'
+import { inputTrace, viewOf } from '../input/inputstats'
 import { useChips } from '../input/chips'
 import { type Chip, tokenAt } from '../input/complete'
 import { Composer, type ComposerHandle } from '../input/composer'
@@ -446,6 +447,14 @@ export function App() {
       }
       e.preventDefault()
     }
+    // 输入路径探针的头两段（AC-3.17）。【必须是捕获阶段】：xterm 处理掉的键会
+    // preventDefault + stopPropagation，冒泡阶段根本收不到 —— 挂在冒泡上的话
+    // 正常打字反而计不上数，探针本身就成了误导
+    const onKeyTrace = () => {
+      inputTrace.bump('keydown')
+      if (document.activeElement?.classList.contains('xterm-helper-textarea')) inputTrace.bump('toTerm')
+    }
+    window.addEventListener('keydown', onKeyTrace, true)
     window.addEventListener('keydown', onKey)
 
     // resize 控制消息做 100ms 防抖（AC-3.11）
@@ -629,9 +638,21 @@ export function App() {
         const buf = term.term.buffer.active
         return { y: buf.viewportY, top: buf.getLine(buf.viewportY)?.translateToString(true) ?? '' }
       },
+      // 打字没反应时按段看断在哪一层（AC-3.17）。生产构建里也在 —— 排障要在
+      // 真机真会话里当场能做，藏在 dev build 里等于没有
+      inputStats: () =>
+        viewOf(
+          inputTrace.snapshot({
+            unackedBytes: store.active === null ? 0 : conn.unackedOf(store.active),
+            focus: document.activeElement?.className ?? '',
+            sid: store.active,
+          }),
+          Date.now(),
+        ),
     }
 
     return () => {
+      window.removeEventListener('keydown', onKeyTrace, true)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('resize', applyViewport)
       removeEventListener('online', kick)
