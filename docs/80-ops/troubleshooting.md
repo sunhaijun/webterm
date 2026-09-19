@@ -339,6 +339,24 @@ journalctl --user -u webterm -n 200 --no-pager
 
 **排查**：在 Safari 的 Web Inspector 里聚焦输入框后看 `document.querySelector('.app').style.transform` —— 键盘弹起时应为 `translateY(<offsetTop>px)`；为空即闸门没开，对比 `visualViewport.height`、`document.documentElement.clientHeight`、`window.innerHeight` 三个数。
 
+## 在 tmux 里突然打不进字（滚了一下之后）
+
+**现象**：在 webterm 里跑 tmux，tmux 里跑 claude / codex。滚了一下滚轮（或触屏拖了一下）之后，键盘输入完全没反应；点终端、切会话、刷新页面、断线重连**全都没用**。
+
+**根因**：不是 webterm。tmux 开了 `mouse on` 时，默认根绑定是
+
+```
+WheelUpPane → if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" { send-keys -M } { copy-mode -e }
+```
+
+pane 里的前台程序那一刻**没开鼠标跟踪**的话，一次滚轮就把它推进 **copy-mode** —— 之后的键全是 copy-mode 命令，不进程序。状态在 **tmux 服务器**里，所以 webterm 这边做什么都不管用。
+
+**确认**：pane 右上角有 `[12/340]` 这种位置指示；或者在别处 `tmux display -p -t <session> '#{pane_in_mode}'`，回 `1` 就是。
+
+**出口**：按 `q` 或 `Esc`。
+
+**注意**：`--no-altscreen-compat` 的默认值（把 claude 拉回 classic 渲染器，[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1）会让这个坑**变密** —— classic 渲染器不开鼠标跟踪，于是 tmux 里每一次滚轮都会进 copy-mode。在 tmux 里跑 claude 又不想碰这个坑，可以 `tmux set -g mouse off`，或给 webterm 加 `--no-altscreen-compat`（代价是回滚历史没了）。
+
 ## claude / codex 跑着，读视图却没有转录卡片
 
 **现象**：进了 claude / codex，读视图是块流的门或空转录视图，尾巴条有输出但没有对话卡片。
