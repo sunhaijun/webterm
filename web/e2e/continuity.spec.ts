@@ -78,7 +78,15 @@ async function runEmit(page: Page, lines: number, cuts: number): Promise<string>
 
   await waitFor(async () => (await terminalText(page)).includes('EMIT-DONE'), '输出跑完', 90_000)
   await waitQuiet(page)
-  return serialize(page)
+  // 【只比对输出本体，不含 shell 提示符】。每一轮用新会话拿干净屏幕，而新会话继承
+  // 当前会话的 cwd —— 提示符里的路径本来就不同，把它算进来就是拿无关差异当失败。
+  // AC-2.1 要的是【输出字节流】的连续性，emit.sh 的内容（颜色 / CJK / 超长行）已经
+  // 把折行与属性都覆盖到了。
+  const full = await serialize(page)
+  const from = full.indexOf('line 00001')
+  const to = full.lastIndexOf('EMIT-DONE')
+  if (from < 0 || to < 0) throw new Error(`序列化结果里找不到输出区间：from=${from} to=${to}`)
+  return full.slice(from, to + 'EMIT-DONE'.length)
 }
 
 test.describe('E2E-2 字节级连续性', () => {
@@ -99,8 +107,21 @@ test.describe('E2E-2 字节级连续性', () => {
     expect(baseline.length, '基准输出太少，测不出东西').toBeGreaterThan(4096)
 
     for (const cuts of [1, 3]) {
-      await page.reload()
-      await expect(page.getByTestId('conn-text')).toHaveText('在线')
+      // 【每一轮换一个新会话拿干净屏幕，不要用 page.reload()】。
+      //
+      // 原来这里是刷新。刷新之后客户端会以 out_seq=0 重新订阅，agent 把整个环形
+      // 缓冲全量回放一遍 —— 上一轮的 300 行原样回到屏幕上，于是 runEmit 等的
+      // `line 00005` 与 `EMIT-DONE` 在命令还没跑之前就已经满足，它立刻拿【回放】
+      // 当结果去比，自然逐字节相同。**断线那部分根本没跑到，这条红线是假绿的**
+      //（2026-09-19 发现：修好"刷新后输入被当成重发丢掉"之后，第二条命令真的执行
+      // 了，屏幕上变成两份，比较才失败 —— 假绿这才暴露出来）。
+      const prev = await page.evaluate(() => (window as unknown as { __webterm: { sid(): number | null } }).__webterm.sid())
+      await page.keyboard.press('Control+Shift+Enter')
+      await waitFor(
+        async () => (await page.evaluate(() => (window as unknown as { __webterm: { sid(): number | null } }).__webterm.sid())) !== prev,
+        '切到了新会话（屏幕是干净的）',
+        15_000,
+      )
       const got = await runEmit(page, 300, cuts)
 
       if (got !== baseline) {

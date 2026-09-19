@@ -196,3 +196,32 @@ test('E2E-34 ④ 打字没反应时，inputStats 指得出断在哪一段', asyn
   // 四段的总量早就大于 0，拿总量断言的话这里恒绿
   expect(after.verdict, `焦点丢掉时的判断：${after.verdict}`).toContain('焦点不在终端')
 })
+
+/**
+ * E2E-34 ⑤ 刷新之后打字还进得去（协议 §5.3 / ADR-0020 第 5 条）。
+ *
+ * `client_id` 的生存期必须是一次页面加载：它跨刷新保留的话，client 的 `in_seq`
+ * 从 0 重来而 agent 的 `accepted` 没有，agent 会把新输入当成重发【整段丢掉】——
+ * 不写 PTY、不 ack、不报错。刷新前打过多少字节，刷新后就有多少字节凭空消失。
+ */
+test('E2E-34 ⑤ 刷新之后打字还进得去', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  // 【刷新前必须先打一些】：agent 那侧的 accepted 大于 0，欠账才存在
+  await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
+  await typeLine(page, 'echo BEFORE')
+  await waitFor(async () => (await terminalText(page)).includes('BEFORE'), 'BEFORE 回显')
+
+  await page.reload()
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
+  await typeLine(page, 'echo AFTER')
+  await waitFor(
+    async () => (await terminalText(page)).includes('AFTER'),
+    `刷新后打的字被 agent 当成重发丢掉了，焦点在 ${await focused(page)}`,
+    20_000,
+  )
+})

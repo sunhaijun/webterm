@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -429,6 +430,14 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 		return ErrInputGap
 	case seq < queued:
 		skip := queued - seq
+		if seq == 0 && queued > 0 {
+			// 【客户端把 in_seq 重置了，而这边的记账没有】。协议 §5.3：client_id 的
+			// 生存期必须是一次页面加载 —— 跨刷新保留的话就是这个形状，而后果是整段
+			// 新输入被当成重发丢掉，用户看到"刷新之后打字没反应"且毫无线索
+			// （ADR-0020 第 5 条就是这么躲过四轮排查的）。宁可吵也要留痕。
+			slog.Warn("输入的 in_seq 从 0 重来，但这个 client_id 已有记账 —— 本段会被当成重发丢弃（协议 §5.3）",
+				"sid", s.sid, "client", clientID, "accepted", queued, "len", len(data))
+		}
 		if skip >= uint64(len(data)) {
 			s.mu.Unlock() // 整段都是已处理过的重发
 			return nil

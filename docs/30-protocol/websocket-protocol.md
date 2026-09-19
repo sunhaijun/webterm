@@ -17,7 +17,7 @@
 | `in_ack` | agent 已真正写入 PTY 的累计输入字节数 |
 | `base_seq` | 环形缓冲当前保留内容的起始 `out_seq` |
 | `head_seq` | 环形缓冲当前的末尾 `out_seq`（= 该会话累计产出字节数） |
-| `client_id` | 一个浏览器标签页的身份。**输入记账的 key**，见 §5.3 |
+| `client_id` | **一次页面加载**的身份（不是标签页的一生）。**输入记账的 key**，见 §5.3 |
 | `instance_id` | agent 进程本次启动的随机 id。用于识别"agent 重启过"，见 §5.2 |
 
 **seq 是字节计数，不是消息计数。** 理由见 [ADR-0009](../20-architecture/adr/0009-hybrid-ws-framing.md)。
@@ -483,6 +483,14 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 
 - agent 为每个 `(client_id, sid)` 维护 `in_ack`，**保留到会话销毁为止**（一个 `uint64`，上界 `max_conns × max_sessions`）
 - 该 `client_id` 从未对这个会话发过输入时 `in_ack = 0`，此时 client 侧的 `in_seq_next` 也必然是 0，两侧天然对齐
+
+**`client_id` 的生存期必须是【一次页面加载】，不能跨刷新保留。**
+
+`in_seq_next` 与 `pending` 都活在页面里，页面一走它们就归零；而 agent 的 `accepted` 按 `client_id` 记、保留到会话销毁。把 id 留到刷新之后（比如存 `sessionStorage`），两侧记账就错位了：client 从 `seq = 0` 重新开始，agent 看到 `seq < accepted` 且 `accepted - seq >= len(data)`，于是把**新输入当成重发整段丢掉** —— 不写 PTY、不 ack、不报错。
+
+症状是**刷新之后打字完全没反应**，而且**刷新不会让它变好**：`accepted` 只增不减，刷一次欠账只会更多。要等用户又打够 `accepted` 字节才恢复，观感上就是"一直打不进"（2026-09-19 实测确认，[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 的那条原则在这里被破了）。
+
+代价是 agent 为每个 `(client_id, sid)` 留一份记账（两个 `uint64` + key，约 60 B），上界从"`max_conns × max_sessions`"变成"**该会话生命周期内的页面加载次数 × max_sessions**"。会话销毁即释放；按每天刷新上百次算也只有几十 KB，**换来的是"刷新之后打字还进得去"**，值。
 - 若按连接记账，重连后 `in_ack` 归零而 client 的 `pending` 仍从旧 `seq` 起，agent 会判 `seq > in_ack` → `input_gap` → 关连接 → 无限重连。**断线期间的输入不丢**（US-2.2）整条就废了
 
 **连接断开时，agent 必须丢弃该 `client_id` 已入队但尚未写入 PTY 的输入**，并把

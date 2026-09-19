@@ -52,14 +52,20 @@ import { breakpoint, debounce, isCoarsePointer, isKeyboardUp, isShort, layoutVie
 
 /** 视图选择：手机/平板默认读，桌面默认终端（ADR-0011）；用户切过就记住。 */
 /** client_id 每个标签页一个，存 sessionStorage —— localStorage 是同源共享的。 */
+/**
+ * 本次**页面加载**的身份（协议 §5.3）。
+ *
+ * 【绝对不能持久化】。`in_seq_next` 与重发队列都活在页面里，页面一走就归零；
+ * 而 agent 的 `accepted` 按 `client_id` 记、保留到会话销毁。把 id 留到刷新之后
+ * （原来存在 `sessionStorage` 里），两侧记账就错位：client 从 seq=0 重新开始，
+ * agent 看到 `seq < accepted` 就把**新输入当成重发整段丢掉** —— 不写 PTY、
+ * 不 ack、不报错。症状是刷新之后打字完全没反应，而且刷新只会让欠账更多
+ * （ADR-0020 第 5 条）。
+ */
+const CLIENT_ID = crypto.randomUUID()
+
 function clientID(): string {
-  const key = 'webterm.client_id'
-  let v = sessionStorage.getItem(key)
-  if (!v) {
-    v = crypto.randomUUID()
-    sessionStorage.setItem(key, v)
-  }
-  return v
+  return CLIENT_ID
 }
 
 export function App() {
