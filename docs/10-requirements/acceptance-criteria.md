@@ -66,7 +66,7 @@
 | AC-3.2 | Composer 提交：含换行时以 bracketed paste 包裹（不被逐条执行），单行与空输入不包裹；一律以 `CR` 结尾 | UT-input-1, E2E-8 |
 | AC-3.3 | Raw 模式下，composition 期间不向 PTY 写入；`compositionend` 时一次性写入最终文本。**组字状态必须有兜底复位**（ADR-0020）：`blur`，以及捕获阶段一个 `isComposing === false` 的 `keydown`，都立即把 `composing` 置回 false —— 切输入法 / 切窗口时 `compositionend` 可能不来，少了兜底该会话的终端输入会**永久**失效，用户只能刷新页面 | UT-input-2, UT-raw-2, E2E-34 |
 | AC-3.17 | **输入路径可观测**（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 推论三）：`__webterm.inputStats()` 按四段给出计数与**最近一次发生的时刻** —— 按键到达页面（**捕获阶段**的 `keydown`）→ 焦点在终端 → xterm 吐出 `onData` → 发给 agent（INPUT 帧），外加被回放门丢掉的数量、未 ack 字节数、当前焦点元素，并给出 `verdict`（断点在哪一段）；**生产构建里也在** | UT-inputstats-1..2, E2E-34 ④ |
-| AC-3.14 | Raw 模式下**软键盘直接插入的字符**（iOS 中文键盘的全角标点等）必须进 PTY：非组字的 `beforeinput` / `insertText` 由前端自己接管发送并 `preventDefault`，不依赖 xterm 的 keydown/input 启发式；组字路径不受影响，同一段文字不重复发送 | UT-raw-1, E2E-7 |
+| AC-3.14 | Raw 模式下**软键盘直接插入的字符**（iOS 中文键盘的全角标点等）必须进 PTY：非组字的 `beforeinput` / `insertText` 由前端自己接管发送并 `preventDefault`，不依赖 xterm 的 keydown/input 启发式；组字路径不受影响，同一段文字不重复发送。**去重只压「已经被另一条路送出去」的那一次且一次性**（`compositionend` 的补发、`keypress` 已送过的字符）；**连打两下同一个字符必须两下都进** —— 按内容 + 时间窗口判重会把第二下静默吃掉（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)） | UT-raw-1, E2E-7 |
 | AC-3.4 | Raw 模式下 `Ctrl+C` / `Ctrl+D` / 方向键 / `Esc` / 功能键正确映射为控制字节 | UT-keymap-1 |
 | AC-3.5（ADR-0013：仅内部，无 UI） | 输入模式随 shell 集成的 prompt 状态自动切换：`B`→Composer，`C`→Raw，`D`→Composer | UT-mode-1, E2E-9 |
 | ~~AC-3.6（ADR-0013 取代：无手动锁定）~~ | 用户手动切换模式后进入"锁定"状态，自动切换暂停，直到用户解锁 | UT-mode-2 |
@@ -119,7 +119,7 @@
 | AC-5.14 | **刷新之后仍能往回拖**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：刷新页面后能滚回刷新前缓冲的**最后 2000 行**（不足 2000 行则全部），恢复的内容与刷新前逐行一致且整段内容**只出现一份**；快照与 `out_seq` 同刻生成，任一步失败就整条不存；`instance_id` 不匹配 / 超过 24h / 备用屏会话 → 不用也不存；**配对失效或设备被吊销后本地快照必须清除** | UT-snap-1..4, E2E-36 |
 | AC-5.15 | **拖动跟手**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：触屏纵向拖每帧至多一次 `scrollTop` 写入，拖动期间**无 > 50 ms 长任务**；松手有惯性，碰到边界或再次触摸立刻停；`prefers-reduced-motion` 下不做惯性 | UT-scroll-1, E2E-37 |
 | AC-5.16 | **大块写入有预算**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：回放 / 快照恢复 / 回看期间的强制写入共用一个带预算的写入器，每帧 ≤ 64 KiB，**顺序不变、不丢不重**，期间用户输入不被丢弃 | UT-writer-1..3, E2E-37 |
-| AC-5.17 | **备用屏的回滚交给程序**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：备用缓冲且 `mouseTrackingMode !== 'none'` 时，纵向拖按行步长转成滚轮上报并有节流上限（每 16 ms ≤ 3 行）；**没开鼠标跟踪时不发任何按键**（绝不退化成 PageUp / 方向键） | UT-scroll-2, E2E-38 |
+| AC-5.17 | **备用屏的回滚交给程序**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：备用缓冲且 `mouseTrackingMode !== 'none'` 时，纵向拖按行步长转成滚轮上报并有节流上限（每 16 ms ≤ 3 行）；**没开鼠标跟踪时不发任何按键**（绝不退化成 PageUp / 方向键）；**转发过滚轮之后必须有看得见的出口** —— 首次转发后若用户打字而屏幕 ~1.5s 内一个字节没变，提示条写明「按 `Esc` / `q` 退出程序的滚动模式」（每会话至多一次），因为滚轮上报可能把程序推进另一种模式（tmux 的 copy-mode），那时输入去向变了而 webterm 无从得知（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)） | UT-scroll-2, E2E-38 |
 | ~~AC-5.7（ADR-0013 取代）~~ | 读视图里展开的块可**最大化**铺满整屏细看（可滚动、含末尾输出）、点「恢复」回内联；「块」面板同样支持 | E2E-12b |
 | ~~AC-5.8（ADR-0013 取代）~~ | 读视图里**最新一条命令的块自动展开**（一眼看到最新输出）；切到更新的命令时上一条自动展开的收起，只留最新一条 —— 失败的块与用户手动展开过的不被自动收起 | E2E-12c |
 | ~~AC-5.6（ADR-0013 取代）~~ | 块的「在终端里看」切到终端视图并**滚到该块输出的第一行**：agent 发 `command.start/end` 先于对应输出帧（IT-order-1），client 写入时按 `out_seq` 切帧、切口处登记 xterm marker；marker 已滚出 scrollback 时退回按命令原文搜索，再不行滚到底 | UT-marks-1, IT-order-1, E2E-20 |
