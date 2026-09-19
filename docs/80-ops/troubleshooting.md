@@ -322,7 +322,7 @@ bash --version
 journalctl --user -u webterm -n 200 --no-pager
 ```
 
-外加浏览器控制台的报错、机型/OS/浏览器版本。
+外加浏览器控制台的报错、机型/OS/浏览器版本。**如果是"打字没反应"这类**，再附一份控制台里的 `__webterm.inputStats()`（**卡住的当下**取，不要事后补）—— 它按段说明输入断在哪一层，见下面的《打字没反应：先看输入断在哪一段》。
 
 日志里不含敏感数据（配对码、Cookie、命令原文、终端输出均已脱敏），可以直接贴。
 
@@ -338,6 +338,27 @@ journalctl --user -u webterm -n 200 --no-pager
 **根因**：iOS Safari 弹键盘只缩【可视视口】不缩布局视口，并把可视区上推（`visualViewport.offsetTop` > 0）去露出输入框；应用要 `translateY(offsetTop)` 跟过去。而 Safari 的 `window.innerHeight` 报的是可视视口高度 —— 键盘一弹它也变矮，若用它做"键盘是否弹起"的参照，闸门永远关着、不补偿。参照必须是 `documentElement.clientHeight`（布局视口），见 [`../40-frontend/layout-responsive.md`](../40-frontend/layout-responsive.md) §高度计算。
 
 **排查**：在 Safari 的 Web Inspector 里聚焦输入框后看 `document.querySelector('.app').style.transform` —— 键盘弹起时应为 `translateY(<offsetTop>px)`；为空即闸门没开，对比 `visualViewport.height`、`document.documentElement.clientHeight`、`window.innerHeight` 三个数。
+
+## 打字没反应：先看输入断在哪一段
+
+**卡住的当下**在浏览器控制台里敲：
+
+```js
+__webterm.inputStats()
+```
+
+它按四段给计数和"最近一次发生在多久以前"，`verdict` 直接说断点在哪一段：
+
+| 现象 | 断点 | 怎么办 |
+|---|---|---|
+| `keydown` 不涨 | 键没进页面 | 焦点在别的窗口 / 被系统层吃掉 |
+| `keydown` 涨、`toTerm` 不涨 | 焦点不在终端（`focus` 字段写着在哪） | 点一下终端；这是 bug，请连 `inputStats` 一起提 |
+| `toTerm` 涨、`data` 不涨 | 卡在 xterm（多半是组字状态没复位） | 切走再切回或刷新；同样请提 bug |
+| `data` 涨、`sent` 不涨 | 没发出去（看 `gated` 与连接状态） | 看状态条是不是"重连中" |
+| `sent` 涨、`unackedBytes` 一直不降 | agent 没确认 | 僵尸连接：切到后台再回前台会触发一次探活（2 秒判死重连，[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 决策一） |
+| **四段全通，程序还是没反应** | **不在 webterm 内** | 前台程序自己不读 stdin，或者它进了别的模式 —— 最常见的是 tmux 的 copy-mode（滚一下滚轮就会进，出口是 `q` / `Esc`，见 [ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §4） |
+
+【按"最近一次发生"看，不要看总量】：总量是页面打开以来的累计，卡住之前那些成功的输入早就把它撑满了。
 
 ## claude / codex 跑着，读视图却没有转录卡片
 

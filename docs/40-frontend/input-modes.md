@@ -281,6 +281,42 @@ onData(data):
 
 ---
 
+## 排障：输入死在哪一段（AC-3.17）
+
+[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 立了「绝不静默丢弃 / 失活」的原则，但没有给出**怎么确认它没被违反**。四条路修完之后再遇到"打字没反应"，第一步仍然是猜 —— 所以输入路径按段留了计数：
+
+```js
+__webterm.inputStats()
+// {
+//   keydown:  {n: 12, agoMs: 900},    // 捕获阶段看到的 keydown：键真的按下了
+//   toTerm:   {n: 12, agoMs: 900},    // 其中焦点确实在终端的 helper textarea 上
+//   data:     {n: 12, agoMs: 900},    // xterm 吐出的 onData（用户输入那一路）
+//   sent:     {n: 12, agoMs: 890},    // 发给 agent 的 INPUT 帧
+//   gated:    0,                      // 被回放门丢掉的（自动应答，不该有用户按键）
+//   unackedBytes: 0,                  // 发了但 agent 还没 ack —— 涨着不降就是没送到
+//   focus: 'xterm-helper-textarea',
+//   verdict: '四段都通：输入已经送达 agent'
+// }
+```
+
+**按段读**，断点一眼可见（`verdict` 就是按这张表算的）：
+
+| 现象 | 断点 | 多半是 |
+|---|---|---|
+| `keydown` 不涨 | 键没进页面 | 焦点在别的窗口 / 系统层吃掉了 |
+| `keydown` 涨、`toTerm` 不涨 | 焦点不在终端 | 切会话 / 关浮层之后焦点落回 `body`（ADR-0020 推论一）；`focus` 字段直接写着它在哪 |
+| `toTerm` 涨、`data` 不涨 | 卡在 xterm | 组字状态没复位（`composing` 恒真，推论二）；或按键被应用级快捷键拦下 |
+| `data` 涨、`sent` 不涨 | 没发出去 | 回放门（看 `gated`）、或连接已断且离线队列满 |
+| `sent` 涨、`unackedBytes` 一直不降 | agent 没确认 | 僵尸连接（决策一）、或 agent 那一侧 PTY 写不进 |
+| **四段全通，程序还是没反应** | **不在 webterm 内** | 前台程序自己不读 stdin，或者它进了别的模式 —— 最常见的是 **tmux 的 copy-mode**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §4），出口是 `q` / `Esc` |
+
+两条口径：
+
+- **计数按「最近一次发生」比，不按总量比**。总量是页面打开以来的累计，卡住之前的成功输入会把它撑满，看不出问题；`agoMs`（距今多久）才能说明"最近这一下走到哪儿断了"。
+- **`keydown` 必须挂在捕获阶段**。xterm 处理掉的键会 `preventDefault + stopPropagation`，冒泡阶段根本收不到 —— 那样正常打字反而计不上数。
+
+**生产构建里也在**，和 `__webterm.altScreen()` 同一条口径（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §排障口径）：排障要在真机真会话里当场能做，藏在 dev build 里等于没有。
+
 ## 软键盘适配（AC-3.8）
 
 用 `visualViewport` 而不是 `window.innerHeight`：

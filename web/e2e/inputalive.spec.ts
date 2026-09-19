@@ -146,3 +146,53 @@ test('E2E-34 ③ compositionend 没来也不会把终端打死（AC-3.3）', asy
     '普通按键没能把组字状态复位 —— 第一个字符还被当成组字吞了',
   )
 })
+
+/** `__webterm.inputStats()` 的返回值（AC-3.17）。 */
+interface Stats {
+  keydown: { n: number; agoMs: number }
+  toTerm: { n: number; agoMs: number }
+  data: { n: number; agoMs: number }
+  sent: { n: number; agoMs: number }
+  gated: number
+  focus: string
+  verdict: string
+}
+const stats = (page: Page): Promise<Stats> =>
+  page.evaluate(() => (window as unknown as { __webterm: { inputStats(): Stats } }).__webterm.inputStats())
+
+/**
+ * E2E-34 ④ 输入路径可观测（AC-3.17）。
+ *
+ * 不测"输入能不能进去"（那是 ①②③ 的事），测的是【卡住时能不能一眼看出断在哪一段】。
+ * ADR-0020 的原则本身需要可观测性，否则下次还是从猜开始。
+ */
+test('E2E-34 ④ 打字没反应时，inputStats 指得出断在哪一段', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
+  await typeLine(page, 'echo STATS')
+  await waitFor(async () => (await terminalText(page)).includes('STATS'), 'STATS 回显')
+
+  const ok = await stats(page)
+  expect(ok.keydown.n, '按键到达页面').toBeGreaterThan(0)
+  expect(ok.toTerm.n, '焦点在终端上').toBeGreaterThan(0)
+  expect(ok.data.n, 'xterm 吐出了 onData').toBeGreaterThan(0)
+  expect(ok.sent.n, '发给了 agent').toBeGreaterThan(0)
+  expect(ok.gated, '用户按键不该被回放门丢掉').toBe(0)
+  expect(ok.verdict, `四段都通时的判断：${ok.verdict}`).toContain('四段都通')
+
+  // 焦点丢掉的指纹：键还在进页面，但进不了终端
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  const before = await stats(page)
+  await page.keyboard.press('a')
+  const after = await stats(page)
+
+  expect(after.keydown.n, '键确实按下了').toBeGreaterThan(before.keydown.n)
+  expect(after.toTerm.n, '但没进终端').toBe(before.toTerm.n)
+  expect(after.focus, `焦点应当已经不是终端的 textarea，实际是 ${after.focus}`).not.toContain('xterm-helper-textarea')
+  // 【这一步同时证明了按"最近一次"判而不是按总量判】：上面成功打过字，
+  // 四段的总量早就大于 0，拿总量断言的话这里恒绿
+  expect(after.verdict, `焦点丢掉时的判断：${after.verdict}`).toContain('焦点不在终端')
+})

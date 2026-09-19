@@ -7,6 +7,7 @@
 import { Connection } from '../conn/connection'
 import { ModeMachine, type ModeState } from '../input/modes'
 import type { SessionInfo } from '../protocol/messages'
+import { inputTrace } from '../input/inputstats'
 import { BudgetWriter } from '../term/budgetwriter'
 import { installInteractive, type InteractiveDetector } from '../term/interactive'
 import { type FollowState, OutputQueue } from '../term/outputqueue'
@@ -131,7 +132,14 @@ export class SessionStore {
     // term.write() 的解析里。按"此刻是否在回放"一刀切，就会把用户正在敲的字
     // 一起吞掉 —— 而回放窗口在 ring_bytes 满载时是【秒级】的。
     term.term.onData((data) => {
-      if (!inUserInputEvent() && (this.entries.get(info.sid)?.replayDepth ?? 0) > 0) return
+      // 输入路径探针的"xterm 吐出 onData"那一段（AC-3.17）。这里数的是【全部】
+      // onData，包括自动应答 —— 被门丢掉的单独记 gated，两个数一起才看得出
+      // "是不是门吃掉了用户的按键"
+      inputTrace.bump('data')
+      if (!inUserInputEvent() && (this.entries.get(info.sid)?.replayDepth ?? 0) > 0) {
+        inputTrace.bumpGated()
+        return
+      }
       this.h.onTermData(info.sid, data)
     })
     term.term.attachCustomKeyEventHandler((e) => e.type !== 'keydown' || this.h.allowKey(e))

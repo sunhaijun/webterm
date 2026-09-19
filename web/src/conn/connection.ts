@@ -24,6 +24,7 @@ import {
   type Welcome,
 } from '../protocol/messages'
 import { Backoff } from './backoff'
+import { inputTrace } from '../input/inputstats'
 import { PendingFullError, ResendQueue } from './resend'
 
 /** 心跳与判死（协议 §5.4 / AC-2.8）。 */
@@ -172,7 +173,14 @@ export class Connection {
       }
       throw e
     }
+    // 输入路径探针的"发给 agent"那一段（AC-3.17）
+    inputTrace.bump('sent')
     this.writeFrame(sid, item.seq, item.bytes)
+  }
+
+  /** 发了但 agent 还没 ack 的字节数（排障用，AC-3.17）：涨着不降 = 没送到。 */
+  unackedOf(sid: number): number {
+    return this.sessions.get(sid)?.resend.pendingBytes ?? 0
   }
 
   send(msg: object): void {
