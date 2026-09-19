@@ -8,8 +8,11 @@
  *     滚动不再和它们抢主线程。回到底部一次性写入，顺序不变、一个字节不丢 ——
  *     序号与 ack 在连接层收到时就记好了，跟这里写不写无关。
  *
- * 不碰 xterm，也不碰 DOM，方便单测。sink 就是 term.write。
+ * 不碰 xterm，也不碰 DOM，方便单测。sink 是【带预算的写入器】（`budgetwriter.ts`）：
+ * 第二个参数 `urgent` 说明这一次要不要"一次写完"。慢滴与一次写完的分界见
+ * AC-5.9 / AC-5.16 —— 上限触发的强制写入慢滴，其余几个时刻一次写完。
  */
+import { nextFrame } from './budgetwriter'
 export interface Parked {
   lines: number
   bytes: number
@@ -36,13 +39,8 @@ export interface OutputQueueOptions {
   onState?: (s: FollowState) => void
 }
 
-const defaultSchedule = (fn: () => void) => {
-  if (typeof requestAnimationFrame === 'function' && (typeof document === 'undefined' || document.visibilityState !== 'hidden')) {
-    requestAnimationFrame(fn)
-  } else {
-    setTimeout(fn, 16)
-  }
-}
+/** `urgent` = 这一次要一次写完（AC-5.9），否则交给写入器按预算慢滴（AC-5.16）。 */
+export type QueueSink = (data: Uint8Array, urgent: boolean) => void
 
 export class OutputQueue {
   private chunks: Uint8Array[] = []
@@ -60,12 +58,12 @@ export class OutputQueue {
   private readonly onState?: (s: FollowState) => void
 
   constructor(
-    private readonly sink: (data: Uint8Array) => void,
+    private readonly sink: QueueSink,
     opts: OutputQueueOptions = {},
   ) {
     this.maxBytes = opts.maxBytes ?? 2 << 20
     this.maxLines = opts.maxLines ?? 4000
-    this.schedule = opts.schedule ?? defaultSchedule
+    this.schedule = opts.schedule ?? nextFrame
     this.onState = opts.onState
   }
 
@@ -94,7 +92,8 @@ export class OutputQueue {
     let had = false
     if (f) {
       had = this.chunks.length > 0
-      this.drain()
+      // 回到底部：用户等的就是完整的那一屏，一次写完（AC-5.9）
+      this.drain(true)
       this.unseenBytes = 0
       this.unseenLines = 0
     }
@@ -113,7 +112,8 @@ export class OutputQueue {
         this.scheduled = true
         this.schedule(() => {
           this.scheduled = false
-          this.drain()
+          // 跟随中的合并帧本来就小，交给写入器按预算走即可
+          this.drain(false)
         })
       }
       return 'batched'
@@ -121,8 +121,9 @@ export class OutputQueue {
     this.unseenBytes += data.length
     this.unseenLines += lines
     if (this.queuedBytes > this.maxBytes || this.queuedLines > this.maxLines) {
-      // 攒过头了：强制写入。视口位置由 xterm 维持，用户不会被拽到底部
-      this.drain()
+      // 攒过头了：强制写入，但【慢滴】—— 一次性 drain 恰好会打断用户正在读的那一屏
+      // （ADR-0024 §2）。队列继续接收，视口位置由 xterm 维持，用户不会被拽到底部
+      this.drain(false)
       this.notify()
       return 'flushed'
     }
@@ -130,8 +131,13 @@ export class OutputQueue {
     return 'parked'
   }
 
-  /** 立刻把队列里的全部内容按顺序写入（回放到达前、切会话、销毁时用）。 */
-  drain(): void {
+  /**
+   * 把队列里的全部内容按顺序交给写入器（回放到达前、切会话、销毁时用）。
+   *
+   * `urgent`（默认）= 一次写完；`false` = 交给带预算的写入器慢滴。
+   * 【无论哪种，顺序都不变】—— 写入器自己是严格 FIFO 的。
+   */
+  drain(urgent = true): void {
     if (this.chunks.length === 0) return
     let out: Uint8Array
     if (this.chunks.length === 1) {
@@ -147,7 +153,7 @@ export class OutputQueue {
     this.chunks = []
     this.queuedBytes = 0
     this.queuedLines = 0
-    this.sink(out)
+    this.sink(out, urgent)
   }
 
   /** 丢掉队列（终端 reset 时：屏幕要按服务端缓冲重建，攒着的旧字节没有意义）。 */

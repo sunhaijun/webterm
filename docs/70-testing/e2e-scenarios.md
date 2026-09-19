@@ -641,10 +641,16 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 1. `emit.sh 4000 0`，等完成
 2. 页面里装 `PerformanceObserver({entryTypes:['longtask']})` 收集
-3. 合成 20 步的单指纵向拖（每步 12px，间隔一帧）
-4. **跟手**：拖动期间 `duration > 50` 的 longtask **== 0**；`.xterm-viewport` 的 `scrollTop` 变化次数 ≤ 拖动帧数（每帧至多落一次）
+3. 合成 20 **帧**的单指纵向拖，每帧走 12px、**每帧派发 3 个 `touchmove`**（共 60 个事件），帧与帧之间真的等一帧
+4. **跟手**：拖动期间 `duration > 50` 的 longtask **== 0**；`.xterm-viewport` 的 `scrollTop` 写入次数 ≤ 拖动帧数（每帧至多落一次）
+
+> 第 3 步的「每帧 3 个」不是凑数：**每帧只发一个的话这条场景区分不出新旧实现** —— 旧实现是每个 `touchmove` 改一次 `scrollTop`，每帧一个事件时它也是"每帧一次"，断言照样过。一帧堆好几个事件也不是臆造的，主线程忙时浏览器就是这么派发的。计数必须**钩 `scrollTop` 的 setter**，不能听 `scroll` 事件：后者被浏览器合并到每帧一个，无论实现每帧写几次都只看到一次。
+>
+> 第 4 步在 E2E 里只能断言「**写入次数远少于事件数**」（< 事件数的一半）：`.xterm-viewport.scrollTop` 不只有我们写，xterm 的 `syncScrollArea` 也会写（把视口对齐到行边界），那几次混在计数里、也不归我们管。**精确的「每帧至多一次」在 UT-scroll-1**（`web/tests/dragscroll.test.ts`）里量 —— 那边没有 xterm，自己接管 `scrollTop` 属性当计数器，数到的每一次都是我们的，连惯性滑行与「再触摸立刻停」也一并钉住。
 5. **惯性**：松手后 `scrollTop` 继续变化并在 1 秒内停下；停下前再触摸一次 → 立刻停
 6. **写入有预算**：用**默认 ring（1 MiB）**的实例造一次满窗口回放 —— 切走会话 A、让它产出 > 1 MiB、再切回（这是单次写入量最大的一条路）。回放期间 `keyboard.type('BUDGETKEY')` → 回显出现（输入没被吃掉，与 E2E-34 ② 同一条纪律），且回放期间 `duration > 50` 的 longtask **== 0**
+
+> 第 6 步有两个坑。**切会话要用键盘**（`Ctrl+Shift+Enter` 新建 / `Ctrl+Shift+↑` 切回），不能走抽屉：抽屉会把焦点收进浮层（AC-5.11），关掉之后敲的字未必回到终端，那样测的是焦点不是预算。**长任务探针要在按下切换键之后才归零**：切会话本身要摘挂 DOM、`fit()`、`reset()` 终端，是一个同步的大任务（实测 ~54ms），它发生在按键处理里、**不在回放窗口内** —— 这条场景量的是回放写入有没有把主线程占死，切换本身的重排是 [ADR-0021](../20-architecture/adr/0021-drag-preview-not-live-relayout.md) / E2E-32 的事。
 
 ## E2E-38 备用屏的回滚交给程序（AC-5.17）
 
