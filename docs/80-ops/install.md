@@ -376,6 +376,8 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | `--max-sessions` | 20 | 会话数上限 |
 | `--max-conns` | 16 | 并发 WebSocket 连接上限（每条连接占一个写队列） |
 | `--ring-bytes` | 1048576 | 每会话输出缓冲（影响能容忍的断线时长） |
+| `--session-env` | 无 | 注入会话 PTY 的环境变量，`KEY=VAL`，可重复 |
+| `--no-altscreen-compat` | false | 关掉"把全屏 AI CLI 拉回主屏"的内置清单（AC-7.8）|
 | `--conn-queue-bytes` | 4194304 | 每连接写队列上限 |
 | `--max-history` | 50000 | 命令历史条数上限 |
 | `--no-history` | false | 完全关闭命令历史记录 |
@@ -383,6 +385,8 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | `--no-login-shell` | false | 用非登录交互 shell（只读 `~/.bashrc`） |
 | `--shell` | `bash` | v0.1 只支持 bash |
 | `--log-level` | `info` | `debug` / `info` / `warn` / `error`。公网扫描器制造的 TLS 握手失败记在 `debug`，默认看不到 |
+
+> **`--session-env` 与 `--no-altscreen-compat` 会改变 AI CLI 的观感。** webterm 默认注入一份内置清单（目前只有 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`），把全屏 AI CLI 拉回主屏 —— 只有主屏的输出才是可以往回拖的追加流（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）。可见的变化只有一条：**输入框从"钉在屏幕底部"变成"输出流的最后几行"** —— 贴底时它照样在屏幕底部、照样能打字，只有你滚上去回看时它会跟着滚出视野，回到底部就回来。换来的是 5000 行可以拖着看的历史。不想要就 `--no-altscreen-compat`。`--session-env` 可以重复给，也可以写进配置文件（多行）—— 两边是**合并**，同名键以后出现的为准，所以命令行照样压过配置文件；`TERM` 和 `WEBTERM_SESSION` 由 webterm 定死，写了会直接报错。
 
 ### 其它子命令
 
@@ -600,7 +604,7 @@ log-level  = info
 
 `domain` · `data-dir` · `bind` · `http-port` · `https-port` · `no-tls` ·
 `trust-proxy` · `acme-staging` · `shell` · `max-sessions` · `max-conns` ·
-`max-history` · `no-history` · `ring-bytes` · `no-shell-integration` ·
+`max-history` · `no-history` · `ring-bytes` · `session-env` · `no-altscreen-compat` · `no-shell-integration` ·
 `no-login-shell` · `log-level`
 
 > `--dev` 与 `--config` 【不能】写进配置文件：前者是"临时本地跑一下"的开关，

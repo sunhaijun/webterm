@@ -159,6 +159,33 @@ webterm 自己的心跳是 30 秒一次，所以正常情况下不会触发 60s 
 
 代价是内存（`会话数 × ring-bytes`）。20 会话 × 4 MiB = 80 MiB。
 
+### 往回拖不动 / 刷新后只剩最后一屏
+
+先分清是哪一类。**全屏程序（备用屏）根本没有 scrollback** —— vim / less / htop 是这样，本机终端里也一样，那些"历史"在程序自己手里。webterm 默认会把已知的 AI CLI 拉回主屏（AC-7.8），让它的输出变成可以回滚的追加流。
+
+确认这条兼容生效没有，两步，从便宜的开始：
+
+```bash
+# ① 变量有没有注入到会话 —— 在 webterm 的终端里跑
+env | grep CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN     # 有输出 = 注入到位
+```
+
+```js
+// ② 程序有没有真的留在主屏 —— 浏览器控制台
+__webterm.altScreen()      // false = 在主屏（生效）；true = 还在备用屏
+```
+
+肉眼信号是等价的：底部键条没有切成 TUI 那一档，且往上拖真的能拖动。
+
+- ① 没输出：`--no-altscreen-compat` 开着，或你自己的环境里已经设过同名变量（**我们不覆盖用户的值**）。
+- ① 有、② 仍是 `true`：上游换了实现或变量名（这些是**私有开关，没有兼容承诺**）。用 `--session-env` 补上新的变量名，或接受备用屏的行为。
+- ② 是 `false` 但还是拖不动：看是不是终端里正跑着别的全屏程序（vim / less / htop）。
+
+> **别用 `script -c claude` 抓 `ESC[?1049h` 来验。** 实测：`script` 里拿不到 winsize 时 claude 自己就退回 classic 渲染器（`?1049h` 0 次），抓到的 0 不代表你那个会话里是 0。
+- **刷新后能往回滚多远**由客户端快照决定（2000 行，[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §3）；再往前的历史只能靠 `--ring-bytes` 的字节窗口，它按字节算而不是按行算。
+
+不想要这套兼容（比如就是喜欢钉在底部的输入框）：`--no-altscreen-compat`。
+
 ### 连接总是很快被断开（正常用着突然掉）
 
 有界队列保护触发了（[协议 §5.5](../30-protocol/websocket-protocol.md#55-有界队列策略读写两侧)）。看日志区分是哪一侧：

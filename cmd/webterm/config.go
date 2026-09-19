@@ -39,6 +39,8 @@ var configKeys = map[string]bool{
 	"max-history":          true,
 	"no-history":           true,
 	"ring-bytes":           true,
+	"session-env":          true,
+	"no-altscreen-compat":  true,
 	"no-shell-integration": true,
 	"no-login-shell":       true,
 	"log-level":            true,

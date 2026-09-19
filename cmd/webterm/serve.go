@@ -40,6 +40,8 @@ type serveOpts struct {
 	noHistory          bool
 	noShellIntegration bool
 	noLoginShell       bool
+	sessionEnv         envList
+	noAltScreenCompat  bool
 	shell              string
 	logLevel           string
 	handoffFD          int
@@ -59,6 +61,8 @@ func (o *serveOpts) register(fs *flag.FlagSet) {
 	fs.BoolVar(&o.noHistory, "no-history", false, "完全关闭命令历史记录")
 	fs.BoolVar(&o.noShellIntegration, "no-shell-integration", false, "不注入 shell 集成（排障用）")
 	fs.BoolVar(&o.noLoginShell, "no-login-shell", false, "用非登录交互 shell（只读 ~/.bashrc）")
+	fs.Var(&o.sessionEnv, "session-env", "注入会话 PTY 的环境变量，KEY=VAL，可重复")
+	fs.BoolVar(&o.noAltScreenCompat, "no-altscreen-compat", false, "关掉「把全屏 AI CLI 拉回主屏」的内置清单（ADR-0024）")
 	fs.StringVar(&o.shell, "shell", "bash", "shell（v0.1 只支持 bash）")
 	fs.StringVar(&o.logLevel, "log-level", "info", "debug / info / warn / error")
 	fs.IntVar(&o.handoffFD, handoff.FlagName, -1, "内部：热升级交接的快照 fd（由旧进程在 exec 时传入，ADR-0016）")
@@ -125,10 +129,12 @@ func runServe(args []string) error {
 	}
 
 	sessCfg := session.Config{
-		MaxSessions: o.maxSessions,
-		RingBytes:   o.ringBytes,
-		Shell:       o.shell,
-		History:     !o.noHistory,
+		MaxSessions:       o.maxSessions,
+		RingBytes:         o.ringBytes,
+		Shell:             o.shell,
+		History:           !o.noHistory,
+		SessionEnv:        o.sessionEnv,
+		NoAltScreenCompat: o.noAltScreenCompat,
 	}
 	if !o.noShellIntegration {
 		// 用临时 rcfile 注入，用户不需要改任何 dotfile（ADR-0010）

@@ -180,3 +180,6 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0019](adr/0019-altscreen-redraw-not-replay.md) | 备用屏不回放历史，改为重画 |
 | [0020](adr/0020-input-never-silently-dropped.md) | 输入路径绝不静默丢弃 |
 | [0021](adr/0021-drag-preview-not-live-relayout.md) | 跟手的手势只做预览，布局改动推到松手 |
+| [0022](adr/0022-drop-command-palette.md) | 砍掉命令面板 |
+| [0023](adr/0023-terminal-font-list.md) | 终端字体给一份探测过的清单 |
+| [0024](adr/0024-scrollback-layered-model.md) | 回滚历史的分层模型：先把内容留在追加流里 |

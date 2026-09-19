@@ -620,6 +620,42 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 5. **已经可见时不滚**：四个会话都看得见，来回切两次，`.sidebar` 的 `scrollTop` 始终是 0
 6. **滚进可视区**：注入 `.sidebar{max-height:120px}` 把列表压到放不下，`Ctrl+Shift+↓` 切到列表末尾那个 → 该行的矩形**完全落在** `.sidebar` 的矩形内（上下都不越界）且 `scrollTop > 0`；再切回第一个 → 同样完全可见
 
+## E2E-36 刷新之后仍能往回拖（AC-5.14）
+
+> `web/e2e/refresh-scrollback.spec.ts`。默认 `--ring-bytes`。
+
+1. 起会话，`emit.sh 3000 0`，等 `EMIT-DONE`
+2. 记下序列化结果里的三个锚点行：`EMIT-0100` / `EMIT-1500` / `EMIT-2999`
+3. `page.reload()`，等重新连上
+4. **能滚回去**：序列化结果里 `EMIT-1500` 仍在（刷新前的 2000 行窗口内）
+5. **只有一份**：`EMIT-1500` 在整个缓冲里出现次数 **== 1**（快照 + 增量续传叠加是最容易出重复的地方）
+6. **接得上**：刷新后再跑一次 `printf 'AFTER-%s\n' RELOAD`，它出现且前面的内容不重排
+7. **agent 重启则不用快照**：杀掉 agent 重新起（`instance_id` 变，会话全部销毁 —— [ADR-0003](../20-architecture/adr/0003-no-tmux.md)），刷新后新建会话 → 终端里**不出现任何 `EMIT-*`**。快照按 `instance_id` 作废，否则新 `sid` 会被旧会话的内容张冠李戴（AC-2.13 同一条理由）
+8. **备用屏不存快照**：`fixtures/altscreen.sh` 的会话刷新后，scrollback 里不出现该程序界面的任何副本（与 E2E-31 同一条断言）
+
+> 第 5 步是这条场景的核心。快照恢复一旦与 `out_seq` 脱钩（用了快照却报 `out_seq: 0`），agent 会把整段历史再追加一遍 —— 屏幕上就是两份。
+
+## E2E-37 滚动跟手与写入预算（AC-5.15 / AC-5.16）
+
+> `web/e2e/scrollperf.spec.ts`，phone 视口。**这台机器没 GPU，绝对帧率没有意义** —— 断言的是主线程长任务个数与写入次数，不是 FPS。
+
+1. `emit.sh 4000 0`，等完成
+2. 页面里装 `PerformanceObserver({entryTypes:['longtask']})` 收集
+3. 合成 20 步的单指纵向拖（每步 12px，间隔一帧）
+4. **跟手**：拖动期间 `duration > 50` 的 longtask **== 0**；`.xterm-viewport` 的 `scrollTop` 变化次数 ≤ 拖动帧数（每帧至多落一次）
+5. **惯性**：松手后 `scrollTop` 继续变化并在 1 秒内停下；停下前再触摸一次 → 立刻停
+6. **写入有预算**：用**默认 ring（1 MiB）**的实例造一次满窗口回放 —— 切走会话 A、让它产出 > 1 MiB、再切回（这是单次写入量最大的一条路）。回放期间 `keyboard.type('BUDGETKEY')` → 回显出现（输入没被吃掉，与 E2E-34 ② 同一条纪律），且回放期间 `duration > 50` 的 longtask **== 0**
+
+## E2E-38 备用屏的回滚交给程序（AC-5.17）
+
+> `web/e2e/altscroll.spec.ts`。需要新夹具 `e2e/fixtures/mousereport.sh`：进备用屏、开 `?1000h` + `?1006h`，把收到的输入原样打在屏幕上。
+
+1. 起会话跑 `mousereport.sh`，等它进备用屏
+2. 单指纵向拖 5 行的距离
+3. **转成了滚轮上报**：屏幕上出现 SGR 编码的滚轮事件（`<64;` 前缀），条数与行步长一致，且受节流上限约束（每 16 ms ≤ 3 行）
+4. **没开跟踪就什么都不发**：换 `fixtures/altscreen.sh`（不开鼠标跟踪）重来一遍，屏幕**逐字节不变** —— 绝不能退化成 PageUp / 方向键
+5. 主屏会话不受影响：普通 shell 会话的纵向拖仍然滚本地 scrollback
+
 ## 不在 E2E 覆盖范围（放手工清单）
 
 - 真机中文输入法的实际候选框行为

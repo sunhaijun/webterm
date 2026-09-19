@@ -184,6 +184,7 @@ os.Remove(rcPath)
 4. 解析 cwd          → 默认继承请求里的值，否则 home；必须存在且是目录
 5. exec.Command("bash", "--rcfile", rcPath, "-i")   // 长选项必须在短选项前
    环境：继承 agent 环境 + TERM=xterm-256color + WEBTERM_SESSION=<sid>
+         + 备用屏兼容清单（AC-7.8）+ --session-env 的键值
    清理：BASH_ENV、ENV
 6. pty.StartWithSize(cmd, &pty.Winsize{...})
 7. 起三个 goroutine
@@ -192,6 +193,15 @@ os.Remove(rcPath)
 ```
 
 `TERM` 固定为 `xterm-256color`。不用 `xterm-kitty` 之类 —— xterm.js 的能力集与 `xterm-256color` 最匹配。
+
+**备用屏兼容清单（AC-7.8，[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1）**：把已知的全屏 AI CLI 拉回主屏，让它的输出变成追加流 —— 只有追加流才有 scrollback 可以往回拖。目前清单里只有一条 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`。三条规则：
+
+- **用户已经设过的同名变量不覆盖**（agent 自己的环境里有，或 `--session-env` 给了）—— 这是他的机器；
+- `--session-env` 优先于清单，`--no-altscreen-compat` 整份关掉；
+- 清单里**只放"把 TUI 拉回主屏"这一类变量**，任何改变程序行为的（模型、权限、遥测）一概不放；
+- `TERM` 与 `WEBTERM_SESSION` 是 webterm 自己的口径（前者决定 xterm.js 那侧的能力匹配，后者是 shell 集成的会话标识），**不接受覆盖** —— `--session-env` 写了这两个键会在解析时直接报错，`internal/session` 里还有第二道兜底。
+
+这些是上游的私有开关，没有兼容承诺，所以必须能关、也必须能验证（[troubleshooting.md](../80-ops/troubleshooting.md#往回拖不动--刷新后只剩最后一屏)）。
 
 ### 关闭
 
