@@ -129,6 +129,50 @@ describe('UT-raw-1 Raw 模式：直接插入的文本', () => {
     expect(e.defaultPrevented).toBe(true)
   })
 
+  it('连打两下同一个字符：两下都要进 —— 去重不能吃掉用户的第二下（AC-3.14 / ADR-0020）', () => {
+    const el = makeTextarea()
+    const onCommit = vi.fn()
+    new RawIme(el, { onCommit, onPreview: vi.fn() })
+
+    // 软键盘直接插入的字符【只走 beforeinput 这一条路】（keyCode 0，xterm 两头都不接），
+    // 所以第二下没有别的路会替它发 —— 这里吃掉就是永久丢字
+    el.dispatchEvent(beforeInput('，'))
+    el.dispatchEvent(beforeInput('，'))
+
+    expect(onCommit, '用户打了两下就该发两下').toHaveBeenCalledTimes(2)
+    expect(onCommit).toHaveBeenNthCalledWith(1, '，')
+    expect(onCommit).toHaveBeenNthCalledWith(2, '，')
+  })
+
+  it('去重是【一次性】的：压掉补发的那一次之后就撤防，再来的同一段是新输入', () => {
+    const el = makeTextarea()
+    const onCommit = vi.fn()
+    new RawIme(el, { onCommit, onPreview: vi.fn() })
+
+    el.dispatchEvent(composition('compositionstart', ''))
+    el.dispatchEvent(composition('compositionend', '哈'))
+    expect(onCommit).toHaveBeenCalledTimes(1)
+
+    el.dispatchEvent(beforeInput('哈')) // WebKit 的补发 —— 吃掉
+    expect(onCommit).toHaveBeenCalledTimes(1)
+
+    el.dispatchEvent(beforeInput('哈')) // 用户自己又打了一个「哈」—— 必须发
+    expect(onCommit, '撤防之后就是新输入').toHaveBeenCalledTimes(2)
+  })
+
+  it('keypress 的去重同样一次性：连按两下，xterm 发两下、我们一下都不补', () => {
+    const el = makeTextarea()
+    const onCommit = vi.fn()
+    new RawIme(el, { onCommit, onPreview: vi.fn() })
+
+    // 物理键盘：每一下都有自己的 keypress（xterm 已经送出去了），各自布防各自压掉
+    for (let i = 0; i < 2; i++) {
+      el.dispatchEvent(new KeyboardEvent('keypress', { key: 'l', bubbles: true }))
+      el.dispatchEvent(beforeInput('l'))
+    }
+    expect(onCommit, 'xterm 送的，我们一下都不该补').not.toHaveBeenCalled()
+  })
+
   it('keypress 的是别的字符，不影响这一发', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
