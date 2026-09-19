@@ -7,6 +7,7 @@
 import { Connection } from '../conn/connection'
 import { ModeMachine, type ModeState } from '../input/modes'
 import type { SessionInfo } from '../protocol/messages'
+import { BudgetWriter } from '../term/budgetwriter'
 import { installInteractive, type InteractiveDetector } from '../term/interactive'
 import { type FollowState, OutputQueue } from '../term/outputqueue'
 import { createTerminal, type TermFont, type TermHandle } from '../term/terminal'
@@ -33,6 +34,11 @@ interface Entry {
   replayDepth: number
   /** 输出写入队列：按帧合并；用户滚上去读旧输出时暂停写入（session-ux.md §回看时暂停跟随）。 */
   queue: OutputQueue
+  /**
+   * 通往 xterm 的唯一入口（AC-5.16）。回放、快照恢复、回看期间的强制写入都从这里过，
+   * 每帧至多 64 KiB。【必须是唯一入口】—— 有第二条路就没有统一的顺序可言。
+   */
+  writer: BudgetWriter
   /** 解绑 .xterm-viewport 的 DOM scroll 监听 —— 那个元素 open() 之后才有。 */
   unhookScroll?: () => void
 }
@@ -130,6 +136,7 @@ export class SessionStore {
     })
     term.term.attachCustomKeyEventHandler((e) => e.type !== 'keydown' || this.h.allowKey(e))
 
+    const writer = new BudgetWriter((data, done) => term.term.write(data, done))
     const entry: Entry = {
       info,
       term,
@@ -140,7 +147,9 @@ export class SessionStore {
       interactive: false,
       detector: installInteractive(term.term),
       replayDepth: 0,
-      queue: new OutputQueue((data) => term.term.write(data), {
+      writer,
+      // urgent = AC-5.9 那几个"一次写完"的时刻；其余交给写入器按预算慢滴（AC-5.16）
+      queue: new OutputQueue((data, urgent) => (urgent ? writer.writeNow(data) : writer.write(data)), {
         onState: (s) => this.h.onFollow?.(info.sid, s),
       }),
     }
@@ -195,6 +204,8 @@ export class SessionStore {
     const e = this.entries.get(sid)
     if (!e) return
     e.unhookScroll?.()
+    e.queue.clear()
+    e.writer.clear()
     e.modes.dispose()
     e.detector.dispose()
     e.term.dispose()
@@ -274,10 +285,14 @@ export class SessionStore {
       e.queue.push(data)
       return
     }
-    // 回放不暂停也不合并：它是一段有界的补课，而且必须排在之前收到的实时帧【之后】
-    e.queue.drain()
+    // 回放不暂停也不合并：它是一段有界的补课，而且必须排在之前收到的实时帧【之后】。
+    // 队列先一次写完（AC-5.9），回放本体则按预算慢滴（AC-5.16）—— 满窗口回放是单次
+    // 写入量最大的一条路，整块灌进去会连着占掉几十帧，那正是"回放期间滚不动"的来源。
+    e.queue.drain(true)
     e.replayDepth++
-    e.term.term.write(data, () => {
+    // 【窗口在入队时就开】：跨帧慢滴时，等到某一片写完才开窗会在片与片之间留缝，
+    // 缝里 xterm 对历史查询的自动应答就漏进 PTY 了（ADR-0020）
+    e.writer.write(data, () => {
       if (e.replayDepth > 0) e.replayDepth--
     })
   }
@@ -298,8 +313,10 @@ export class SessionStore {
   resetTerm(sid: number): void {
     const e = this.entries.get(sid)
     if (!e) return
-    // 屏幕要按服务端缓冲重建，攒着的旧字节没有意义了；重建完视口在底部，恢复跟随
+    // 屏幕要按服务端缓冲重建，攒着的旧字节没有意义了；重建完视口在底部，恢复跟随。
+    // 写入器里还在滴的也一起丢 —— 那是重建前的内容，写进去只会排在新内容前面
     e.queue.clear()
+    e.writer.clear()
     e.term.term.reset()
     e.queue.setFollowing(true)
   }
@@ -345,6 +362,7 @@ export class SessionStore {
     for (const e of this.entries.values()) {
       e.unhookScroll?.()
       e.queue.clear()
+      e.writer.clear()
       e.modes.dispose()
       e.term.dispose()
     }
