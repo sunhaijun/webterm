@@ -1,4 +1,4 @@
-import { devices, expect, test } from '@playwright/test'
+import { devices, expect, test, type Page } from '@playwright/test'
 
 import { Agent, submit, terminalText, waitFor } from './harness'
 
@@ -139,22 +139,19 @@ test('反复弹出收起不会越缩越小', async ({ page }) => {
  * 真机的 keyCode 是 iOS 自己报的、没法在 headless 里复刻，但
  *【keydown 发生过 + insertText】这个组合就是要害，合成事件能精确覆盖。
  */
-test('E2E-7 软键盘直接插入的全角标点进得了终端，且不重复', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-
-  // 终端直通输入：点终端区，键直送 PTY（ADR-0013+）
-  await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
-  await page.keyboard.type('echo ')
-
-  /** 软键盘按下一个键：keydown → 浏览器把字插进 textarea → input → keyup。
-   * keydown 没被 preventDefault 才会真的插进去 —— xterm 处理掉的键会 cancel。 */
-  const softKey = (ch: string, keyCode: number) =>
-    page.evaluate(
-      ([ch, keyCode]) => {
-        const ta = document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!
-        ta.focus()
+/**
+ * 软键盘按下同一个键 n 下：每下都是 keydown → 浏览器把字插进 textarea → input → keyup。
+ *
+ * keydown 没被 preventDefault 才会真的插进去 —— xterm 处理掉的键会 cancel。
+ * 【n 下在同一个 evaluate 里发完】：连打的间隔必须落在去重窗口（120ms）以内，
+ * 否则测不到"去重会不会吃掉用户的第二下"。
+ */
+function softKeys(page: Page, ch: string, keyCode: number, n: number) {
+  return page.evaluate(
+    ([ch, keyCode, n]: [string, number, number]) => {
+      const ta = document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!
+      ta.focus()
+      for (let i = 0; i < (n as number); i++) {
         const opts = { bubbles: true, cancelable: true, composed: true }
         const kd = new KeyboardEvent('keydown', { key: ch as string, keyCode: keyCode as number, ...opts })
         ta.dispatchEvent(kd)
@@ -167,9 +164,22 @@ test('E2E-7 软键盘直接插入的全角标点进得了终端，且不重复',
           }
         }
         ta.dispatchEvent(new KeyboardEvent('keyup', { key: ch as string, keyCode: keyCode as number, bubbles: true, composed: true }))
-      },
-      [ch, keyCode] as [string, number],
-    )
+      }
+    },
+    [ch, keyCode, n] as [string, number, number],
+  )
+}
+
+test('E2E-7 软键盘直接插入的全角标点进得了终端，且不重复', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  // 终端直通输入：点终端区，键直送 PTY（ADR-0013+）
+  await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
+  await page.keyboard.type('echo ')
+
+  const softKey = (ch: string, keyCode: number) => softKeys(page, ch, keyCode, 1)
 
   // keyCode 0 = iOS 对直接插入报的值（本 bug 的要害）；229 = 差量路；191 = keydown 路
   await softKey('，', 0)
@@ -193,4 +203,28 @@ test('E2E-7 软键盘直接插入的全角标点进得了终端，且不重复',
   const text = await terminalText(page)
   expect(text, '重复发送会变成「，，」').not.toContain('，，')
   expect(text, '组字结果不能发两遍').not.toContain('你好你好')
+})
+
+/**
+ * E2E-7 ② 连打两下同一个标点（AC-3.14 / ADR-0020）。
+ *
+ * 软键盘直接插入的字符【只走 beforeinput 这一条路】，第二下没有别的路会替它发 ——
+ * 去重若按"内容 + 时间窗口"判，第二下会被静默吃掉，而用户只会看到"字打不进去"。
+ */
+test('E2E-7 ② 连打两下同一个标点：两下都进，不被去重吃掉', async ({ page }) => {
+  await agent.pair(page)
+  await page.goto(agent.baseURL)
+  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+
+  await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
+  await page.keyboard.type('echo ')
+
+  // 两下在同一个 evaluate 里发完 —— 间隔远小于 120ms 的去重窗口
+  await softKeys(page, '，', 0, 2)
+
+  await page.keyboard.press('Enter')
+  await waitFor(
+    async () => (await terminalText(page)).split('\n').some((l) => l.trim() === '，，'),
+    '连打两下「，」，终端回显必须是两个 —— 第二下被去重吃掉就只剩一个',
+  )
 })

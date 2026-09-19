@@ -175,9 +175,18 @@ compositionend    → composing=false，隐藏浮层，把 event.data 一次性�
 - `inputType` 不是 `insertText` 的不碰（`insertCompositionText` / 删除 / 替换各有各的路）；
 - xterm 在 `keydown` 里处理掉的键会 `preventDefault`，**根本不会有 `beforeinput`**，所以普通按键完全不受影响。
 
-两个去重：
-- `compositionend` 之后的极短窗口里，同内容的 `insertText` 吃掉不再发（WebKit 会在组字提交后补发一次）；
-- `keypress` 刚发过同一个字符时吃掉不再发（xterm 的 `_keyPress` 已经送过了）。
+**去重：只压别人已经发过的那一次，而且是一次性的。**
+
+会重复发送的只有两种情形，共同点是「这一段文字**已经被另一条路送出去了**」：
+
+- `compositionend` 提交之后，WebKit 会补发一次同内容的 `insertText`；
+- xterm 的 `_keyPress` 处理掉一个可打印字符时不 `preventDefault`（`cancelEvents` 默认 false），那个字符还会插进 textarea 再发一次 `beforeinput`。
+
+所以只有这两处才「布防」（记下刚发出去的文字 + 时刻），而且**压住一次之后立刻撤防**。
+
+【`beforeinput` 自己发出去的不布防】。这是要害：它发的是**用户此刻敲的字**，紧跟着的同一个字符是**用户又敲了一下**，不是补发。按「内容 + 时间窗口」判重的话，连打两下同一个字符（软键盘直接插入的标点最容易，因为它只走这一条路）第二下会被**静默吃掉** —— 那正是 [ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 明令禁止的。
+
+时间窗口（120ms）留着，但它只是布防的**保质期**：防的是一个过期的标记在很久以后吃掉一个真按键。判重靠「谁布的防 + 一次性」，不靠时间。
 
 ### 按键映射
 

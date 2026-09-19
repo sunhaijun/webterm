@@ -16,8 +16,14 @@ export interface RawImeHandlers {
 }
 
 /**
- * 去重窗口：compositionend 之后这么久之内、同一段文字的 insertText 算重复。
- * WebKit 会在组字提交后再补发一次 insertText，那是同一段文字，不能发两遍。
+ * 布防的保质期。
+ *
+ * 【它不是判重的依据】。判重靠"谁布的防 + 一次性"：只有【已经被另一条路送出去】的
+ * 文字才布防（compositionend 的补发、xterm _keyPress 送过的字符），压住一次就撤防。
+ * 这个窗口只防一个过期的标记在很久以后吃掉一个真按键。
+ *
+ * 【按内容 + 时间窗口判重是错的】：软键盘直接插入的字符只走 beforeinput 这一条路，
+ * 用户连打两下同一个标点时，第二下会被静默吃掉 —— 而它没有别的路会替它发（ADR-0020）。
  */
 const DEDUP_MS = 120
 
@@ -28,7 +34,7 @@ const DEDUP_MS = 120
  */
 export class RawIme {
   private composing = false
-  /** 最近一次已经发出去的文本 + 时刻，用来吃掉浏览器补发的同一段文字。 */
+  /** 布防中的文本 + 布防时刻：这一段【已经被别的路送出去了】，紧跟其后的同内容补发要吃掉。 */
   private sent = ''
   private sentAt = 0
   private readonly el: HTMLTextAreaElement
@@ -82,7 +88,7 @@ export class RawIme {
     // 记下来，下面去重用
     this.on('keypress', (e) => {
       const key = (e as KeyboardEvent).key
-      if (key && key.length === 1) this.mark(key)
+      if (key && key.length === 1) this.arm(key)
     })
 
     // 【直接插入的文本由我们自己发】（AC-3.14）。
@@ -105,8 +111,13 @@ export class RawIme {
       if (!data) return
       // 不管发不发，都别让它落进 textarea —— 落进去 xterm 的差量路径会补一刀
       e.preventDefault()
-      if (data === this.sent && Date.now() - this.sentAt < DEDUP_MS) return
-      this.commit(data)
+      const duplicate = data === this.sent && Date.now() - this.sentAt < DEDUP_MS
+      // 【一次性】：压住一次就撤防。补发只有一次，再来的同一段是用户又打了一下
+      this.disarm()
+      if (duplicate) return
+      // 【这里发出去的不布防】。它是用户此刻敲的字，不是别人已经送过的 ——
+      // 布防的话，连打两下同一个字符时第二下会被自己压掉（AC-3.14）
+      this.h.onCommit(data)
     })
   }
 
@@ -117,15 +128,22 @@ export class RawIme {
     this.h.onPreview('') // 浮层也要收掉，否则留一片没人管的预览挂在屏幕上
   }
 
-  /** 发出去，并记下来用于去重。 */
+  /** 发出去并布防 —— 只有 compositionend 走这里：WebKit 会补发一次同一段文字。 */
   private commit(text: string): void {
-    this.mark(text)
+    this.arm(text)
     this.h.onCommit(text)
   }
 
-  private mark(text: string): void {
+  /** 布防：记下"已经被别的路送出去"的那一段。 */
+  private arm(text: string): void {
     this.sent = text
     this.sentAt = Date.now()
+  }
+
+  /** 撤防。 */
+  private disarm(): void {
+    this.sent = ''
+    this.sentAt = 0
   }
 
   /** 组字中？keydown 处理器必须在它为 true 时【全部 return】（AC-3.3）。 */

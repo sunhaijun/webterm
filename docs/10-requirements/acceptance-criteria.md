@@ -65,7 +65,7 @@
 | AC-3.1 | Composer 模式下，IME composition 事件不触发任何向 PTY 的写入；只有提交动作才写入 | E2E-7 |
 | AC-3.2 | Composer 提交：含换行时以 bracketed paste 包裹（不被逐条执行），单行与空输入不包裹；一律以 `CR` 结尾 | UT-input-1, E2E-8 |
 | AC-3.3 | Raw 模式下，composition 期间不向 PTY 写入；`compositionend` 时一次性写入最终文本。**组字状态必须有兜底复位**（ADR-0020）：`blur`，以及捕获阶段一个 `isComposing === false` 的 `keydown`，都立即把 `composing` 置回 false —— 切输入法 / 切窗口时 `compositionend` 可能不来，少了兜底该会话的终端输入会**永久**失效，用户只能刷新页面 | UT-input-2, UT-raw-2, E2E-34 |
-| AC-3.14 | Raw 模式下**软键盘直接插入的字符**（iOS 中文键盘的全角标点等）必须进 PTY：非组字的 `beforeinput` / `insertText` 由前端自己接管发送并 `preventDefault`，不依赖 xterm 的 keydown/input 启发式；组字路径不受影响，同一段文字不重复发送 | UT-raw-1, E2E-7 |
+| AC-3.14 | Raw 模式下**软键盘直接插入的字符**（iOS 中文键盘的全角标点等）必须进 PTY：非组字的 `beforeinput` / `insertText` 由前端自己接管发送并 `preventDefault`，不依赖 xterm 的 keydown/input 启发式；组字路径不受影响，同一段文字不重复发送。**去重只压「已经被另一条路送出去」的那一次且一次性**（`compositionend` 的补发、`keypress` 已送过的字符）；**连打两下同一个字符必须两下都进** —— 按内容 + 时间窗口判重会把第二下静默吃掉（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)） | UT-raw-1, E2E-7 |
 | AC-3.4 | Raw 模式下 `Ctrl+C` / `Ctrl+D` / 方向键 / `Esc` / 功能键正确映射为控制字节 | UT-keymap-1 |
 | AC-3.5（ADR-0013：仅内部，无 UI） | 输入模式随 shell 集成的 prompt 状态自动切换：`B`→Composer，`C`→Raw，`D`→Composer | UT-mode-1, E2E-9 |
 | ~~AC-3.6（ADR-0013 取代：无手动锁定）~~ | 用户手动切换模式后进入"锁定"状态，自动切换暂停，直到用户解锁 | UT-mode-2 |
