@@ -186,12 +186,15 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0022](adr/0022-drop-command-palette.md) | 砍掉命令面板 |
 | [0023](adr/0023-terminal-font-list.md) | 终端字体给一份探测过的清单（被 0030 取代） |
 | [0024](adr/0024-scrollback-layered-model.md) | 回滚历史的分层模型：先把内容留在追加流里（§2–§4 已被 0026 取代，§1 保留） |
-| [0025](adr/0025-termux-style-ui.md) | Termux 式界面：全屏终端 + 两行附加键，会话按设备分两种切换（§3 回车被 0027 修订，§5 纵向拖被 0029 修订，设置被 0030 删除，标签宽度被 0031 修订） |
+| [0025](adr/0025-termux-style-ui.md) | Termux 式界面：全屏终端 + 两行附加键，会话按设备分两种切换（§3 回车被 0027 修订，§5 纵向拖被 0029 修订，设置被 0030 删除，标签宽度被 0031 修订，`+` 被 0035 移出标签条，§3 文本页被 0036 改为跟着会话走） |
 | [0026](adr/0026-agent-holds-terminal-state.md) | 输出链路：agent 持有终端状态，浏览器只负责显示 |
 | [0027](adr/0027-text-page-enter-submits.md) | 文本输入页：回车 = 发送并提交 |
 | [0028](adr/0028-settings-without-notes.md) | 设置面板不写说明文字（面板被 0030 删除） |
 | [0029](adr/0029-touch-drag-to-wheel.md) | 触屏纵向拖：程序开了鼠标跟踪时转成滚轮（标定被 0032 去掉） |
 | [0030](adr/0030-no-settings.md) | 不要设置：主题跟随系统，字号与字体用默认；会话按钮显示会话数 |
-| [0031](adr/0031-tabs-equal-width.md) | 标签栏：按宽度等分，放不下时横向滚动 |
+| [0031](adr/0031-tabs-equal-width.md) | 标签栏：按宽度等分，放不下时横向滚动（`+` 的位置被 0035 修订） |
 | [0032](adr/0032-drag-wheel-per-row.md) | 触屏拖动转滚轮：去掉标定，手指每移动一行高发一次 |
 | [0033](adr/0033-own-fit.md) | 终端行列自己算，不用 FitAddon（修某些宽度上列数来回翻） |
+| [0034](adr/0034-system-service-oom-priority.md) | 以普通用户运行的系统服务：agent 不再先于会话被 OOM 杀掉 |
+| [0035](adr/0035-tabbar-new-button-pinned.md) | 标签栏的 `+` 移出滚动条：常驻可见、与标签隔开、与状态点对齐 |
+| [0036](adr/0036-text-page-per-session.md) | 文本输入页跟着会话走：每个会话各记页与草稿 |

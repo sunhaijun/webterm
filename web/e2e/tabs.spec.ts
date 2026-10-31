@@ -1,5 +1,5 @@
 /**
- * E2E-41 宽屏标签栏 —— AC-4.10（另含 AC-4.8 的「切换不改几何」）。
+ * E2E-41 宽屏标签栏 —— AC-4.10（另含 AC-4.8 的「切换不改几何」）；`+` 的位置见 ADR-0035。
  *
  * 1440×900 鼠标；第 7 步用 iPad Mini 设备描述（触屏 wide）。
  */
@@ -21,6 +21,12 @@ const closeVisible = (p: Page, sid: number) =>
   p.getByTestId(`tab-${sid}-close`).evaluate((el) => getComputedStyle(el).visibility === 'visible')
 /** 标签上显示的名字（不含 ⇵ 与未读点）。 */
 const tabName = (p: Page, sid: number) => p.getByTestId(`tab-${sid}`).locator('.tab-name').textContent()
+/** `+` 的左边缘到标签条右边缘的间隔（ADR-0035 §2）。 */
+const plusGap = async (p: Page) => {
+  const strip = (await p.getByTestId('tabbar').boundingBox())!
+  const plus = (await p.getByTestId('new-session').boundingBox())!
+  return plus.x - (strip.x + strip.width)
+}
 
 test.describe('1440×900 鼠标', () => {
   test.use(WIDE)
@@ -37,7 +43,9 @@ test.describe('1440×900 鼠标', () => {
     expect(bar.height, '标签栏 36px（鼠标）').toBe(36)
     const tabbar = page.getByTestId('tabbar')
     await expect(tabbar.locator('.tab')).toHaveCount(1)
-    await expect(tabbar.getByTestId('new-session')).toBeVisible()
+    await expect(tabbar.getByTestId('new-session'), '`+` 不在滚动的标签条里（ADR-0035）').toHaveCount(0)
+    await expect(page.locator('.topbar').getByTestId('new-session')).toBeVisible()
+    expect(Math.abs((await plusGap(page)) - 12), '`+` 前留 12px').toBeLessThanOrEqual(0.5)
     await expect(tabbar.getByTestId('conn-dot'), '状态点不在可滚动的标签条里').toHaveCount(0)
     await expect(page.locator('.topbar').getByTestId('conn-dot')).toHaveAttribute('data-state', 'online')
     await expect(page.getByTestId('open-settings'), '没有设置（ADR-0030）').toHaveCount(0)
@@ -45,6 +53,15 @@ test.describe('1440×900 鼠标', () => {
     const strip = (await rectOf(page, '[data-testid=tabbar]'))!
     expect(dot.left, '状态点在标签条右边').toBeGreaterThanOrEqual(strip.right - 1)
     expect(bar.right - dot.right, '状态点在最右（只隔它自己的外边距）').toBeLessThanOrEqual(12)
+    // `+` 是图标、按几何中心居中：和状态点在同一条水平线上（ADR-0035 §3）
+    const mid = await page.evaluate(() => {
+      const c = (s: string) => {
+        const r = document.querySelector(s)!.getBoundingClientRect()
+        return r.top + r.height / 2
+      }
+      return { plus: c('[data-testid=new-session] svg'), dot: c('[data-testid=conn-dot]') }
+    })
+    expect(Math.abs(mid.plus - mid.dot), `\`+\` 与状态点垂直对齐：${JSON.stringify(mid)}`).toBeLessThanOrEqual(0.5)
     await expect(page.getByTestId('open-sessions')).toHaveCount(0)
     await expect(page.getByTestId('extrakeys')).toHaveCount(0)
 
@@ -168,13 +185,14 @@ test.describe('1440×900 鼠标', () => {
     const strip = page.getByTestId('tabbar')
     const scroll = () => strip.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, left: el.scrollLeft }))
 
-    // 3 个：等宽，都封顶 240px；`+` 紧跟最后一个；不滚动
+    // 3 个：等宽，都封顶 240px；标签条正好是三个标签宽；`+` 跟在最后一个后面、隔 12px；不滚动
     for (const w of await widths()) expect(Math.abs(w - 240), `标签宽 ${w}`).toBeLessThanOrEqual(1)
     const last = (await tabs.last().boundingBox())!
-    const plus = (await strip.getByTestId('new-session').boundingBox())!
-    expect(Math.abs(plus.x - (last.x + last.width)), '`+` 紧跟最后一个标签').toBeLessThanOrEqual(1)
+    const plus = (await page.getByTestId('new-session').boundingBox())!
+    expect(Math.abs(plus.x - (last.x + last.width) - 12), '`+` 跟在最后一个标签后面，隔 12px').toBeLessThanOrEqual(1)
     let s = await scroll()
     expect(s.sw, '放得下时不滚动').toBe(s.cw)
+    expect(Math.abs(s.cw - 720), `标签条正好三个标签宽：${s.cw}`).toBeLessThanOrEqual(1)
 
     // 窗口改窄、建到 5 个：每个停在 120px，标签条放不下，当前（最后建的）整个可见
     await page.setViewportSize({ width: 600, height: 900 })
@@ -187,11 +205,26 @@ test.describe('1440×900 鼠标', () => {
     const box = (await strip.boundingBox())!
     const curBox = (await page.getByTestId(`tab-${cur}`).boundingBox())!
     expect(curBox.x >= box.x - 1 && curBox.x + curBox.width <= box.x + box.width + 1, '当前标签整个可见').toBe(true)
+    expect(s.left, '当前在最后，标签条已经滚到右边').toBeGreaterThan(0)
+
+    // 放不下时 `+` 不跟着滚：整个在顶栏里、点得到，离标签条 12px；标签条滚到最左它也不动（ADR-0035）
+    const pinned = (await page.getByTestId('new-session').boundingBox())!
+    expect(pinned.x + pinned.width, '`+` 整个在 600px 宽的顶栏里').toBeLessThanOrEqual(600)
+    expect(Math.abs((await plusGap(page)) - 12), '放不下时仍隔 12px').toBeLessThanOrEqual(0.5)
+    const hit = await page.evaluate(
+      ({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid=new-session]') !== null,
+      { x: pinned.x + pinned.width / 2, y: pinned.y + pinned.height / 2 },
+    )
+    expect(hit, '`+` 的中心点得到它自己').toBe(true)
+    await strip.evaluate((el) => (el.scrollLeft = 0))
+    await expect.poll(async () => (await scroll()).left).toBe(0)
+    expect(await page.getByTestId('new-session').boundingBox(), '标签条滚动，`+` 不动').toEqual(pinned)
 
     // 鼠标滚轮纵向滚 = 横着滚标签条
-    const before = s.left
-    expect(before, '当前在最后，标签条已经滚到右边').toBeGreaterThan(0)
     await page.mouse.move(box.x + 60, box.y + box.height / 2)
+    await page.mouse.wheel(0, 200)
+    await expect.poll(async () => (await scroll()).left, { message: '滚轮向下 → 往右滚' }).toBeGreaterThan(0)
+    const before = (await scroll()).left
     await page.mouse.wheel(0, -200)
     await expect.poll(async () => (await scroll()).left, { message: '滚轮向上 → 往左滚' }).toBeLessThan(before)
 
@@ -200,6 +233,28 @@ test.describe('1440×900 鼠标', () => {
     await expect.poll(async () => (await widths()).every((w) => Math.abs(w - 240) <= 1)).toBe(true)
     s = await scroll()
     expect(s.sw, '放宽后不滚动').toBe(s.cw)
+  })
+
+  test('E2E-41 ⑨ `+` 前的间隔点上去什么都不做，也不抢终端的焦点', async ({ page }) => {
+    await agent.open(page)
+    await newSession(page)
+    const cur = (await hooks.sid(page))!
+    const tabs = page.locator('.tabbar .tab')
+    await expect(tabs).toHaveCount(2)
+    await page.locator('.xterm-helper-textarea').focus()
+
+    const last = (await tabs.last().boundingBox())!
+    const plus = (await page.getByTestId('new-session').boundingBox())!
+    const gap = { x: (last.x + last.width + plus.x) / 2, y: plus.y + plus.height / 2 }
+    expect(plus.x - (last.x + last.width), '间隔有 12px').toBeGreaterThanOrEqual(11)
+    await page.mouse.click(gap.x, gap.y)
+    await page.waitForTimeout(400)
+    await expect(tabs, '没有新建').toHaveCount(2)
+    expect(await hooks.sid(page), '当前会话不变').toBe(cur)
+    expect(
+      await page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea') ?? false),
+      '焦点还在终端里',
+    ).toBe(true)
   })
 })
 
@@ -215,6 +270,7 @@ test.describe('iPad Mini 触屏', () => {
     await expect(page.locator('.app')).toHaveAttribute('data-coarse', 'true')
     expect(await closeVisible(page, b), '当前标签有 ✕').toBe(true)
     expect(await closeVisible(page, a), '非当前标签没有 ✕（免得误点）').toBe(false)
+    expect(Math.abs((await plusGap(page)) - 16), '触屏上 `+` 前留 16px').toBeLessThanOrEqual(0.5)
 
     const box = (await page.getByTestId(`tab-${a}`).boundingBox())!
     const cdp = await page.context().newCDPSession(page)

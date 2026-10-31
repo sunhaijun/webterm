@@ -100,11 +100,12 @@ export function App({ onRevoked }: AppProps = {}) {
           count={s.sessions.length}
           unread={anyUnread}
           sticky={ctl.sticky}
+          page={s.page}
           onOpenSessions={() => ctl.openSessions()}
+          onTogglePage={() => ctl.togglePage()}
           onKey={(id) => ctl.pressKey(id)}
           onSend={(send) => ctl.sendText(send)}
-          focusTerm={() => ctl.focusTerm()}
-          textRef={(el) => ctl.registerTextInput(el)}
+          register={(els) => ctl.registerTextPage(els)}
         />
       )}
 

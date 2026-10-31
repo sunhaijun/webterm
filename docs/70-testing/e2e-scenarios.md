@@ -537,7 +537,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 ---
 
-## E2E-40 文本输入页（AC-3.19, AC-3.10）
+## E2E-40 文本输入页（AC-3.19, AC-3.10, AC-3.22）
 
 > `web/e2e/textinput.spec.ts`，Pixel 5。hook `WebSocket.send` 记 INPUT 帧，断言时把这一步的帧拼起来比（粘贴与回车是两次 `onData`，分不分帧不重要）。E2E 的 bash 开了括号粘贴。
 
@@ -549,21 +549,23 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 6. **组字**：派发 `compositionstart` → `compositionupdate`（`ni`）→ 按 `Enter`（`isComposing: true`）→ **没有 INPUT 帧**；`compositionend`（`你好`）后回车 → INPUT 帧拼起来是括号包好的 `你好` + `0d`
 7. **多行内容整块粘贴再回车**：往文本框粘贴 `echo L1⏎echo L2` 后回车 → INPUT 帧拼起来以 `1b5b3230307e` 开头、以 `1b5b3230317e0d` 结尾，中间的换行已转成 `0d`；两行都执行，输出里出现 `L1` 与 `L2`
 8. **回车不插换行**：以上每一步之后，`textinput.value` 里都没有 `\n`
+9. **跟着会话走**（AC-3.22 / AC-4.8，[ADR-0036](../20-architecture/adr/0036-text-page-per-session.md)）：会话 A 在文本页，框里填 `echo DRAFT-A`（不回车）；从会话抽屉新建会话 B → B 是键位页（`extrakeys[data-page=keys]`、`textinput` 不可见），焦点在 B 的终端里。B 里点 `toggle-text`，填 `echo DRAFT-B`。从抽屉切回 A → 文本页，`textinput.value` 是 `echo DRAFT-A`，焦点在文本框；回车 → 只有 A 的输出里出现 `DRAFT-A`。从抽屉切到 B → 文本页，值是 `echo DRAFT-B`；点 `toggle-text` 回键位页，切到 A → A 仍是文本页、框是空的（刚才发掉了）；再切回 B → 键位页，焦点在终端；整个过程没有任何一次把 `DRAFT-B` 发出去
 
 ---
 
 ## E2E-41 宽屏标签栏（AC-4.10）
 
-> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述，第 8 步中途把窗口改窄。
+> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述，第 8 步中途把窗口改窄。`+` 的位置见 [ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)。
 
-1. **结构**：顶栏在终端上方；`tabbar`（标签条）里有一个标签和 `new-session`，右侧钉住 `conn-dot`，它在最右；没有 `open-settings`、没有 `open-sessions`，没有附加键
+1. **结构**：顶栏在终端上方；`tabbar`（标签条）里只有一个标签，`new-session` 在顶栏里、**不在** `tabbar` 里，位于标签条右边、左边缘距标签条右边缘 12px（ADR-0035）；右侧钉住 `conn-dot`，它在最右；`new-session` 里的 SVG 与 `conn-dot` 的垂直中心相差 ≤ 0.5px；没有 `open-settings`、没有 `open-sessions`，没有附加键
 2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
 3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹确认，确认后标签消失；中键点标签同样关闭
 4. **改名**：双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
 5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现 `⇵`；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
 6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点；切回 A → 消失
-7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签 → `session-menu`；附加键在，左列只有 `toggle-text`
-8. **等宽与滚动**（ADR-0031）：建到 3 个会话 → 三个标签等宽（差 ≤ 1px）、都是 240px，`new-session` 紧跟最后一个标签，`tabbar` 不横向滚动（`scrollWidth` = `clientWidth`）；把窗口改成 600×900（`screen` 不变，仍是 `wide`）、建到 5 个 → 每个标签 120px（差 ≤ 1px），`tabbar` 放不下（`scrollWidth > clientWidth`），当前（最后建的）整个可见；鼠标悬在标签条上纵向滚轮向上 → `scrollLeft` 变小；窗口改回 1440 → 5 个都是 240px，不再横向滚动
+7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签 → `session-menu`；附加键在，左列只有 `toggle-text`；`new-session` 与 `tabbar` 右边缘相距 16px
+8. **等宽与滚动**（ADR-0031 / ADR-0035）：建到 3 个会话 → 三个标签等宽（差 ≤ 1px）、都是 240px，`tabbar` 正好是三个标签的宽度、不横向滚动（`scrollWidth` = `clientWidth`），`new-session` 的左边缘 = 最后一个标签的右边缘 + 12px；把窗口改成 600×900（`screen` 不变，仍是 `wide`）、建到 5 个 → 每个标签 120px（差 ≤ 1px），`tabbar` 放不下（`scrollWidth > clientWidth`），当前（最后建的）整个可见；**`new-session` 整个落在顶栏里、可点（`elementFromPoint` 命中它），左边缘 = `tabbar` 右边缘 + 12px**；把 `tabbar` 滚到最左（`scrollLeft = 0`）→ `new-session` 的位置不变；（此时 `scrollLeft` 为 0）鼠标悬在标签条上纵向滚轮向下再向上 → `scrollLeft` 先变大后变小；窗口改回 1440 → 5 个都是 240px，不再横向滚动
+9. **间隔不可点**（ADR-0035 §2）：两个会话，焦点在终端里；在最后一个标签右边缘与 `new-session` 左边缘之间那 12px 的正中点击 → 会话数不变、当前会话不变、焦点仍在终端里
 
 ---
 

@@ -6,7 +6,7 @@ import { Connection, type ConnState, type StateInfo, type WebSocketLike } from '
 import { inputTrace, viewOf } from '../keys/inputstats'
 import { Sticky, appAction, extraKeyBytes, type ExtraKeyId } from '../keys/keymap'
 import { RawIme, cursorPosition } from '../keys/raw'
-import type { TextSend } from '../keys/textpage'
+import { TextPages, type KeyPage, type TextPageEls, type TextSend } from '../keys/textpage'
 import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, displayName, routeInput, type SessionView } from '../sessions/store'
 import { installDragWheel, installTapToggle } from '../term/gestures'
@@ -47,6 +47,8 @@ export interface AppState {
   preview: ImePreviewState | null
   /** compact 的会话抽屉。 */
   sessionsOpen: boolean
+  /** 当前会话的附加键槽停在哪一页（ADR-0036：每个会话各记一份）。 */
+  page: KeyPage
 }
 
 /** 打开抽屉之前焦点在哪（AC-4.8：选中会话后按它恢复）。 */
@@ -62,7 +64,14 @@ export class AppController {
   private readonly store: SessionStore
   private readonly enc = new TextEncoder()
   private area: HTMLElement | null = null
-  private textInput: HTMLTextAreaElement | null = null
+  /** 文本页跟着会话走（AC-3.22，ADR-0036）：各会话的页与草稿。 */
+  private readonly pages = new TextPages()
+  private textPage: TextPageEls | null = null
+  private untrackText: (() => void) | null = null
+  /** 文本框里此刻是哪个会话的草稿。 */
+  private textOwner: number | null = null
+  /** 文本框正在组字（输入法候选还没选）。 */
+  private composing = false
   private ime: RawIme | null = null
   private imeEl: HTMLTextAreaElement | null = null
   private lastWelcome: Welcome | null = null
@@ -107,6 +116,7 @@ export class AppController {
       toast: null,
       preview: null,
       sessionsOpen: false,
+      page: 'keys',
     }
     this.conn = new Connection({
       url: opts.url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
@@ -159,7 +169,8 @@ export class AppController {
   }
 
   private refresh(): void {
-    this.set({ sessions: this.store.list(), active: this.store.active })
+    this.syncTextPage()
+    this.set({ sessions: this.store.list(), active: this.store.active, page: this.pages.page(this.store.active) })
   }
 
   private toast(kind: Toast['kind'], text: string): void {
@@ -259,6 +270,7 @@ export class AppController {
       undrag()
       this.sendResize.cancel()
       this.ime?.dispose()
+      this.untrackText?.()
       this.conn.close()
       this.store.dispose()
       if (this.toastTimer) clearTimeout(this.toastTimer)
@@ -266,27 +278,50 @@ export class AppController {
     }
   }
 
-  /** 文本输入页的 textarea（焦点规则要认得它）。 */
-  registerTextInput(el: HTMLTextAreaElement | null): void {
-    this.textInput = el
+  /**
+   * 附加键组件交上来（或收回）文本页的 DOM。之后切会话时由这里同步翻页、换草稿、给焦点。
+   * 附加键可能晚于会话出现（`pointer: coarse` 在运行中变了），所以交上来时先装上当前会话的那一份。
+   */
+  registerTextPage(els: TextPageEls | null): void {
+    const old = this.textPage
+    if (old) this.pages.setDraft(this.textOwner, old.text.value)
+    this.untrackText?.()
+    this.untrackText = null
+    this.composing = false
+    this.textPage = els
+    if (!els) return
+    els.text.value = this.pages.draft(this.textOwner)
+    els.slot.dataset.page = this.pages.page(this.textOwner)
+    const start = () => (this.composing = true)
+    const end = () => (this.composing = false)
+    els.text.addEventListener('compositionstart', start)
+    els.text.addEventListener('compositionend', end)
+    els.text.addEventListener('blur', end)
+    this.untrackText = () => {
+      els.text.removeEventListener('compositionstart', start)
+      els.text.removeEventListener('compositionend', end)
+      els.text.removeEventListener('blur', end)
+    }
   }
 
   // ---------- 会话 ----------
 
   /**
    * 切到某个会话。焦点跟着会话走（AC-4.8）：`activate()` 把上一个会话的 DOM 摘掉时
-   * 焦点会落回 body，所以先记下「焦点在不在终端里」，切完按它还回去；非触摸设备无条件还。
-   * 焦点在文本输入页时不动它。`focus` 显式给出时以它为准（从抽屉切换：看打开抽屉之前）。
+   * 焦点会落回 body，所以先记下「焦点在不在终端或文本框里」，切完还给**新会话的输入处**
+   * （它停在文本页就是文本框，否则是终端，ADR-0036）；非触摸设备无条件还。
+   * `focus` 显式给出时以它为准（从抽屉切换：看打开抽屉之前）。点的就是当前会话时不挪焦点。
    */
   select(sid: number, focus?: boolean): void {
     const area = this.area
     if (!area || !this.store.has(sid)) return
-    const hadFocus = area.contains(document.activeElement)
-    const textFocused = this.textInput !== null && document.activeElement === this.textInput
+    const place = this.focusPlace()
+    const same = sid === this.store.active
     this.store.activate(sid, area)
     this.attachIme()
-    const want = focus ?? (hadFocus || !this.state.coarse)
-    if (want && !textFocused) this.store.termOf(sid)?.term.focus()
+    this.syncTextPage()
+    const want = focus ?? (place !== null || !this.state.coarse)
+    if (want && !(same && place !== null)) this.focusInput()
     this.refresh()
   }
 
@@ -304,9 +339,8 @@ export class AppController {
       this.toast('warn', '未连接，稍后再新建会话')
       return
     }
-    const area = this.area
     const reqID = `new-${++this.reqSeq}`
-    this.pendingCreate.set(reqID, focus ?? ((area?.contains(document.activeElement) ?? false) || !this.state.coarse))
+    this.pendingCreate.set(reqID, focus ?? (this.focusPlace() !== null || !this.state.coarse))
     const sid = this.store.active
     const cur = sid === null ? undefined : this.store.info(sid)
     const t = this.activeTerm()?.term
@@ -356,14 +390,13 @@ export class AppController {
   selectFromDrawer(sid: number): void {
     const place = this.drawerFocus
     this.set({ sessionsOpen: false })
-    this.select(sid, place === 'term' || (place === null && !this.state.coarse))
-    if (place === 'text') this.textInput?.focus()
+    this.select(sid, place !== null || !this.state.coarse)
   }
 
   newFromDrawer(): void {
     const place = this.drawerFocus
     this.set({ sessionsOpen: false })
-    this.newSession(place === 'term' || !this.state.coarse)
+    this.newSession(place !== null || !this.state.coarse)
   }
 
   // ---------- 输入 ----------
@@ -401,6 +434,47 @@ export class AppController {
 
   focusTerm(): void {
     this.activeTerm()?.term.focus()
+  }
+
+  /**
+   * ✎ 或键区横滑：翻当前会话的页（ADR-0036）。DOM 上的页【同步】翻：下一行的 focus() 要求
+   * 文本框此刻已经可见，而且必须在这次点击 / 抬起的处理函数里聚焦，iOS 才会弹键盘。
+   */
+  togglePage(): void {
+    const sid = this.store.active
+    const next: KeyPage = this.pages.page(sid) === 'keys' ? 'text' : 'keys'
+    this.pages.setPage(sid, next)
+    const el = this.textPage
+    if (el) el.slot.dataset.page = next
+    this.set({ page: next })
+    if (next === 'text') el?.text.focus({ preventScroll: true })
+    else if (el && document.activeElement === el.text) this.focusTerm()
+  }
+
+  /** 焦点给当前会话的输入处：停在文本页（且文本页在界面上）就是文本框，否则是终端。 */
+  private focusInput(): void {
+    const el = this.textPage
+    if (el && this.pages.page(this.store.active) === 'text') el.text.focus({ preventScroll: true })
+    else this.focusTerm()
+  }
+
+  /**
+   * 当前会话变了（切换、关掉、agent 重启）就把文本框换成它的草稿、附加键槽翻到它的页
+   * （AC-3.22）。旧会话还在就先把框里的内容存成它的草稿。组字中先失焦，让输入法把组到一半的字
+   * 提交进框里再存 —— 直接改 `value` 会让输入法丢字，或把字补进新会话的草稿（ADR-0036 §3）。
+   */
+  private syncTextPage(): void {
+    this.pages.retain((s) => this.store.has(s))
+    const sid = this.store.active
+    if (sid === this.textOwner) return
+    const el = this.textPage
+    const owner = this.textOwner
+    this.textOwner = sid
+    if (!el) return
+    if (this.composing && document.activeElement === el.text) el.text.blur()
+    if (owner === null || this.store.has(owner)) this.pages.setDraft(owner, el.text.value)
+    el.text.value = this.pages.draft(sid)
+    el.slot.dataset.page = this.pages.page(sid)
   }
 
   private onTermData(sid: number, data: string): void {
@@ -579,10 +653,10 @@ export class AppController {
 
   private closeLocal(sid: number): void {
     const wasActive = this.store.active === sid
-    const hadFocus = this.area?.contains(document.activeElement) ?? false
+    const typing = this.focusPlace() !== null
     const next = wasActive ? this.store.neighbourOf(sid) : null
     this.store.remove(sid)
-    if (next !== null) this.select(next, hadFocus || !this.state.coarse)
+    if (next !== null) this.select(next, typing || !this.state.coarse)
   }
 
   private activeTerm() {
@@ -592,7 +666,7 @@ export class AppController {
 
   private focusPlace(): FocusPlace {
     const el = document.activeElement
-    if (this.textInput && el === this.textInput) return 'text'
+    if (this.textPage && el === this.textPage.text) return 'text'
     if (this.area?.contains(el)) return 'term'
     return null
   }
