@@ -7,7 +7,8 @@
  *   - 没开 → 切换软键盘：终端有焦点就 blur，没有就 focus。focus 必须发生在这次触摸
  *     的处理函数里（iOS 只允许在用户手势里弹键盘），所以在 touchend 里做。
  *
- * 纵向拖是 xterm 自带的触摸滚动；横向拖不做任何事。
+ * 纵向拖：没开鼠标跟踪时是 xterm 自带的触摸滚动；开了就由 installDragWheel 转成滚轮
+ * （ADR-0029）—— xterm 5.5 在鼠标跟踪时不处理触摸。横向拖不做任何事。
  */
 
 /** 「点一下」= 位移 < 10px 且时长 < 300ms。 */
@@ -86,5 +87,182 @@ export function installTapToggle(el: HTMLElement, target: () => TapTarget | null
     el.removeEventListener('touchmove', onMove)
     el.removeEventListener('touchend', onEnd)
     el.removeEventListener('touchcancel', onCancel)
+  }
+}
+
+// ---------- 纵向拖转滚轮（ADR-0029，input.md §纵向拖，AC-3.21） ----------
+
+/** 一次 touchmove 最多发几次滚轮。浏览器把 touchmove 合并到每帧一个，约等于每帧上限。 */
+export const WHEEL_MAX_PER_MOVE = 3
+
+/** 按单位距离（步长 × 行高）累计手指的纵向位移，换成滚轮次数。 */
+export class DragWheel {
+  private rest = 0
+
+  /** 只攒不发（标定期间；扣掉第一下那一步时传负数）。 */
+  hold(dy: number): void {
+    this.rest += dy
+  }
+
+  /** 攒着的位移（px）。 */
+  pending(): number {
+    return this.rest
+  }
+
+  /**
+   * 喂入这一帧的纵向位移（px，手指向下为正），返回要发几次滚轮：正 = 向上滚（看更早的）。
+   * 超过上限的整单位直接丢掉，不攒到下一帧 —— 否则松手后还在往外吐。
+   */
+  feed(dy: number, unitPx: number): number {
+    this.rest += dy
+    const n = Math.trunc(this.rest / unitPx) || 0 // 不满一个单位的负位移 trunc 出 -0
+    this.rest -= n * unitPx
+    return Math.max(-WHEEL_MAX_PER_MOVE, Math.min(WHEEL_MAX_PER_MOVE, n))
+  }
+
+  reset(): void {
+    this.rest = 0
+  }
+}
+
+/**
+ * 一次滚轮之后屏幕挪了几行（标定步长）。只认 `before` 里独一无二的非空行 —— 空行、重复的
+ * 分隔线在任何位移下都对得上；静止的标题栏、状态栏位移是 0，不投票。向上滚 = 内容下移。
+ * 票数最多且至少 2 行对得上的位移胜出，认不出来返回 0。
+ */
+export function detectShift(before: string[], after: string[], up: boolean): number {
+  const at = new Map<string, number>()
+  before.forEach((line, i) => {
+    const k = line.trimEnd()
+    if (k !== '') at.set(k, at.has(k) ? -1 : i)
+  })
+  const votes = new Map<number, number>()
+  after.forEach((line, i) => {
+    const j = at.get(line.trimEnd())
+    if (j === undefined || j < 0) return
+    const d = up ? i - j : j - i
+    if (d > 0) votes.set(d, (votes.get(d) ?? 0) + 1)
+  })
+  let best = 0
+  let most = 1
+  for (const [d, n] of votes) {
+    if (n > most || (n === most && best !== 0 && d < best)) {
+      best = d
+      most = n
+    }
+  }
+  return best
+}
+
+export interface WheelTarget {
+  /** 前台程序开了鼠标跟踪。 */
+  mouseTracking(): boolean
+  /** 一行的高度（px）。 */
+  rowHeight(): number
+  /** 程序一次滚轮滚几行（标定出来的）。 */
+  wheelStep(): number
+  /** 正在等标定结果。 */
+  calibrating(): boolean
+  /** 最近一次标定认出了位移（量不到 = 那一下屏幕没挪）。 */
+  calibrated(): boolean
+  /** 在视口坐标 (x, y) 处发一次滚轮；up = 向上滚；calibrate = 顺便量程序滚了几行。 */
+  wheel(up: boolean, x: number, y: number, calibrate: boolean): void
+}
+
+/** 一次拖动最多量几次。都量不到（到顶了、程序不按行滚）就按已知步长走，不再等。 */
+export const MAX_PROBES = 2
+
+/**
+ * 在终端容器上装「鼠标跟踪时纵向拖 = 滚轮」，跟手：手指移动多少行，内容就移动多少行。
+ * 程序一次滚几行事先不知道，所以每次拖动先发一下并标定（量到之前位移先攒着），之后手指
+ * 每移动「步长 × 行高」发一次，量到的那一下挪走的一步从攒着的位移里扣掉。量不到的那一下
+ * 当作没挪（tmux 的第一下只是进 copy-mode），下一下再量。位移满 10px（点的门槛）且纵向
+ * 占优才算拖；转换期间 preventDefault，免得浏览器再原生滚一次。没开鼠标跟踪时什么都不做，
+ * 交给 xterm 的触摸滚动。
+ */
+export function installDragWheel(el: HTMLElement, target: () => WheelTarget | null): () => void {
+  let start: { x: number; y: number } | null = null
+  let lastY = 0
+  let dragging = false
+  /** 发出去等结果的那一下的方向：+1 向上滚，-1 向下滚；0 = 没有在等的。 */
+  let probeDir = 0
+  /** 这次拖动量了几次。 */
+  let probes = 0
+  /** 这次拖动的步长定下来了（量到了，或者量够次数放弃了）。 */
+  let found = false
+  const acc = new DragWheel()
+
+  const onStart = (e: TouchEvent) => {
+    start = null
+    if (e.touches.length !== 1) return
+    const p = e.touches[0]!
+    start = { x: p.clientX, y: p.clientY }
+    lastY = p.clientY
+    dragging = false
+    probeDir = 0
+    probes = 0
+    found = false
+    acc.reset()
+  }
+  const onMove = (e: TouchEvent) => {
+    if (!start) return
+    if (e.touches.length !== 1) {
+      start = null
+      return
+    }
+    const t = target()
+    if (!t || !t.mouseTracking()) return
+    const p = e.touches[0]!
+    if (!dragging) {
+      const dx = p.clientX - start.x
+      const dy = p.clientY - start.y
+      if (Math.hypot(dx, dy) < TAP_MAX_MOVE) return // 可能还是点
+      if (Math.abs(dy) <= Math.abs(dx)) {
+        start = null // 横向拖：不做任何事
+        return
+      }
+      dragging = true
+    }
+    if (e.cancelable) e.preventDefault()
+    const dy = p.clientY - lastY
+    lastY = p.clientY
+    if (t.calibrating()) {
+      acc.hold(dy) // 几下叠在一起就量不准了，先攒着
+      return
+    }
+    const unit = t.wheelStep() * t.rowHeight()
+    if (probeDir !== 0) {
+      // 上一次标定有结果了：量到 = 那一下挪走了一步；量不到 = 那一下没挪
+      if (t.calibrated()) {
+        found = true
+        acc.hold(-probeDir * unit)
+      } else if (probes >= MAX_PROBES) {
+        found = true
+      }
+      probeDir = 0
+    }
+    if (!found) {
+      acc.hold(dy)
+      probeDir = acc.pending() >= 0 ? 1 : -1
+      probes++
+      t.wheel(probeDir > 0, p.clientX, p.clientY, true)
+      return
+    }
+    const n = acc.feed(dy, unit)
+    for (let i = 0; i < Math.abs(n); i++) t.wheel(n > 0, p.clientX, p.clientY, false)
+  }
+  const onEnd = () => {
+    start = null
+  }
+
+  el.addEventListener('touchstart', onStart, { passive: true })
+  el.addEventListener('touchmove', onMove, { passive: false })
+  el.addEventListener('touchend', onEnd)
+  el.addEventListener('touchcancel', onEnd)
+  return () => {
+    el.removeEventListener('touchstart', onStart)
+    el.removeEventListener('touchmove', onMove)
+    el.removeEventListener('touchend', onEnd)
+    el.removeEventListener('touchcancel', onEnd)
   }
 }

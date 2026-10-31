@@ -234,7 +234,7 @@ m9 / m10 只依赖 m8，彼此独立。
 | 两行静态附加键（Termux 默认 14 键，CTRL / ALT 粘滞，DECCKM） | [input.md](../40-frontend/input.md#附加键ac-318) + [keymap.md](../40-frontend/keymap.md) |
 | 文本输入页（✎ / 左右滑动切换；回车：有内容不追加回车、空回车发 `\r`；后由 [ADR-0027](../20-architecture/adr/0027-text-page-enter-submits.md) 改为发内容并回车） | [input.md](../40-frontend/input.md) |
 | `compact`：☰ + 底部会话抽屉（未读点、系统返回键关抽屉）；`wide`：顶部标签栏 | [session-ux.md](../40-frontend/session-ux.md#切换会话ac-410) |
-| 点终端切换软键盘 / 鼠标跟踪时上报点击；滚动用 xterm 原生 | [layout.md](../40-frontend/layout.md) |
+| 点终端切换软键盘 / 鼠标跟踪时上报点击；滚动用 xterm 原生；鼠标跟踪时纵向拖转滚轮（后由 [ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md) 补上） | [layout.md](../40-frontend/layout.md) |
 | 连接横幅（覆盖、不改几何）、进程结束提示行、删除 `Ctrl/Cmd+F` 搜索 | [session-ux.md](../40-frontend/session-ux.md) |
 | `internal/vterm`（tuios.dev/vt）：同锁喂入、快照、改列数重发快照、热升级交接状态 | [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)、[session-manager.md](../50-backend/session-manager.md) |
 | 协议 v2：`SNAPSHOT` 帧、`resumed[].status: "snapshot"`；删 `ATTR_PREFIX` / `reset` / `redraw` / `cwd` / `prompt` / `command.*`；同步 `vectors.json` | [websocket-protocol.md](../30-protocol/websocket-protocol.md) |
