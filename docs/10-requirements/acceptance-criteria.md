@@ -66,11 +66,11 @@
 | AC-3.4 | 终端直输与附加键的 `Ctrl+C` / `Ctrl+D` / 方向键 / `Esc` / 功能键正确映射为控制字节，附加键与实体键盘同一编码；方向键与 `Home` / `End` 跟随应用光标键模式（DECCKM 开启时发 `ESC O A` / `ESC O H`），按键时现读不缓存 | UT-keymap-1 |
 | AC-3.8 | 软键盘弹出时（`visualViewport` resize），终端区收缩而不被遮挡，附加键贴在键盘上方、完整可见，布局无跳动；形态不变 | E2E-21 |
 | AC-3.10 | 文本输入页的 `textarea` 禁用 `autocorrect` / `autocapitalize` / `spellcheck`，以 DOM attribute 的实际值为准（`autocorrect="off"`，不是被框架反射成的 `on`） | UT-input-3, E2E-40 |
-| AC-3.11 | 终端尺寸变化时向 agent 发 `resize`，agent 对 PTY 执行 `TIOCSWINSZ`；resize 消息做 100ms 防抖 | IT-resize-1, UT-resize-1 |
+| AC-3.11 | 终端尺寸变化时向 agent 发 `resize`，agent 对 PTY 执行 `TIOCSWINSZ`；resize 消息做 100ms 防抖。行列 = 可用尺寸 ÷ **稳定的**字符格尺寸（不随当前行列变，[ADR-0033](../20-architecture/adr/0033-own-fit.md)）：容器尺寸不变时反复量，行列不变；只改高度时列数不变 | IT-resize-1, UT-resize-1, UT-fit-1, E2E-42 |
 | AC-3.18 | **附加键**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §2）：`compact` 恒显示、`wide` 在 `pointer: coarse` 时显示；两行共 14 个键，依次为 `ESC / - HOME ↑ END PGUP` 与 `TAB CTRL ALT ← ↓ → PGDN`，**不随前台程序、提示符状态变**；393px 宽下全部可见、不横向滚动；按键在 `pointerdown` 时 `preventDefault`，按下前后 `document.activeElement` 不变；字节走 `onData` 出口（计入 `inputStats`）；CTRL / ALT 点一下只对下一个键生效（含软键盘输入的下一个字符），长按锁定，再点解锁，激活与锁定有 `data-sticky` 与高亮 | UT-keys-1, E2E-10 |
 | AC-3.19 | **文本输入页**：点 ✎ 或在键区左右滑动切换，切换前后终端行列数不变、不发 `resize`；回车：组字中不处理，有内容 = 内容走 `term.paste()`（对端开了括号粘贴就包裹，换行转 `CR`）、**紧跟一个 `\r`**、清空，空 = 发 `\r`，回车不在框里插入换行；都走 `onData`（计入 `inputStats`）；发完留在文本页且焦点不变（[ADR-0027](../20-architecture/adr/0027-text-page-enter-submits.md)）；文本框四边都有边框，整个落在附加键槽内 | UT-textinput-1, E2E-40 |
 | AC-3.20 | **点按终端**：前台程序开了鼠标跟踪时点击交给 xterm 上报；没开时切换软键盘（终端有焦点则失焦，没有则聚焦），聚焦发生在这次触摸的处理函数里；位移 ≥ 10px 的是拖动，不算点 | E2E-10 |
-| AC-3.21 | **触屏纵向拖**（[ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md)）：前台程序开了鼠标跟踪时，位移满 10px 且纵向占优的拖动转成滚轮，**跟手**：每次拖动先发一次滚轮并量出程序一次滚几行（步长；量到前位移先攒着，最多 300ms；量不到的那一下当作没挪、下一下再量，最多 2 次），之后手指每移动「步长 × 行高」发一次，内容移动的行数与手指移动的行数相差不超过一个步长；一次 `touchmove` 最多 3 次、超出的丢掉；手指向下 = 滚轮向上，上报的行列是手指所在格，编码按程序的协议；转换期间 `touchmove` 被 `preventDefault`；横向拖与「点一下」不发滚轮。没开鼠标跟踪时不变：主屏是 xterm 的触摸滚动，备用屏不动、不发方向键 | UT-touch-1, E2E-44 |
+| AC-3.21 | **触屏纵向拖**（[ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md)、[ADR-0032](../20-architecture/adr/0032-drag-wheel-per-row.md)）：前台程序开了鼠标跟踪时，位移满 10px 且纵向占优的拖动转成滚轮：**手指每移动一行高发一次**（从起点开始累计，零头留到下一帧），一拖动就发、不等任何往返；一次 `touchmove` 最多 3 次、超出的丢掉；手指向下 = 滚轮向上，上报的行列是手指所在格，编码按程序的协议；程序一次滚几行由程序定（步长 N 的程序，手指拖 k 行内容走约 k × N 行）；转换期间 `touchmove` 被 `preventDefault`；横向拖与「点一下」不发滚轮。没开鼠标跟踪时不变：主屏是 xterm 的触摸滚动，备用屏不动、不发方向键 | UT-touch-1, E2E-44 |
 
 ---
 

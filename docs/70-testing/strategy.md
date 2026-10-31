@@ -158,7 +158,7 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 | `UT-seq-1` | `out_seq` 记账：连续帧、空洞检测、重复检测；SNAPSHOT 后 `out_seq` 跳到快照的 `seq` |
 | `UT-snapshot-1` | SNAPSHOT 帧：`MORE` 拼接、收齐才应用、应用时 `reset` 并换新的 UTF-8 解码器 |
 | `UT-utf8-1` | 输出按任意字节切开写入，中文标点（。…—“”）一个不丢（AC-2.23） |
-| `UT-touch-1` | 触屏纵向拖转滚轮：按「步长 × 行高」累计、方向、标定期间攒着、量到的那一下扣掉一步、量不到再量（最多 2 次）、每次 touchmove 最多 3 次、10px 门槛与纵向占优、只在鼠标跟踪时转换并 `preventDefault`；步长识别（只认唯一非空行、至少 2 行、静止行与重复行不算）（AC-3.21） |
+| `UT-touch-1` | 触屏纵向拖转滚轮：每满一行高发一次、零头留到下一帧、方向、每次 touchmove 最多 3 次且超出的丢掉、10px 门槛与纵向占优、只在鼠标跟踪时转换并 `preventDefault`（AC-3.21） |
 | `UT-input-1..3` | 文本输入页：回车语义（有内容 = 粘贴内容再回车 / 空回车发 `\r`）、composition 期间不发送、输入框属性 |
 | `UT-keymap-1` | 控制键映射表（对照 [`../40-frontend/keymap.md`](../40-frontend/keymap.md)） |
 | `UT-look-1` | 外观固定：xterm 字号 14px、字体是系统等宽栈；`Ctrl+Shift+,` 不是应用快捷键（AC-5.3） |
@@ -168,6 +168,7 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 | `UT-replay-2` | 回放门：用户输入事件派发期间的 `onData` 放行，`message` / 定时器里产生的在回放（增量补课、快照）中丢弃（AC-2.15） |
 | `UT-raw-2` | 组字兜底复位：`blur` / `isComposing === false` 的 `keydown` 都把 `composing` 置回 false（AC-3.3） |
 | `UT-resize-1` | resize 防抖 |
+| `UT-fit-1` | 行列 = 可用尺寸 ÷ 稳定字符格尺寸，向下取整、最少 2 列 1 行；900px 宽的实测数（字符宽 8.4287px、可用 877px）得 104 列，与当前列数无关（AC-3.11） |
 | `UT-name-1` | 会话自动命名规则（home → `~`、`/` → `/`、手动名优先） |
 | 协议向量 | 跑 `internal/protocol/testdata/vectors.json`（与 Go 侧同一份） |
 

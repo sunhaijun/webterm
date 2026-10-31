@@ -75,7 +75,7 @@ compact（手机）                              wide（PC / Pad）
 终端高度     = 容器高度 − safe-area 上下（键盘弹起时下边按 0 算）− 标签栏（wide）− 附加键（显示时）
 ```
 
-顺序：`visualViewport` 变化 → 重算容器 → 布局稳定 → `ResizeObserver` 通知终端 → `FitAddon.fit()` → 发 `resize` 控制消息（100ms 防抖）。
+顺序：`visualViewport` 变化 → 重算容器 → 布局稳定 → `ResizeObserver` 通知终端 → 重算行列（`fit()`，见 [§终端尺寸](#终端尺寸ac-53)）→ 发 `resize` 控制消息（100ms 防抖）。
 
 **不要在 `visualViewport` 事件里直接调 `fit()`** —— 布局还没稳定，会算出错误的行列数。必须让 `ResizeObserver` 观察终端容器，由它触发。
 
@@ -97,7 +97,7 @@ iOS Safari（以及 Chrome ≥108 的 `resizes-visual`）弹键盘只缩【可�
 
 ## 终端尺寸（AC-5.3）
 
-`FitAddon` 根据容器像素尺寸和 cell 尺寸算 cols/rows。
+行列由 `term/terminal.ts` 自己算（[ADR-0033](../20-architecture/adr/0033-own-fit.md)，不用 `FitAddon`）：可用尺寸（父元素宽高 − `.xterm` 内边距，宽度再减滚动条）÷ 字符格尺寸，向下取整，最少 2 列 1 行。**字符格尺寸取 `dimensions.device.cell / dpr`**，不取 `css.cell`：后者是「整行宽取整 ÷ 当前列数」，随当前列数变，拿它去除，某些宽度上每次都在 N 和 N−1 之间翻（只改高度也会改列数，agent 就重发一次快照）。
 
 - 字号**固定 14px**，两种形态一样，不可调（[ADR-0030](../20-architecture/adr/0030-no-settings.md)）。手机竖屏 14px 约 45 列，这是刻意的取舍：可读优先于宽输出。
 - cell 尺寸运行时不会变，所以容器尺寸变了（`ResizeObserver`）才 `fit()`，再防抖发 `resize`。

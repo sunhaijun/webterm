@@ -190,6 +190,8 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0026](adr/0026-agent-holds-terminal-state.md) | 输出链路：agent 持有终端状态，浏览器只负责显示 |
 | [0027](adr/0027-text-page-enter-submits.md) | 文本输入页：回车 = 发送并提交 |
 | [0028](adr/0028-settings-without-notes.md) | 设置面板不写说明文字（面板被 0030 删除） |
-| [0029](adr/0029-touch-drag-to-wheel.md) | 触屏纵向拖：程序开了鼠标跟踪时转成滚轮 |
+| [0029](adr/0029-touch-drag-to-wheel.md) | 触屏纵向拖：程序开了鼠标跟踪时转成滚轮（标定被 0032 去掉） |
 | [0030](adr/0030-no-settings.md) | 不要设置：主题跟随系统，字号与字体用默认；会话按钮显示会话数 |
 | [0031](adr/0031-tabs-equal-width.md) | 标签栏：按宽度等分，放不下时横向滚动 |
+| [0032](adr/0032-drag-wheel-per-row.md) | 触屏拖动转滚轮：去掉标定，手指每移动一行高发一次 |
+| [0033](adr/0033-own-fit.md) | 终端行列自己算，不用 FitAddon（修某些宽度上列数来回翻） |
