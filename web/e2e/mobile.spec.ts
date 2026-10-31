@@ -95,7 +95,7 @@ test('E2E-10 ①② 结构：compact、无标签栏、附加键 80px 在终端�
   expect(keys.top, '附加键在终端下方').toBeGreaterThanOrEqual(term.bottom - 1)
   expect(term.height, '终端拿到了剩余的高度').toBeGreaterThan(400)
 
-  // 左列：☰ 在上、✎ 在下
+  // 左列：会话按钮在上、✎ 在下
   const side = await page.evaluate(() => [...document.querySelectorAll('.ek-side > *')].map((e) => (e as HTMLElement).dataset.testid))
   expect(side).toEqual(['open-sessions', 'toggle-text'])
   const sessions = (await rectOf(page, '[data-testid=open-sessions]'))!

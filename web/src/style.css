@@ -198,7 +198,7 @@ button { font: inherit; color: inherit; }
   color: var(--fg);
 }
 .app[data-coarse='true'] .topbar { height: 40px; }
-/* 标签条自己横向滚动；状态点与 ⚙ 钉在右边不跟着滚 */
+/* 标签条自己横向滚动；状态点钉在右边不跟着滚 */
 .tabbar {
   flex: 1 1 auto; min-width: 0;
   display: flex; align-items: stretch;
