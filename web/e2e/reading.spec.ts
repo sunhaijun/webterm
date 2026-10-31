@@ -169,7 +169,7 @@ test.describe('E2E-12 阅读输出（1440×900）', () => {
 
     const select = page.getByTestId('font-family')
     await expect(select).toBeVisible()
-    await expect(page.getByTestId('font-note')).toContainText('连字')
+    await expect(page.getByTestId('settings').locator('p'), '设置面板不写说明段落（ADR-0028）').toHaveCount(0)
     const opts = await select.locator('option').evaluateAll((els) =>
       els.map((e) => ({ id: (e as HTMLOptionElement).value, label: (e as HTMLOptionElement).textContent ?? '' })),
     )
