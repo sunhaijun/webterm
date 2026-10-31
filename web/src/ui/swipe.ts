@@ -16,9 +16,12 @@ export interface SwipeDismissOptions {
 export function installSwipeDismiss(host: HTMLElement, onDismiss: () => void, opts: SwipeDismissOptions = {}): () => void {
   const threshold = opts.threshold ?? 90
   const findScroller = opts.scroller ?? ((h) => h.querySelector<HTMLElement>('.drawer-body'))
+  let startX = 0
   let startY = 0
   let dy = 0
   let dragging = false
+  /** 方向判定过没有：横向占优（左滑一行，ADR-0039）就整次不接管。 */
+  let decided = false
 
   const atTop = () => {
     const sc = findScroller(host)
@@ -26,13 +29,24 @@ export function installSwipeDismiss(host: HTMLElement, onDismiss: () => void, op
   }
   const onStart = (e: TouchEvent) => {
     if (e.touches.length !== 1) return
+    startX = e.touches[0]!.clientX
     startY = e.touches[0]!.clientY
     dy = 0
+    decided = false
     dragging = (opts.enabled?.() ?? true) && atTop()
   }
   const onMove = (e: TouchEvent) => {
     if (!dragging || e.touches.length !== 1) return
     dy = e.touches[0]!.clientY - startY
+    if (!decided) {
+      const dx = e.touches[0]!.clientX - startX
+      if (Math.abs(dx) + Math.abs(dy) < 6) return
+      decided = true
+      if (Math.abs(dx) > Math.abs(dy)) {
+        dragging = false
+        return
+      }
+    }
     if (dy <= 0) {
       // 往上了：交还给列表滚动
       dragging = false

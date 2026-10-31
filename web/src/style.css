@@ -147,6 +147,10 @@ button { font: inherit; color: inherit; }
   padding: var(--sa-top) var(--sa-right) var(--sa-bottom) var(--sa-left);
   overflow: hidden;
   background: var(--term-bg);
+  /* fixed 定位的浮层以 .app 为包含块（ADR-0039 §3）：.app 跟着 visualViewport 走，
+     浮层的遮罩就盖住可见区，sheet 贴着键盘上沿。少了它，Android 弹键盘只缩可视视口，
+     贴着布局视口底边的 sheet 整个在键盘后面 */
+  contain: layout;
 }
 /* 网格行：标签栏（wide）· 终端（剩余全部）· 附加键（80px，显示时） */
 .app[data-form='compact'] { grid-template-rows: minmax(0, 1fr) auto; }
@@ -399,7 +403,7 @@ button { font: inherit; color: inherit; }
   padding: 16px;
 }
 .drawer {
-  width: min(420px, 100%); max-height: min(80vh, 720px);
+  width: min(420px, 100%); max-height: min(80%, 720px);
   display: flex; flex-direction: column; min-height: 0;
   background: var(--bg); color: var(--fg);
   border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
@@ -450,7 +454,7 @@ button { font: inherit; color: inherit; }
 /* compact：贴底整宽 sheet，抓手 + 下滑关闭 */
 .app[data-form='compact'] .drawer-backdrop { align-items: flex-end; padding: 0; }
 .app[data-form='compact'] .drawer {
-  width: 100%; max-height: 80vh;
+  width: 100%; max-height: 80%;
   border-bottom: 0; border-radius: 16px 16px 0 0;
   animation: sheet-up 170ms ease;
 }
@@ -460,11 +464,12 @@ button { font: inherit; color: inherit; }
   margin: 8px auto 2px;
 }
 .app[data-form='compact'] .drawer-head { padding-top: 4px; }
-/* fixed 定位不在 .app 的 padding 里，自己让出 Home 指示条 */
+/* 浮层盖在 .app 的 padding 上，自己让出 Home 指示条。用 --sa-bottom 不用 env()：
+   键盘弹起时它被置 0（键盘已经盖住了指示条） */
 .app[data-form='compact'] .drawer:not([data-foot]),
-.app[data-form='compact'] .drawer-foot { padding-bottom: max(16px, env(safe-area-inset-bottom, 0px)); }
+.app[data-form='compact'] .drawer-foot { padding-bottom: max(16px, var(--sa-bottom)); }
 /* 会话抽屉至少半屏（iOS sheet 的「中等」档）：多出来的高度给列表，底部一行贴着 sheet 底部 */
-.app[data-form='compact'] .drawer[data-variant='sessions'] { min-height: 50vh; }
+.app[data-form='compact'] .drawer[data-variant='sessions'] { min-height: 50%; }
 
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
@@ -475,13 +480,33 @@ button { font: inherit; color: inherit; }
 /* ---------- 会话列表（compact 抽屉） ---------- */
 
 .session-list { list-style: none; margin: 0; padding: 4px 0; }
+/* 一行 = 底下的三个按钮 + 盖在上面的正文；左滑把正文推开（ADR-0039 §1） */
+.sl-item { position: relative; overflow: hidden; }
+.row-actions {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  display: flex; width: 216px;
+}
+.row-act {
+  flex: 1 1 0; border: 0; padding: 0 4px;
+  color: #fff; font-size: 14px; cursor: pointer;
+}
+.row-act[data-act='pin'] { background: var(--line-strong); color: var(--fg); }
+.row-act[data-act='rename'] { background: var(--accent); }
+.row-act[data-act='close'] { background: var(--err); font-weight: 600; }
 .session-row {
+  position: relative; z-index: 1;
   display: flex; align-items: center; gap: 8px;
-  height: 52px; padding: 0 14px;
+  height: 52px; padding: 0 0 0 14px;
+  background: var(--bg);
   cursor: pointer; outline: none;
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  /* 纵向交给列表滚动，横向归左滑 */
+  touch-action: pan-y;
+  transition: transform 180ms ease;
 }
-.session-row:hover:not([aria-current='true']) { background: var(--hover); }
+.sl-item[data-open='true'] .session-row { transform: translateX(-216px); }
+/* 底色必须不透明：半透明的 hover 会把底下的按钮透出来 */
+.session-row:hover:not([aria-current='true']) { background: color-mix(in srgb, var(--fg) 7%, var(--bg)); }
 .session-row:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
 /* 当前：强调色 3px 左条 + 强调色底色 + 名字用 --accent 加粗（AC-4.9） */
 .session-row[aria-current='true'] {
@@ -499,6 +524,32 @@ button { font: inherit; color: inherit; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl;
 }
 .sl-meta[data-failed='true'] { color: var(--err); font-weight: 600; direction: ltr; }
+/* 拖动柄（ADR-0040）：一行右端 44px，按住就拖，不让浏览器拿去滚动 */
+.row-grip {
+  flex: none; align-self: stretch; width: 44px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); touch-action: none; cursor: grab;
+}
+/* 拖动中：被拖的浮起来跟手，其余的带过渡让位 */
+[data-reordering] .sl-item, [data-reordering] .tab { transition: transform 150ms ease; }
+.sl-item[data-dragging], .tab[data-dragging] {
+  position: relative; z-index: 3; transition: none !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+.tab[data-dragging] { background: var(--bg); cursor: grabbing; }
+.sl-item[data-dragging] .row-grip { cursor: grabbing; }
+.tab[data-armed='true'] { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); }
+
+/* 改名 sheet（ADR-0039 §2）：一个整行宽的输入框 */
+.rename-field { padding: 16px; }
+.rename-sheet-input {
+  display: block; width: 100%; height: 44px; padding: 0 12px;
+  font: inherit; font-size: 16px; /* iOS 小于 16px 会在聚焦时放大页面 */
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: var(--bg); color: var(--fg); outline: none;
+}
+.rename-sheet-input:focus { border-color: var(--accent); }
+.drawer-btn.primary { color: var(--accent); font-weight: 600; }
 
 .rename-input {
   min-width: 0; width: 100%;

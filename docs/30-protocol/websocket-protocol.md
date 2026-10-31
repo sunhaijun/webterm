@@ -191,7 +191,7 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 把会话 `sid` 挪到会话 `before` 的前面；`before` 为 `null` 时挪到最后（[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)）。
 
 - `sid` 不存在 → `error{code:"unknown_session"}`。
-- `before` 不存在（比如刚被别处关掉）或等于 `sid` → 当作 `null`，挪到最后 / 原地不动。不报错。
+- `before` 不存在（比如刚被别处关掉）→ 当作 `null`，挪到最后；`before` 等于 `sid` → 原地不动。都不报错。
 - 成功后广播 `session.order`（§4.2），**位置没变也广播**，发起方据此确认。
 
 #### `subscribe` / `unsubscribe`

@@ -31,6 +31,9 @@ export const PlusIcon = () => <Icon d="M7 1.5v11M1.5 7h11" />
 
 export const MinusIcon = () => <Icon d="M1.5 7h11" />
 
+/** 拖动柄（ADR-0040）：三条横线。 */
+export const GripIcon = () => <Icon d="M2 3.5h10M2 7h10M2 10.5h10" />
+
 /** 六齿齿轮：外轮廓一笔画完，中间一个圆孔（两段弧画成整圆）。 */
 export const GearIcon = () => <Icon d={GEAR} />
 

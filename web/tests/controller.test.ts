@@ -584,3 +584,34 @@ describe('UT-close-1 关闭确认（AC-4.11，ADR-0038）', () => {
     expect(sock.msgs('session.close')).toHaveLength(0)
   })
 })
+
+describe('UT-close-1 关闭中（ADR-0038 §5）', () => {
+  it('发了 session.close 之后：输入（含焦点上报）与 resize 都不发，它的 unknown_session 不弹', async () => {
+    sock.text(welcome([info(1), info(2)]))
+    ctl.requestClose(1)
+    ctl.confirmClose()
+    const before = sock.inputs().length
+    xterm(1).input('\x1b[I', false) // 焦点上报
+    inside('keydown', () => xterm(1).input('x', true))
+    expect(sock.inputs().length, '关闭中的会话不再收输入').toBe(before)
+    sock.text({ t: 'error', sid: 1, code: 'unknown_session', message: '会话不存在' })
+    expect(ctl.get().toast, '关闭中：意料之中，不弹').toBeNull()
+    sock.text({ t: 'session.closed', sid: 1, exit_code: 0 })
+    sock.text({ t: 'error', sid: 1, code: 'unknown_session', message: '会话不存在' })
+    expect(ctl.get().toast, '本地已经没有了：也不弹').toBeNull()
+    sock.text({ t: 'error', sid: 2, code: 'unknown_session', message: '会话不存在' })
+    expect(ctl.get().toast?.text, '本地还在、也没在关：真的不同步了，照弹').toBe('会话不存在')
+  })
+})
+
+describe('UT-order-1 拖动排序（ADR-0040）', () => {
+  it('welcome 的顺序就是显示顺序；moveSession 本地先挪并发 session.move；session.order 整个替换', () => {
+    sock.text(welcome([info(3), info(1), info(2)]))
+    expect(ctl.get().sessions.map((s) => s.sid)).toEqual([3, 1, 2])
+    ctl.moveSession(2, 3)
+    expect(ctl.get().sessions.map((s) => s.sid)).toEqual([2, 3, 1])
+    expect(sock.msgs('session.move')).toMatchObject([{ sid: 2, before: 3 }])
+    sock.text({ t: 'session.order', sids: [1, 2, 3] })
+    expect(ctl.get().sessions.map((s) => `${s.index}:${s.sid}`)).toEqual(['1:1', '2:2', '3:3'])
+  })
+})

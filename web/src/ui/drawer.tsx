@@ -31,7 +31,7 @@ export interface DrawerProps {
   /** 底部固定的一行（会话抽屉的「+ 新会话 · ⚙」）。 */
   foot?: ComponentChildren
   /** 哪一种浮层：CSS 按它挂各自的尺寸（会话抽屉有最小高度，ADR-0037 §5）。 */
-  variant?: 'sessions' | 'settings' | 'confirm'
+  variant?: 'sessions' | 'settings' | 'confirm' | 'rename'
   children: ComponentChildren
 }
 
@@ -110,6 +110,14 @@ export function Drawer({
         ref={sheetRef}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          // 按钮上的 Enter：浏览器在 keydown 上就触发 click，不拦的话随后的 keypress 会落到
+          // 焦点刚还回去的终端里，多出一个回车（关闭确认之后、新建会话之后）。自己点、吞掉默认动作
+          const btn = (e.target as Element).closest?.('button')
+          if (e.key !== 'Enter' || !btn || e.isComposing) return
+          e.preventDefault()
+          btn.click()
+        }}
       >
         <div class="drawer-grab" />
         <div class="drawer-head">

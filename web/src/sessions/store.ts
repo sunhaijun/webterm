@@ -12,6 +12,7 @@ import type { ITheme } from '@xterm/xterm'
 import { inputTrace } from '../keys/inputstats'
 import type { SessionInfo, SessionStatus } from '../protocol/messages'
 import { createTerminal, exitLine, type TermHandle } from '../term/terminal'
+import { moveBefore } from '../ui/reorder'
 import { inUserInputEvent } from '../term/userinput'
 
 /** store 需要的那一小块连接层。 */
@@ -68,6 +69,8 @@ interface Entry {
 
 export class SessionStore {
   private readonly entries = new Map<number, Entry>()
+  /** 显示顺序（ADR-0040）：agent 给的，新建的排最后；不再按 created_at 排。 */
+  private order: number[] = []
   private readonly conn: ConnLike
   private readonly h: StoreHooks
   private activeSid: number | null = null
@@ -93,7 +96,7 @@ export class SessionStore {
     return this.entries.get(sid)?.term
   }
 
-  /** 按创建顺序。 */
+  /** 按显示顺序（agent 给的，ADR-0040）。 */
   list(): SessionView[] {
     return this.ordered().map((e, i) => ({
       sid: e.info.sid,
@@ -144,6 +147,7 @@ export class SessionStore {
 
     const entry: Entry = { info, term, host, opened: false, pinned: false, exitShown: false }
     this.entries.set(sid, entry)
+    if (!this.order.includes(sid)) this.order.push(sid) // 新建的排最后（ADR-0040）
     this.maybeExitLine(entry)
     this.h.onChange()
   }
@@ -162,6 +166,7 @@ export class SessionStore {
     e.term.dispose()
     e.host.remove()
     this.entries.delete(sid)
+    this.order = this.order.filter((x) => x !== sid)
     this.conn.forget(sid)
     if (this.activeSid === sid) this.activeSid = null
     this.h.onChange()
@@ -270,13 +275,29 @@ export class SessionStore {
   dispose(): void {
     for (const e of this.entries.values()) e.term.dispose()
     this.entries.clear()
+    this.order = []
     this.activeSid = null
   }
 
+  /**
+   * agent 给的完整顺序（welcome.sessions[] 的顺序、session.order）：整个替换。
+   * 里面没有的已知会话（比如广播之前刚建的）按原来的相对顺序接在后面。
+   */
+  setOrder(sids: readonly number[]): void {
+    const known = sids.filter((sid) => this.entries.has(sid))
+    const seen = new Set(known)
+    this.order = [...known, ...this.order.filter((sid) => !seen.has(sid) && this.entries.has(sid))]
+    this.h.onChange()
+  }
+
+  /** 本地先挪（松手立刻生效），之后以 agent 的 session.order 为准。 */
+  move(sid: number, before: number | null): void {
+    this.order = moveBefore(this.order, sid, before)
+    this.h.onChange()
+  }
+
   private ordered(): Entry[] {
-    return [...this.entries.values()].sort(
-      (a, b) => a.info.created_at - b.info.created_at || a.info.sid - b.info.sid,
-    )
+    return this.order.map((sid) => this.entries.get(sid)).filter((e): e is Entry => e !== undefined)
   }
 
   /**

@@ -12,7 +12,7 @@ import { AppController } from './controller'
 import { showsExtraKeys } from './form'
 import { ConnBanner, ImePreview, ToastView } from './notices'
 import { CloseConfirm } from './confirm'
-import { SessionList, SessionMenu } from './sessions'
+import { RenameSheet, SessionList, SessionMenu } from './sessions'
 import { Settings } from './settings'
 import { TopBar } from './tabs'
 
@@ -50,6 +50,8 @@ export function App({ onRevoked }: AppProps = {}) {
   const atLimit = s.sessions.length >= s.maxSessions
   const menuSession = menu ? s.sessions.find((x) => x.sid === menu.sid) : undefined
   const closing = s.closing === null ? undefined : s.sessions.find((x) => x.sid === s.closing)
+  // compact 上改名是一张叠在抽屉上的小 sheet（ADR-0039 §2）；wide 是标签上原地改
+  const renamingSheet = s.form === 'compact' && renaming !== null ? s.sessions.find((x) => x.sid === renaming) : undefined
   const anyUnread = s.sessions.some((x) => x.unread)
   const empty = s.welcomed && s.sessions.length === 0
 
@@ -81,6 +83,7 @@ export function App({ onRevoked }: AppProps = {}) {
           onRename={rename}
           onCancelRename={endRename}
           onSettings={() => ctl.openSettings()}
+          onMove={(sid, before) => ctl.moveSession(sid, before)}
         />
       )}
 
@@ -120,10 +123,7 @@ export function App({ onRevoked }: AppProps = {}) {
           testid="session-drawer"
           variant="sessions"
           backButton
-          onClose={() => {
-            setRenaming(null)
-            ctl.closeSessions()
-          }}
+          onClose={() => ctl.closeSessions()}
           foot={
             <div class="drawer-actions">
               <button
@@ -152,11 +152,11 @@ export function App({ onRevoked }: AppProps = {}) {
           <SessionList
             sessions={s.sessions}
             home={s.home}
-            renaming={renaming}
             onSelect={(sid) => ctl.selectFromDrawer(sid)}
-            onMenu={(sid, x, y) => setMenu({ sid, x, y })}
-            onRename={rename}
-            onCancelRename={() => setRenaming(null)}
+            onTogglePin={(sid) => ctl.togglePin(sid)}
+            onRename={(sid) => setRenaming(sid)}
+            onClose={(sid) => ctl.requestClose(sid)}
+            onMove={(sid, before) => ctl.moveSession(sid, before)}
           />
         </Drawer>
       )}
@@ -189,6 +189,17 @@ export function App({ onRevoked }: AppProps = {}) {
             setMenu(null)
             ctl.requestClose(menu.sid)
           }}
+        />
+      )}
+
+      {renamingSheet && (
+        <RenameSheet
+          name={renamingSheet.name}
+          onCommit={(name) => {
+            setRenaming(null)
+            ctl.rename(renamingSheet.sid, name)
+          }}
+          onCancel={() => setRenaming(null)}
         />
       )}
 

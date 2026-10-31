@@ -95,6 +95,11 @@ export class AppController {
   /** 打开关闭确认之前焦点在哪、是不是从会话抽屉里打开的（ADR-0038 §3）。 */
   private closeFocus: FocusPlace = null
   private closeFromDrawer = false
+  /**
+   * 已经发了 session.close、还没收到 session.closed 的会话（ADR-0038 §5）。agent 先把会话从表里
+   * 删掉、再等进程退出（最多 2s），这段时间里发给它的任何东西都会换来 unknown_session。
+   */
+  private closeSent = new Set<number>()
   /** 附加键 / 文本页正在往终端里送字节：onData 出口别再套一次粘滞修饰。 */
   private keyBypass = false
   private lastW = 0
@@ -412,6 +417,8 @@ export class AppController {
   }
 
   private sendClose(sid: number): void {
+    if (this.closeSent.has(sid)) return
+    this.closeSent.add(sid)
     this.conn.send({ t: T.sessionClose, req_id: `close-${++this.reqSeq}`, sid })
   }
 
@@ -425,6 +432,13 @@ export class AppController {
 
   togglePin(sid: number): void {
     this.store.togglePinned(sid)
+  }
+
+  /** 拖动排序松手（ADR-0040）：本地先挪，再告诉 agent；收到 session.order 以它为准。 */
+  moveSession(sid: number, before: number | null): void {
+    if (!this.store.has(sid)) return
+    this.store.move(sid, before)
+    this.conn.send({ t: T.sessionMove, req_id: `move-${++this.reqSeq}`, sid, before })
   }
 
   // ---------- 浮层 ----------
@@ -565,6 +579,8 @@ export class AppController {
   }
 
   private onTermData(sid: number, data: string): void {
+    // 关闭中：键入、焦点上报（tmux / claude 开了 1004）都不再发（ADR-0038 §5）
+    if (this.closeSent.has(sid)) return
     // 组字期间【一个字节都不能发】—— 只在 compositionend 时一次性提交（AC-3.3）
     if (sid === this.store.active && this.ime?.isComposing) return
     // 粘滞 CTRL / ALT 对软键盘打出来的下一个字符也生效；附加键自己已经算过了
@@ -584,7 +600,7 @@ export class AppController {
   }
 
   private onTermBinary(sid: number, data: string): void {
-    if (this.store.info(sid)?.status !== 'running') return
+    if (this.closeSent.has(sid) || this.store.info(sid)?.status !== 'running') return
     this.conn.sendInput(sid, Uint8Array.from(data, (c) => c.charCodeAt(0) & 0xff))
   }
 
@@ -668,7 +684,7 @@ export class AppController {
   private sendResizeNow(): void {
     const sid = this.store.active
     const t = this.activeTerm()?.term
-    if (sid === null || !t) return
+    if (sid === null || !t || this.closeSent.has(sid)) return
     this.conn.send({ t: T.resize, sid, cols: t.cols, rows: t.rows })
     this.resizeCount++
   }
@@ -694,12 +710,17 @@ export class AppController {
       case T.sessionClosed:
         this.closeLocal(msg.sid)
         break
+      case T.sessionOrder:
+        this.store.setOrder(msg.sids)
+        break
       case T.sessionUpdated: {
         const { t: _t, sid, head_seq: _head, ...patch } = msg
         this.store.patch(sid, patch)
         break
       }
       case T.error:
+        // 关闭中、或者本来就没有了的会话：agent 说「会话不存在」是意料之中，不弹（ADR-0038 §5）
+        if (msg.code === Code.unknownSession && msg.sid !== undefined && (this.closeSent.has(msg.sid) || !this.store.has(msg.sid))) break
         if (msg.code === Code.sessionLimit) this.toast('warn', `会话数已达上限 ${this.state.maxSessions}`)
         else if (msg.code !== Code.unauthorized && msg.code !== Code.protocolUnsupported && msg.code !== Code.sessionExited) {
           this.toast('error', msg.message || msg.code)
@@ -725,6 +746,8 @@ export class AppController {
     const live = new Set(w.sessions.map((s) => s.sid))
     for (const s of this.store.list()) if (!live.has(s.sid)) this.store.remove(s.sid)
     for (const s of w.sessions) this.store.upsert(s)
+    // welcome.sessions[] 的顺序就是显示顺序（ADR-0040）
+    this.store.setOrder(w.sessions.map((s) => s.sid))
     if (gone) this.toast('warn', '会话已结束（agent 可能已重启）')
     this.set({ welcomed: true, maxSessions: w.limits.max_sessions, fatal: null, home: w.home || null })
 
@@ -745,7 +768,10 @@ export class AppController {
     const wasActive = this.store.active === sid
     const typing = this.focusPlace() !== null
     const next = wasActive ? this.store.neighbourOf(sid) : null
+    // 【先标成关闭中再拆】：dispose 时 xterm 失焦，开了焦点上报的程序会再吐一个 ESC [O
+    this.closeSent.add(sid)
     this.store.remove(sid)
+    this.closeSent.delete(sid)
     if (next !== null) this.select(next, typing || !this.state.coarse)
   }
 
