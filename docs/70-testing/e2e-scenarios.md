@@ -350,12 +350,13 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 > AC-4.10, AC-5.11, AC-4.8。`web/e2e/drawer.spec.ts`，Pixel 5。触屏抽屉有约 170ms 的 `sheet-up` 进场动画：量「贴底」或长按抽屉里的行之前先等动画结束（`animationend`，或等矩形两次读数相同），否则拿到的是半路的位置。
 
-1. **形态**：会话按钮 `open-sessions` 里的数字等于会话数（`1`）；点它 → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行是 `new-session` 与 `open-settings`，各有一个 SVG 图标；从抽屉新建一个会话后按钮里是 `2`；在抽屉里长按它 →「关闭」→ `close-confirm` 是贴底 sheet、**叠在抽屉上**（两个 `.drawer`），按 `Esc` 只关掉确认、抽屉仍在；再关一次点 `close-ok` → 行消失、抽屉仍开着，按钮里变回 `1`（AC-4.11）
+1. **形态**：会话按钮 `open-sessions` 里的数字等于会话数（`1`）；点它 → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行是 `new-session` 与 `open-settings`，各有一个 SVG 图标；从抽屉新建一个会话后按钮里是 `2`；在抽屉里左滑它 → `row-close` → `close-confirm` 是贴底 sheet、**叠在抽屉上**（两个 `.drawer`），按 `Esc` 只关掉确认、抽屉仍在；再关一次点 `close-ok` → 行消失、抽屉仍开着，按钮里变回 `1`（AC-4.11）
 2. **焦点进浮层**：每次打开，`document.activeElement.closest('.drawer')` 非空
 3. **关闭方式**（会话抽屉）：点遮罩、`Esc`、✕、选中一个会话、`page.goBack()`（系统返回键）各关一次；`goBack` 之后页面仍在 `/`；五次开关之后 `history.length` 至多比开始时多 1
 4. **不挤终端**：开关抽屉前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
 5. **焦点恢复**（AC-4.8）：先点终端让它有焦点 → 开抽屉 → 选另一个会话 → 焦点在新会话的 helper textarea 上；先让终端失焦 → 开抽屉 → 选会话 → 焦点**不**在终端
-6. **会话菜单**：长按抽屉里的一行 → `session-menu` 出现，有 `session-rename` `session-pin` `session-close`；改名后列表里的名字跟着变；点外面关闭菜单
+6. **行操作**（AC-4.12，ADR-0039）：两个会话。触摸左滑第二行 120px → 松手后它停在打开（行内容左移 216px），`row-pin` `row-rename` `row-close` 可见；只左滑 60px → 弹回；打开后右滑 → 关上；纵向拖列表不打开任何一行。长按一行 → 同样打开、**不出现** `session-menu`；再左滑另一行 → 前一行关上；点开着那行的正文 → 关上、当前会话不变。`row-pin` → 名字前出现 `⇵`、行关上。`row-rename` → `rename-sheet` 叠在抽屉上（两个 `.drawer`），`rename-input` 有焦点、内容全选、字号 16px；输入 `RENAMED` 按 `Enter` → sheet 消失、抽屉仍在，那一行显示 `RENAMED`；再打开改名清空按「保存」→ 恢复自动命名；再打开改名按 `Esc` → 只关改名
+9. **浮层跟着可视区**（ADR-0039 §3）：打开改名 sheet 后把视口高度减 300px（模拟可视视口被键盘压缩：`.app` 的高度跟着变）→ `rename-sheet` 的底边与 `.app` 的底边差 ≤ 1px，`rename-input` 整个在 `.app` 的矩形里；`session-drawer` 的高度 ≤ `.app` 高度的 80%
 7. **高度与留白**（AC-5.11，ADR-0037 §5）：只有 1 个会话时打开抽屉 → `session-drawer` 的高度 ≥ 可视区高度的 50%（差 ≤ 1px）；底部一行贴着 sheet 底部；`new-session` 的底边与 sheet 底边之间 ≥ 16px、左边与 sheet 左边之间 16px，`open-settings` 的右边与 sheet 右边之间 16px，两个按钮之间 12px，两个按钮一样高（48px）
 8. **从抽屉进设置**：点 `open-settings` → `session-drawer` 消失，`settings` 出现，贴底整宽、有抓手；它的高度小于可视区的 50%（不套会话抽屉的最小高度）；`font-inc` 的底边与 sheet 底边之间 ≥ 16px；点遮罩关闭
 

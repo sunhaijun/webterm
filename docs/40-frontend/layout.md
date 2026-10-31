@@ -106,7 +106,7 @@ iOS Safari（以及 Chrome ≥108 的 `resizes-visual`）弹键盘只缩【可�
 
 ## 浮层
 
-浮层有三个：手机上的会话抽屉、设置、关闭确认（[ADR-0038](../20-architecture/adr/0038-close-confirm-sheet.md)）。它们共用 `Drawer` 原语（`web/src/ui/drawer.tsx`，[ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)），**形态看 `compact` / `wide`**，不看 `pointer`（[ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §4）：
+浮层有四个：手机上的会话抽屉、设置、关闭确认（[ADR-0038](../20-architecture/adr/0038-close-confirm-sheet.md)）、手机上的改名（[ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md)）。它们共用 `Drawer` 原语（`web/src/ui/drawer.tsx`，[ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)），**形态看 `compact` / `wide`**，不看 `pointer`（[ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §4）：
 
 | | `compact`（手机） | `wide`（PC / Pad） |
 |---|---|---|
@@ -115,7 +115,7 @@ iOS Safari（以及 Chrome ≥108 的 `resizes-visual`）弹键盘只缩【可�
 | 进场 | `sheet-up` 约 170ms（`prefers-reduced-motion` 下无） | 无 |
 | 抓手 | 有（36×4） | 无 |
 | 下滑关闭 | 有（内部滚动到顶再下拉，> 90px 松手即关） | — |
-| 使用者 | 会话抽屉、设置、关闭确认 | 设置、关闭确认 |
+| 使用者 | 会话抽屉、设置、关闭确认、改名 | 设置、关闭确认 |
 
 ```
 ┌─────────────── ═══ ───────────────┐  抓手（仅 sheet）
@@ -131,13 +131,14 @@ iOS Safari（以及 Chrome ≥108 的 `resizes-visual`）弹键盘只缩【可�
 └───────────────────────────────────┘
 ```
 
-- **高度**：最大 80vh，随内容长。**会话抽屉最小 50vh**（iOS sheet 的「中等」档）：会话少的时候不至于只剩一条，多出来的高度给列表，底部一行始终贴着 sheet 底部。设置的内容只有两行，不设最小高度。
-- **底部留出呼吸空间**：底部一行的内边距是上 12px、左右 16px、下 `max(16px, env(safe-area-inset-bottom))`；没有底部一行的 sheet 在正文下面留同样的 `max(16px, 安全区)`。按钮不贴边铺满，是 `--surface` 底色、`--line` 细边、圆角 12px 的块。
+- **跟着可视区走**（[ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md) §3）：`.app` 设 `contain: layout`，成为 `position: fixed` 后代的包含块。`.app` 本来就跟着 `visualViewport`（高度 + 键盘弹起时的 `translateY`），所以遮罩盖住的就是可见区，sheet 的底边就是键盘的上沿。不这样的话，Android 弹键盘只缩可视视口，贴着布局视口底边的 sheet 整个在键盘后面。
+- **高度**：按遮罩（可见区）的百分比算，不用 `vh`：最大 80%，随内容长。**会话抽屉最小 50%**（iOS sheet 的「中等」档）：会话少的时候不至于只剩一条，多出来的高度给列表，底部一行始终贴着 sheet 底部。设置的内容只有两行，不设最小高度。
+- **底部留出呼吸空间**：底部一行的内边距是上 12px、左右 16px、下 `max(16px, var(--sa-bottom))`；没有底部一行的 sheet 在正文下面留同样的 `max(16px, var(--sa-bottom))`。`--sa-bottom` 是 `.app` 上的安全区变量，键盘弹起时被置 0（键盘盖住了 Home 指示条，不用再空一截）。按钮不贴边铺满，是 `--surface` 底色、`--line` 细边、圆角 12px 的块。
 - **关闭方式**：点遮罩、`Esc`、✕、（sheet）下滑。会话抽屉另加两种：选中一个会话、系统返回键（[session-ux.md](session-ux.md)）。设置不接系统返回键（ADR-0037 §4）。
 - **打开时焦点进浮层**（模态）：键盘与读屏用户不会被留在背后那一层，`Esc` 也才有确定的接收者。
-- **可以叠**：关闭确认能叠在会话抽屉上。`Esc` 只关最上面一层（DOM 里最后一个 `.drawer`），点遮罩也只点得到最上面那层。
+- **可以叠**：关闭确认、改名能叠在会话抽屉上。`Esc` 只关最上面一层（DOM 里最后一个 `.drawer`），点遮罩也只点得到最上面那层。
 - **浮层不改终端几何**：`position: fixed`，不发 `resize`。
-- **`position: fixed` 的浮层自己吃 `env(safe-area-inset-bottom)`**（`.app` 的 padding 管不到它），见上面的底部留白。
+- **`position: fixed` 的浮层自己吃底部安全区**（`.app` 的 padding 管不到它），见上面的底部留白。
 
 ## 设置（AC-5.3）
 
@@ -165,7 +166,7 @@ iOS Safari（以及 Chrome ≥108 的 `resizes-visual`）弹键盘只缩【可�
 - 字号不用数字输入框：手机上一点就弹数字键盘。
 - 关掉设置后：打开之前焦点在终端（或文本输入页）里的，或者是非触摸设备，焦点还回去；否则不动，免得触屏上弹出软键盘。
 
-会话菜单（长按或右键会话弹出的「改名 · 保持接收 · 关闭」）不是浮层，是锚在触发点旁边的小菜单：点外面或 `Esc` 关闭。
+`wide` 的会话菜单（右键或长按标签弹出的「改名 · 保持接收 · 关闭」）不是浮层，是锚在触发点旁边的小菜单：点外面或 `Esc` 关闭。
 
 ## 主题
 
