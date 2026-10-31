@@ -198,7 +198,7 @@ button { font: inherit; color: inherit; }
   color: var(--fg);
 }
 .app[data-coarse='true'] .topbar { height: 40px; }
-/* 标签条自己横向滚动；状态点钉在右边不跟着滚 */
+/* 标签条自己横向滚动（滚动条隐藏，滚轮由 tabs.tsx 转成横向）；状态点钉在右边不跟着滚 */
 .tabbar {
   flex: 1 1 auto; min-width: 0;
   display: flex; align-items: stretch;
@@ -208,10 +208,11 @@ button { font: inherit; color: inherit; }
   touch-action: pan-x;
 }
 .tabbar::-webkit-scrollbar { display: none; }
+/* 等分标签条，120–240px；放不下时停在 120px，标签条横向滚动（ADR-0031） */
 .tab {
-  flex: none;
+  flex: 1 1 0;
   display: flex; align-items: center; gap: 5px;
-  min-width: 72px; max-width: 200px;
+  min-width: 120px; max-width: 240px;
   padding: 0 4px 0 12px;
   border-right: 1px solid var(--line);
   font-size: 13px;

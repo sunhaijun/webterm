@@ -4,12 +4,9 @@
  * 1440×900（标签栏）与 Pixel 5（抽屉）。断言的是【看得出来】，所以量计算样式与矩形，
  * 不量 class 名。
  */
-import { mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { devices, expect, test, type Page } from '@playwright/test'
 
-import { Agent, focusTerm, hooks, newSession, openDrawer, submit, waitFor } from './harness'
+import { Agent, focusTerm, hooks, newSession, openDrawer } from './harness'
 
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 
@@ -99,13 +96,8 @@ test.describe('600×900 窄窗口（screen 1440×900）', () => {
   test.use({ viewport: { width: 600, height: 900 }, contextOptions: { screen: { width: 1440, height: 900 } } })
 
   test('E2E-35 ⑥ 当前标签被切到视区外时滚进来；切回第一个同样完整可见', async ({ page }) => {
-    // 名字要够长，5 个标签才放不下（标签最小 72px，名字 `~` 时 5 个也塞得进 600px）
-    const dir = join(tmpdir(), `webterm-e2e35-a-rather-long-directory-name-${process.pid}`)
-    mkdirSync(dir, { recursive: true })
+    // 标签最窄 120px（ADR-0031）：600px 宽的窗口里 5 个放不下
     await agent.open(page)
-    await submit(page, `cd ${dir}`)
-    const first = (await hooks.sid(page))!
-    await waitFor(async () => ((await page.getByTestId(`tab-${first}`).locator('.tab-name').textContent()) ?? '').startsWith('webterm-e2e35'), '自动命名跟上 CWD', 10_000)
     for (let i = 1; i < 5; i++) await newSession(page)
     await expect(page.locator('.tabbar .tab')).toHaveCount(5)
     const w = await page.getByTestId('tabbar').evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth }))

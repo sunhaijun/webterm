@@ -1,8 +1,9 @@
 /**
  * wide（PC / Pad）的顶部标签栏（session-ux.md §wide，参照 Termius）。
  *
- * 从左到右：会话标签、`+`、空白、连接状态点。标签条（`tabbar`）自己横向滚动，
- * 当前标签变化时把它滚进视野（整个已可见则不动，不用 smooth）。切换标签不改终端几何。
+ * 从左到右：会话标签、`+`、空白、连接状态点。标签等分标签条的宽度（120–240px，纯 CSS，
+ * ADR-0031）；放不下时标签条横向滚动，当前标签变化时把它滚进视野（整个已可见则不动，
+ * 不用 smooth）。切换标签不改终端几何。
  */
 import { useLayoutEffect, useRef } from 'preact/hooks'
 
@@ -48,6 +49,21 @@ export function TopBar(p: TopBarProps) {
       el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     }
   }, [active, p.sessions.length])
+
+  useLayoutEffect(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    // 滚动条是隐藏的：鼠标滚轮纵向滚 = 横着滚标签条（ADR-0031 §3）。
+    // 放得下、或者本来就是横向手势（触控板）时不拦
+    const onWheel = (e: WheelEvent) => {
+      if (strip.scrollWidth <= strip.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
+      e.preventDefault()
+      const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 40 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? strip.clientWidth : 1
+      strip.scrollLeft += e.deltaY * unit
+    }
+    strip.addEventListener('wheel', onWheel, { passive: false })
+    return () => strip.removeEventListener('wheel', onWheel)
+  }, [])
 
   const rtt = p.connInfo.rttMs
   const dotTitle = p.conn === 'online' && rtt !== undefined && rtt > 300 ? `在线 · ${rtt}ms` : connLabel(p.conn, p.connInfo)
