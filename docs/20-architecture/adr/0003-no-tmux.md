@@ -71,4 +71,4 @@ PTY 的 master fd 由 agent 持有。agent 一死，slave 端的 shell 收到 `S
 ## 用户仍然可以自己用 tmux
 
 这个决策**不阻止**用户在 webterm 的会话里手动敲 `tmux`。它只是说 webterm 不管理 tmux。
-需要注意的是：那种情况下 shell 集成的 OSC 序列要穿过 tmux（tmux 默认会过滤未知 OSC，需要 `set -g allow-passthrough on`），命令历史与 CWD 上报可能失效。这属于用户自选的降级路径，见 [`../../30-protocol/shell-integration.md`](../../30-protocol/shell-integration.md#与-tmux-共存)。
+需要注意的是：那种情况下 shell 集成的 OSC 序列要穿过 tmux（tmux 默认会过滤未知 OSC，需要 `set -g allow-passthrough on`），命令历史与 CWD 上报可能失效。这属于用户自选的降级路径（shell 集成文档已随 ADR-0026 删除）。

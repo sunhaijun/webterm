@@ -180,7 +180,7 @@ webterm serve --dev
 | 80/443 在**云安全组**里放行 | 挑战要从外网打进来 | 在别的机器上 `curl -sI http://<域名>/` |
 | Linux（x86_64 / arm64） | | `uname -m` |
 
-bash 不是硬要求，但版本影响功能完整度：**4.4+** 才有 readline 的 bracketed paste（Composer 的多行提交依赖它）；**4.0+** 才有完整的 shell 集成（更低版本降级为只上报 CWD 与 prompt 状态）。任何版本下终端本身都完全可用。
+webterm 不往 shell 里注入任何东西，用哪个 shell、哪个版本都行。想让多行粘贴不被逐行执行，shell 要支持 bracketed paste（bash 4.4+、zsh、fish 都支持）。
 
 `webterm doctor` 子命令会逐项检查并给出可读的诊断。**部署前先跑它。**
 
@@ -375,15 +375,11 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | `--trust-proxy` | false | 信任 `X-Forwarded-For`（**仅在反代后启用**，否则限速可被绕过） |
 | `--max-sessions` | 20 | 会话数上限 |
 | `--max-conns` | 16 | 并发 WebSocket 连接上限（每条连接占一个写队列） |
-| `--ring-bytes` | 1048576 | 每会话输出缓冲（影响能容忍的断线时长） |
+| `--ring-bytes` | 262144 | 每会话环形缓冲。断线或切走期间的输出在它之内就增量续传，超出就改发快照（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)） |
 | `--session-env` | 无 | 注入会话 PTY 的环境变量，`KEY=VAL`，可重复 |
 | `--no-altscreen-compat` | false | 关掉"把全屏 AI CLI 拉回主屏"的内置清单（AC-7.8）|
-| `--conn-queue-bytes` | 4194304 | 每连接写队列上限 |
-| `--max-history` | 50000 | 命令历史条数上限 |
-| `--no-history` | false | 完全关闭命令历史记录 |
-| `--no-shell-integration` | false | 不注入 shell 集成（排障用） |
-| `--no-login-shell` | false | 用非登录交互 shell（只读 `~/.bashrc`） |
-| `--shell` | `bash` | v0.1 只支持 bash |
+| `--no-login-shell` | false | 以 `-i` 启动非登录交互 shell（bash 只读 `~/.bashrc`）。默认 `-l -i` |
+| `--shell` | `bash` | 会话里跑的 shell，任何支持 `-l` / `-i` 的 shell 都行 |
 | `--log-level` | `info` | `debug` / `info` / `warn` / `error`。公网扫描器制造的 TLS 握手失败记在 `debug`，默认看不到 |
 
 > **`--session-env` 与 `--no-altscreen-compat` 会改变 AI CLI 的观感。** webterm 默认注入一份内置清单（目前只有 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`），把全屏 AI CLI 拉回主屏 —— 只有主屏的输出才是可以往回拖的追加流（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）。可见的变化只有一条：**输入框从"钉在屏幕底部"变成"输出流的最后几行"** —— 贴底时它照样在屏幕底部、照样能打字，只有你滚上去回看时它会跟着滚出视野，回到底部就回来。换来的是 5000 行可以拖着看的历史。不想要就 `--no-altscreen-compat`。**在 tmux 里跑 claude 的话还有一条**：classic 渲染器不开鼠标跟踪，于是 tmux（`mouse on`）里每一次滚轮都会把 pane 推进 copy-mode，之后键盘输入不进程序 —— 按 `q` / `Esc` 退出，详见 [troubleshooting.md](troubleshooting.md#在-tmux-里突然打不进字滚了一下之后)。`--session-env` 可以重复给，也可以写进配置文件（多行）—— 两边是**合并**，同名键以后出现的为准，所以命令行照样压过配置文件；`TERM` 和 `WEBTERM_SESSION` 由 webterm 定死，写了会直接报错。
@@ -396,7 +392,6 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | `webterm update` | 升级到最新版（按上次的安装参数重装） |
 | `webterm pair` | 生成新的配对码（打印 URL + 二维码 + 可手输的 16 位数字） |
 | `webterm devices [list\|revoke <id>\|revoke-all]` | 设备管理（CLI 侧，UI 里也有） |
-| `webterm shell-init bash` | 输出 shell 集成脚本（手动接入的降级路径） |
 | `webterm version` | 版本信息 |
 
 ## systemd
@@ -466,20 +461,18 @@ ss -lntp | grep -E ':(80|443)\b'
 
 ```
 $XDG_DATA_HOME/webterm/     （默认 ~/.local/share/webterm/）
-├── webterm.db       ← 设备授权 + 命令历史 + 快捷命令
+├── webterm.db       ← 设备授权与配对（只存哈希）
 ├── certs/           ← autocert 缓存（丢了会重新申请，注意 Let's Encrypt 限流）
-└── run/             ← 临时 rcfile，无需备份
+└── run/             ← 控制 socket，无需备份
 ```
 
 备份 `webterm.db` 即可。建议先停服或用 `sqlite3 webterm.db ".backup /path/to/backup.db"`，直接 `cp` 可能撞上 WAL 状态不一致。
-
-> ⚠️ **`webterm.db` 里有你的完整命令历史。** 备份到哪里就等于把历史复制到哪里。见 [`../60-security/privacy-history.md`](../60-security/privacy-history.md)。
 
 **`certs/` 值得一并备份** —— 不是因为不能重新申请，而是 Let's Encrypt 有签发频率限制（每域名每周 50 次），频繁重建会撞限流。
 
 ## 升级
 
-**热升级不丢会话**（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）：agent 原地换成新二进制，PID 不变，各会话的 shell、环形缓冲、序号一并交接过去。浏览器只会看到状态灯闪一下然后自动重连，正在跑的 vim / claude / ssh 都在原处。
+**热升级不丢会话**（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）：agent 原地换成新二进制，PID 不变，各会话的 shell、环形缓冲、终端模拟器的状态、序号一并交接过去。浏览器只会看到连接横幅闪一下然后自动重连，正在跑的 vim / claude / ssh 都在原处。
 
 ```bash
 # 1. 替换二进制（file capability 会丢，要重做 setcap）
@@ -489,9 +482,9 @@ sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm
 webterm reload              # 或 systemctl --user reload webterm
 ```
 
-`webterm reload` 先让新二进制预检快照能不能读，读不了就**中止、服务照常**，不会自动退化成重启。要接受丢会话就走老路：`systemctl --user restart webterm`。`webterm reload --when-idle` 等所有会话都停在提示符再动。
+`webterm reload` 先让新二进制预检快照能不能读，读不了就**中止、服务照常**，不会自动退化成重启。要接受丢会话就走老路：`systemctl --user restart webterm`。`webterm reload --when-idle` 等所有会话都空闲再动：空闲 = PTY 的前台进程组就是 shell 自己，也就是没有命令在跑。
 
-真正的重启（`systemctl restart`、`SIGTERM`）仍会关闭所有会话；agent 会先向所有客户端广播"agent 即将重启，所有会话将结束"再退出。**命令历史存在 SQLite 里，跨重启存活**。
+真正的重启（`systemctl restart`、`SIGTERM`）仍会关闭所有会话；agent 会先向所有客户端广播"agent 即将重启，所有会话将结束"再退出。设备授权存在 SQLite 里，跨重启存活，不用重新配对。
 
 ## 看一眼现在正不正常
 
@@ -525,7 +518,7 @@ webterm v0.1.0
 
 ```bash
 webterm update                 # 默认热升级：会话保留（ADR-0016）
-webterm update --when-idle     # 等所有会话停在提示符再动
+webterm update --when-idle     # 等所有会话空闲（前台进程组就是 shell）再动
 webterm update --force-restart # 接受丢会话，走 systemctl restart（老版本 agent 也是这条路）
 ```
 
@@ -594,7 +587,7 @@ log-level  = info
 - 命令行参数**覆盖**配置文件，临时改一次不用动文件
 - `#` 开头是注释，空行忽略
 - 键名写错会**当场报错并指出行号**，不会安静地忽略
-- 布尔项写 `no-history = true`，或者只写键名也算 true
+- 布尔项写 `no-login-shell = true`，或者只写键名也算 true
 
 刻意不用 TOML/YAML：那要引依赖，而配置只有十来个平铺的键。
 键名与 flag 名共用同一套，所以 `webterm serve --help` 就是配置文件的文档，
@@ -604,8 +597,7 @@ log-level  = info
 
 `domain` · `data-dir` · `bind` · `http-port` · `https-port` · `no-tls` ·
 `trust-proxy` · `acme-staging` · `shell` · `max-sessions` · `max-conns` ·
-`max-history` · `no-history` · `ring-bytes` · `session-env` · `no-altscreen-compat` · `no-shell-integration` ·
-`no-login-shell` · `log-level`
+`ring-bytes` · `session-env` · `no-altscreen-compat` · `no-login-shell` · `log-level`
 
 > `--dev` 与 `--config` 【不能】写进配置文件：前者是"临时本地跑一下"的开关，
 > 写进文件等于把生产配置永久降级；后者会自我循环。
@@ -687,8 +679,8 @@ webterm serve --domain term.example.com --bind 127.0.0.1 --no-tls --http-port 80
 ```bash
 systemctl --user disable --now webterm
 rm /usr/local/bin/webterm
-rm -rf ~/.local/share/webterm       # 含历史，确认后再删
+rm -rf ~/.local/share/webterm       # 含设备授权，删了要重新配对
 rm ~/.config/systemd/user/webterm.service
 ```
 
-**不需要清理 dotfiles** —— webterm 从不修改 `~/.bashrc`（[ADR-0010](../20-architecture/adr/0010-bash-rcfile-injection.md)），集成通过临时 rcfile 注入，卸载即干净。
+**不需要清理 dotfiles** —— webterm 从不修改 `~/.bashrc`，也不往 shell 里注入任何东西，卸载即干净。

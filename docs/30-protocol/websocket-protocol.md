@@ -1,6 +1,6 @@
 # WebSocket 协议
 
-> 状态：Accepted · 协议版本 `1`
+> 状态：Accepted · 协议版本 `2`（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)）
 >
 > ★ **这是前后端的唯一契约。** 任何改动必须先改这篇文档，再改代码。不允许一侧先改。
 > 实现位置：`internal/protocol`（Go）与 `web/src/protocol`（TS），两者必须严格对应，并对同一组测试向量做单测。
@@ -12,13 +12,14 @@
 | 名字 | 定义 |
 |---|---|
 | `sid` | 会话 id，`uint16`，agent 进程内唯一，进程重启后重新分配 |
-| `out_seq` | **agent 已发给 client 的累计字节数**（按会话）。剥离 OSC 之后计数 |
+| `out_seq` | **会话累计的 PTY 输出字节数**中 client 已收到的位置。agent 不改写输出流，一个字节都不剥离 |
 | `in_seq` | **client 已发给 agent 的累计字节数**（按会话） |
 | `in_ack` | agent 已真正写入 PTY 的累计输入字节数 |
 | `base_seq` | 环形缓冲当前保留内容的起始 `out_seq` |
 | `head_seq` | 环形缓冲当前的末尾 `out_seq`（= 该会话累计产出字节数） |
-| `client_id` | 一个浏览器标签页的身份。**输入记账的 key**，见 §5.3 |
-| `instance_id` | agent 进程本次启动的随机 id。用于识别"agent 重启过"，见 §5.2 |
+| 快照 | agent 侧终端模拟器在某个 `seq` 上的完整状态，序列化成任何 xterm 都能吃的字节（§5.2） |
+| `client_id` | 一次页面加载的身份。**输入记账的 key**，见 §5.4 |
+| `instance_id` | agent 进程本次启动的随机 id。用于识别"agent 重启过"，见 §5.3 |
 
 **seq 是字节计数，不是消息计数。** 理由见 [ADR-0009](../20-architecture/adr/0009-hybrid-ws-framing.md)。
 
@@ -48,7 +49,7 @@ Origin: https://<配置的域名>
 
 - 一条 WebSocket 复用所有会话，帧头带 `sid`
 - 同一设备可以开多条连接（多个标签页）。**agent 允许并且不做互斥**：每条连接独立订阅、独立记 `out_seq`
-- 输入侧多连接并发写同一会话是允许的但语义上由用户负责（就像两个人 attach 同一个 tmux）。`in_seq` 按 **`client_id`** 独立记账，见 §5.3
+- 输入侧多连接并发写同一会话是允许的但语义上由用户负责（就像两个人 attach 同一个 tmux）。`in_seq` 按 **`client_id`** 独立记账，见 §5.4
 
 ---
 
@@ -58,7 +59,7 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 
 | WebSocket 帧 | 内容 |
 |---|---|
-| **binary** | 终端数据。12 字节定长头 + 原始负载 |
+| **binary** | 终端数据与快照。12 字节定长头 + 原始负载 |
 | **text** | 控制消息。JSON 对象，必有 `t` 字段 |
 
 任何不符合上述格式的帧 → 接收方发 `error{code:"bad_frame"}` 并关闭连接。
@@ -72,35 +73,45 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 ```
 偏移  长度  字段      类型      说明
 ────  ────  ────────  ────────  ──────────────────────────────────────
-  0     1   type      uint8     0x01 = OUTPUT (agent→client)
-                                0x02 = INPUT  (client→agent)
-  1     1   flags     uint8     bit0 = ATTR_PREFIX（仅 OUTPUT，见下）
+  0     1   type      uint8     0x01 = OUTPUT   (agent→client)
+                                0x02 = INPUT    (client→agent)
+                                0x03 = SNAPSHOT (agent→client)
+  1     1   flags     uint8     bit0 = MORE（仅 SNAPSHOT，见下）
                                 其余位保留：发送方填 0，接收方忽略
   2     2   sid       uint16    会话 id
-  4     8   seq       uint64    本帧【首字节】的 out_seq / in_seq
- 12     N   payload   bytes     原始终端字节，N ≥ 1
+  4     8   seq       uint64    OUTPUT / INPUT：本帧【首字节】的 out_seq / in_seq
+                                SNAPSHOT：这份快照对应的 out_seq（见下）
+ 12     N   payload   bytes     N ≥ 1
 ```
 
 - 头部固定 12 字节
 - `payload` 长度为 0 的帧是非法的 → `error{code:"bad_frame"}`
+- 未知 `type`、方向不对的 `type`（client 发来 `OUTPUT` / `SNAPSHOT`，agent 发来 `INPUT`）→ `error{code:"bad_frame"}`
 - 单帧 `payload` 上限 **256 KiB**；超出 → `error{code:"frame_too_large"}` 并关闭连接
-- **不做任何编码**。`payload` 可以是任意字节序列，包括被切断的多字节 UTF-8 字符
+- **不做任何编码**。`payload` 可以是任意字节序列，包括被切断的多字节 UTF-8 字符 —— client 必须用**流式** UTF-8 解码器接（§5.2）
 
 ### OUTPUT 帧（agent → client）
 
-- agent 从环形缓冲连续读出后发送。分帧边界完全由 agent 的读取时机决定，**没有语义**
-- **`flags` bit0（`ATTR_PREFIX`）**：置位表示 `payload` 的前 4 字节是 `ESC [ 0 m`（属性修正，见 §5.1），**不计入 seq**。只出现在 reset 回放的第一帧上
-- **ATTR_PREFIX 是一条指令，不只是一个标记**：client 收到置位的帧必须**先清屏**（`terminal.reset()`）再写这一帧，并把 `out_seq` 置为 `seq + data_len`。它自带"这段内容与你屏幕上的东西接不上"的语义，**不依赖任何先到的控制消息** —— agent 少发一条 `reset`，屏幕也不会被接歪。`reset` 消息只负责 UI 提示（§4.2）
-- **"不计入 seq"的渲染修正一共两处**，规则相同：这 4 个字节的 `ESC[0m`，以及 `redraw.modes`（§4.2）。它们都是 agent 生成的渲染指令，不是流内容；计进去两侧会永久错开
-- 记 `data_len(n) = len(payload(n)) - (flags(n) & 1 ? 4 : 0)`。连续的 OUTPUT 帧对同一 `sid` 必须满足 `seq(n+1) == seq(n) + data_len(n)`
-- client 收到 `seq != 期望值` 时（**仅对 `flags` bit0 未置位的帧**；置位的帧是重建，永远照写）：
+- `payload` 是 PTY 的原始输出，原样转发。分帧边界完全由 agent 的读取时机决定，**没有语义**
+- 连续的 OUTPUT 帧对同一 `sid` 必须满足 `seq(n+1) == seq(n) + len(payload(n))`
+- client 收到 `seq != 期望值` 时：
   - `seq < 期望` → 重复数据（不应发生），丢弃并记 warning
   - `seq > 期望` → 出现空洞（不应发生），**立即关闭连接并走重连续传**，不要尝试自行修补
+
+### SNAPSHOT 帧（agent → client）
+
+一份快照可以拆成多帧：同一份快照的所有帧 `seq` 相同，**除最后一帧外都置 `flags` bit0（MORE）**。agent 保证一份快照的各帧之间不夹杂同一 `sid` 的其它帧。
+
+- `seq` 是这份快照对应的 `out_seq`：agent 的模拟器恰好吃完了前 `seq` 个字节。之后的 OUTPUT 帧从 `seq` 开始
+- `payload`（拼起来之后）是一段**任何 xterm 兼容终端都能吃的字节**：从清空的终端开始画出至多 2000 行历史、当前屏、模式、画笔、滚动区域、字符集、制表位、光标，以及模拟器解析到一半的序列（放在最后，让之后的 OUTPUT 帧把它接完）
+- **快照的字节不计入 `out_seq`**。它是 agent 生成的渲染指令，不是流内容
+- client 收齐最后一帧后：在写入流里先写 RIS（`ESC c`）复位 → 换一个新的 UTF-8 解码器 → 把快照当作**回放**写入（§5.3 回放门）→ `out_seq = seq`
+- **用写入流里的 RIS（`ESC c`）复位，不要调 `term.reset()`**：`reset()` 是同步的，不清写缓冲。列数一变 agent 立刻重发快照，此时还没解析完的旧输出会被画到复位之后、快照之前。RIS 和快照一起进写缓冲，顺序天然正确（xterm 自己在 `reset()` 的注释里也建议这种场合用 RIS）
 
 ### INPUT 帧（client → agent）
 
 - client 分配 `in_seq` 并写入本地重发队列
-- agent 校验（记账属于 `(client_id, sid)`，不属于连接，见 §5.3）。设 `accepted`
+- agent 校验（记账属于 `(client_id, sid)`，不属于连接，见 §5.4）。设 `accepted`
   为 agent 已接受入队的累计字节数：
   - `seq == accepted` → 正常，入队待写 PTY
   - `seq < accepted` → 重发的已处理数据，**丢弃前 `accepted - seq` 字节**，接受剩余部分（重连时的正常情况）
@@ -125,7 +136,7 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 ```json
 {
   "t": "hello",
-  "protocol": 1,
+  "protocol": 2,
   "client_id": "c7f3…",
   "instance_id": "a91e…",
   "resume": [
@@ -137,8 +148,8 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 | 字段 | 说明 |
 |---|---|
 | `protocol` | client 支持的协议版本 |
-| `client_id` | **每个标签页一个**，client 自己生成并存在 `sessionStorage`（不是 `localStorage` —— 那是同源共享的，区分不了标签页）。跨重连稳定，是输入记账的 key（§5.3） |
-| `instance_id` | 上次 `welcome` 里拿到的值，首次连接为 `null`。与 agent 当前值不符 → agent 把所有 `resume` 项判为 `gone`（§5.2） |
+| `client_id` | **每次页面加载一个**，client 自己生成、只放内存；跨重连靠同一个连接对象保持不变。是输入记账的 key（§5.4）。**不能存 `sessionStorage`**：刷新后 id 还是那个，agent 记的 `in_ack` 停在刷新前的累计值，新页面的 `in_seq` 却从 0 重新数，开头那几个字节会被当成重发静默丢掉。也不能存 `localStorage`：同源共享，区分不了标签页 |
+| `instance_id` | 上次 `welcome` 里拿到的值，首次连接为 `null`。与 agent 当前值不符 → agent 把所有 `resume` 项判为 `gone`（§5.3） |
 | `resume` | 想要续传的会话及其输出进度。首次连接为 `[]`。**不带输入进度** —— `in_ack` 由 agent 保管 |
 
 agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_hello"}` 并关闭。
@@ -150,6 +161,8 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 ```
 
 `name`/`cwd` 为 `null` 时用默认值（`cwd` 默认为用户 home）。成功回 `session.created`，失败回 `error`。
+
+**建会话不自动订阅**：client 收到 `session.created` 后自己发 `subscribe{out_seq: 0}`，走快照拿到第一屏。只有这一条路。
 
 #### `session.close`
 
@@ -176,27 +189,20 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 { "t": "unsubscribe", "sid": 1 }
 ```
 
-**只对当前可见的会话订阅。** 未订阅的会话在 agent 侧照常运行和缓冲，agent 只在其产生输出时发一条 `session.updated{head_seq}`（做节流，见 §6.3），client 据此自行判定未读。
+**只对当前可见的会话订阅。** 未订阅的会话在 agent 侧照常运行、照常喂给模拟器，agent 只在其产生输出时发一条 `session.updated{head_seq}`（做节流，见 §6.2），client 据此自行判定未读。
 
-`subscribe` 携带 `out_seq`，语义与 `resume` 相同：agent 从该位置开始补齐。切回会话时用这个消息，不需要重连。
+`subscribe` 携带 `out_seq`，判定与 `resume` 相同（§5.1）：**增量**或**快照**。第一次打开、切回会话都用这个消息，不需要重连。client 手里没有这个会话的内容时（第一次打开、刷新页面）报 `out_seq: 0`。
 
-**`cols` / `rows` 是切回时的终端尺寸**，省略（或为 0）表示"沿用会话当前尺寸"。**切会话时不要再单发一条 `resize`** —— 尺寸必须和 `subscribe` 在同一条消息里，理由是顺序：
+**`cols` / `rows` 是此刻的终端尺寸**，省略、为 0、或超出 1..1000 表示"沿用会话当前尺寸"。列数变了时，快照发给**该会话的每个订阅者**（不只是这条连接），与 `resize` 相同。**订阅时不要再单发一条 `resize`** —— 尺寸必须和 `subscribe` 在同一条消息里，agent 才能把顺序钉死：
 
-- 尺寸排在后面（比如走 100ms 防抖的 `resize`），agent 补的就是按【旧尺寸】排版的积压，绝对定位与折行全部错位；
-- 尺寸排在前面单发，PTY 先收到 `TIOCSWINSZ`、全屏程序立刻整屏重画，**那批重画字节会落在 `subscribe` 之前**，被随后的 `redraw.seq` 跳过（§4.2），客户端反而拿不到那一屏。
+```
+锁内: 列数变了 → 模拟器.Resize → 走快照（不管 out_seq）
+      否则     → 按 §5.1 判定增量 / 快照；行数变了就 模拟器.Resize
+      把要发的帧入队，加入订阅者集合
+锁外: 尺寸变了 → TIOCSWINSZ
+```
 
-合成一条之后，agent 就能把顺序钉死：**先算分支、先发 `redraw`/回放，再应用尺寸**。
-
-**`out_seq < base_seq` 时按屏分流**（切走期间的输出超过了 `ring_bytes`，这是切回场景里的常态而不是异常）：
-
-| 会话当前的屏 | agent 的动作 | client 的动作 |
-|---|---|---|
-| 主屏（追加流） | 先发 `reset`（§4.2），再发置位 `ATTR_PREFIX` 的回放帧 | 清屏后按字节重建 |
-| 备用屏（状态） | 发 `redraw`（§4.2），**不回放窗口字节**，随后逼出一次整屏重画 | 清屏 + 恢复模式，然后等程序自己画 |
-
-分流的理由见 [ADR-0019](../20-architecture/adr/0019-altscreen-redraw-not-replay.md)：备用屏没有 scrollback，窗口里的差分字节离开 `ESC[?1049h` 就没有意义，回放它必然画错。
-
-**判定交给环形缓冲**，调用方不要自己钳位 —— 钳过的位置会落进"正常增量"分支，于是既不发 `reset`、也不置 `ATTR_PREFIX`，客户端把一段接不上的内容接到旧屏幕后面（§5.2 同款陷阱）。
+程序因 SIGWINCH 重画的字节因此一定排在快照或增量之后。反过来的话，那批重画字节会进入快照之前的位置，客户端拿不到那一屏。
 
 #### `resize`
 
@@ -204,7 +210,10 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 { "t": "resize", "sid": 1, "cols": 100, "rows": 30 }
 ```
 
-client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
+client 侧做 100ms 防抖。agent：
+
+- **列数变了**：锁内 `模拟器.Resize` → 生成快照（`seq` = `head_seq`）→ 发给**该会话的每个订阅者**；锁外 `TIOCSWINSZ`。两边各自重排的结果不一致（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §4），以 agent 的为准
+- **只有行数变了**：`模拟器.Resize` + `TIOCSWINSZ`，不发快照
 
 #### `ping`
 
@@ -221,20 +230,18 @@ client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
 ```json
 {
   "t": "welcome",
-  "protocol": 1,
-  "server_version": "0.1.0",
+  "protocol": 2,
+  "server_version": "0.2.0",
   "instance_id": "a91e…",
-  "limits": { "max_sessions": 20, "ring_bytes": 1048576, "max_frame_bytes": 262144 },
+  "home": "/home/sun",
+  "limits": { "max_sessions": 20, "ring_bytes": 262144, "max_frame_bytes": 262144 },
   "sessions": [
     {
       "sid": 1, "name": "webterm", "name_is_manual": false,
       "cwd": "/home/sun/github/webterm",
       "status": "running", "exit_code": null,
       "cols": 80, "rows": 24,
-      "integration": "active",
-      "unmarked_input": false,
-      "prompt_state": "input",
-      "base_seq": 0, "head_seq": 483920,
+      "base_seq": 221776, "head_seq": 483920,
       "created_at": 1757116000000
     }
   ],
@@ -248,28 +255,28 @@ client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
 
 | 值 | 含义 | client 动作 |
 |---|---|---|
-| `ok` | 可增量续传 | 不清屏，等着接 OUTPUT 帧 |
-| `reset` | 缓冲已覆盖（`out_seq < base_seq`） | **先清屏**（`terminal.reset()`），再接 OUTPUT 帧，并提示"历史输出已截断" |
+| `ok` | 增量续传 | 不清屏，从 `from_seq`（= 自己的 `out_seq`）接 OUTPUT 帧 |
+| `snapshot` | 发快照 | 等 SNAPSHOT 帧（§3）；`from_seq` = 快照的 `seq` |
 | `gone` | 该 sid 已不存在（会话已销毁 / `instance_id` 不符） | 移除该会话的 UI，提示"会话已结束" |
 
-`resumed[].in_ack` 是 agent 对 **该 `client_id`** 在该会话上已写入 PTY 的累计字节数（§5.3）。**client 必须据此裁剪重发队列，并重发其后的全部输入。**
+`home` 是 agent 用户的家目录，client 用它把 CWD 缩写成 `~`（cwd 等于它或以 `home + "/"` 开头时）。没有这个字段时不缩写。
+
+`resumed[].in_ack` 是 agent 对 **该 `client_id`** 在该会话上已写入 PTY 的累计字节数（§5.4）。**client 必须据此裁剪重发队列，并重发其后的全部输入。**
 
 **未读靠 `head_seq` 推导**，不是服务端状态：`unread = head_seq > 本地 out_seq`。未读天然是 per-client 的，放在服务端会让两个标签页互相清对方的未读。
-
-**`prompt_state` 是给重连用的。** `prompt` 消息只在状态变化的那一刻发一次 —— 客户端离线期间发生的那些【发给了零个订阅者，就此丢掉】。如果断线恰好跨过一个命令边界，客户端手里还是断线前的状态：命令早就跑完了，它却以为还在跑，于是停在 Raw 模式、Composer 收起，用户【连字都打不了】，直到下一条命令才自愈。
-
-所以每次 `welcome` 都要把当前 prompt 状态带回去，让客户端重新对齐。取值与 `prompt` 消息相同；集成不可用时为 `null`。
 
 #### `session.created` / `session.closed` / `session.updated`
 
 ```json
 { "t": "session.created", "req_id": "r1", "session": { …同 welcome.sessions[] 的结构… } }
 { "t": "session.closed",  "req_id": "r2", "sid": 1, "exit_code": 0 }
-{ "t": "session.updated", "sid": 1, "name": "api", "cwd": "/srv/api", "status": "running", "head_seq": 491337, "integration": "active" }
+{ "t": "session.updated", "sid": 1, "name": "api", "cwd": "/srv/api", "status": "running", "head_seq": 491337 }
 ```
 
 - 三条都**广播给该设备的所有连接**（否则 B 标签页看不到 A 新建的会话）。`req_id` 只出现在发起请求的那条连接的副本上
 - `session.updated` 只包含**发生变化的字段** + `sid`。client 做增量合并
+- `cwd` 来自 agent 每秒读一次 `/proc/<前台进程组>/cwd`，变了才发；`name_is_manual == false` 时 `name` 跟着变（AC-4.4）
+- **会话退出**：`session.updated{status:"exited", exit_code, head_seq}` 一定排在该会话**最后一个 OUTPUT 之后**（agent 等 PTY 读到 EOF 再发，最多等 500 ms —— 后台进程占着 PTY 时 EOF 不会来）。`head_seq` 是最终的输出总量：client 的 `out_seq` 追到它，才说明输出收齐了
 
 #### `ack`
 
@@ -278,102 +285,6 @@ client 侧做 100ms 防抖。agent 对 PTY 执行 `TIOCSWINSZ`。
 ```
 
 agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条，取最新值（这是累计量，丢中间值无害）。
-
-#### `reset`
-
-```json
-{ "t": "reset", "sid": 1, "base_seq": 512000 }
-```
-
-在**已连接期间**发生缓冲覆盖、且会话在**主屏**时使用。触发点只有一个：`subscribe` 的 `out_seq < base_seq`（切走太久，积压超过 `ring_bytes`）。紧跟其后的是置位 `ATTR_PREFIX` 的回放帧。会话在备用屏时走 `redraw`，不发这条。
-
-**分工**：清屏由 `ATTR_PREFIX` 驱动（§3），这条消息只负责**告诉用户**"历史输出已截断"。两者都到齐时客户端会清两次屏 —— 无害，因为两次都发生在回放帧写入之前。
-
-重连时的 reset 不用这条消息，走 `welcome.resumed[].status`；那条路上 `welcome` 已经先到，再发一条纯属重复。
-
-#### `redraw`
-
-```json
-{ "t": "redraw", "sid": 1, "seq": 991337, "modes": "\u001b[0m\u001b(B\u001b[?1049h\u001b[?1h\u001b[?1000h\u001b[?1006h\u001b[?2004h" }
-```
-
-会话**当前在备用屏**（agent 跟踪 `ESC[?1049h`，见 [ADR-0019](../20-architecture/adr/0019-altscreen-redraw-not-replay.md)）而又需要 reset 时发这条，**代替**字节回放。
-
-| 字段 | 说明 |
-|---|---|
-| `seq` | client 把该会话的 `out_seq` **直接跳到**这里（= 发出时的 `head_seq`）。跳过的字节被有意丢弃 |
-| `modes` | agent 按跟踪表拼出来的粘性模式前缀，纯 ASCII 转义序列，几十字节。**只含 agent 自己生成的开关，不含任何程序输出的原文** |
-
-**client 动作**，按这个顺序：① 清空输出写队列并恢复跟随 → ② `terminal.reset()` → ③ 原样写入 `modes` → ④ `out_seq = catchup_to = seq` → ⑤ 之后按普通实时帧接收。第一批实时帧就是程序自己的整屏重画。**不显示"历史输出已截断"**：备用屏本来就没有历史，那条提示是误导。
-
-**`modes` 的字节不计入 `out_seq`** —— 与 `ATTR_PREFIX` 同一条规则（§3）。它是渲染修正，不是流内容。
-
-**顺序承诺**：`redraw` 与后续 OUTPUT 帧走同一条按序写队列；"把 `seq` 定为 `head_seq`"与入队在同一把锁下完成，**逼出重画的动作（应用尺寸 / 抖动 winsize）必须排在入队之后**。反过来的话重画字节先进环形缓冲、随后被 `seq` 跳过，客户端拿不到那一屏。
-
-**兜底**：agent 发出重画请求后起一个 300ms 定时器，判据是 `head_seq` 有没有超过 `redraw.seq`。没超过 → 判定程序不响应 SIGWINCH → 退回主屏那条路（`ATTR_PREFIX` + 窗口内容）。最坏情况不比字节回放差。
-
-**为什么不复用 `resumed[].status` 加一个取值**：协议里唯一明文的前向兼容承诺是"未知 `t` 一律忽略"（§4）。用独立消息，老 client 看不懂就当没收到，退化成今天的行为；加新的 status 取值则没有这条保护。
-
-#### `cwd`
-
-```json
-{ "t": "cwd", "sid": 1, "path": "/home/sun/github/webterm" }
-```
-
-来自 shell 集成的 OSC 7。会话自动命名也由它驱动（`name_is_manual == false` 时）。
-
-#### `prompt`
-
-```json
-{ "t": "prompt", "sid": 1, "state": "input" }
-```
-
-`state` 取值：
-
-| 值 | 来源 | 含义 | 目标输入模式 |
-|---|---|---|---|
-| `"input"` | OSC `133;B` | prompt 画完，等用户输入 | **Composer** |
-| `"running"` | OSC `133;C` | 命令开始执行 | **Raw** |
-| `"done"` | OSC `133;D` | 命令结束，即将回到 prompt | **Composer** |
-
-**这条消息驱动输入模式自动切换**（[ADR-0007](../20-architecture/adr/0007-dual-mode-input.md)）。
-
-它【不可续传】—— 离线期间的状态变化就是丢了。重连后靠 `welcome.sessions[].prompt_state` 重新对齐，见 §4.2。
-`133;A`（prompt 开始）不产生消息 —— 对客户端没有用处。
-
-#### `command.start` / `command.end`
-
-```json
-{ "t": "command.start", "sid": 1, "cmd_id": 8842, "text": "go test ./...", "cwd": "/srv/x", "at": 1757116800000, "out_seq": 483920 }
-{ "t": "command.end",   "sid": 1, "cmd_id": 8842, "exit_code": 0, "duration_ms": 4210, "out_seq": 491337 }
-```
-
-- `cmd_id` 是 `commands` 表的主键，client 可用它做置顶等操作
-- `out_seq` 标记该命令的输出在流中的起止偏移。**v0.1 不使用这个字段**，它是为 v0.2 的命令块视图预留的（[ADR-0006](../20-architecture/adr/0006-agent-side-osc-parsing.md)）
-- 以空格开头的命令不上报（隐私，AC-6.2）
-- 有 `command.start` 但 shell 在命令结束前就死了 → 不会有 `command.end`。client 需要容忍悬空的 start
-- **顺序承诺**：`command.start` / `command.end`（以及同一次 PTY 读里产生的 `prompt` / `cwd`）**先于**包含其 `out_seq` 位置的 OUTPUT 帧到达。事件与帧走同一条按序写队列，agent 在推帧之前先发事件。client 据此能在写入 xterm 时把帧在 `out_seq` 处切开、登记行锚点 ——「在终端里看」才能定位到块（[ADR-0011](../20-architecture/adr/0011-read-first-layout.md) ④）。不保证这一点的旧 agent 只是让 client 登记不了锚点，定位退回按命令原文搜索
-- **`out_seq` 是该标记在剥离后输出流里的精确位置**，不是发消息那一刻的 head。`[start.out_seq, end.out_seq)` 恰好是这条命令的输出字节 —— 命令块视图靠它切块。同一次 PTY 读里可能同时到达 `133;C`、输出、`133;D`，每个标记各有各的位置（解析器为每个事件报告它在本块干净输出里的偏移，见 [shell-integration.md §5](shell-integration.md#5-agent-侧-osc-解析器要求)）。**用整块 append 之后的 head 盖戳是错的**：快命令的 start 和 end 会相等，块为空
-
-#### `transcript`
-
-```json
-{ "t": "transcript", "sid": 1, "source": "claude", "reset": true, "items": [] }
-{ "t": "transcript", "sid": 1, "source": "claude", "items": [
-  { "id": "u1#0", "role": "user", "kind": "text", "text": "解释一下 context 包", "at": 1757116800000 },
-  { "id": "a1#1", "role": "assistant", "kind": "text", "text": "## context\n\n…", "at": 1757116805000 },
-  { "id": "a1#2", "role": "tool", "kind": "tool_use", "name": "Bash", "text": "go test ./...", "at": 1757116805000 }
-] }
-```
-
-前台起了 claude / codex（`command.start` 的 `text` 认出程序名），agent 跟踪它的会话文件（[ADR-0012](../20-architecture/adr/0012-ai-cli-conversation-first.md) β）并把对话按到达顺序推过来。
-
-- `source`：`claude`（`~/.claude/projects/<cwd-slug>/*.jsonl`）或 `codex`（`~/.codex/sessions/…/rollout-*.jsonl`）
-- `reset: true` 的那条在新一轮跟踪开始时发（`items` 为空）：客户端先清空
-- `role`：`user` / `assistant` / `tool`（工具调用摘要，`name` 是工具名）/ `system`（斜杠命令的本地回显）；`kind`：`text`（Markdown 正文）/ `tool_use`
-- 消息是**整块完成才落盘**的，流式过程看终端；子代理、思考、工具结果、开发者提示、注入的上下文都不进转录
-- 与 `command.*` 一样发给**所有连接**、不可续传；重连 / 切会话后用 [`GET /api/transcript`](http-api.md#转录) 回放，再接增量
-- 命令结束（`command.end` 或 shell 退出）停止跟踪；条目留到下一次 AI 命令开始或会话关闭
 
 #### `pong`
 
@@ -403,28 +314,40 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 
 ## 5. 续传机制
 
-### 5.1 环形缓冲
+### 5.1 增量还是快照
 
-每个会话在内存里保留最近 `ring_bytes`（默认 1 MiB，可配）的输出。
+`hello.resume` 的每一项与每一条 `subscribe`，agent 都做同一个判定：
+
+```
+instance_id 不符 / sid 不存在          → gone（仅 hello）
+subscribe 带来的列数与会话当前不同      → 快照（先 模拟器.Resize；该会话的其它订阅者也收到这份快照）
+out_seq > 0 且 base_seq ≤ out_seq ≤ head_seq → 增量：from_seq = out_seq，发 [out_seq, head_seq) 的原始字节
+其余（out_seq == 0、落出窗口、领先于 head）→ 快照：from_seq = 快照的 seq
+```
+
+- **增量**是网络抖动、短时切走的常态，字节级连续（AC-2.1）
+- **快照**覆盖其余一切：第一次打开、刷新页面、断线太久、切走太久、程序在备用屏、列数变了。没有"按屏分流"，没有"历史输出已截断"
+- **判定在锁内，与入队、加入订阅者集合一起完成**。分开做的话，中间到达的一批输出要么被发两遍（重复），要么两边都漏（空洞）
+
+### 5.2 环形缓冲与模拟器
+
+每个会话的 PTY 输出，在**同一把锁里**做两件事：追加进环形缓冲、喂给终端模拟器。所以任何时刻 `模拟器吃到的字节数 == head_seq`，快照的 `seq` 就取那一刻的 `head_seq`。
 
 ```
                       base_seq                      head_seq
                           │                             │
 输出字节流: ──────────────┼─────────────────────────────┼──────>
-            (已被覆盖)    │      (缓冲内保留的内容)      │
+            (已被覆盖)    │  环形缓冲（默认 256 KiB）    │
+                                                        └── 模拟器的状态恰好对应这里
 ```
 
-- `head_seq` = 该会话自创建以来累计产出的字节数（剥离 OSC 之后）
-- `base_seq` = `max(0, head_seq - 缓冲实际保留字节数)`
-- **裁剪规则**：需要腾空间时，优先裁剪到下一个 `\n` 之后，以减少把转义序列切成两半的概率。若 64 KiB 内找不到换行则按字节硬裁（AC-2.7）
-- **只有 reset 回放**（`status == "reset"` 或 `reset` 消息）在起点前置 `ESC [ 0 m`（SGR reset），清除因裁剪而悬空的颜色/属性。承载它的帧置 `flags` bit0，这 4 个字节**不计入 `out_seq`**（§3）
-  - 增量续传（`status == "ok"`）**绝不能注入** —— 客户端的终端状态是完整的，注入会把断点处生效中的属性清掉，让 AC-2.1 的字节级比较失败
+- **环形缓冲**只服务增量这一条路，默认 `ring_bytes` = **256 KiB**（`--ring-bytes`）。按字节裁剪，不找 `\n` 边界：落出窗口的客户端一律走快照，裁剪位置不影响显示
+- **模拟器**（`internal/vterm`，tuios.dev/vt）保留 2000 行历史，不管有没有人订阅都喂。它自己生成的查询应答**丢弃** —— 终端查询仍由浏览器的 xterm 回答（§5.3）
+- **快照**由模拟器导出：当前屏 + 至多 2000 行历史 + 模式 / 画笔 / 滚动区 / 字符集 / 制表位 / 光标 + 解析到一半的序列。普通内容生成约 0.5 ms（只有当前屏）到 35 ms（满 2000 行，100 列）
+- **快照上限 1 MiB**：超过就按比例减少带的历史行数重新生成一次（当前屏与模式不减）。宽终端（几百列）配上每格换色的极端输出，满 2000 行可达数 MiB，会撑爆连接写队列（4 MiB，§5.6）而断开、重连又要快照，形成死循环
+- client 侧：**每会话一个流式 UTF-8 解码器**（`TextDecoder` + `stream: true`），把字节解成字符串再写进 xterm。直接写 `Uint8Array` 时，xterm.js 会在某些切法下丢字（第 2 字节为 `0x80` 的三字节字符切在第 2 字节之后，如 `。` `…` `—`），见 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §背景。收到快照时换一个新的解码器
 
-> **已知限制**：硬裁剪可能把一个转义序列切成两半，导致回放起点出现少量可见垃圾字符。这个瑕疵在一行内自愈。只在"断开很久 + 期间输出很多"时才可能触发，正常网络抖动（几秒）永远走不到这条路径。已接受，记录在此。
-
-**备用屏会话不走上面这一段。** 会话当前在备用屏（`ESC[?1049h`）时，窗口里的字节是一串**离开上下文就没有意义**的差分补丁：模式开关只在会话开头出现一次，早被裁掉了。这种情况下 reset 改发 `redraw`（§4.2）—— 清屏 + 恢复模式 + 逼程序自己整屏重画，不回放窗口。理由与边界见 [ADR-0019](../20-architecture/adr/0019-altscreen-redraw-not-replay.md)。
-
-### 5.2 重连续传流程
+### 5.3 重连续传流程
 
 ```
 ①  client 检测到断开
@@ -432,40 +355,31 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 ③  指数退避重连（0.5s 起，×1.5，上限 15s，±20% 抖动）
     online 事件 / 页面重新可见 → 立即重试一次并重置退避
 ④  连接建立 → 发 hello{ client_id, instance_id, resume: [{sid, out_seq}, …] }
-⑤  agent 对每个 sid 判定：
-       instance_id 不符        → status: "gone"   （agent 重启过，sid 会被重新分配，见下）
-       sid 不存在              → status: "gone"
-       out_seq ∈ [base, head]  → status: "ok",    from_seq = out_seq
-       out_seq <  base_seq     → status: "reset", from_seq = base_seq
-       out_seq >  head_seq     → status: "ok",    from_seq = head_seq   （client 领先，不应发生；不回放）
+⑤  agent 对每个 sid 按 §5.1 判定 ok / snapshot / gone
 ⑥  agent 回 welcome（含 instance_id 与 resumed[].in_ack）
 ⑦  client：
-       status=="reset"  → terminal.reset() + 显示截断提示
        status=="gone"   → 移除会话 UI
        按 in_ack 裁剪重发队列 → 重发其后全部输入
-⑧  agent 从 from_seq 开始推送 OUTPUT 帧
-       该会话在备用屏、且判定为 reset → 改发 redraw（§4.2），不回放窗口
+⑧  agent 推送：ok → 从 from_seq 起的 OUTPUT 帧；snapshot → SNAPSHOT 帧，随后从它的 seq 起的 OUTPUT 帧
 ```
 
-**为什么要 `instance_id`**：`sid` 是 `uint16` 且 agent 重启后从头分配。没有实例标识时，一个 `resume{sid:1, out_seq:很大}` 会落进"client 领先"分支 —— 屏幕上留着旧会话的内容，之后接的却是一个**毫不相干的新会话**的输出，用户无从察觉。
+**为什么要 `instance_id`**：`sid` 是 `uint16` 且 agent 重启后从头分配。没有实例标识时，一个 `resume{sid:1, out_seq:很大}` 会被当成"领先于 head"，屏幕上留着旧会话的内容，之后接的却是一个**毫不相干的新会话**的输出，用户无从察觉。
 
-**热升级不算重启**（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）：agent 原地 re-exec 时把 `instance_id`、每会话的环形缓冲与 `in_ack` 一并交接给新进程，所以升级后客户端重连仍是 `status: "ok"` 的增量续传，不是 `gone`。client 侧对此**无感**，走的就是上面这条流程 —— 它只会看到一次普通的断线重连。只有真正的进程重启（`SIGTERM`、崩溃）才换 `instance_id`。
+**热升级不算重启**（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）：agent 原地 re-exec 时把 `instance_id`、每会话的环形缓冲、模拟器状态与 `in_ack` 一并交接给新进程，所以升级后客户端重连仍是增量续传，不是 `gone`。只有真正的进程重启（`SIGTERM`、崩溃）才换 `instance_id`。
 
-**关键点**：只有当前可见的会话在 `resume` 里带 `out_seq` 并被立即回放。后台会话可以在 `resume` 里报进度但暂不订阅 —— 由 client 决定，避免重连瞬间涌入大量数据。推荐做法：`resume` 只列可见会话，其它会话在用户切过去时用 `subscribe{out_seq}` 补齐。
+**推荐做法**：`resume` 只列可见会话，其它会话在用户切过去时用 `subscribe{out_seq}` 补齐，避免重连瞬间涌入大量数据。
 
-**「补课」的字节必须被标成回放。** client 侧每会话记一个 `catchup_to`：`out_seq` 追到它之前收到的输出都算回放。取值：
+**回放门：补课与快照的字节写进终端时，终端产生的自动应答不进 PTY。** 历史输出里有程序发过的终端查询（DSR / DA / `CSI ?u` …），把这段字节写进 xterm，它会**再答一遍** —— 那不是用户输入，送进 PTY 就是一串乱码键入。client 侧每会话记一个 `catchup_to`：`out_seq` 追到它之前收到的 OUTPUT 都算回放；SNAPSHOT 一律算回放。
 
 | 时机 | `catchup_to` |
 |---|---|
-| `welcome` | 该会话的 `head_seq` |
-| `subscribe`（切回会话） | 该会话已知的 `head_seq`（由 `session.updated` 维护） |
-| 收到 `ATTR_PREFIX` 帧 | 新的 `out_seq`（reset 已重建到当前，之后就是 live） |
+| `welcome`，`status == "ok"` | 该会话的 `head_seq` |
+| `subscribe`，增量 | 该会话已知的 `head_seq`（由 `session.updated` 维护） |
+| 收到 SNAPSHOT | 它的 `seq`（快照之后就是 live） |
 
-**为什么非标不可**：历史输出里有程序发过的终端查询（DSR / DA / `CSI ?u` …）。把这段字节写进终端，终端会**再答一遍** —— 那不是用户输入，送进 PTY 就是一串乱码键入，前台程序（claude / codex）会当成按键吃掉。回放期间必须抑制这些自动应答。重连路径一直是这么做的；**切回会话时的补课同样是回放**，漏标就等于每切回一次给前台程序喂一次乱码。
+**抑制的是自动应答，不是用户的输入。** 两者都从 xterm 的 `onData` 出来，区别在于**谁产生的**：自动应答同步发生在 `term.write()` 的解析里，用户输入同步发生在一次 DOM 输入事件的派发里。client 按来源区分：**正在派发用户输入事件时产生的 `onData` 一律放行**，其余的才受回放门约束（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)）。
 
-**抑制的是自动应答，不是用户的按键。** 这两样东西都从终端的 `onData` 出来，区别在于**谁产生的**：自动应答同步发生在 `term.write()` 的解析里，用户按键同步发生在一次 DOM 输入事件的派发里。按"此刻是否在回放"一刀切会把用户正在敲的字一起吞掉，而回放窗口在 `ring_bytes` 满载时是秒级的（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)）。client 必须按来源区分：**正在派发用户输入事件时产生的 `onData` 一律放行**，其余的才受回放门约束。
-
-### 5.3 输入重发队列
+### 5.4 输入重发队列
 
 client 侧每会话维护：
 
@@ -479,10 +393,10 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 - 重连后：按 `welcome.resumed[].in_ack` 裁剪，然后**按 seq 升序重发** `pending` 全部内容
 - `pending` 上限 **64 KiB**。超出时停止接受新输入并在 UI 上明确提示"离线输入已满"，**不要静默丢弃**
 
-**记账的 key 是 `(client_id, sid)`，不是连接。** 两个标签页各自独立计数（混在一起没有意义），但**同一标签页的重连必须继承 `in_ack`**：
+**记账的 key 是 `(client_id, sid)`，不是连接。** 两个标签页各自独立计数（混在一起没有意义），但**同一页面的重连必须继承 `in_ack`**：
 
-- agent 为每个 `(client_id, sid)` 维护 `in_ack`，**保留到会话销毁为止**（一个 `uint64`，上界 `max_conns × max_sessions`）
-- 该 `client_id` 从未对这个会话发过输入时 `in_ack = 0`，此时 client 侧的 `in_seq_next` 也必然是 0，两侧天然对齐
+- agent 为每个 `(client_id, sid)` 维护 `in_ack`，**保留到会话销毁为止**。刷新一次就多一个 `client_id`，条目数随刷新次数增长；每条是一个 id 加两个 `uint64`，长期运行的会话上也只是 KB 量级，所以不回收 —— 回收之后，那个页面带着 `pending` 重连会被判 `input_gap`
+- 该 `client_id` 从未对这个会话发过输入时 `in_ack = 0`，此时 client 侧的 `in_seq_next` 也必然是 0，两侧天然对齐。这一条成立的前提是 `client_id` 每次页面加载都是新的（§4.1）
 - 若按连接记账，重连后 `in_ack` 归零而 client 的 `pending` 仍从旧 `seq` 起，agent 会判 `seq > in_ack` → `input_gap` → 关连接 → 无限重连。**断线期间的输入不丢**（US-2.2）整条就废了
 
 **连接断开时，agent 必须丢弃该 `client_id` 已入队但尚未写入 PTY 的输入**，并把
@@ -490,7 +404,7 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 重连后会重发；不丢的话它们会被写进 PTY 一次、重发时再写一次。回退之后
 `accepted == in_ack`，client 按 `in_ack` 重发就精确对齐。
 
-### 5.4 心跳与超时
+### 5.5 心跳与超时
 
 | 方向 | 规则 |
 |---|---|
@@ -504,20 +418,20 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 
 **为什么要单独一条探活规则。** 线路断掉不一定有 `onclose`：手机息屏、切 App、Wi-Fi 切蜂窝、NAT / 反向代理静默回收连接，这些场合 TCP 上没有 FIN，浏览器那边 `readyState` 一直是 OPEN。这种**僵尸连接**自认在线，唯一的暴露渠道就是心跳，最坏 30 + 10 = 40 秒 —— 而 `setInterval` 在后台标签页还会被节流，实际更久。这 40 秒里用户打的字全都写进一条死 socket，屏幕上毫无变化。
 
-`online` 与"页面重新可见"是**已知的可疑时刻**：系统刚说网络变了、或者用户刚把应用切回前台。此时连接要么是活的（本机 RTT 远小于 2 秒），要么就是死的，所以探针用 2 秒而不是心跳的 10 秒。判错的代价只是多一次重连，而重连是无损的（§5.2 续传 + §5.3 按 `in_ack` 重发）。
+`online` 与"页面重新可见"是**已知的可疑时刻**：系统刚说网络变了、或者用户刚把应用切回前台。此时连接要么是活的（本机 RTT 远小于 2 秒），要么就是死的，所以探针用 2 秒而不是心跳的 10 秒。判错的代价只是多一次重连，而重连是无损的（§5.3 续传 + §5.4 按 `in_ack` 重发）。
 
 理由与取舍见 [ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)。
 
-### 5.5 有界队列策略（读写两侧）
+### 5.6 有界队列策略（读写两侧）
 
 | 队列 | 上限 | 满了怎么办 |
 |---|---|---|
-| 连接写队列（输出 → client） | 4 MiB，`--conn-queue-bytes` | 关闭该连接 |
+| 连接写队列（输出 → client） | 4 MiB（常量） | 关闭该连接 |
 | 会话输入队列（client → PTY） | 256 KiB | 回 `error{code:"input_stalled", sid}` 并关闭该连接 |
 
 **两侧都绝不阻塞。** 写侧阻塞会反压到 `PTY.Read()` 卡住 shell —— 一个慢客户端不能拖慢服务器上真正在跑的活。读侧阻塞更糟：**一条 WebSocket 复用所有会话**，一个不读 stdin 的前台程序（`sleep`、某些 TUI）会把 PTY 输入缓冲填满，进而卡住整条连接的读循环 —— ping/pong、`resize`、`session.create`、其它会话的输入全停。
 
-关连接是无损的：client 自动重连走续传，输出只要没落后超过 `ring_bytes`、输入按 `in_ack`（§5.3）重发即可。
+关连接是无损的：client 自动重连走续传，输出走增量或快照、输入按 `in_ack`（§5.4）重发即可。
 
 ---
 
@@ -533,26 +447,14 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 
 `exited` 会话：保留缓冲、可续传、可查看，**不接受输入**。
 
-### 6.2 集成状态
-
-`integration` 字段：`pending` → `active` | `inactive`
-
-- 会话创建时为 `pending`
-- 收到 `OSC 1701;hello` → 仍 `pending`，但取消握手超时（hello 现在发在用户 dotfile **之前**，只表示脚本开始加载）
-- 收到第一个 `OSC 133` 标记 → `active`
-- 10 秒内**连 hello 都没收到** → `inactive`，并发 `session.updated{integration:"inactive"}`
-- `active` → `inactive`（钩子被摘掉，如 `trap - DEBUG` / `exec bash`）：**在 prompt 前连续 2 次 Enter 有输出却零标记**（[shell-integration.md §4.7](shell-integration.md#47-活性探测按命令)）。不再靠"多久没标记"猜 —— 长命令和发呆都不产生标记。再收到 133 标记立即转回 `active`
-
-`unmarked_input` 字段（bool）：命令**在跑**时连续 2 次 Enter 有输出却零标记 → `true`。说明输入正去往一个没有集成的子程序（ssh / su / 容器 / REPL）；**`integration` 不受影响**，因为外层 shell 没坏。子程序退出、外层标记回来 → `false`。客户端据此提示"当前程序里没有 shell 集成"，命令块在此期间自然合并为一个。
-
-### 6.3 节流规则汇总
+### 6.2 节流规则汇总
 
 | 消息 | 节流 |
 |---|---|
 | `ack` | 每会话最多 50ms 一条，取最新累计值；**被吞掉的要补发** |
 | `session.updated{head_seq}` | 每会话最多 1s 一条（client 只用它判未读，中间值无害）；**被吞掉的要补发** |
-| `cwd` | 仅在路径实际变化时发送 |
-| `resize`（client 侧） | 100ms 防抖；**切会话时例外，见 §4.1 `subscribe`** |
+| `session.updated{cwd}` | agent 每秒读一次，仅在路径实际变化时发送 |
+| `resize`（client 侧） | 100ms 防抖；**订阅时例外，见 §4.1 `subscribe`** |
 
 **"被吞掉的要补发"不是可选项。** 这两条都是累计量，丢中间值无害 —— 但**丢最后一个值有害**：
 输出常常是一阵一阵的，一秒内打完就安静了，后面再没有新消息来触发下一条。只节流不补发，
@@ -568,10 +470,10 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 |---|---|---|
 | `expected_hello` | 首条消息不是 `hello` | 是 |
 | `protocol_unsupported` | 协议版本无法协商 | 是 |
-| `bad_frame` | 帧格式非法（长度不足、payload 为空、JSON 解析失败） | 是 |
+| `bad_frame` | 帧格式非法（长度不足、payload 为空、未知 `type`、方向不对的 `type`、JSON 解析失败） | 是 |
 | `frame_too_large` | 超过 `max_frame_bytes` | 是 |
-| `input_gap` | INPUT 帧的 `seq` 大于 `in_ack`，出现空洞 | 是 |
-| `input_stalled` | 会话输入队列满（PTY 长时间写不进去，§5.5） | 是 |
+| `input_gap` | INPUT 帧的 `seq` 大于 agent 已接受的累计字节数（`accepted`，§3），出现空洞 | 是 |
+| `input_stalled` | 会话输入队列满（PTY 长时间写不进去，§5.6） | 是 |
 | `unauthorized` | 设备已被吊销 | 是（先发 `notice`） |
 | `unknown_session` | `sid` 不存在 | 否 |
 | `session_exited` | 向已退出的会话写输入 | 否 |
@@ -583,10 +485,15 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 
 ## 8. 协议版本演进
 
-- `protocol` 为整数，当前 `1`
+- `protocol` 为整数，当前 `2`
 - **可以自由添加**：新的控制消息类型、已有消息的新字段。接收方忽略未知 `t` 和未知字段
 - **必须升版本**：二进制帧布局变更、已有字段语义变更、删除字段
-- 版本不匹配时 agent 回 `error{code:"protocol_unsupported"}` 并在 `message` 里写清双方版本，client 展示"请刷新页面 / agent 版本过旧"
+- 版本不匹配时 agent 回 `error{code:"protocol_unsupported"}` 并在 `message` 里写清双方版本，client 展示"agent 已升级，请刷新页面"
+
+| 版本 | 变化 |
+|---|---|
+| 1 | 初版 |
+| 2 | [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)：新增 `SNAPSHOT` 帧与 `resumed[].status: "snapshot"`；删除 `ATTR_PREFIX`、`reset`、`redraw`、`cwd`、`prompt`、`command.start` / `command.end`、会话字段 `integration` / `prompt_state` / `unmarked_input`；`out_seq` 不再剥离 OSC |
 
 ---
 
@@ -600,23 +507,22 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
     {
       "name": "output_basic",
       "hex": "0100000100000000000000e86869",
-      "decoded": { "type": 1, "flags": 0, "sid": 1, "seq": "232", "payload_hex": "6869" },
-      "data_len": 2
+      "decoded": { "type": 1, "flags": 0, "sid": 1, "seq": "232", "payload_hex": "6869" }
     },
     {
-      "name": "output_attr_prefix",
-      "hex": "0101000100000000000000e81b5b306d6869",
-      "decoded": { "type": 1, "flags": 1, "sid": 1, "seq": "232", "payload_hex": "1b5b306d6869" },
-      "data_len": 2,
-      "note": "flags bit0：前 4 字节 ESC[0m 不计入 seq，data_len == 2"
+      "name": "snapshot_more",
+      "hex": "0301000100000000000000e81b5b48",
+      "decoded": { "type": 3, "flags": 1, "sid": 1, "seq": "232", "payload_hex": "1b5b48" },
+      "note": "flags bit0 = MORE：同一份快照后面还有帧"
     }
   ],
   "invalid_frames": [
     { "name": "too_short_header", "hex": "010000010000", "expect_error": "bad_frame" },
-    { "name": "header_only_empty_payload", "hex": "0100000100000000000000e8", "expect_error": "bad_frame" }
+    { "name": "header_only_empty_payload", "hex": "0100000100000000000000e8", "expect_error": "bad_frame" },
+    { "name": "unknown_type", "hex": "0400000100000000000000e86869", "expect_error": "bad_frame" }
   ],
   "control_messages": [
-    { "name": "hello_first_connect", "json": { "t": "hello", "protocol": 1, "client_id": "x", "resume": [] } }
+    { "name": "hello_first_connect", "json": { "t": "hello", "protocol": 2, "client_id": "x", "resume": [] } }
   ],
   "unknown_messages": [
     { "name": "future_type", "json": { "t": "session.split", "sid": 1 }, "note": "接收方必须忽略，不能关连接" }
@@ -624,8 +530,10 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 }
 ```
 
+`binary_frames[].data_len` 是该帧**计入 seq 的字节数**：OUTPUT / INPUT 等于 payload 长度，SNAPSHOT 为 0（快照不计入 seq）。两侧都要逐帧校验它。
+
 **`seq` 在 fixture 里是字符串。** 它是 `uint64`，而 JS 的 `JSON.parse` 会把超过 2^53 的整数变成浮点丢精度 —— 一份要给两侧共用的 fixture 不能有一边读不准。Go 侧用 `strconv.ParseUint`，TS 侧用 `BigInt(string)`。
 
 `unknown_messages` 用来钉住前向兼容：两侧都必须【忽略】不认识的 `t` 值，而不是当成错误。
 
-必测项见 [`../70-testing/strategy.md`](../70-testing/strategy.md)。最关键的一条是 **AC-2.1 字节级连续性**。
+必测项见 [`../70-testing/strategy.md`](../70-testing/strategy.md)。最关键的两条是 **AC-2.1 字节级连续性**（增量）与 **AC-2.21 屏幕级一致性**（快照）。

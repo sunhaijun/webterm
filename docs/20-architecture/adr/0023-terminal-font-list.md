@@ -19,7 +19,7 @@ ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
 
 **给一份硬编码的等宽优选清单，打开设置时探测本机装了哪些，只列探测到的。**
 
-清单见 [`../../40-frontend/layout-responsive.md`](../../40-frontend/layout-responsive.md#终端字体可选ac-513)，
+清单见 [`../../40-frontend/layout.md`](../../40-frontend/layout.md)，
 实现是 `web/src/ui/fonts.ts`。三条附带的规矩：
 
 1. **每一项都是一整段 stack，尾巴恒为 CJK 等宽 + `monospace`**：

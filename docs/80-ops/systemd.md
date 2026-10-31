@@ -79,7 +79,7 @@ journalctl --user -u webterm -f
 journalctl --user -u webterm --since "1 hour ago"
 ```
 
-日志里**不会有**配对码、Cookie、命令原文、终端输出（[`../60-security/privacy-history.md`](../60-security/privacy-history.md#日志ac-85)）。
+日志里**不会有**配对码、Cookie、用户输入、终端输出（[`../60-security/privacy-history.md`](../60-security/privacy-history.md#日志ac-85)）。
 
 ## 首次配对
 

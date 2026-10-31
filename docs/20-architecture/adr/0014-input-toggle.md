@@ -1,5 +1,7 @@
 # ADR-0014 底栏输入互切键（终端输入 ⇄ 编辑面板）
 
+> **已被 [ADR-0025](0025-termux-style-ui.md) 取代**（互切键与编辑面板一起删除，换成 Termux 式的附加键 + 文本输入页）。以下保留作历史记录。
+
 状态：已接受（2026-09-11）。**细化 [ADR-0013](0013-terminal-only.md) 决定 #2 的输入面**：把 ADR-0013 的「无输入模式、按触摸位置全自动分流 + 编辑面板常驻底栏」改成一个**显式互切键**，默认终端输入。终端唯一显示面、点终端逐键直送、编辑面板整段发送这些都不变。
 
 ## 背景
@@ -28,4 +30,4 @@ ADR-0013 让编辑输入条常驻底栏，按触摸位置自动分流：点终�
 
 ## 影响
 
-底栏渲染（`web/src/ui/app.tsx`：`editing` / `forceTerminal` / `termLead` / `toEdit` / `toTerminal` / `fillComposer`）、`WriteSheet` 新增 `lead` 槽（互切键落在面板头）、`KeyBar`。testid：新增 `term-bar` / `term-lead` / `to-edit` / `to-terminal`；旧 `tui-bar` 并入 `term-bar`。E2E：`inputmodel.spec` / `sheet.spec` 重写为互切模型；harness `submit()` 自动先切到编辑面板，新增 `openComposer()`。相关文档：[input-modes.md](../../40-frontend/input-modes.md)。
+底栏渲染（`web/src/ui/app.tsx`：`editing` / `forceTerminal` / `termLead` / `toEdit` / `toTerminal` / `fillComposer`）、`WriteSheet` 新增 `lead` 槽（互切键落在面板头）、`KeyBar`。testid：新增 `term-bar` / `term-lead` / `to-edit` / `to-terminal`；旧 `tui-bar` 并入 `term-bar`。E2E：`inputmodel.spec` / `sheet.spec` 重写为互切模型；harness `submit()` 自动先切到编辑面板，新增 `openComposer()`。相关文档：[input.md](../../40-frontend/input.md)。

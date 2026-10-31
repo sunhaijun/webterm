@@ -39,7 +39,7 @@ feat/<docs编号>-<主题>
 | 交付 | 对应文档 |
 |---|---|
 | `internal/ringbuf` | [ring-buffer.md](../50-backend/ring-buffer.md) |
-| `internal/oscparse` | [shell-integration.md §5](../30-protocol/shell-integration.md#5-agent-侧-osc-解析器要求) |
+| `internal/oscparse` | 已随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除 |
 | `internal/protocol` + `testdata/vectors.json` | [websocket-protocol.md](../30-protocol/websocket-protocol.md) |
 | `internal/session`（Session / SessionManager / 真 PTY） | [session-manager.md](../50-backend/session-manager.md) |
 | `internal/store` + 迁移 | [storage-schema.md](../50-backend/storage-schema.md) |
@@ -82,8 +82,8 @@ feat/<docs编号>-<主题>
 |---|---|
 | Vite + TS + Preact 工程、`go:embed` 集成 | [architecture/overview.md](../20-architecture/overview.md) |
 | `web/src/conn`：连接层、seq 记账、重发队列、指数退避、心跳 | [websocket-protocol.md §5](../30-protocol/websocket-protocol.md#5-续传机制) |
-| `web/src/term`：xterm 封装、WebGL、滚动、搜索 | [layout-responsive.md](../40-frontend/layout-responsive.md) |
-| 连接状态指示 | [session-ux.md](../40-frontend/session-ux.md#连接状态指示ac-210) |
+| `web/src/term`：xterm 封装、WebGL、滚动 | WebGL 与自写滚动已随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 改用 xterm 原生，见 [layout.md](../40-frontend/layout.md) |
+| 连接状态指示 | [session-ux.md](../40-frontend/session-ux.md) |
 | Playwright 夹具与确定性输出脚本 | [e2e-scenarios.md](../70-testing/e2e-scenarios.md#测试夹具) |
 
 **测试**：`UT-seq-1`、`UT-reconnect-1`、`UT-hb-1`、`UT-render-1`、**`E2E-1`、`E2E-2a..2d`、`E2E-3`、`E2E-4`、`E2E-5`、`E2E-12`**
@@ -98,11 +98,11 @@ feat/<docs编号>-<主题>
 
 | 交付 | 对应文档 |
 |---|---|
-| Composer：多行、IME、历史导航、bracketed paste 提交 | [input-modes.md](../40-frontend/input-modes.md) |
-| Raw：按键映射、composition 处理、内联预览浮层 | 同上 + [keymap.md](../40-frontend/keymap.md) |
-| 模式状态机（含 `running` 去抖、`locked`） | [input-modes.md §状态机](../40-frontend/input-modes.md#状态机) |
-| 移动端功能键条 + 粘滞修饰键 | 同上 |
-| `visualViewport` 软键盘适配 | [layout-responsive.md](../40-frontend/layout-responsive.md#高度计算) |
+| Composer：多行、IME、历史导航、bracketed paste 提交 | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 删除（换成文本输入页） |
+| Raw：按键映射、composition 处理、内联预览浮层 | [input.md](../40-frontend/input.md) + [keymap.md](../40-frontend/keymap.md) |
+| 模式状态机（含 `running` 去抖、`locked`） | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 删除 |
+| 移动端功能键条 + 粘滞修饰键 | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 换成附加键，见 [input.md](../40-frontend/input.md) |
+| `visualViewport` 软键盘适配 | [layout.md](../40-frontend/layout.md) |
 
 **测试**：`UT-input-1..3`、`UT-mode-1..2`、`UT-keymap-1`、`UT-resize-1`、**`E2E-7`、`E2E-8`、`E2E-10`**、`IT-resize-1`
 
@@ -118,12 +118,12 @@ feat/<docs编号>-<主题>
 
 | 交付 | 对应文档 |
 |---|---|
-| `internal/shellinit/bash.sh` + rcfile 注入 | [shell-integration.md](../30-protocol/shell-integration.md) + [ADR-0010](../20-architecture/adr/0010-bash-rcfile-injection.md) |
-| 命令记录落库（`command.start` / `command.end`） | [storage-schema.md](../50-backend/storage-schema.md#写入路径) |
-| CWD 上报 + 会话自动命名 | [session-manager.md](../50-backend/session-manager.md#自动命名ac-44) |
-| `prompt{state}` → **输入模式自动切换真正生效** | [ADR-0007](../20-architecture/adr/0007-dual-mode-input.md) |
-| 集成状态机与降级提示 | [session-manager.md](../50-backend/session-manager.md#集成状态机ac-76) |
-| `webterm shell-init bash` 子命令 | [install.md](../80-ops/install.md) |
+| `internal/shellinit/bash.sh` + rcfile 注入 | 已随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除 |
+| 命令记录落库（`command.start` / `command.end`） | 已随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除 |
+| CWD 上报 + 会话自动命名 | CWD 改读 `/proc`（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)），自动命名见 [session-manager.md](../50-backend/session-manager.md#自动命名ac-44) |
+| `prompt{state}` → **输入模式自动切换真正生效** | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 与 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除 |
+| 集成状态机与降级提示 | 已随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除 |
+| `webterm shell-init bash` 子命令 | 已随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除 |
 
 **测试**：`IT-shell-1..7`、`UT-name-1`、**`E2E-9`、`E2E-13`**
 
@@ -140,11 +140,11 @@ feat/<docs编号>-<主题>
 | 交付 | 对应文档 |
 |---|---|
 | 会话列表、切换、未读、自动命名显示 | [session-ux.md](../40-frontend/session-ux.md) |
-| 三档布局（desktop 侧栏 / tablet 抽屉 / phone sheet + 滑动） | [layout-responsive.md](../40-frontend/layout-responsive.md) |
-| `short` 布局（手机横屏） | 同上 |
-| 已退出会话的保留与"重开" | [session-ux.md](../40-frontend/session-ux.md#已退出会话的保留ac-45) |
-| 订阅策略 + "保持接收"开关 | [session-ux.md](../40-frontend/session-ux.md#订阅策略) |
-| 主题（三态）、字号、PWA + Service Worker | [layout-responsive.md](../40-frontend/layout-responsive.md#pwa) |
+| 三档布局（desktop 侧栏 / tablet 抽屉 / phone sheet + 滑动） | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 换成两种形态，见 [layout.md](../40-frontend/layout.md) |
+| `short` 布局（手机横屏） | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 删除 |
+| 已退出会话的保留与"重开" | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 换成进程结束提示行，见 [session-ux.md](../40-frontend/session-ux.md) |
+| 订阅策略 + "保持接收"开关 | [session-ux.md](../40-frontend/session-ux.md) |
+| 主题（三态）、字号、PWA + Service Worker | [layout.md](../40-frontend/layout.md) |
 
 **测试**：**`E2E-6`、`E2E-11`、`E2E-15`、`E2E-16`、`E2E-17`**
 
@@ -158,14 +158,14 @@ feat/<docs编号>-<主题>
 
 | 交付 | 对应文档 |
 |---|---|
-| `/api/commands*` 与 `/api/settings` | [http-api.md](../30-protocol/http-api.md) |
-| 历史面板（搜索、过滤、分组、退出码显示） | [commands-ux.md](../40-frontend/commands-ux.md#历史面板) |
+| `/api/commands*` 与 `/api/settings` | 已随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除 |
+| 历史面板（搜索、过滤、分组、退出码显示） | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 删除 |
 | 置顶（☆）→ 快捷命令；label、拖动排序 | 同上 |
 | 移动端快捷命令条 | 同上 |
 | ~~命令面板（`Ctrl/Cmd+K`，模糊搜索会话/快捷命令/历史/动作）~~ | 已随 [ADR-0022](../20-architecture/adr/0022-drop-command-palette.md) 删除 |
-| Composer 历史导航接真实数据源 | [input-modes.md](../40-frontend/input-modes.md#历史导航) |
-| 删除 / 清空 / 淘汰保护置顶 | [storage-schema.md](../50-backend/storage-schema.md#淘汰ac-610) |
-| 隐私说明（空格前缀）进设置页与引导 | [privacy-history.md](../60-security/privacy-history.md) |
+| Composer 历史导航接真实数据源 | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 删除 |
+| 删除 / 清空 / 淘汰保护置顶 | 已随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除 |
+| 隐私说明（空格前缀）进设置页与引导 | 已随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除（不再记命令） |
 
 **测试**：**`E2E-14`**、`UT-store-*` 补全
 
@@ -209,19 +209,86 @@ m0 ──> m1 ──> m2 ──> m3 ──> m4 ──> m6 ──> m7
 
 ---
 
+## Termux 式界面与输出链路（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md)、[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)）
+
+老界面（互切键、编辑面板、上下文键区、侧栏、横滑、视觉缩放、历史面板）整体删除，换成全屏终端 + 两行静态附加键；手机用 ☰ + 底部会话抽屉，PC / Pad 用顶部标签栏。输出链路改成 agent 持有终端状态（增量 / 快照两条路），shell 集成与命令历史随之删除。
+
+```
+m8 ──> m9
+ └───> m10
+```
+
+m9 / m10 只依赖 m8，彼此独立。
+
+---
+
+## m8 · `feat/40-termux-shell`
+
+**一个 PR：清除老界面、重建输出链路、删掉随之变成死代码的后端。**
+
+| 交付 | 对应文档 |
+|---|---|
+| ADR-0025 / ADR-0026 与前端、协议、后端、需求、E2E 文档重写 | [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §11、[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §影响 |
+| 删除老界面代码与对应测试（ADR-0025 §9 清单），`app.tsx` 拆成只做装配的 `app/` | ADR-0025 §9 |
+| 形态判定（屏幕短边 600px 分 `compact` / `wide`） | [layout.md](../40-frontend/layout.md#形态ac-518) |
+| 两行静态附加键（Termux 默认 14 键，CTRL / ALT 粘滞，DECCKM） | [input.md](../40-frontend/input.md#附加键ac-318) + [keymap.md](../40-frontend/keymap.md) |
+| 文本输入页（✎ / 左右滑动切换；回车：有内容不追加回车、空回车发 `\r`） | [input.md](../40-frontend/input.md) |
+| `compact`：☰ + 底部会话抽屉（未读点、系统返回键关抽屉）；`wide`：顶部标签栏 | [session-ux.md](../40-frontend/session-ux.md#切换会话ac-410) |
+| 点终端切换软键盘 / 鼠标跟踪时上报点击；滚动用 xterm 原生 | [layout.md](../40-frontend/layout.md) |
+| 连接横幅（覆盖、不改几何）、进程结束提示行、删除 `Ctrl/Cmd+F` 搜索 | [session-ux.md](../40-frontend/session-ux.md) |
+| `internal/vterm`（tuios.dev/vt）：同锁喂入、快照、改列数重发快照、热升级交接状态 | [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)、[session-manager.md](../50-backend/session-manager.md) |
+| 协议 v2：`SNAPSHOT` 帧、`resumed[].status: "snapshot"`；删 `ATTR_PREFIX` / `reset` / `redraw` / `cwd` / `prompt` / `command.*`；同步 `vectors.json` | [websocket-protocol.md](../30-protocol/websocket-protocol.md) |
+| 环形缓冲缩到 256 KiB、按字节裁剪 | [ring-buffer.md](../50-backend/ring-buffer.md) |
+| 删 `termstate` / `oscparse` / `shellinit`、命令历史（迁移 `0003` DROP `commands`）、`/api/commands*` / `/api/fs` / `/api/settings`、`--no-history` / `--no-shell-integration` / `shell-init`；CWD 读 `/proc` | [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §6、[storage-schema.md](../50-backend/storage-schema.md)、[http-api.md](../30-protocol/http-api.md) |
+| 前端输出路径原生化：流式 `TextDecoder`、删按帧合并 / 回看暂停 / 预算写入 / WebGL / 自写滚动 / 客户端快照 | [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §7 |
+| 录制夹具 + Vitest（`@xterm/headless` 当裁判）的屏幕级一致性测试 | [strategy.md](../70-testing/strategy.md) |
+| E2E 脚手架：敲命令改成直接往终端里敲 | [e2e-scenarios.md](../70-testing/e2e-scenarios.md) |
+
+**测试**：AC-3.18 / 3.19 / 3.20 / 4.10 / 5.18 与 AC-2.21 / 2.22 / 2.23 对应的单测与 E2E；改写的 E2E；`TestHandoffByteLevelContinuity`；协议测试向量两侧对齐
+
+**出口标准**：`go test ./...`、`npm test`、`npm run e2e` 全绿；★ **增量的字节级连续性（E2E-2）与快照的屏幕级一致性都过**；`TestHandoffByteLevelContinuity` 过。
+
+---
+
+## m9 · `feat/40-termux-keys`
+
+**附加键增强**（ADR-0025 §2）。
+
+| 交付 | 对应文档 |
+|---|---|
+| 上划副键（默认 `-` → `\|`、`/` → `~`） | [input.md](../40-frontend/input.md) |
+| 长按连发（`↑ ↓ ← → PGUP PGDN`，400ms 后每 60ms） | 同上 |
+| 键位可配（Termux `extra-keys` 语法，存 `localStorage`，解析失败退回默认并提示） | 同上 |
+
+**测试**：本分支新增的验收标准与对应单测 / E2E
+
+**出口标准**：同 m8。
+
+---
+
+## m10 · `feat/40-termux-gestures`
+
+**手势**（ADR-0025 §5、§6）。
+
+| 交付 | 对应文档 |
+|---|---|
+| 双指捏合改字号：过程中只做 CSS 预览，松手改 `fontSize` + `fit()` + 补发 `resize`，按形态保存 | [layout.md](../40-frontend/layout.md) |
+| 长按选区：选词、拖手柄、「复制 · 粘贴 · 更多」（选择链接 / 分享 / 保持亮屏） | 同上 |
+| 响铃振动（Android） | 同上 |
+
+**测试**：本分支新增的验收标准与对应 E2E；真机手势进[手工清单](../70-testing/manual-checklist.md)
+
+**出口标准**：同 m8。
+
+---
+
 ## v0.2（不承诺时间）
 
-**排在最前面：回滚历史的四步**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）—— 内容层（把全屏 AI CLI 拉回主屏）→ 手势与渲染层（拖动跟手、写入有预算）→ 持久层（刷新后的客户端快照）→ 备用屏层（拖动转滚轮上报）。四步独立可交付、独立可回退，**前两步就能兑现日常体感**；一条协议消息都不加。分支 `feat/20-scrollback-model`。
+按价值排序（回滚历史已由 [ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1 与 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 解决）：
 
-其余按价值排序：
-
-1. **命令块可视化** —— 折叠、跳转、块内复制、按退出码筛选。数据在 m5 已经采好（`command.start/end` 已带 `out_seq`），**协议不需要改**
-2. **Web Push 通知** —— 长命令跑完提醒。依赖 m5 的命令结束事件
-3. **文件浏览 + 上传下载** —— 独立功能面
-4. **Passkey / WebAuthn** —— 填补"新设备接入需要访问服务器终端"的缺口
-5. **zsh 集成** —— `preexec`/`precmd` 天然存在，比 bash 干净
-6. **Composer 的 Tab 补全** —— 需要新的控制消息与独立的补全通道
-7. **桌面端分屏**
+1. **文件浏览 + 上传下载** —— 独立功能面
+2. **Passkey / WebAuthn** —— 填补"新设备接入需要访问服务器终端"的缺口
+3. **桌面端分屏**
 
 ## v0.3+ 的候选
 
@@ -229,4 +296,3 @@ m0 ──> m1 ──> m2 ──> m3 ──> m4 ──> m6 ──> m7
 - **SSH 跳板**：agent 内加 SSH 出站，连没装 agent 的机器（[ADR-0001](../20-architecture/adr/0001-agent-first-no-ssh.md) 的分层）
 - **多用户**：需要数据模型迁移
 - **本地回显预测**（mosh 式）
-- **命令历史 FTS5**：等 `LIKE` 真的慢了再说

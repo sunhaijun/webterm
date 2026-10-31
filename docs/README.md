@@ -19,10 +19,10 @@
 | [`00-overview/`](00-overview/) | 愿景、非目标、术语表 |
 | [`10-requirements/`](10-requirements/) | 用户故事、验收标准、设备与布局矩阵 |
 | [`20-architecture/`](20-architecture/) | 架构总览、架构决策记录（ADR） |
-| [`30-protocol/`](30-protocol/) | ★ WebSocket 协议、HTTP API、bash shell 集成协议 |
-| [`40-frontend/`](40-frontend/) | 响应式布局、输入模式、会话交互、命令交互、快捷键 |
-| [`50-backend/`](50-backend/) | 会话管理与 PTY 生命周期、环形缓冲、存储模型 |
-| [`60-security/`](60-security/) | 威胁模型、认证与配对、历史隐私 |
+| [`30-protocol/`](30-protocol/) | ★ WebSocket 协议、HTTP API |
+| [`40-frontend/`](40-frontend/) | 布局与形态、输入（附加键 / 文本输入页 / IME）、会话交互、快捷键 |
+| [`50-backend/`](50-backend/) | 会话管理、PTY 与终端模拟器、环形缓冲、存储模型 |
+| [`60-security/`](60-security/) | 威胁模型、认证与配对、隐私 |
 | [`70-testing/`](70-testing/) | 测试策略、E2E 场景清单、手工测试清单 |
 | [`80-ops/`](80-ops/) | 安装、开发与测试、TLS、systemd、排障 |
 | [`90-roadmap/`](90-roadmap/) | 里程碑与分支计划 |

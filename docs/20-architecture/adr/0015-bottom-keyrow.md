@@ -1,5 +1,7 @@
 # ADR-0015 底栏单行键行：互切键永远在行首，程序键不盖终端
 
+> **已被 [ADR-0025](0025-termux-style-ui.md) 取代**（单行上下文键行换成两行静态附加键）。以下保留作历史记录。
+
 状态：已接受（2026-09-11）。**细化 [ADR-0014](0014-input-toggle.md) 的「底栏形态」**：互切键、⋯ 与功能键条并成**一条键行**；编辑面板的头部同样并进它自己的键行。终端唯一显示面（ADR-0013）、互切模型、点终端逐键直送 / 编辑面板整段发送这些语义都不变。
 
 ## 背景
@@ -39,7 +41,7 @@ ADR-0014 落地后在 Pixel 5（393×727）、横屏（802×293）、iPhone SE�
 
 ## 影响
 
-- 文档：[input-modes.md](../../40-frontend/input-modes.md) §底栏 / §功能键条 / §编辑键行；[layout-responsive.md](../../40-frontend/layout-responsive.md) 底栏高度与 short 叠加；[acceptance-criteria.md](../../10-requirements/acceptance-criteria.md) AC-3.9 改为前 5 个、新增 AC-3.14；[e2e-scenarios.md](../../70-testing/e2e-scenarios.md) E2E-10 与新增 E2E-25。
+- 文档：[input.md](../../40-frontend/input.md) §底栏 / §功能键条 / §编辑键行；[layout.md](../../40-frontend/layout.md) 底栏高度与 short 叠加；[acceptance-criteria.md](../../10-requirements/acceptance-criteria.md) AC-3.9 改为前 5 个、新增 AC-3.14；[e2e-scenarios.md](../../70-testing/e2e-scenarios.md) E2E-10 与新增 E2E-25。
 - 前端：`web/src/ui/app.tsx`（`termLead` 并入 `KeyBar` 的 `leading` / `trailing`；终端态 context 改传 `interactive`；`classic = desktop && !coarse`）、`web/src/input/keybar.tsx`（`trailing` 与 `keys` 槽，键区独立滚动）、`web/src/input/keymap.ts`（`PROMPT_KEYS`、`PROGRAM_EDIT_KEYS`）、`web/src/input/sheet.tsx`（头部改抓手条、去 `sheet-close`、键行接互切键 / 程序键 / 发送、槽位高度改测量）、`web/src/style.css`（`--slot-h`、键行、取消 sheet 内 40vh 上限）。
 - 测试：E2E `inputmodel` / `sheet` / `input` 与 `escape`（前 8 → 前 5）/ `control` / `commands` / `mobile`（滚的是 `.keybar-scroll`）；新增 `tablet.spec`（iPad mini 横竖屏）；单测 `keymap.test.ts`。testid：保留 `to-edit` / `to-terminal` / `term-bar` / `keybar` / `editkeys` / `send` / `open-more`，**移除 `sheet-close` / `term-lead`**；编辑键行里的程序键复用 `key-Escape` / `key-CtrlC`。
 - 不触及协议、重连、连接层。画布几何仍不因底栏变化而 resize（ADR-0011 约束、ADR-0013）。

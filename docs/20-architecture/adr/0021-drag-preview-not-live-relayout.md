@@ -1,5 +1,7 @@
 # ADR-0021 跟手的手势只做预览，布局改动推到松手
 
+> **适用对象（桌面侧栏）已随 [ADR-0025](0025-termux-style-ui.md) 删除**；「跟手只做预览、松手才改布局」这条原则由 ADR-0025 的捏合改字号继承。以下保留作历史记录。
+
 状态：已接受（2026-09-13）
 
 用户报告"桌面浏览器里拖动会卡顿，手机上不会"。量下来这不是"桌面慢"，而是**桌面上唯一的那个拖动，恰好是这套布局里最贵的一种改动**：拖侧栏分隔条 = 每帧改终端几何。而手机上的每一个拖动都是浮层（[ADR-0013](0013-terminal-only.md) ③、[ADR-0018](0018-one-drawer-primitive.md) ④），碰不到终端。
@@ -61,13 +63,13 @@
 ## 代价与取舍
 
 - **拖动中侧栏内容不再跟着变宽**，看到的是一条落点线（整列高亮）。换来合成器级别的跟手。
-  需要说清楚的是：原来那个"实时"本来也只到 CSS 层——拖动期间 `ResizeObserver` 被短路，cols/rows 不重算，画布被裁 / 留白，松手才重排（[layout-responsive.md](../../40-frontend/layout-responsive.md) §desktop 的第一条硬约束）。所以损失的是"侧栏列表实时变窄"这一点视觉，不是终端的实时性——终端本来就不实时。
+  需要说清楚的是：原来那个"实时"本来也只到 CSS 层——拖动期间 `ResizeObserver` 被短路，cols/rows 不重算，画布被裁 / 留白，松手才重排（[layout.md](../../40-frontend/layout.md) §desktop 的第一条硬约束）。所以损失的是"侧栏列表实时变窄"这一点视觉，不是终端的实时性——终端本来就不实时。
 - **从收起态拖出来时，侧栏在松手前不展开**。原来是先展开给人看、松手再结算，现在统一成"预览线 → 松手落地"。少一条特例。
 - 键盘步进（`←` / `→` / `Home` / `End`）**仍然是即时改宽**：离散、一次一步、没有每帧预算问题，预览反而多余。
 
 ## 影响
 
-- 文档：[acceptance-criteria.md](../../10-requirements/acceptance-criteria.md) AC-5.12 改写；[layout-responsive.md](../../40-frontend/layout-responsive.md) §desktop「侧栏宽度可拖、可收起」补第三条硬约束；[e2e-scenarios.md](../../70-testing/e2e-scenarios.md) E2E-32 步骤 1 / 4 改写、新增步骤 8。
+- 文档：[acceptance-criteria.md](../../10-requirements/acceptance-criteria.md) AC-5.12 改写；[layout.md](../../40-frontend/layout.md) §desktop「侧栏宽度可拖、可收起」补第三条硬约束；[e2e-scenarios.md](../../70-testing/e2e-scenarios.md) E2E-32 步骤 1 / 4 改写、新增步骤 8。
 - 前端：`web/src/ui/sidebar.ts` 新增 `previewEdge()`（预览位置 = 松手结果，一个纯函数）；`web/src/ui/app.tsx` 的三个指针回调；`web/src/style.css` 的 `.sidebar-resizer`（拖动时整列高亮 + `will-change`）。
 - 测试：UT-sidebar-1 补预览位置；E2E-32 改断言（拖动中 `.sidebar` 宽度**不变**、分隔条视觉位置跟手、松手后宽度落到预览处）。
 - 不触及协议、重连、连接层、会话状态。终端几何在拖动全程不变，因此"拖动全程只发一条 `resize`"这条老断言比原来更强（现在拖动期间根本没有几何变化可言）。

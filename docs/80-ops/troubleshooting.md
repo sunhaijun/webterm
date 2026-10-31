@@ -149,15 +149,17 @@ proxy_send_timeout 3600s;
 
 webterm 自己的心跳是 30 秒一次，所以正常情况下不会触发 60s 空闲超时 —— 如果仍然每 60 秒断，说明代理配置没生效或者中间还有一层。
 
-### 频繁"历史输出已截断"
+### 切回或重连之后，画面整个重画了一下
 
-断线期间的输出超过了环形缓冲。加大它：
+断线或切走期间的输出超出了环形缓冲（默认 256 KiB），agent 改发了一份快照（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)）：浏览器清屏后按快照重画，回看位置回到底部。内容是完整的，不会缺。刷新页面、改列数（换字号、转屏）也一定走快照。
+
+经常在短暂断线后看到它，就加大缓冲，让更多情况走增量：
 
 ```
---ring-bytes 4194304      # 4 MiB
+--ring-bytes 1048576      # 1 MiB
 ```
 
-代价是内存（`会话数 × ring-bytes`）。20 会话 × 4 MiB = 80 MiB。
+代价是内存（`会话数 × ring-bytes`）。
 
 ### 往回拖不动 / 刷新后只剩最后一屏
 
@@ -175,65 +177,25 @@ env | grep CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN     # 有输出 = 注入到位
 __webterm.altScreen()      // false = 在主屏（生效）；true = 还在备用屏
 ```
 
-肉眼信号是等价的：底部键条没有切成 TUI 那一档，且往上拖真的能拖动。
+肉眼信号是等价的：往上拖真的能拖动。
 
 - ① 没输出：`--no-altscreen-compat` 开着，或你自己的环境里已经设过同名变量（**我们不覆盖用户的值**）。
 - ① 有、② 仍是 `true`：上游换了实现或变量名（这些是**私有开关，没有兼容承诺**）。用 `--session-env` 补上新的变量名，或接受备用屏的行为。
 - ② 是 `false` 但还是拖不动：看是不是终端里正跑着别的全屏程序（vim / less / htop）。
 
 > **别用 `script -c claude` 抓 `ESC[?1049h` 来验。** 实测：`script` 里拿不到 winsize 时 claude 自己就退回 classic 渲染器（`?1049h` 0 次），抓到的 0 不代表你那个会话里是 0。
-- **刷新后能往回滚多远**由客户端快照决定（2000 行，[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §3）；再往前的历史只能靠 `--ring-bytes` 的字节窗口，它按字节算而不是按行算。
+- **刷新后能往回滚多远**由 agent 的快照决定：至多 2000 行（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)）。不刷新的话，浏览器自己留着 5000 行。
 
 不想要这套兼容（比如就是喜欢钉在底部的输入框）：`--no-altscreen-compat`。
 
 ### 连接总是很快被断开（正常用着突然掉）
 
-有界队列保护触发了（[协议 §5.5](../30-protocol/websocket-protocol.md#55-有界队列策略读写两侧)）。看日志区分是哪一侧：
+有界队列保护触发了（[协议 §5.6](../30-protocol/websocket-protocol.md#56-有界队列策略读写两侧)）。看日志区分是哪一侧：
 
 | 日志 | 含义 | 处理 |
 |---|---|---|
-| `conn queue full` | 输出侧：客户端网络太慢而输出太快 | 加大 `--conn-queue-bytes`，或减少输出量 |
+| `conn queue full` | 输出侧：客户端网络太慢而输出太快 | 减少输出量；断开后会自动重连（走增量或快照），不丢画面 |
 | `input_stalled` | 输入侧：某个会话的前台程序长时间不读 stdin，PTY 写不进去 | 看那个会话在跑什么（`Ctrl+C` 或关掉它）。这是保护措施 —— 不这样做的话整条连接的所有会话都会一起卡住 |
-
----
-
-## shell 集成
-
-### 界面提示"shell 集成未生效"
-
-诊断顺序：
-
-```bash
-bash --version
-```
-
-| 原因 | 现象 | 处理 |
-|---|---|---|
-| bash < 4.0 | 集成降级：只有 CWD 与 prompt 状态，没有命令原文 | 升级 bash，或接受降级（终端仍可用） |
-| bash < 4.4 | 集成正常，但 Composer 的**多行**提交会被逐行执行（readline 没有 bracketed paste） | 升级 bash，或分多次提交 |
-| 会话里 `exec zsh` / `su` / 进了容器 | 集成在替换后失效 | 预期行为。在新 shell 里手动 `eval "$(webterm shell-init bash)"` |
-| 用户的 prompt 主题重写 `PS1` | 命令记录缺失或 prompt 状态不准 | 我们每次 precmd 都重新断言标记；如果仍失效，把主题初始化放在 `.bashrc` 更早的位置 |
-| 会话里跑了 tmux | tmux 过滤未知 OSC | `set -g allow-passthrough on`（[shell-integration.md](../30-protocol/shell-integration.md#与-tmux-共存)） |
-| `--no-shell-integration` 开着 | | 去掉这个参数 |
-
-**注意：集成失效不影响终端可用性**（AC-7.7）。丢的只有命令历史、CWD 显示和输入模式自动切换。
-
-### 命令历史里少了一些命令
-
-| 原因 | 说明 |
-|---|---|
-| 命令以空格开头 | **这是刻意的隐私设计**（[privacy-history.md](../60-security/privacy-history.md#空格前缀规则ac-62--us-67)） |
-| `--no-history` 开着 | 或 UI 里关了历史记录 |
-| 用户的 `HISTCONTROL` 设了 `ignoredups` / `ignoreboth` | 重复命令不进 bash 历史 → 我们也拿不到。这是 bash 行为，不是 bug |
-| `HISTSIZE=0` | bash 完全不记历史，我们的 `history 1` 拿不到东西 |
-
-### 输入模式切换不对 / 闪烁
-
-| 现象 | 原因 |
-|---|---|
-| 一直不切到 Raw | 集成未生效：没有数据源，固定在 Composer（见降级横幅）。ADR-0013 起没有手动模式开关 |
-| 模式来回跳 | 命令输出里含 OSC 133 序列（比如 `cat` 一个含这些字节的文件）。**固有限制**，见 [shell-integration.md](../30-protocol/shell-integration.md#6-已知限制) |
-| 短命令时闪一下 Raw | 去抖失效。正常应该有 120ms 去抖 —— 报 bug |
 
 ---
 
@@ -242,8 +204,6 @@ bash --version
 ### 升级/重启后会话全没了
 
 **预期行为**（[ADR-0003](../20-architecture/adr/0003-no-tmux.md)）。agent 持有 PTY，进程重启则 shell 收到 `SIGHUP`。
-
-命令历史存在 SQLite 里，跨重启存活。
 
 ### "会话数已达上限"
 
@@ -273,8 +233,8 @@ ps -eo pid,pgid,sid,ppid,cmd | grep <进程名>
 
 ### 中文输入法候选框位置不对
 
-- 在 **Composer 模式**下应该完全正常（原生 textarea）
-- 在 **Raw 模式**下靠内联预览浮层。如果浮层位置不对，附上截图报 bug
+- 在**文本输入页**里应该完全正常（原生 textarea）—— 长段中文就用它
+- **终端直输**靠内联预览浮层。如果浮层位置不对，附上截图报 bug
 
 ### 无法安装到主屏
 
@@ -288,23 +248,7 @@ ps -eo pid,pgid,sid,ppid,cmd | grep <进程名>
 
 ```bash
 sqlite3 ~/.local/share/webterm/webterm.db '.tables'
-sqlite3 ~/.local/share/webterm/webterm.db 'SELECT text, exit_code, started_at FROM commands ORDER BY started_at DESC LIMIT 20;'
-```
-
-### 数据库文件变得很大
-
-历史上限默认 5 万条。检查：
-
-```bash
-sqlite3 ~/.local/share/webterm/webterm.db 'SELECT count(*) FROM commands;'
-```
-
-淘汰后空间不会自动回收，手动整理：
-
-```bash
-systemctl --user stop webterm
-sqlite3 ~/.local/share/webterm/webterm.db 'VACUUM;'
-systemctl --user start webterm
+sqlite3 ~/.local/share/webterm/webterm.db 'SELECT id, name, last_seen_at, revoked_at FROM devices;'
 ```
 
 ### 忘了配对，所有设备都吊销了
@@ -324,20 +268,31 @@ journalctl --user -u webterm -n 200 --no-pager
 
 外加浏览器控制台的报错、机型/OS/浏览器版本。**如果是"打字没反应"这类**，再附一份控制台里的 `__webterm.inputStats()`（**卡住的当下**取，不要事后补）—— 它按段说明输入断在哪一层，见下面的《打字没反应：先看输入断在哪一段》。
 
-日志里不含敏感数据（配对码、Cookie、命令原文、终端输出均已脱敏），可以直接贴。
+日志里不含敏感数据（配对码、Cookie、用户输入、终端输出均不记录），可以直接贴。
 
-## 底栏盖住终端 / 拖动到底变空白（读态布局）
+## 拖动到底变空白
 
-- 给元素设 `display`（如 `.bar{display:flex}`）会压过 `hidden` 属性的 UA `display:none` —— 隐藏的直发提示行仍占 56px，把终端最后几行盖住。用全局 `[hidden]{display:none!important}` 兜住。
 - xterm 的内部滚动容器 `.xterm-viewport` 要 `overscroll-behavior: contain`，否则手机上拖到底再拖会把整页橡皮筋拽成空白。
 
 ## 一点输入，输入框就被键盘推得看不见（iPhone）
 
-**现象**：读视图点 Composer、或终端视图点「⌨ 打字」，软键盘弹出的同时整个页面被"上推"，输入框（甚至整个应用）不在屏幕上。
+**现象**：点终端或在文本输入页里点输入框，软键盘弹出的同时整个页面被"上推"，附加键和输入框（甚至整个应用）不在屏幕上。
 
-**根因**：iOS Safari 弹键盘只缩【可视视口】不缩布局视口，并把可视区上推（`visualViewport.offsetTop` > 0）去露出输入框；应用要 `translateY(offsetTop)` 跟过去。而 Safari 的 `window.innerHeight` 报的是可视视口高度 —— 键盘一弹它也变矮，若用它做"键盘是否弹起"的参照，闸门永远关着、不补偿。参照必须是 `documentElement.clientHeight`（布局视口），见 [`../40-frontend/layout-responsive.md`](../40-frontend/layout-responsive.md) §高度计算。
+**根因**：iOS Safari 弹键盘只缩【可视视口】不缩布局视口，并把可视区上推（`visualViewport.offsetTop` > 0）去露出输入框；应用要 `translateY(offsetTop)` 跟过去。而 Safari 的 `window.innerHeight` 报的是可视视口高度 —— 键盘一弹它也变矮，若用它做"键盘是否弹起"的参照，闸门永远关着、不补偿。参照必须是 `documentElement.clientHeight`（布局视口），见 [`../40-frontend/layout.md`](../40-frontend/layout.md)。
 
 **排查**：在 Safari 的 Web Inspector 里聚焦输入框后看 `document.querySelector('.app').style.transform` —— 键盘弹起时应为 `translateY(<offsetTop>px)`；为空即闸门没开，对比 `visualViewport.height`、`document.documentElement.clientHeight`、`window.innerHeight` 三个数。
+
+## 输出显示不对：先分清是哪条路
+
+输出只有两条路（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)）：**增量**（原始字节原样转发）和**快照**（agent 的终端模拟器导出的完整画面）。浏览器开发者工具 → Network → WS 看帧：二进制帧首字节 `01` 是增量（OUTPUT），`03` 是快照（SNAPSHOT）。
+
+| 现象 | 多半是 |
+|---|---|
+| 只在切回 / 重连 / 刷新 / 换字号之后不对 | 快照那条路。记下当时在跑的程序，附上 `webterm version` 报 bug —— 快照的口径是「先吃快照再吃之后的字节」逐格等于「直接吃全部字节」 |
+| 一直开着、没断过也不对 | 增量那条路就是程序的原始输出，和本机终端应当一致；先在本机同尺寸的 xterm 系终端里复现 |
+| top 表头最右一格少了反白 / 上划线不显示 | 已知差异：前者是 xterm.js 在行尾「擦到行尾」时和其它终端不同，后者是快照不带 SGR 53。程序重画那一格后恢复 |
+| 只改了行数（软键盘弹出收起）之后画面错了几行 | 已知：只改行数不重发快照，两边各自调整的结果可能不同。程序收到 SIGWINCH 重画后收敛，或者切走再切回 |
+| 中文标点（。…—“”）偶尔不见 | xterm.js 写 `Uint8Array` 时切开的 UTF-8 会丢字，前端必须先用流式 `TextDecoder` 解码。再出现就是这条被改坏了 |
 
 ## 打字没反应：先看输入断在哪一段
 
@@ -354,7 +309,7 @@ __webterm.inputStats()
 | `keydown` 不涨 | 键没进页面 | 焦点在别的窗口 / 被系统层吃掉 |
 | `keydown` 涨、`toTerm` 不涨 | 焦点不在终端（`focus` 字段写着在哪） | 点一下终端；这是 bug，请连 `inputStats` 一起提 |
 | `toTerm` 涨、`data` 不涨 | 卡在 xterm（多半是组字状态没复位） | 切走再切回或刷新；同样请提 bug |
-| `data` 涨、`sent` 不涨 | 没发出去（看 `gated` 与连接状态） | 看状态条是不是"重连中" |
+| `data` 涨、`sent` 不涨 | 没发出去（看 `gated` 与连接状态） | 看顶部有没有连接横幅（重连中 / 离线） |
 | `sent` 涨、`unackedBytes` 一直不降 | agent 没确认 | 僵尸连接：切到后台再回前台会触发一次探活（2 秒判死重连，[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 决策一） |
 | **四段全通，程序还是没反应** | **不在 webterm 内** | 前台程序自己不读 stdin，或者它进了别的模式 —— 最常见的是 tmux 的 copy-mode —— **见下一条** |
 
@@ -376,14 +331,3 @@ pane 里的前台程序那一刻**没开鼠标跟踪**的话，一次滚轮就�
 **出口**：按 `q` 或 `Esc`。
 
 **注意**：`--no-altscreen-compat` 的默认值（把 claude 拉回 classic 渲染器，[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1）会让这个坑**变密** —— classic 渲染器不开鼠标跟踪，于是 tmux 里每一次滚轮都会进 copy-mode。在 tmux 里跑 claude 又不想碰这个坑，可以 `tmux set -g mouse off`，或给 webterm 加 `--no-altscreen-compat`（代价是回滚历史没了）。
-
-## claude / codex 跑着，读视图却没有转录卡片
-
-**现象**：进了 claude / codex，读视图是块流的门或空转录视图，尾巴条有输出但没有对话卡片。
-
-**排查顺序**：
-1. agent 认出的程序名：`command.start` 的 `text` 最后一段第一个词得是 `claude` / `codex`（`ProgramOf` 规则，包装器 sudo / env 会跳过；别名 / 脚本名不算）
-2. 会话文件在哪：Claude Code 写 `~/.claude/projects/<cwd 里非字母数字换成 ->/<session>.jsonl`，Codex 写 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`；agent 只认**命令开始之后被写过**的文件，cwd 对得上的优先。`--resume` 继续旧会话时，第一条新消息落盘后才会被认出
-3. home 对不对：agent 用自己进程的 home（systemd 下是 `User=` 的 home）；`WEBTERM_TRANSCRIPT_HOME` 可以指别处
-4. `GET /api/transcript?sid=N`：404 = 没跟踪过（程序名没认出）；200 但 `items` 空 = 文件还没被写或没定位到
-5. 消息是整块完成才落盘的：正在流式输出时看尾巴条，答完才出卡片

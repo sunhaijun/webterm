@@ -1,5 +1,7 @@
 # ADR-0010 通过临时 rcfile 注入 shell 集成
 
+> **已被 [ADR-0026](0026-agent-holds-terminal-state.md) 取代**：shell 集成整体删除，shell 按自己的规则启动（默认 `bash -l -i`），不再生成 rcfile。以下保留作历史记录。
+
 > 状态：Accepted · 2026-09-06
 
 ## 背景
