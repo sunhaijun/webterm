@@ -74,6 +74,9 @@ func (c *Conn) handleControl(data []byte) {
 		}
 		s.Rename(m.Name)
 
+	case *protocol.SessionMove:
+		c.handleSessionMove(m)
+
 	case *protocol.Subscribe:
 		s, ok := c.deps.Sessions.Get(m.SID)
 		if !ok {
@@ -138,4 +141,16 @@ func (c *Conn) handleSessionClose(m *protocol.SessionClose) {
 	}
 	c.deps.Hub.Broadcast(&protocol.SessionClosed{SID: m.SID, ExitCode: code}, c,
 		&protocol.SessionClosed{ReqID: m.ReqID, SID: m.SID, ExitCode: code})
+}
+
+// handleSessionMove 改显示顺序并把完整顺序广播给所有连接（ADR-0040）。位置没变
+// 也广播，发起方据此确认。广播在 Move 的锁里做，见 Manager.Move。
+func (c *Conn) handleSessionMove(m *protocol.SessionMove) {
+	err := c.deps.Sessions.Move(m.SID, m.Before, func(sids []uint16) {
+		c.deps.Hub.Broadcast(&protocol.SessionOrder{SIDs: sids}, c,
+			&protocol.SessionOrder{ReqID: m.ReqID, SIDs: sids})
+	})
+	if err != nil {
+		c.sendError(m.ReqID, &m.SID, protocol.CodeUnknownSession, "会话不存在", false)
+	}
 }

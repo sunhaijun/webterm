@@ -88,7 +88,7 @@ type Snapshot struct {
 	InstanceID  string     `json:"instance_id"`
 	NextSID     uint16     `json:"next_sid"`
 	Listeners   []Listener `json:"listeners"`
-	Sessions    []Session  `json:"sessions"`
+	Sessions    []Session  `json:"sessions"` // 按显示顺序（ADR-0040）
 }
 
 // Meta 返回不含缓冲与待写输入的副本 —— 预检只需要验 schema 与字段形状，

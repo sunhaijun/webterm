@@ -52,6 +52,8 @@ func (m *Manager) Thaw() {
 
 // Export 拍整份快照。【必须在 Freeze 成功之后】调用。代数 +1 是给新进程的。
 // 出错时已 dup 出来的 fd 都关掉，什么都不留。
+//
+// sessions[] 按显示顺序排（ADR-0040）：顺序不单独占字段，schema 不变。
 func (m *Manager) Export(fromVersion string) (*handoff.Snapshot, error) {
 	m.mu.RLock()
 	snap := &handoff.Snapshot{
@@ -75,6 +77,9 @@ func (m *Manager) Export(fromVersion string) (*handoff.Snapshot, error) {
 
 // Restore 在新进程里用快照重建会话表。只能在 Manager 还没创建过任何会话时调用。
 //
+// 显示顺序就是 sessions[] 的顺序（ADR-0040）。老快照是按 sid 排的，恢复出来
+// 就是按 sid 的顺序 —— 正是老版本给出的顺序。
+//
 // 全部成功才生效；任何一个会话接不回来就整体失败 —— 那时新进程应当把错误
 // 报出去退出，让 systemd 拉起一个干净的进程（会话丢失，但状态是明确的）。
 // 模拟器状态例外：导不回来就从环形缓冲尽力还原（见 restoreTerm），不为一屏画面
@@ -89,12 +94,14 @@ func (m *Manager) Restore(snap *handoff.Snapshot) error {
 		return errors.New("session: Restore 必须在没有会话时调用")
 	}
 	restored := make(map[uint16]*Session, len(snap.Sessions))
+	order := make([]uint16, 0, len(snap.Sessions))
 	for _, hs := range snap.Sessions {
 		s, err := m.restoreSession(hs)
 		if err != nil {
 			return fmt.Errorf("session: 接回会话 %d: %w", hs.SID, err)
 		}
 		restored[hs.SID] = s
+		order = append(order, hs.SID)
 	}
 	m.instanceID = snap.InstanceID
 	m.nextSID = snap.NextSID
@@ -103,6 +110,7 @@ func (m *Manager) Restore(snap *handoff.Snapshot) error {
 	}
 	m.generation = snap.Generation
 	m.sessions = restored
+	m.order = order
 	for _, s := range restored {
 		if s.Status() == protocol.StatusRunning {
 			s.startLoops()
