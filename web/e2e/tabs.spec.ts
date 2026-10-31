@@ -29,7 +29,7 @@ test.describe('1440×900 鼠标', () => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
 
-    // ① 顶栏在终端上方；标签条里一个标签 + `+`；右侧钉住状态点与 ⚙；没有 ☰、没有附加键
+    // ① 顶栏在终端上方；标签条里一个标签 + `+`；右侧钉住状态点（在最右）；没有设置、没有会话按钮、没有附加键
     await expect(page.locator('.app')).toHaveAttribute('data-form', 'wide')
     const bar = (await rectOf(page, '.topbar'))!
     const term = (await rectOf(page, '[data-testid=terminal]'))!
@@ -39,14 +39,12 @@ test.describe('1440×900 鼠标', () => {
     await expect(tabbar.locator('.tab')).toHaveCount(1)
     await expect(tabbar.getByTestId('new-session')).toBeVisible()
     await expect(tabbar.getByTestId('conn-dot'), '状态点不在可滚动的标签条里').toHaveCount(0)
-    await expect(tabbar.getByTestId('open-settings')).toHaveCount(0)
     await expect(page.locator('.topbar').getByTestId('conn-dot')).toHaveAttribute('data-state', 'online')
-    await expect(page.locator('.topbar').getByTestId('open-settings')).toBeVisible()
+    await expect(page.getByTestId('open-settings'), '没有设置（ADR-0030）').toHaveCount(0)
     const dot = (await rectOf(page, '[data-testid=conn-dot]'))!
-    const gear = (await rectOf(page, '.topbar [data-testid=open-settings]'))!
     const strip = (await rectOf(page, '[data-testid=tabbar]'))!
     expect(dot.left, '状态点在标签条右边').toBeGreaterThanOrEqual(strip.right - 1)
-    expect(gear.right, '⚙ 在最右').toBeGreaterThanOrEqual(bar.right - 1)
+    expect(bar.right - dot.right, '状态点在最右（只隔它自己的外边距）').toBeLessThanOrEqual(12)
     await expect(page.getByTestId('open-sessions')).toHaveCount(0)
     await expect(page.getByTestId('extrakeys')).toHaveCount(0)
 

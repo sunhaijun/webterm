@@ -1,7 +1,7 @@
 /**
  * 附加键区（AC-3.18 / AC-3.19，input.md）：80px 的定高槽，两页 ——
  * 键位页（Termux 默认 14 键）和文本输入页（一个两行的 textarea）。左边 44px 的固定列：
- * compact 是 ☰（上）与 ✎（下），wide 只有 ✎。两页高度相同，切换不改终端几何。
+ * compact 是会话按钮（上，方框里写会话数）与 ✎（下），wide 只有 ✎。两页高度相同，切换不改终端几何。
  *
  * 所有键在 pointerdown 时 preventDefault：按附加键不让软键盘收起或弹出，焦点不动。
  * 字节在 pointerup 的派发里发（`term.input()`，走 onData 出口），这样在键区上横滑
@@ -18,7 +18,9 @@ export type KeyPage = 'keys' | 'text'
 
 export interface ExtraKeysProps {
   form: Form
-  /** 任一非当前会话有未读：☰ 上的小红点。 */
+  /** 会话数：写在会话按钮的方框里。 */
+  count: number
+  /** 任一非当前会话有未读：会话按钮上的小红点。 */
   unread: boolean
   sticky: Sticky
   onOpenSessions(): void
@@ -126,11 +128,14 @@ export function ExtraKeys(p: ExtraKeysProps) {
             class="ek-side-btn"
             data-testid="open-sessions"
             data-unread={p.unread ? 'true' : 'false'}
-            aria-label={p.unread ? '会话（有新输出）' : '会话'}
+            aria-label={p.unread ? `${p.count} 个会话（有新输出）` : `${p.count} 个会话`}
             onPointerDown={noFocus}
             onClick={p.onOpenSessions}
           >
-            ☰
+            {/* 手机浏览器「标签页」按钮的样子：圆角方框里写会话数（ADR-0030 §3） */}
+            <span class="ek-count" aria-hidden="true">
+              {p.count}
+            </span>
           </button>
         )}
         <button

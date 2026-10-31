@@ -1,6 +1,6 @@
 /**
  * E2E-5 连接状态指示 —— AC-2.10
- * E2E-12 阅读输出 —— AC-5.1 / AC-5.3 / AC-5.4 / AC-5.13
+ * E2E-12 阅读输出 —— AC-5.1 / AC-5.3 / AC-5.4
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 
@@ -8,6 +8,7 @@ import {
   Agent,
   EMIT,
   copySelection,
+  focusTerm,
   hooks,
   installWSControl,
   lastWelcome,
@@ -143,85 +144,26 @@ test.describe('E2E-12 阅读输出（1440×900）', () => {
     expect(sel1, '新输出不破坏选区').toBe(sel0)
   })
 
-  test('② 改字号：生效、按形态持久化、补一条 resize 且列数跟着变', async ({ page }) => {
+  test('② 外观跟随系统、不刷新就换；字号 14px；没有设置入口，Ctrl+Shift+, 不弹东西（AC-5.3）', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' })
     await agent.open(page)
-    await page.waitForTimeout(300)
-    const cols0 = (await hooks.size(page)).cols
-    const r0 = await hooks.resizes(page)
+    const bg = () =>
+      page.evaluate(() => ({
+        body: getComputedStyle(document.body).backgroundColor,
+        term: getComputedStyle(document.querySelector('.xterm-viewport')!).backgroundColor,
+      }))
+    expect(await bg(), '浅色：--bg / --term-bg').toEqual({ body: 'rgb(255, 255, 255)', term: 'rgb(251, 251, 252)' })
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expect
+      .poll(bg, { message: '系统切到深色：界面与 xterm 一起变，不用刷新' })
+      .toEqual({ body: 'rgb(13, 17, 23)', term: 'rgb(13, 17, 23)' })
 
+    expect(await page.evaluate(() => getComputedStyle(document.querySelector('.xterm-rows')!).fontSize)).toBe('14px')
+
+    await expect(page.getByTestId('open-settings')).toHaveCount(0)
+    await focusTerm(page)
     await page.keyboard.press('Control+Shift+Comma')
-    await page.getByTestId('font-size').fill('18')
-    await expect.poll(() => hooks.fontSize(page)).toBe(18)
-    await page.keyboard.press('Escape')
-    await expect.poll(() => hooks.resizes(page), { message: '容器没变也要补一条 resize' }).toBeGreaterThan(r0)
-    expect((await hooks.size(page)).cols, '列数跟着变').toBeLessThan(cols0)
-    expect(await page.evaluate(() => localStorage.getItem('webterm.fontSize.wide'))).toBe('18')
-
-    await page.reload()
-    await waitOnline(page)
-    await expect.poll(() => hooks.fontSize(page), { message: '刷新后保持' }).toBe(18)
-  })
-
-  test('⑤ 换终端字体（AC-5.13）：只列装了的；换了就换 stack、列数与 resize 跟着变；刷新保持；野值回落', async ({ page }) => {
-    await agent.open(page)
     await page.waitForTimeout(300)
-    await page.keyboard.press('Control+Shift+Comma')
-
-    const select = page.getByTestId('font-family')
-    await expect(select).toBeVisible()
-    await expect(page.getByTestId('settings').locator('p'), '设置面板不写说明段落（ADR-0028）').toHaveCount(0)
-    const opts = await select.locator('option').evaluateAll((els) =>
-      els.map((e) => ({ id: (e as HTMLOptionElement).value, label: (e as HTMLOptionElement).textContent ?? '' })),
-    )
-    expect(opts[0]?.id, '系统默认永远在第一位').toBe('system')
-
-    // 【只列本机装了的】：把列出来的名字拿回页面里用同一套判据再量一遍，一个都不该是"没装"
-    const missing = await page.evaluate((names) => {
-      const ctx = document.createElement('canvas').getContext('2d')
-      if (!ctx) return names
-      const probe = 'mmmmmmmmmmlliWWWWWW0O中文'
-      const w = (f: string) => {
-        ctx.font = `72px ${f}`
-        return ctx.measureText(probe).width
-      }
-      return names.filter((n) => ['monospace', 'serif', 'sans-serif'].every((b) => w(`"${n}", ${b}`) === w(b)))
-    }, opts.slice(1).map((o) => o.label))
-    expect(missing, '列出来的字体本机必须真的装着').toEqual([])
-
-    // 场景本身给的 skip 条件：一台机器一个清单字体都没装时，换字体那半边测不了
-    test.skip(opts.length < 2, '这台机器一个清单里的字体都没装，换字体这半边测不了')
-    // 挑一个和「系统默认」字宽不同的：系统默认的 monospace 往往就解析成清单里的某一项
-    // （这台机器是 DejaVu Sans Mono），换成它列数当然不变
-    const widths = await page.evaluate(
-      (stacks) => {
-        const ctx = document.createElement('canvas').getContext('2d')!
-        return stacks.map((f) => {
-          ctx.font = `14px ${f}`
-          return ctx.measureText('M'.repeat(100)).width
-        })
-      },
-      [await hooks.fontFamily(page), ...opts.slice(1).map((o) => `"${o.label}", monospace`)],
-    )
-    const diff = opts.slice(1).findIndex((_, i) => Math.abs(widths[i + 1]! - widths[0]!) > 1)
-    const pick = opts[diff >= 0 ? diff + 1 : 1]!
-    const cols0 = (await hooks.size(page)).cols
-    const r0 = await hooks.resizes(page)
-    await select.selectOption(pick.id)
-    await expect.poll(() => hooks.fontFamily(page)).toContain(pick.label)
-    expect(await hooks.fontFamily(page), 'stack 尾巴永远带等宽回退').toContain('monospace')
-    await expect.poll(() => hooks.resizes(page), { message: '换字体也要补一条 resize' }).toBeGreaterThan(r0)
-    if (diff >= 0) expect((await hooks.size(page)).cols, `换成 ${pick.label} 之后列数应当变化`).not.toBe(cols0)
-    else test.info().annotations.push({ type: 'note', description: `清单里装了的字体与系统默认等宽，列数不变（${opts.map((o) => o.label).join('、')}）` })
-
-    await page.reload()
-    await waitOnline(page)
-    await expect.poll(() => hooks.fontFamily(page), { message: '刷新后仍是它' }).toContain(pick.label)
-
-    // 野值回落系统默认，不报错
-    await page.evaluate(() => localStorage.setItem('webterm.font.family', 'comic-sans'))
-    await page.reload()
-    await waitOnline(page)
-    await expect.poll(() => hooks.fontFamily(page)).toContain('ui-monospace')
-    expect(await terminalText(page)).toBeDefined()
+    await expect(page.locator('.drawer'), 'Ctrl+Shift+, 不再打开任何浮层').toHaveCount(0)
   })
 })

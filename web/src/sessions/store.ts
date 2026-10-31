@@ -11,7 +11,7 @@ import type { ITheme } from '@xterm/xterm'
 
 import { inputTrace } from '../keys/inputstats'
 import type { SessionInfo, SessionStatus } from '../protocol/messages'
-import { createTerminal, exitLine, type TermFont, type TermHandle } from '../term/terminal'
+import { createTerminal, exitLine, type TermHandle } from '../term/terminal'
 import { inUserInputEvent } from '../term/userinput'
 
 /** store 需要的那一小块连接层。 */
@@ -50,7 +50,6 @@ export interface StoreHooks {
   onBinary?(sid: number, data: string): void
   /** 应用级快捷键：返回 false 表示拦下来，不让它进 PTY。 */
   allowKey(e: KeyboardEvent): boolean
-  font(): TermFont
   theme(): ITheme | undefined
 }
 
@@ -117,7 +116,7 @@ export class SessionStore {
       this.h.onChange()
       return
     }
-    const term = createTerminal(this.h.font(), this.h.theme())
+    const term = createTerminal(this.h.theme())
     const host = document.createElement('div')
     host.className = 'term-host'
     host.dataset.sid = String(info.sid)
@@ -229,18 +228,7 @@ export class SessionStore {
     this.maybeExitLine(e)
   }
 
-  /**
-   * 改字号 / 字体：所有实例一起改，对挂着的那个 fit()。
-   * 【调用方还欠一条 resize】：cell 尺寸变了而容器没变，ResizeObserver 不会响（AC-5.3）。
-   */
-  setFont(f: TermFont): void {
-    for (const e of this.entries.values()) {
-      e.term.term.options.fontSize = f.size
-      e.term.term.options.fontFamily = f.family
-      if (e.opened && e.info.sid === this.activeSid) e.term.fit.fit()
-    }
-  }
-
+  /** 系统切换了深浅色：所有实例一起换（layout.md §主题）。 */
   setTheme(theme: ITheme | undefined): void {
     for (const e of this.entries.values()) e.term.term.options.theme = theme ?? {}
   }

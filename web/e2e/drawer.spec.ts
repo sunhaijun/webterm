@@ -1,8 +1,8 @@
 /**
  * E2E-28 浮层与手机会话抽屉 —— AC-4.10 / AC-5.11 / AC-4.8。
  *
- * 设置与手机会话抽屉共用一个 Drawer：触屏贴底整宽 + 抓手 + 标题栏 + ✕，鼠标设备居中浮窗；
- * 关法一致，且浮层【不挤终端】。触屏抽屉有约 170ms 的进场动画，量矩形前先等它落位。
+ * 手机会话抽屉：贴底整宽 + 抓手 + 标题栏 + ✕，浮层【不挤终端】；会话按钮的方框里是会话数。
+ * 抽屉有约 170ms 的进场动画，量矩形前先等它落位。
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 
@@ -38,12 +38,14 @@ async function termGeo(page: Page) {
 test.describe('Pixel 5', () => {
   test.use(PIXEL)
 
-  test('E2E-28 ①②④ 会话抽屉：贴底整宽、抓手、✕、底部固定行；焦点进浮层；不挤终端', async ({ page }) => {
+  test('E2E-28 ①②④ 会话抽屉：会话数、贴底整宽、抓手、✕、底部固定行；焦点进浮层；不挤终端', async ({ page }) => {
     await agent.open(page)
     await page.waitForTimeout(300) // 让首屏的 resize 防抖落定
     const before = await termGeo(page)
+    const button = page.getByTestId('open-sessions')
+    await expect(button, '会话按钮的方框里是会话数').toHaveText('1')
 
-    await page.getByTestId('open-sessions').click()
+    await button.click()
     await settled(page, 'session-drawer')
     const r = (await rectOf(page, '[data-testid=session-drawer]'))!
     const v = await vp(page)
@@ -52,32 +54,28 @@ test.describe('Pixel 5', () => {
     expect(r.right, '整宽').toBeGreaterThanOrEqual(v.w)
     await expect(page.getByTestId('session-drawer').locator('.drawer-grab'), '触屏有抓手').toBeVisible()
     await expect(page.getByTestId('session-drawer').getByTestId('drawer-close'), '标题栏有 ✕').toBeVisible()
-    // 底部固定一行：新会话 · 设置
+    // 底部固定一行：只有新会话，没有设置（ADR-0030）
     const foot = page.getByTestId('session-drawer').locator('.drawer-foot')
     await expect(foot.getByTestId('new-session')).toBeVisible()
-    await expect(foot.getByTestId('open-settings')).toBeVisible()
+    await expect(foot.locator('button')).toHaveCount(1)
+    await expect(page.getByTestId('open-settings')).toHaveCount(0)
     expect(await activeInDrawer(page), '打开时焦点进浮层').toBe(true)
 
     expect(await termGeo(page), '开抽屉不改终端几何、不发 resize').toEqual(before)
     await page.getByTestId('drawer-close').click()
     await expect(page.getByTestId('session-drawer')).toHaveCount(0)
 
-    // 设置（从抽屉底部进）：同一种壳
+    // 会话数跟着新建 / 关闭即时变
+    const b = await newSession(page)
+    await expect(button, '新建之后').toHaveText('2')
+    page.once('dialog', (d) => d.accept())
     await openDrawer(page)
-    await page.getByTestId('open-settings').click()
-    await expect(page.getByTestId('session-drawer')).toHaveCount(0)
-    await settled(page, 'settings')
-    const s = (await rectOf(page, '[data-testid=settings]'))!
-    expect(Math.abs(s.bottom - v.h), '设置也贴底').toBeLessThanOrEqual(1)
-    await expect(page.getByTestId('settings').locator('.drawer-grab')).toBeVisible()
-    expect(await activeInDrawer(page), '设置打开时焦点进浮层').toBe(true)
-    expect(await termGeo(page), '开设置不改终端几何、不发 resize').toEqual(before)
-
-    // ⑦ 设置内容完整；改字号实时生效
-    await expect(page.getByTestId('theme-select')).toBeVisible()
-    await expect(page.getByTestId('font-family')).toBeVisible()
-    await page.getByTestId('font-size').fill('18')
-    await expect.poll(() => hooks.fontSize(page)).toBe(18)
+    const row = page.getByTestId(`session-${b}`)
+    const box = (await row.boundingBox())!
+    await longPress(page, box.x + box.width / 2, box.y + box.height / 2)
+    await page.getByTestId('session-close').click()
+    await expect(page.getByTestId(`session-${b}`)).toHaveCount(0)
+    await expect(button, '关掉之后').toHaveText('1')
   })
 
   test('E2E-28 ③ 会话抽屉五种关法：遮罩 / Esc / ✕ / 选中会话 / 返回键；历史记录不累积', async ({ page }) => {
@@ -171,36 +169,5 @@ test.describe('Pixel 5', () => {
     await expect(menu).toBeVisible()
     await page.getByTestId('session-menu-scrim').click({ position: { x: 10, y: 10 } })
     await expect(menu).toHaveCount(0)
-  })
-})
-
-test.describe('1440×900 鼠标', () => {
-  test.use({ viewport: { width: 1440, height: 900 }, contextOptions: { screen: { width: 1440, height: 900 } } })
-
-  test('E2E-28 ①④ 设置（Ctrl+Shift+,）是居中浮窗、没有抓手；不挤终端；Esc 关闭', async ({ page }) => {
-    await agent.open(page)
-    await page.waitForTimeout(300)
-    const before = await termGeo(page)
-
-    await focusTerm(page)
-    await page.keyboard.press('Control+Shift+Comma')
-    await expect(page.getByTestId('settings')).toBeVisible()
-    const r = (await rectOf(page, '[data-testid=settings]'))!
-    const v = await vp(page)
-    expect(Math.abs(r.left - (v.w - r.right)), '水平居中').toBeLessThanOrEqual(2)
-    expect(Math.abs(r.top - (v.h - r.bottom)), '垂直居中').toBeLessThanOrEqual(2)
-    expect(r.bottom, '不贴底').toBeLessThan(v.h - 20)
-    await expect(page.getByTestId('settings').locator('.drawer-grab'), '鼠标设备没有抓手').toBeHidden()
-    expect(await activeInDrawer(page), '焦点进浮层').toBe(true)
-    expect(await termGeo(page), '开设置不改终端几何').toEqual(before)
-
-    await expect(page.getByTestId('theme-select')).toBeVisible()
-    await expect(page.getByTestId('font-size')).toBeVisible()
-    await expect(page.getByTestId('font-family')).toBeVisible()
-    await page.getByTestId('font-size').fill('18')
-    await expect.poll(() => hooks.fontSize(page)).toBe(18)
-
-    await page.keyboard.press('Escape')
-    await expect(page.getByTestId('settings')).toHaveCount(0)
   })
 })

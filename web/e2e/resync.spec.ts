@@ -1,12 +1,12 @@
 /**
- * E2E-42 列数变了重发快照 —— AC-2.22 / AC-5.3（ADR-0026 §4）。
+ * E2E-42 列数变了重发快照 —— AC-2.22（ADR-0026 §4）。
  *
  * 两边各自重排的结果不一致，以 agent 的为准：列数一变，agent 先改模拟器尺寸、生成快照发给
  * 订阅者，锁外才 TIOCSWINSZ。只改行数（软键盘）不发快照。
  */
 import { expect, test } from '@playwright/test'
 
-import { Agent, EMIT, count, focusTerm, framesSince, hooks, recordSent, submit, terminalText, waitFor, waitSnapshot, waitText } from './harness'
+import { Agent, EMIT, count, framesSince, hooks, recordSent, submit, terminalText, waitFor, waitSnapshot, waitText } from './harness'
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -14,7 +14,7 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-test('E2E-42 改字号（列数变）→ resize 之后收到快照、终端列数对、内容只有一份；只改高度 → 不发快照', async ({ page }) => {
+test('E2E-42 窗口变窄（列数变）→ resize 之后收到快照、终端列数对、内容只有一份；只改高度 → 不发快照', async ({ page }) => {
   const rec = await recordSent(page)
   await agent.open(page)
   const sid = (await hooks.sid(page))!
@@ -25,15 +25,12 @@ test('E2E-42 改字号（列数变）→ resize 之后收到快照、终端列�
   await page.waitForTimeout(300)
   const before = await hooks.size(page)
 
-  // ② 字号 14 → 18：列数变少
-  await focusTerm(page)
-  await page.keyboard.press('Control+Shift+Comma')
-  await expect(page.getByTestId('settings')).toBeVisible()
-  expect(await hooks.fontSize(page)).toBe(14)
+  // ② 窗口 1280 → 900 宽：列数变少
   await rec.clear()
   const read = await framesSince(page)
-  await page.getByTestId('font-size').fill('18')
-  await page.keyboard.press('Escape')
+  const vp0 = page.viewportSize()!
+  expect(vp0.width).toBe(1280)
+  await page.setViewportSize({ width: 900, height: vp0.height })
 
   await waitFor(async () => (await rec.ctl()).some((m) => m.t === 'resize'), '客户端发出 resize')
   const resize = (await rec.ctl()).find((m) => m.t === 'resize') as unknown as { cols: number; rows: number }

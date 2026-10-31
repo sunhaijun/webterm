@@ -1,7 +1,7 @@
 /**
  * wide（PC / Pad）的顶部标签栏（session-ux.md §wide，参照 Termius）。
  *
- * 从左到右：会话标签、`+`、空白、连接状态点、⚙。标签条（`tabbar`）自己横向滚动，
+ * 从左到右：会话标签、`+`、空白、连接状态点。标签条（`tabbar`）自己横向滚动，
  * 当前标签变化时把它滚进视野（整个已可见则不动，不用 smooth）。切换标签不改终端几何。
  */
 import { useLayoutEffect, useRef } from 'preact/hooks'
@@ -27,7 +27,6 @@ export interface TopBarProps {
   onRenameStart(sid: number): void
   onRename(sid: number, name: string): void
   onCancelRename(): void
-  onSettings(): void
 }
 
 /** 按下标签不抢焦点：焦点留在终端（或文本输入页）里，切过去接着打字。 */
@@ -147,9 +146,6 @@ export function TopBar(p: TopBarProps) {
         </button>
       </div>
       <span class="conn-dot" data-testid="conn-dot" data-state={p.conn} title={dotTitle} aria-hidden="true" />
-      <button class="topbar-btn" data-testid="open-settings" aria-label="设置" title="设置（Ctrl+Shift+,）" onPointerDown={keepFocus} onClick={p.onSettings}>
-        ⚙
-      </button>
     </div>
   )
 }

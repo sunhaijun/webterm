@@ -271,12 +271,10 @@ describe('切换会话', () => {
     expect(sock.msgs('unsubscribe')).toMatchObject([{ sid: 1 }])
   })
 
-  it('wide 上 Ctrl+Shift+B 不做任何事；Ctrl+Shift+, 开关设置', () => {
+  it('wide 上 Ctrl+Shift+B 不做任何事', () => {
     sock.text(welcome([info(1)]))
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'B', ctrlKey: true, shiftKey: true }))
     expect(ctl.get().sessionsOpen).toBe(ctl.get().form === 'compact')
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: '<', ctrlKey: true, shiftKey: true }))
-    expect(ctl.get().settingsOpen).toBe(true)
   })
 
   it('关掉当前会话后切到后一个', () => {

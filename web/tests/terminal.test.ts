@@ -6,12 +6,12 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { SCROLLBACK, createTerminal, exitLine, themeFromCss } from '../src/term/terminal'
+import { FONT_FAMILY, FONT_SIZE, SCROLLBACK, createTerminal, exitLine, themeFromCss } from '../src/term/terminal'
 import { flush, lineText, lines } from './helpers'
 
 const bytes = (...xs: number[]) => new Uint8Array(xs)
 const enc = (s: string) => new TextEncoder().encode(s)
-const mk = () => createTerminal({ size: 14, family: 'monospace' })
+const mk = () => createTerminal()
 
 describe('UT-decode-1 切开的 UTF-8 不丢字', () => {
   it('。…— 各被切在第 2 字节之后、落在不同的 OUTPUT 帧里（E2E-43 的切法）', async () => {
@@ -169,11 +169,20 @@ describe('进程结束提示行（AC-4.5）', () => {
 })
 
 describe('xterm 配置', () => {
-  it('scrollback 至少 5000 行（AC-5.1）；字体是传进来的那一段（AC-5.13）', () => {
-    const h = createTerminal({ size: 14, family: '"JetBrains Mono", monospace' })
+  it('scrollback 至少 5000 行（AC-5.1）', () => {
+    const h = mk()
     expect(SCROLLBACK).toBeGreaterThanOrEqual(5000)
     expect(h.term.options.scrollback).toBe(SCROLLBACK)
-    expect(h.term.options.fontFamily).toBe('"JetBrains Mono", monospace')
+    h.dispose()
+  })
+
+  it('UT-look-1 字号 14px、字体是系统等宽栈，带 CJK 等宽回退（AC-5.3）', () => {
+    const h = mk()
+    expect(FONT_SIZE).toBe(14)
+    expect(h.term.options.fontSize).toBe(14)
+    expect(h.term.options.fontFamily).toBe(FONT_FAMILY)
+    expect(FONT_FAMILY).toMatch(/^ui-monospace, /)
+    expect(FONT_FAMILY).toMatch(/"Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace$/)
     h.dispose()
   })
 

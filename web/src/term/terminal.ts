@@ -21,11 +21,15 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 
 import { detectShift } from './gestures'
 
-/** 终端字体：字号 + 一整段 family stack（AC-5.3 / AC-5.13）。 */
-export interface TermFont {
-  size: number
-  family: string
-}
+/** 终端字号：固定，不提供设置（AC-5.3，ADR-0030）。 */
+export const FONT_SIZE = 14
+
+/**
+ * 终端字体：系统等宽栈，和 CSS 里的 `--font-mono` 是同一串。尾巴是 CJK 等宽回退 ——
+ * 编程字体基本不带汉字，少了它汉字会掉进比例字体，中英混排的列宽当场歪掉。
+ */
+export const FONT_FAMILY =
+  'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace'
 
 /** scrollback 至少 5000 行（AC-5.1）。 */
 export const SCROLLBACK = 5000
@@ -73,10 +77,10 @@ export interface TermHandle {
   dispose(): void
 }
 
-export function createTerminal(font: TermFont, theme?: ITheme): TermHandle {
+export function createTerminal(theme?: ITheme): TermHandle {
   const term = new Terminal({
-    fontSize: font.size,
-    fontFamily: font.family,
+    fontSize: FONT_SIZE,
+    fontFamily: FONT_FAMILY,
     scrollback: SCROLLBACK,
     allowProposedApi: true,
     convertEol: false,

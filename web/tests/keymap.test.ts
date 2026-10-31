@@ -112,8 +112,11 @@ describe('应用级快捷键', () => {
     expect(appAction(key('ArrowDown', { ctrlKey: true, shiftKey: true }))).toBe('nextSession')
     expect(appAction(key('W', { ctrlKey: true, shiftKey: true }))).toBe('closeSession')
     expect(appAction(key('B', { ctrlKey: true, shiftKey: true }))).toBe('toggleSessions')
-    expect(appAction(key('<', { ctrlKey: true, shiftKey: true }))).toBe('settings')
-    expect(appAction(key(',', { ctrlKey: true, shiftKey: true }))).toBe('settings')
+  })
+
+  it('UT-look-1 Ctrl+Shift+, 不再是快捷键（没有设置，ADR-0030），交给终端', () => {
+    expect(appAction(key('<', { ctrlKey: true, shiftKey: true }))).toBeNull()
+    expect(appAction(key(',', { ctrlKey: true, shiftKey: true }))).toBeNull()
   })
 
   it('Ctrl+Alt+* 不当快捷键（Windows / 欧洲键盘上是 AltGr）', () => {

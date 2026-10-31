@@ -10,10 +10,8 @@ import type { TextSend } from '../keys/textpage'
 import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, displayName, routeInput, type SessionView } from '../sessions/store'
 import { installDragWheel, installTapToggle } from '../term/gestures'
-import { themeFromCss, type TermFont } from '../term/terminal'
+import { themeFromCss } from '../term/terminal'
 import { inUserInputEvent } from '../term/userinput'
-import { fontStack, readFontFamily, writeFontFamily } from '../ui/fonts'
-import { applyTheme, readFontSize, readTheme, validFontSize, writeFontSize, type Theme } from '../ui/prefs'
 import { debounce, installAppFit, isCoarsePointer, watchCoarse } from '../ui/viewport'
 import { readForm, type Form } from './form'
 
@@ -47,12 +45,8 @@ export interface AppState {
   maxSessions: number
   toast: Toast | null
   preview: ImePreviewState | null
-  theme: Theme
-  fontSize: number
-  fontFamily: string
   /** compact 的会话抽屉。 */
   sessionsOpen: boolean
-  settingsOpen: boolean
 }
 
 /** 打开抽屉之前焦点在哪（AC-4.8：选中会话后按它恢复）。 */
@@ -98,9 +92,8 @@ export class AppController {
     } = {},
   ) {
     this.authProbe = opts.authProbe ?? (() => fetch('/api/devices', { credentials: 'same-origin' }).then((r) => r.status))
-    const form = readForm()
     this.state = {
-      form,
+      form: readForm(),
       coarse: isCoarsePointer(),
       conn: 'connecting',
       connInfo: {},
@@ -113,11 +106,7 @@ export class AppController {
       maxSessions: 20,
       toast: null,
       preview: null,
-      theme: readTheme(),
-      fontSize: readFontSize(form),
-      fontFamily: readFontFamily(),
       sessionsOpen: false,
-      settingsOpen: false,
     }
     this.conn = new Connection({
       url: opts.url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
@@ -149,7 +138,6 @@ export class AppController {
       onData: (sid, data) => this.onTermData(sid, data),
       onBinary: (sid, data) => this.onTermBinary(sid, data),
       allowKey: (e) => appAction(e) === null,
-      font: () => this.font(),
       theme: () => cssTheme(),
     })
   }
@@ -172,10 +160,6 @@ export class AppController {
 
   private refresh(): void {
     this.set({ sessions: this.store.list(), active: this.store.active })
-  }
-
-  private font(): TermFont {
-    return { size: this.state.fontSize, family: fontStack(this.state.fontFamily) }
   }
 
   private toast(kind: Toast['kind'], text: string): void {
@@ -214,7 +198,6 @@ export class AppController {
   /** 终端容器与 `.app` 就位之后调用一次。返回卸载函数。 */
   mount(area: HTMLElement, root: HTMLElement): () => void {
     this.area = area
-    applyTheme(this.state.theme)
 
     // 【只在容器尺寸真的变了才 fit】：ResizeObserver 会因内容变化、亚像素抖动反复触发
     const ro = new ResizeObserver(() => this.measure())
@@ -255,6 +238,7 @@ export class AppController {
     })
     const undrag = installDragWheel(area, () => this.activeTerm() ?? null)
 
+    // 主题只跟随系统（AC-5.3）：系统切深浅色时 CSS 变量已经变了，xterm 的要重读一遍
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
     const onScheme = () => this.store.setTheme(cssTheme())
     mq?.addEventListener('change', onScheme)
@@ -361,7 +345,7 @@ export class AppController {
 
   openSessions(): void {
     this.drawerFocus = this.focusPlace()
-    this.set({ sessionsOpen: true, settingsOpen: false })
+    this.set({ sessionsOpen: true })
   }
 
   closeSessions(): void {
@@ -380,14 +364,6 @@ export class AppController {
     const place = this.drawerFocus
     this.set({ sessionsOpen: false })
     this.newSession(place === 'term' || !this.state.coarse)
-  }
-
-  openSettings(): void {
-    this.set({ settingsOpen: true, sessionsOpen: false })
-  }
-
-  closeSettings(): void {
-    this.set({ settingsOpen: false })
   }
 
   // ---------- 输入 ----------
@@ -476,10 +452,6 @@ export class AppController {
           else this.openSessions()
         }
         break
-      case 'settings':
-        if (this.state.settingsOpen) this.closeSettings()
-        else this.openSettings()
-        break
     }
   }
 
@@ -512,43 +484,15 @@ export class AppController {
     return { text, left: s.left - g.left + pos.left, top: s.top - g.top + pos.top }
   }
 
-  // ---------- 偏好 ----------
-
-  /** 改字号：按形态存；所有实例一起换 → fit → 补一条 resize（AC-5.3）。 */
-  setFontSize(n: number): void {
-    if (!validFontSize(n) || n === this.state.fontSize) return
-    writeFontSize(this.state.form, n)
-    this.set({ fontSize: n })
-    this.store.setFont(this.font())
-    this.measure(true)
-  }
-
-  setFontFamily(id: string): void {
-    if (id === this.state.fontFamily) return
-    writeFontFamily(id)
-    this.set({ fontFamily: id })
-    this.store.setFont(this.font())
-    this.measure(true)
-  }
-
-  setTheme(theme: Theme): void {
-    applyTheme(theme)
-    this.set({ theme })
-    this.store.setTheme(cssTheme())
-  }
-
   // ---------- 尺寸 ----------
 
-  /**
-   * 容器尺寸变了 → fit → 防抖发 resize。`force`：容器没变但 cell 变了（改字号 / 字体），
-   * 尺寸去重会把整次量算吞掉，客户端与 PTY 的 cols/rows 就分了家。
-   */
-  private measure(force = false): void {
+  /** 容器尺寸变了 → fit → 防抖发 resize。cell 尺寸运行时不变（字号字体固定），只看容器。 */
+  private measure(): void {
     const area = this.area
     if (!area) return
     const w = area.clientWidth
     const h = area.clientHeight
-    if (!force && w === this.lastW && h === this.lastH) return
+    if (w === this.lastW && h === this.lastH) return
     this.lastW = w
     this.lastH = h
     const t = this.activeTerm()
@@ -676,8 +620,6 @@ export class AppController {
       resizes: () => this.resizeCount,
       sid: () => this.store.active,
       form: () => this.state.form,
-      fontSize: () => term()?.options.fontSize ?? 0,
-      fontFamily: () => term()?.options.fontFamily ?? '',
       altScreen: () => this.activeTerm()?.altScreen() ?? false,
       unread: (sid: number) => this.conn.isUnread(sid),
       /** 最近收到的二进制帧 `{type, kind, sid, seq, flags, bytes, replay}`。 */
