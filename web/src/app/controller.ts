@@ -9,7 +9,7 @@ import { RawIme, cursorPosition } from '../keys/raw'
 import type { TextSend } from '../keys/textpage'
 import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, displayName, routeInput, type SessionView } from '../sessions/store'
-import { installTapToggle } from '../term/gestures'
+import { installDragWheel, installTapToggle } from '../term/gestures'
 import { themeFromCss, type TermFont } from '../term/terminal'
 import { inUserInputEvent } from '../term/userinput'
 import { fontStack, readFontFamily, writeFontFamily } from '../ui/fonts'
@@ -253,6 +253,7 @@ export class AppController {
         blur: () => t.term.blur(),
       }
     })
+    const undrag = installDragWheel(area, () => this.activeTerm() ?? null)
 
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
     const onScheme = () => this.store.setTheme(cssTheme())
@@ -271,6 +272,7 @@ export class AppController {
       unfit()
       uncoarse()
       untap()
+      undrag()
       this.sendResize.cancel()
       this.ime?.dispose()
       this.conn.close()

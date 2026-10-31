@@ -10,13 +10,16 @@
  * 【先解码成字符串再写】。xterm.js 5.5 的 `write(Uint8Array)` 在一个三字节字符被切进
  * 两次写入、且第 2 字节是 0x80、切在第 2 字节之后时会丢掉整个字符（`。` `…` `—`）。
  *
- * 渲染器用 xterm 默认的 DOM 渲染器；触屏滚动用 xterm 自带的。不做回看暂停、
+ * 渲染器用 xterm 默认的 DOM 渲染器；触屏滚动用 xterm 自带的（程序开了鼠标跟踪时
+ * 纵向拖转成滚轮，标定步长在这里做，ADR-0029）。不做回看暂停、
  * 按帧合并、写入预算 —— 都等量过 E2E-37 的基线再说。
  */
-import { Terminal, type ITheme } from '@xterm/xterm'
+import { Terminal, type IDisposable, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
+
+import { detectShift } from './gestures'
 
 /** 终端字体：字号 + 一整段 family stack（AC-5.3 / AC-5.13）。 */
 export interface TermFont {
@@ -34,6 +37,9 @@ export const SCROLLBACK = 5000
  * RIS 走的是同一条写入队列，顺序天然正确，效果与 `term.reset()` 相同。
  */
 export const RIS = '\x1bc'
+
+/** 标定最多等多久（ADR-0029）：程序这么久没重画出可认的位移，就沿用旧步长。 */
+export const CALIBRATE_MS = 300
 
 export interface TermHandle {
   term: Terminal
@@ -54,6 +60,16 @@ export interface TermHandle {
   altScreen(): boolean
   /** 前台程序开了鼠标跟踪。 */
   mouseTracking(): boolean
+  /** 一行的高度（px）。 */
+  rowHeight(): number
+  /** 前台程序一次滚轮滚几行（ADR-0029 标定出来的；没量过按 3）。 */
+  wheelStep(): number
+  /** 正在等标定结果。 */
+  calibrating(): boolean
+  /** 最近一次标定认出了位移。 */
+  calibrated(): boolean
+  /** 在视口坐标 (x, y) 处发一次滚轮（ADR-0029）；up = 向上滚；calibrate = 顺便量程序滚了几行。 */
+  wheel(up: boolean, x: number, y: number, calibrate: boolean): void
   dispose(): void
 }
 
@@ -81,6 +97,22 @@ export function createTerminal(font: TermFont, theme?: ITheme): TermHandle {
   let replayDepth = 0
   /** 每来一份快照加一：快照之前排下的本地行作废。 */
   let generation = 0
+  /** 前台程序一次滚轮滚几行（ADR-0029）；没量过时按多数程序的默认值 3。 */
+  let wheelStep = 3
+  /** 正在进行的标定：等程序重画回来看屏幕挪了几行。 */
+  let probe: { sub: IDisposable; timer: ReturnType<typeof setTimeout> } | null = null
+  /** 最近一次标定认出了位移。 */
+  let probeOk = false
+  const endProbe = () => {
+    if (!probe) return
+    probe.sub.dispose()
+    clearTimeout(probe.timer)
+    probe = null
+  }
+  const visibleRows = () => {
+    const b = term.buffer.active
+    return Array.from({ length: term.rows }, (_, i) => b.getLine(b.viewportY + i)?.translateToString(true) ?? '')
+  }
 
   const writeReplay = (s: string) => {
     // 【窗口在入队时就开，解析完才关】：xterm 是分片异步解析的，同步关门会漏掉之后
@@ -121,7 +153,43 @@ export function createTerminal(font: TermFont, theme?: ITheme): TermHandle {
     replaying: () => replayDepth > 0,
     altScreen: () => term.buffer.active.type === 'alternate',
     mouseTracking: () => term.modes.mouseTrackingMode !== 'none',
+    rowHeight() {
+      const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
+      return Math.max((screen?.getBoundingClientRect().height ?? 0) / Math.max(term.rows, 1), 1)
+    },
+    wheelStep: () => wheelStep,
+    calibrating: () => probe !== null,
+    calibrated: () => probeOk,
+    wheel(up, x, y, calibrate) {
+      if (calibrate && !probe) {
+        probeOk = false
+        // 发之前记下屏幕；之后每次写入解析完比一次，认出位移就是步长。量不到就沿用旧值
+        const before = visibleRows()
+        const sub = term.onWriteParsed(() => {
+          const k = detectShift(before, visibleRows(), up)
+          if (k > 0) {
+            wheelStep = k
+            probeOk = true
+            endProbe()
+          }
+        })
+        probe = { sub, timer: setTimeout(endProbe, CALIBRATE_MS) }
+      }
+      // 交给 xterm 自己的鼠标跟踪路径：一个 DOM_DELTA_LINE 的滚轮就是一次上报，
+      // 编码（X10 / SGR / URXVT）与行列都按程序要的协议算
+      term.element?.dispatchEvent(
+        new WheelEvent('wheel', {
+          deltaY: up ? -1 : 1,
+          deltaMode: WheelEvent.DOM_DELTA_LINE,
+          clientX: x,
+          clientY: y,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+    },
     dispose() {
+      endProbe()
       term.dispose()
     },
   }
