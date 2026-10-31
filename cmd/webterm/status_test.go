@@ -76,6 +76,28 @@ func TestRenderStatus(t *testing.T) {
 			nil,
 		},
 		{
+			// ADR-0034：系统服务没在跑，启动命令要带 sudo
+			"系统服务没在跑",
+			status{running: false, unit: unitSystem, url: "https://x.example.com"},
+			[]string{"未运行", "sudo systemctl start webterm"},
+			[]string{"--user", "迁移"},
+		},
+		{
+			// ADR-0034：还是用户服务 → 说清代价，并给出迁移命令（只提示，不替用户做）
+			"还是用户服务",
+			status{running: true, runningVia: "systemd", unit: unitUser,
+				url: "https://x.example.com", certOK: true, certExpiry: now.AddDate(0, 0, 89), devices: 1},
+			[]string{"用户服务", "先被杀", "webterm update --force-restart", "从 SSH 跑"},
+			nil,
+		},
+		{
+			"系统服务正常",
+			status{running: true, runningVia: "systemd", unit: unitSystem,
+				url: "https://x.example.com", certOK: true, certExpiry: now.AddDate(0, 0, 89), devices: 1},
+			[]string{"运行中（systemd）"},
+			[]string{"用户服务", "迁移"},
+		},
+		{
 			"还没配域名（连 --dev 都没跑过）",
 			status{running: false},
 			[]string{"还没配域名", "install.sh"},

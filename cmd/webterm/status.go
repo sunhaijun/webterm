@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -29,7 +28,8 @@ import (
 // status 是总览要用到的全部事实。取数据与渲染分开，渲染就能当纯函数测。
 type status struct {
 	running    bool
-	runningVia string // "systemd" 或 "" —— 只是为了让"怎么知道的"透明
+	runningVia string   // "systemd" 或 "" —— 只是为了让"怎么知道的"透明
+	unit       unitKind // 装的是哪种 systemd 单元：决定提示里的命令，以及要不要提示迁移
 	url        string
 	certOK     bool
 	certExpiry time.Time
@@ -81,7 +81,8 @@ func collectStatus() status {
 		}
 	}
 
-	st.running, st.runningVia = probeRunning(c.domain, *httpPort, *httpsPort)
+	st.unit = detectUnit()
+	st.running, st.runningVia = probeRunning(st.unit, c.domain, *httpPort, *httpsPort)
 
 	if c.domain != "" {
 		if exp, ok := certExpiryFromCache(agent.CertDirDefault(c.dataDir), c.domain); ok {
@@ -99,17 +100,15 @@ func collectStatus() status {
 
 // probeRunning 判断服务在不在跑。
 //
-// 先问 systemd（装出来的部署都走 user service，那是最可靠的答案）。
+// 先问 systemd（装出来的部署都有单元：ADR-0034 起是系统服务，之前是用户服务），
+// 那是最可靠的答案。
 //
-// 没有 systemd 单元时退化成探 /healthz。【不能只看端口有没有人听】——
+// 单元没在跑、或者根本没有单元时退化成探 /healthz（手工 webterm serve 也算在跑）。【不能只看端口有没有人听】——
 // 443 上很可能是别的服务（这个坑真踩过：探到的是 Xray），
 // 而 /healthz 返回 "ok" 是 webterm 特有的。
-func probeRunning(domain string, httpPort, httpsPort int) (bool, string) {
-	if out, err := exec.Command("systemctl", "--user", "is-active", "webterm").Output(); err == nil {
-		if strings.TrimSpace(string(out)) == "active" {
-			return true, "systemd"
-		}
-		return false, "systemd"
+func probeRunning(unit unitKind, domain string, httpPort, httpsPort int) (bool, string) {
+	if unit.active() {
+		return true, "systemd"
 	}
 	// 生产：HTTPS 端口跑完整路由（:80 只有挑战和跳转）。
 	//
@@ -210,6 +209,8 @@ func renderStatus(st status, ver string, now time.Time, color bool) string {
 	row := func(k, v string) { fmt.Fprintf(&b, "  %-6s  %s\n", k, v) }
 
 	switch {
+	case st.running && st.runningVia != "" && st.unit == unitUser:
+		row("服务", "运行中（systemd 用户服务 —— 内存吃紧时会比登录会话先被杀）")
 	case st.running && st.runningVia != "":
 		row("服务", "运行中（systemd）")
 	case st.running:
@@ -253,7 +254,15 @@ func renderStatus(st status, ver string, now time.Time, color bool) string {
 
 	b.WriteString("\n")
 	if !st.running {
-		b.WriteString("  webterm serve      启动服务（装过的话用 systemctl --user start webterm）\n")
+		if st.unit == unitNone {
+			b.WriteString("  webterm serve      启动服务\n")
+		} else {
+			fmt.Fprintf(&b, "  %-18s 启动服务\n", st.unit.ctl("start"))
+		}
+	}
+	if st.unit == unitUser {
+		// ADR-0034：迁移会关闭所有会话一次，所以只提示、不替用户做
+		b.WriteString("  webterm update --force-restart   迁移成系统服务（会关闭所有会话一次，从 SSH 跑）\n")
 	}
 	if st.devices == 0 {
 		b.WriteString("  webterm pair       拿配对码 + 二维码，手机扫一下完成授权  ← 下一步\n")

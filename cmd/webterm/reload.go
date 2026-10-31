@@ -40,7 +40,7 @@ func runReload(args []string) error {
 			return fmt.Errorf("运行中的 agent 不支持热升级或没在跑：%v", err)
 		}
 		return fmt.Errorf("运行中的 agent 不支持热升级或没在跑（%v）。\n"+
-			"  升级前的老版本不认这条路，只能 systemctl --user restart webterm（会关闭所有会话）", err)
+			"  升级前的老版本不认这条路，只能 %s（会关闭所有会话）", err, detectUnit().ctl("restart"))
 	}
 	if *probe {
 		fmt.Printf("ok version=%s pid=%d generation=%d sessions=%d busy=%d\n", st.Version, st.PID, st.Generation, st.Sessions, st.Busy)
@@ -122,12 +122,13 @@ func waitTakeover(sock string, before *agent.ControlStatus, timeout time.Duratio
 			return nil
 		}
 		if st.LastError != "" && st.Generation == before.Generation {
-			return fmt.Errorf("agent 中止了热升级：%s\n  会话照常，服务未重启。修好后重试，或接受丢会话：systemctl --user restart webterm", st.LastError)
+			return fmt.Errorf("agent 中止了热升级：%s\n  会话照常，服务未重启。修好后重试，或接受丢会话：%s", st.LastError, detectUnit().ctl("restart"))
 		}
 	}
 	st, err := controlStatus(sock)
+	u := detectUnit()
 	if err == nil && st.Generation == before.Generation {
-		return errors.New("agent 没有完成热升级（看 journalctl --user -u webterm -n 50）。会话照常，服务未重启")
+		return fmt.Errorf("agent 没有完成热升级（看 %s -n 50）。会话照常，服务未重启", u.journal())
 	}
-	return errors.New("热升级后 30 秒内没等到新进程应答。看 systemctl --user status webterm 与 journalctl --user -u webterm -n 50")
+	return fmt.Errorf("热升级后 30 秒内没等到新进程应答。看 %s 与 %s -n 50", u.ctl("status"), u.journal())
 }
