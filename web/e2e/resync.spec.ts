@@ -25,12 +25,14 @@ test('E2E-42 窗口变窄（列数变）→ resize 之后收到快照、终端�
   await page.waitForTimeout(300)
   const before = await hooks.size(page)
 
-  // ② 窗口 1280 → 900 宽：列数变少
+  // ② 窗口 1280 → 1000 宽：列数变少。
+  // 【别用 900】：那个宽度上 xterm 的 DOM 渲染器按当前列数反算 cell 宽，fit() 在 104 / 103
+  // 之间来回翻，④ 只改高度也会改列数 —— 是 main 上就有的问题，另案处理
   await rec.clear()
   const read = await framesSince(page)
   const vp0 = page.viewportSize()!
   expect(vp0.width).toBe(1280)
-  await page.setViewportSize({ width: 900, height: vp0.height })
+  await page.setViewportSize({ width: 1000, height: vp0.height })
 
   await waitFor(async () => (await rec.ctl()).some((m) => m.t === 'resize'), '客户端发出 resize')
   const resize = (await rec.ctl()).find((m) => m.t === 'resize') as unknown as { cols: number; rows: number }

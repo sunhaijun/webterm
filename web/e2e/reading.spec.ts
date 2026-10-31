@@ -147,16 +147,21 @@ test.describe('E2E-12 阅读输出（1440×900）', () => {
   test('② 外观跟随系统、不刷新就换；字号 14px；没有设置入口，Ctrl+Shift+, 不弹东西（AC-5.3）', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'light' })
     await agent.open(page)
+    // 终端区看到的底色是 .stage 的；xterm 自己的主题（ANSI 色、反色单元格用得上）写在
+    // .xterm-viewport 的内联样式里（CSS 把它的背景压成透明）
     const bg = () =>
       page.evaluate(() => ({
         body: getComputedStyle(document.body).backgroundColor,
-        term: getComputedStyle(document.querySelector('.xterm-viewport')!).backgroundColor,
+        stage: getComputedStyle(document.querySelector('.stage')!).backgroundColor,
+        xterm: document.querySelector<HTMLElement>('.xterm-viewport')!.style.backgroundColor,
       }))
-    expect(await bg(), '浅色：--bg / --term-bg').toEqual({ body: 'rgb(255, 255, 255)', term: 'rgb(251, 251, 252)' })
+    const light = 'rgb(251, 251, 252)'
+    const dark = 'rgb(13, 17, 23)'
+    expect(await bg(), '浅色：--bg / --term-bg').toEqual({ body: 'rgb(255, 255, 255)', stage: light, xterm: light })
     await page.emulateMedia({ colorScheme: 'dark' })
     await expect
       .poll(bg, { message: '系统切到深色：界面与 xterm 一起变，不用刷新' })
-      .toEqual({ body: 'rgb(13, 17, 23)', term: 'rgb(13, 17, 23)' })
+      .toEqual({ body: dark, stage: dark, xterm: dark })
 
     expect(await page.evaluate(() => getComputedStyle(document.querySelector('.xterm-rows')!).fontSize)).toBe('14px')
 
