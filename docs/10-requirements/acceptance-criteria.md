@@ -70,6 +70,7 @@
 | AC-3.18 | **附加键**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §2）：`compact` 恒显示、`wide` 在 `pointer: coarse` 时显示；两行共 14 个键，依次为 `ESC / - HOME ↑ END PGUP` 与 `TAB CTRL ALT ← ↓ → PGDN`，**不随前台程序、提示符状态变**；393px 宽下全部可见、不横向滚动；按键在 `pointerdown` 时 `preventDefault`，按下前后 `document.activeElement` 不变；字节走 `onData` 出口（计入 `inputStats`）；CTRL / ALT 点一下只对下一个键生效（含软键盘输入的下一个字符），长按锁定，再点解锁，激活与锁定有 `data-sticky` 与高亮 | UT-keys-1, E2E-10 |
 | AC-3.19 | **文本输入页**：点 ✎ 或在键区左右滑动切换，切换前后终端行列数不变、不发 `resize`；回车：组字中不处理，有内容 = 内容走 `term.paste()`（对端开了括号粘贴就包裹，换行转 `CR`）、**紧跟一个 `\r`**、清空，空 = 发 `\r`，回车不在框里插入换行；都走 `onData`（计入 `inputStats`）；发完留在文本页且焦点不变（[ADR-0027](../20-architecture/adr/0027-text-page-enter-submits.md)）；文本框四边都有边框，整个落在附加键槽内 | UT-textinput-1, E2E-40 |
 | AC-3.20 | **点按终端**：前台程序开了鼠标跟踪时点击交给 xterm 上报；没开时切换软键盘（终端有焦点则失焦，没有则聚焦），聚焦发生在这次触摸的处理函数里；位移 ≥ 10px 的是拖动，不算点 | E2E-10 |
+| AC-3.21 | **触屏纵向拖**（[ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md)）：前台程序开了鼠标跟踪时，位移满 10px 且纵向占优的拖动转成滚轮，**跟手**：每次拖动先发一次滚轮并量出程序一次滚几行（步长；量到前位移先攒着，最多 300ms；量不到的那一下当作没挪、下一下再量，最多 2 次），之后手指每移动「步长 × 行高」发一次，内容移动的行数与手指移动的行数相差不超过一个步长；一次 `touchmove` 最多 3 次、超出的丢掉；手指向下 = 滚轮向上，上报的行列是手指所在格，编码按程序的协议；转换期间 `touchmove` 被 `preventDefault`；横向拖与「点一下」不发滚轮。没开鼠标跟踪时不变：主屏是 xterm 的触摸滚动，备用屏不动、不发方向键 | UT-touch-1, E2E-44 |
 
 ---
 
