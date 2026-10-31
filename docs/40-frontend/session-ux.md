@@ -88,7 +88,7 @@ agent 的回答只有两种（[协议 §5.1](../30-protocol/websocket-protocol.m
 ```
 
 - 抽屉就是 `Drawer` 原语（[layout.md](layout.md#浮层)）：贴底整宽的 sheet，`data-testid="session-drawer"`。**高度至少半屏**（50vh，最多 80vh），会话少的时候多出来的高度给列表。
-- 列表（`session-list`）一行一个会话（`session-<sid>`）：编号 `[n]`（按创建顺序，从 1 开始，关掉中间的会话后后面的顺延）、名字、CWD 或退出码、未读点。开着保持接收的会话名前有一个 `⇵` 标记。行高 52px。
+- 列表（`session-list`）一行一个会话（`session-<sid>`）：编号 `[n]`（按当前顺序，从 1 开始，关掉中间的会话后后面的顺延；顺序可以拖，见 [§排序](#排序ac-413)）、名字、CWD 或退出码、未读点。开着保持接收的会话名前有一个 `⇵` 标记。行高 52px。
 - 底部固定一行：`+ 新会话`（`new-session`，占满剩下的宽度）与设置（`open-settings`，48px 的方形按钮，⚙ 图标）。两个都是带细边的圆角块，四周留白，不贴 sheet 的边（[layout.md §浮层](layout.md#浮层)）。点设置 = 关掉抽屉、打开设置（[layout.md §设置](layout.md#设置ac-53)）。
 - 点一行 = 切过去并关闭抽屉。**左滑或长按一行 = 露出这一行的按钮**（见 [§行操作](#行操作compact)）。
 - **关闭抽屉**：点遮罩、选中一个会话、`Esc`、✕、系统返回键；下滑只作加速。
@@ -138,6 +138,26 @@ agent 的回答只有两种（[协议 §5.1](../30-protocol/websocket-protocol.m
 - 点按钮后先关上这一行，再做事。
 
 **改名 sheet**（`rename-sheet`）：叠在抽屉上的小 sheet，只有一个整行宽的输入框（`rename-input`，16px，打开时选中全部）和「取消 / 保存」（`rename-cancel` / `rename-ok`）。`Enter` 或保存确认，留空恢复跟随目录自动命名；`Esc`、✕、点遮罩、下滑、取消都是取消。失焦不算取消。sheet 贴着键盘上沿（[layout.md §浮层](layout.md#浮层)），输入框不会被挡。
+
+### 排序（AC-4.13）
+
+会话可以拖动调整顺序，顺序存在 agent 上，所有设备一样，刷新、热升级后不变（[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)，协议 `session.move` / `session.order`）。
+
+| 在哪 | 怎么开始拖 |
+|---|---|
+| `wide` 标签栏，鼠标 | 按住标签横移 > 5px |
+| `wide` 标签栏，触屏 | 长按标签后不松手直接移动（原地松手仍是会话菜单） |
+| `compact` 抽屉 | 按住一行右端的拖动柄（`≡`，`session-<sid>-grip`，44px 宽） |
+
+```
+│ [1] webterm     ~/github/webterm   ≡ │  ← ≡ 是拖动柄；行的其余部分照旧点、左滑、长按
+```
+
+- 被拖的那一项跟着指针、带阴影浮起，其余项让位；松手插到指针处。位置没变不发消息。
+- 拖完的那次 `click` 吞掉，不切会话；`Esc` 取消拖动。
+- 可滚动的标签条、抽屉列表：指针到边缘 32px 以内自动朝那边滚。
+- 松手立刻按新顺序显示，同时发 `session.move`；收到 `session.order` 以它为准。
+- `[n]`、`Ctrl+Shift+↑/↓`、关掉当前会话后切到相邻的，都按当前顺序。
 
 ### 会话菜单（wide）
 

@@ -614,3 +614,14 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 - PWA 真机安装
 - Android 系统返回键（E2E 用 `page.goBack()` 模拟）
 - 触觉反馈
+
+## E2E-45 拖动排序（AC-4.13）
+
+> `web/e2e/order.spec.ts`。[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)。
+
+1. **wide 鼠标**（1440×900）：建到 3 个会话 A B C → 鼠标按住 C 的标签往左拖过 A 的中线松手 → 标签顺序是 C A B，当前会话不变（拖完不切换）；发出一条 `session.move{sid: C, before: A}`，随后收到 `session.order{sids: [C, A, B]}`；按住 B 横移 3px 松手 → 只是点击（切到 B），不发 `session.move`
+2. **拖到一半按 Esc**：按住 A 往右拖过 B，不松手按 `Esc` → 回到原位，松手后不发 `session.move`
+3. **顺序在 agent 上**：刷新页面 → 仍是 C A B；再开第二个 browser context（第二台设备）→ 它的标签顺序也是 C A B；在第一个里再拖一次（A 拖到最后）→ 第二个不刷新就变成 C B A
+4. **compact 拖动柄**（Pixel 5）：同一个 agent 上，打开抽屉 → 每行右端有 `session-<sid>-grip`；触摸按住最后一行的柄往上拖到第一行上方松手 → 它成为第一行、编号 `[1]`；按住一行的正文纵向拖 → 是滚动列表，顺序不变
+5. **触屏 Pad**（iPad Mini）：长按一个标签 500ms 后不松手横移过相邻标签再松手 → 顺序变了、不出现 `session-menu`；长按后原地松手 → 出现 `session-menu`
+6. **键盘切换按新顺序**：顺序是 C B A、当前是 C → `Ctrl+Shift+↓` 到 B

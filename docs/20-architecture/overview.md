@@ -199,4 +199,6 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0035](adr/0035-tabbar-new-button-pinned.md) | 标签栏的 `+` 移出滚动条：常驻可见、与标签隔开、与状态点对齐 |
 | [0036](adr/0036-text-page-per-session.md) | 文本输入页跟着会话走：每个会话各记页与草稿 |
 | [0037](adr/0037-settings-theme-and-font-size.md) | 设置回来，只有主题与终端字号；浮层按形态分；会话抽屉有最小高度与底部留白 |
-| [0038](adr/0038-close-confirm-sheet.md) | 关闭确认不用浏览器的 `confirm()`，用自己的浮层 |
+| [0038](adr/0038-close-confirm-sheet.md) | 关闭确认不用浏览器的 `confirm()`，用自己的浮层；关闭中的会话不再收东西 |
+| [0039](adr/0039-drawer-row-swipe-actions.md) | 手机会话列表左滑出按钮；改名用一张小 sheet；浮层跟着可视区走 |
+| [0040](adr/0040-session-order-drag.md) | 会话可以拖动排序，顺序存在 agent 上（协议加 `session.move` / `session.order`） |

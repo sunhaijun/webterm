@@ -182,6 +182,18 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 
 设置后该会话**停止**跟随 CWD 自动改名。`name` 传 `null` 恢复自动改名。
 
+#### `session.move`
+
+```json
+{ "t": "session.move", "req_id": "r4", "sid": 3, "before": 1 }
+```
+
+把会话 `sid` 挪到会话 `before` 的前面；`before` 为 `null` 时挪到最后（[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)）。
+
+- `sid` 不存在 → `error{code:"unknown_session"}`。
+- `before` 不存在（比如刚被别处关掉）或等于 `sid` → 当作 `null`，挪到最后 / 原地不动。不报错。
+- 成功后广播 `session.order`（§4.2），**位置没变也广播**，发起方据此确认。
+
 #### `subscribe` / `unsubscribe`
 
 ```json
@@ -259,6 +271,8 @@ client 侧做 100ms 防抖。agent：
 | `snapshot` | 发快照 | 等 SNAPSHOT 帧（§3）；`from_seq` = 快照的 `seq` |
 | `gone` | 该 sid 已不存在（会话已销毁 / `instance_id` 不符） | 移除该会话的 UI，提示"会话已结束" |
 
+**`sessions[]` 的顺序就是会话的显示顺序**（[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)）：新建的排在最后，`session.move` 可以调整。client 照这个顺序显示，不自己排序。
+
 `home` 是 agent 用户的家目录，client 用它把 CWD 缩写成 `~`（cwd 等于它或以 `home + "/"` 开头时）。没有这个字段时不缩写。
 
 `resumed[].in_ack` 是 agent 对 **该 `client_id`** 在该会话上已写入 PTY 的累计字节数（§5.4）。**client 必须据此裁剪重发队列，并重发其后的全部输入。**
@@ -277,6 +291,14 @@ client 侧做 100ms 防抖。agent：
 - `session.updated` 只包含**发生变化的字段** + `sid`。client 做增量合并
 - `cwd` 来自 agent 每秒读一次 `/proc/<前台进程组>/cwd`，变了才发；`name_is_manual == false` 时 `name` 跟着变（AC-4.4）
 - **会话退出**：`session.updated{status:"exited", exit_code, head_seq}` 一定排在该会话**最后一个 OUTPUT 之后**（agent 等 PTY 读到 EOF 再发，最多等 500 ms —— 后台进程占着 PTY 时 EOF 不会来）。`head_seq` 是最终的输出总量：client 的 `out_seq` 追到它，才说明输出收齐了
+
+#### `session.order`
+
+```json
+{ "t": "session.order", "req_id": "r4", "sids": [3, 1, 2] }
+```
+
+`session.move` 成功后广播给所有连接，`req_id` 只在发起方的副本上。`sids` 是**完整的**显示顺序，client 整个替换自己的顺序。新建、关闭会话不发它：新建的排在最后，关掉的直接去掉，两边各自推得出来。
 
 #### `ack`
 
