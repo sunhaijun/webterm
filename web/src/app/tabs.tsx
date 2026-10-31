@@ -1,9 +1,10 @@
 /**
  * wide（PC / Pad）的顶部标签栏（session-ux.md §wide，参照 Termius）。
  *
- * 从左到右：会话标签、`+`、空白、连接状态点。标签等分标签条的宽度（120–240px，纯 CSS，
+ * 从左到右：标签条（只装标签）、`+`、空白、连接状态点。标签等宽（120–240px，纯 CSS，
  * ADR-0031）；放不下时标签条横向滚动，当前标签变化时把它滚进视野（整个已可见则不动，
- * 不用 smooth）。切换标签不改终端几何。
+ * 不用 smooth）。`+` 不在标签条里，放不下时也始终可见，前面隔开一段不可点的空白（ADR-0035）。
+ * 切换标签不改终端几何。
  */
 import { useLayoutEffect, useRef } from 'preact/hooks'
 
@@ -30,7 +31,10 @@ export interface TopBarProps {
   onCancelRename(): void
 }
 
-/** 按下标签不抢焦点：焦点留在终端（或文本输入页）里，切过去接着打字。 */
+/**
+ * 按下顶栏的任何地方（标签、`+`、`+` 前的空白）都不抢焦点：焦点留在终端（或文本输入页）里，
+ * 切过去接着打字。改名的输入框除外。挂在 `.topbar` 上，冒泡上来的一并处理。
+ */
 const keepFocus = (e: PointerEvent) => {
   if ((e.target as Element).closest('input')) return
   e.preventDefault()
@@ -69,7 +73,7 @@ export function TopBar(p: TopBarProps) {
   const dotTitle = p.conn === 'online' && rtt !== undefined && rtt > 300 ? `在线 · ${rtt}ms` : connLabel(p.conn, p.connInfo)
 
   return (
-    <div class="topbar">
+    <div class="topbar" onPointerDown={keepFocus}>
       <div class="tabbar" data-testid="tabbar" role="tablist" aria-label="会话" ref={stripRef}>
         {p.sessions.map((s) => (
           <div
@@ -85,7 +89,6 @@ export function TopBar(p: TopBarProps) {
             aria-current={s.active ? 'true' : undefined}
             title={s.cwd ? `${s.name}\n${s.cwd}` : s.name}
             onPointerDown={(e) => {
-              keepFocus(e)
               if (e.pointerType === 'touch') {
                 const { clientX: x, clientY: y } = e
                 press.down(x, y, () => p.onMenu(s.sid, x, y))
@@ -149,18 +152,20 @@ export function TopBar(p: TopBarProps) {
             </button>
           </div>
         ))}
-        <button
-          class="tab-new"
-          data-testid="new-session"
-          disabled={p.atLimit}
-          aria-label="新会话"
-          title={p.atLimit ? `会话数已达上限 ${p.maxSessions}` : '新会话（Ctrl+Shift+Enter）'}
-          onPointerDown={keepFocus}
-          onClick={p.onNew}
-        >
-          +
-        </button>
       </div>
+      <button
+        class="tab-new"
+        data-testid="new-session"
+        disabled={p.atLimit}
+        aria-label="新会话"
+        title={p.atLimit ? `会话数已达上限 ${p.maxSessions}` : '新会话（Ctrl+Shift+Enter）'}
+        onClick={p.onNew}
+      >
+        {/* 图标而不是 `+` 字符：字符的上下位置随字体度量变，和状态点对不齐（ADR-0035 §3） */}
+        <svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+          <path d="M7 1.5v11M1.5 7h11" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" fill="none" />
+        </svg>
+      </button>
       <span class="conn-dot" data-testid="conn-dot" data-state={p.conn} title={dotTitle} aria-hidden="true" />
     </div>
   )

@@ -3,6 +3,9 @@
  * 键位页（Termux 默认 14 键）和文本输入页（一个两行的 textarea）。左边 44px 的固定列：
  * compact 是会话按钮（上，方框里写会话数）与 ✎（下），wide 只有 ✎。两页高度相同，切换不改终端几何。
  *
+ * 停在哪一页、文本框里的草稿是**每个会话各一份**（AC-3.22，ADR-0036），由装配层记着：
+ * 这里只显示当前会话的那一页，翻页交给 `onTogglePage`，文本框的 DOM 交给 `register`。
+ *
  * 所有键在 pointerdown 时 preventDefault：按附加键不让软键盘收起或弹出，焦点不动。
  * 字节在 pointerup 的派发里发（`term.input()`，走 onData 出口），这样在键区上横滑
  * 可以切页而不误按键；CTRL / ALT 长按锁定也要等抬起才知道是点还是按。
@@ -12,9 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import type { Form } from '../app/form'
 import { PressTracker } from '../ui/longpress'
 import { EXTRA_KEYS, appAction, isModifierKey, type ExtraKeyId, type Sticky } from './keymap'
-import { isPageSwipe, textEnter, type TextSend } from './textpage'
-
-export type KeyPage = 'keys' | 'text'
+import { isPageSwipe, textEnter, type KeyPage, type TextPageEls, type TextSend } from './textpage'
 
 export interface ExtraKeysProps {
   form: Form
@@ -23,20 +24,22 @@ export interface ExtraKeysProps {
   /** 任一非当前会话有未读：会话按钮上的小红点。 */
   unread: boolean
   sticky: Sticky
+  /** 当前会话停在哪一页。 */
+  page: KeyPage
   onOpenSessions(): void
+  /** ✎ 或键区横滑：翻当前会话的页（装配层同步翻 DOM 并处理焦点）。 */
+  onTogglePage(): void
   /** 一个非修饰键被按下（在 pointerup 的派发里调用）。 */
   onKey(id: ExtraKeyId): void
   /** 文本页回车（在 keydown 的派发里调用）。 */
   onSend(send: TextSend): void
-  /** 从文本页切回键位页、且焦点在文本框里时，把焦点还给终端。 */
-  focusTerm(): void
-  textRef(el: HTMLTextAreaElement | null): void
+  register(els: TextPageEls | null): void
 }
 
 const noFocus = (e: Event) => e.preventDefault()
 
 export function ExtraKeys(p: ExtraKeysProps) {
-  const [page, setPage] = useState<KeyPage>('keys')
+  const page = p.page
   const slotRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const press = useRef(new PressTracker()).current
@@ -48,7 +51,8 @@ export function ExtraKeys(p: ExtraKeysProps) {
 
   useLayoutEffect(() => {
     const ta = taRef.current
-    if (!ta) return
+    const slot = slotRef.current
+    if (!ta || !slot) return
     // 【必须 setAttribute】（AC-3.10）：Chrome 把 autocorrect 实现成 boolean IDL 属性，
     // 写在 JSX 里框架会去赋属性，"off" 是真值，反射出来的 attribute 变成 autocorrect="on"
     ta.setAttribute('autocorrect', 'off')
@@ -56,19 +60,9 @@ export function ExtraKeys(p: ExtraKeysProps) {
     ta.setAttribute('spellcheck', 'false')
     ta.setAttribute('autocomplete', 'off')
     ta.setAttribute('enterkeyhint', 'send')
-    p.textRef(ta)
-    return () => p.textRef(null)
+    p.register({ slot, text: ta })
+    return () => p.register(null)
   }, [])
-
-  const switchPage = (next: KeyPage) => {
-    // 同步翻 DOM 上的页：下一行的 focus() 要求 textarea 此刻已经可见。
-    // 必须在这次点击 / 抬起的处理函数里聚焦，iOS 才会弹键盘
-    if (slotRef.current) slotRef.current.dataset.page = next
-    setPage(next)
-    const ta = taRef.current
-    if (next === 'text') ta?.focus({ preventScroll: true })
-    else if (ta && document.activeElement === ta) p.focusTerm()
-  }
 
   const onDown = (e: PointerEvent) => {
     const keyEl = (e.target as Element).closest<HTMLElement>('[data-key]')
@@ -94,7 +88,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
     if (!g) return
     if (isPageSwipe(e.clientX - g.x, e.clientY - g.y)) {
       press.cancel()
-      switchPage(page === 'keys' ? 'text' : 'keys')
+      p.onTogglePage()
       return
     }
     if (!g.key) {
@@ -145,7 +139,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
           aria-pressed={page === 'text' ? 'true' : 'false'}
           aria-label={page === 'text' ? '切回附加键' : '文本输入'}
           onPointerDown={noFocus}
-          onClick={() => switchPage(page === 'keys' ? 'text' : 'keys')}
+          onClick={p.onTogglePage}
         >
           ✎
         </button>

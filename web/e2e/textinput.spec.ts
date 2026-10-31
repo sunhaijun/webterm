@@ -1,12 +1,12 @@
 /**
- * E2E-40 文本输入页 —— AC-3.19 / AC-3.10。
+ * E2E-40 文本输入页 —— AC-3.19 / AC-3.10 / AC-3.22。
  *
  * Pixel 5。hook `WebSocket.send` 记 INPUT 帧：断言的是线上的字节。粘贴与回车是两次 onData，
  * 分不分帧不重要，所以这一步的帧拼起来比。E2E 的 bash 开了括号粘贴。
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 
-import { Agent, hooks, recordSent, terminalText, waitFor, type SentRecorder } from './harness'
+import { Agent, hooks, newSession, recordSent, switchTo, terminalText, waitFor, type SentRecorder } from './harness'
 
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 test.use(PIXEL)
@@ -154,4 +154,54 @@ test('E2E-40 ③–⑧ attribute、回车语义、组字、括号粘贴、回车
   await waitFor(async () => (await hasLine(page, 'L1')) && (await hasLine(page, 'L2')), '两行都执行了')
   await expect(text).toHaveValue('')
   await noNewline(page)
+})
+
+test('E2E-40 ⑨ 跟着会话走：页与草稿各归各的，焦点落到新会话的输入处，回车只发到当前会话（ADR-0036）', async ({ page }) => {
+  const rec = await recordSent(page)
+  await agent.open(page)
+  const a = (await hooks.sid(page))!
+  const ek = page.getByTestId('extrakeys')
+  const text = page.getByTestId('textinput')
+  const inTerm = () => page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea') ?? false)
+
+  // A 在文本页写了一半
+  await page.getByTestId('toggle-text').tap()
+  await expect(text).toBeFocused()
+  await text.fill('echo DRAFT-A')
+
+  // 从抽屉新建 B：键位页、文本框藏起来，焦点进 B 的终端
+  const b = await newSession(page)
+  await expect(ek).toHaveAttribute('data-page', 'keys')
+  await expect(text).toBeHidden()
+  await waitFor(inTerm, '焦点进 B 的终端')
+  await page.getByTestId('toggle-text').tap()
+  await expect(text, 'B 的框是空的，不是 A 的草稿').toHaveValue('')
+  await text.fill('echo DRAFT-B')
+
+  // 切回 A：文本页、A 的草稿、焦点在文本框；回车只发到 A
+  await switchTo(page, a)
+  await expect(ek).toHaveAttribute('data-page', 'text')
+  await expect(text).toHaveValue('echo DRAFT-A')
+  await expect(text).toBeFocused()
+  await atPrompt(page)
+  await text.press('Enter')
+  await waitFor(() => hasLine(page, 'DRAFT-A'), 'A 执行了自己的草稿')
+  await expect(text).toHaveValue('')
+
+  // 切到 B：B 的草稿还在；B 翻回键位页
+  await switchTo(page, b)
+  await expect(ek).toHaveAttribute('data-page', 'text')
+  await expect(text).toHaveValue('echo DRAFT-B')
+  await page.getByTestId('toggle-text').tap()
+  await expect(ek).toHaveAttribute('data-page', 'keys')
+
+  // A 仍在文本页、框是空的（刚才发掉了）；再切回 B 是键位页，焦点在终端
+  await switchTo(page, a)
+  await expect(ek).toHaveAttribute('data-page', 'text')
+  await expect(text).toHaveValue('')
+  await switchTo(page, b)
+  await expect(ek).toHaveAttribute('data-page', 'keys')
+  await waitFor(inTerm, '焦点进 B 的终端')
+
+  expect((await rec.input()).join(''), 'B 的草稿一次都没发出去').not.toContain('DRAFT-B')
 })

@@ -286,6 +286,128 @@ describe('切换会话', () => {
   })
 })
 
+describe('UT-textinput-2 文本页跟着会话走（AC-3.22 / AC-4.8，ADR-0036）', () => {
+  /** 附加键组件交上来的两块 DOM（jsdom 不算样式，`data-page` 只看值）。 */
+  function textPage() {
+    const slot = document.createElement('div')
+    slot.className = 'extrakeys'
+    const ta = document.createElement('textarea')
+    slot.appendChild(ta)
+    document.body.appendChild(slot)
+    ctl.registerTextPage({ slot, text: ta })
+    return { slot, ta }
+  }
+  const inTerm = () => area.contains(document.activeElement)
+
+  it('切会话换页与草稿，焦点落到新会话的输入处；切回原样恢复', () => {
+    sock.text(welcome([info(1), info(2)]))
+    const { slot, ta } = textPage()
+    expect([ctl.get().page, slot.dataset.page]).toEqual(['keys', 'keys'])
+
+    ctl.togglePage()
+    expect([ctl.get().page, slot.dataset.page]).toEqual(['text', 'text'])
+    expect(document.activeElement).toBe(ta)
+    ta.value = 'echo DRAFT-1'
+
+    // 在 1 的文本框里 → 切到停在键位页的 2：焦点进 2 的终端，框里不是 1 的草稿
+    ctl.select(2)
+    expect(term().sid()).toBe(2)
+    expect([ctl.get().page, slot.dataset.page, ta.value]).toEqual(['keys', 'keys', ''])
+    expect(inTerm(), '新会话停在键位页：焦点给终端').toBe(true)
+
+    ctl.togglePage()
+    ta.value = 'echo DRAFT-2'
+    ctl.togglePage() // 2 回键位页，草稿留着
+    expect(inTerm(), '切回键位页时焦点从文本框还给终端').toBe(true)
+
+    // 在 2 的终端里 → 切到停在文本页的 1：焦点进文本框，里面是 1 的草稿
+    ctl.select(1)
+    expect([ctl.get().page, slot.dataset.page, ta.value]).toEqual(['text', 'text', 'echo DRAFT-1'])
+    expect(document.activeElement).toBe(ta)
+
+    ctl.select(2)
+    expect([ctl.get().page, ta.value]).toEqual(['keys', 'echo DRAFT-2'])
+    expect(inTerm()).toBe(true)
+  })
+
+  it('点当前会话不挪焦点：文本页开着、人在终端里打字，焦点留在终端', () => {
+    sock.text(welcome([info(1)]))
+    const { ta } = textPage()
+    ctl.togglePage()
+    ctl.focusTerm()
+    ctl.select(1)
+    expect(inTerm()).toBe(true)
+    expect(document.activeElement).not.toBe(ta)
+  })
+
+  it('新会话：键位页、空草稿，焦点进它的终端；原会话的草稿还在', () => {
+    sock.text(welcome([info(1)]))
+    const { ta } = textPage()
+    ctl.togglePage()
+    ta.value = 'half'
+    ctl.newSession()
+    const [create] = sock.msgs('session.create')
+    sock.text({ t: 'session.created', req_id: create.req_id, session: info(2) })
+    expect(term().sid()).toBe(2)
+    expect([ctl.get().page, ta.value]).toEqual(['keys', ''])
+    expect(inTerm()).toBe(true)
+    ctl.select(1)
+    expect([ctl.get().page, ta.value]).toEqual(['text', 'half'])
+  })
+
+  it('会话关掉草稿就丢；同一个 sid 再出现时从头开始', () => {
+    sock.text(welcome([info(1), info(2)]))
+    const { ta } = textPage()
+    ctl.select(2)
+    ctl.togglePage()
+    ta.value = 'gone'
+    sock.text({ t: 'session.closed', sid: 2, exit_code: 0 })
+    expect(term().sid()).toBe(1)
+    expect([ctl.get().page, ta.value]).toEqual(['keys', ''])
+    expect(document.activeElement, '原来在文本框里打字：焦点给 1 的输入处（键位页 → 终端）').not.toBe(ta)
+    expect(inTerm()).toBe(true)
+
+    sock.text({ t: 'session.created', session: info(2) })
+    ctl.select(2)
+    expect([ctl.get().page, ta.value]).toEqual(['keys', ''])
+  })
+
+  it('组字中切换：先失焦让输入法把字提交进去，再存草稿、换内容', () => {
+    sock.text(welcome([info(1), info(2)]))
+    const { ta } = textPage()
+    ctl.togglePage()
+    ta.value = '你'
+    ta.dispatchEvent(new CompositionEvent('compositionstart'))
+    const atBlur: string[] = []
+    // 输入法在失焦时把组到一半的字提交进去
+    ta.addEventListener('blur', () => {
+      ta.value += '好'
+      atBlur.push(ta.value)
+    })
+    ctl.select(2)
+    expect(atBlur, '换内容之前先失焦').toEqual(['你好'])
+    expect(ta.value).toBe('')
+    ctl.select(1)
+    expect(ta.value, '提交进去的字算在 1 的草稿里').toBe('你好')
+  })
+
+  it('没在组字就不失焦（iPad 上点标签切会话，文本框一直有焦点）', () => {
+    sock.text(welcome([info(1), info(2)]))
+    const { ta } = textPage()
+    ctl.select(2)
+    ctl.togglePage()
+    ctl.select(1)
+    ctl.togglePage()
+    let blurs = 0
+    ta.addEventListener('blur', () => blurs++)
+    ta.dispatchEvent(new CompositionEvent('compositionstart'))
+    ta.dispatchEvent(new CompositionEvent('compositionend'))
+    ctl.select(2)
+    expect(blurs).toBe(0)
+    expect(document.activeElement).toBe(ta)
+  })
+})
+
 describe('设备被吊销（AC-1.11 / E2E-15）', () => {
   it('notice + error{unauthorized}：停止重连，revoked 置位（闸门据此换成配对引导页）', async () => {
     sock.text(welcome([info(1)]))
