@@ -171,7 +171,8 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 | `UT-input-1..3` | 文本输入页：回车语义（有内容 = 粘贴内容再回车 / 空回车发 `\r`）、composition 期间不发送、输入框属性 |
 | `UT-textinput-2` | 文本页跟着会话走：每个会话各记页与草稿、新会话是键位页空草稿、关掉的会话被忘掉；切换会话时换草稿、焦点落到新会话的输入处、组字中先失焦再换（AC-3.22 / AC-4.8） |
 | `UT-keymap-1` | 控制键映射表（对照 [`../40-frontend/keymap.md`](../40-frontend/keymap.md)） |
-| `UT-look-1` | 外观固定：xterm 字号 14px、字体是系统等宽栈；`Ctrl+Shift+,` 不是应用快捷键（AC-5.3） |
+| `UT-look-1` | 外观默认值：xterm 默认字号 14px、字体是系统等宽栈；`Ctrl+Shift+,` 不是应用快捷键（AC-5.3） |
+| `UT-prefs-1` | 两项偏好（AC-5.3，ADR-0037）：主题默认跟随系统、`light` / `dark` 打上 `data-theme` 与 `color-scheme`、跟随系统时去掉；字号默认 14、只收 10–24 的整数、不合法回默认；`localStorage` 抛异常时用默认值且不抛；控制器改字号时所有实例一起换并补发 `resize`（容器没变也发），改主题时 xterm 主题跟着换 |
 | `UT-reconnect-1` | 指数退避序列、抖动范围、`online` 事件立即重试 |
 | `UT-hb-1` | 心跳间隔、pong 超时判死 |
 | `UT-hb-2` | 自认在线时的即时探活：`online` / 页面可见 → 发 `ping`，2 秒无 `pong` → 关连接；`pong` 来了就不关（AC-2.20） |

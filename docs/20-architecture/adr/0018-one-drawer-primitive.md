@@ -1,5 +1,7 @@
 # ADR-0018 次要界面共用一个浮层原语：触屏底部 sheet，桌面居中浮窗
 
+> **设置随 [ADR-0037](0037-settings-theme-and-font-size.md) 回来，居中浮窗形态也回来了，但形态改按 `compact` / `wide` 分**（不再按 `pointer`）：`compact` 是底部 sheet，`wide` 是居中浮窗。
+
 > **设置已随 [ADR-0030](0030-no-settings.md) 删除，`Drawer` 只剩手机会话抽屉一个使用者，形态也只剩底部 sheet**：居中浮窗形态没有使用者了，一并删除。
 
 > **⋯ 菜单、历史浮层、平板上的会话浮层已随 [ADR-0025](0025-termux-style-ui.md) 删除**。`Drawer` 原语保留，使用者只剩设置与手机上的会话抽屉。

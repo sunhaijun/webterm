@@ -78,14 +78,18 @@ agent 的回答只有两种（[协议 §5.1](../30-protocol/websocket-protocol.m
 │▎[1] webterm     ~/github/webterm    │  ← 当前：强调色左条 + 底色
 │ [2] api       • ~/srv/api           │  ← 未读点
 │ [3] build       exit 1              │  ← 已退出（非零用警示色）
+│                                     │  ← 至少半屏高：多出来的给列表
 ├─────────────────────────────────────┤
-│              + 新会话               │  ← 固定在底部，离拇指最近
+│  ┌───────────────────────┐ ┌─────┐  │  ← 固定在底部，离拇指最近
+│  │        + 新会话       │ │  ⚙  │  │
+│  └───────────────────────┘ └─────┘  │
+│                                     │  ← 底部留白 max(16px, 安全区)
 └─────────────────────────────────────┘
 ```
 
-- 抽屉就是 `Drawer` 原语（[layout.md](layout.md#浮层)）：触屏贴底整宽，`data-testid="session-drawer"`。
+- 抽屉就是 `Drawer` 原语（[layout.md](layout.md#浮层)）：贴底整宽的 sheet，`data-testid="session-drawer"`。**高度至少半屏**（50vh，最多 80vh），会话少的时候多出来的高度给列表。
 - 列表（`session-list`）一行一个会话（`session-<sid>`）：编号 `[n]`（按创建顺序，从 1 开始，关掉中间的会话后后面的顺延）、名字、CWD 或退出码、未读点。开着保持接收的会话名前有一个 `⇵` 标记。行高 52px。
-- 底部固定一行，只有 `+ 新会话`（`new-session`）。没有设置（[ADR-0030](../20-architecture/adr/0030-no-settings.md)）。
+- 底部固定一行：`+ 新会话`（`new-session`，占满剩下的宽度）与设置（`open-settings`，48px 的方形按钮，⚙ 图标）。两个都是带细边的圆角块，四周留白，不贴 sheet 的边（[layout.md §浮层](layout.md#浮层)）。点设置 = 关掉抽屉、打开设置（[layout.md §设置](layout.md#设置ac-53)）。
 - 点一行 = 切过去并关闭抽屉。长按一行 = 弹出会话菜单（见下）。
 - **关闭抽屉**：点遮罩、选中一个会话、`Esc`、✕、系统返回键；下滑只作加速。
 - **系统返回键**：打开时 `history.pushState({drawer: true})`，`popstate` 时关闭抽屉。用别的方式关闭时调用 `history.back()` 把那条记录消掉，不让记录越积越多。少了这一条，Android PWA 里按返回键会直接退出应用。
@@ -96,17 +100,17 @@ agent 的回答只有两种（[协议 §5.1](../30-protocol/websocket-protocol.m
 ### wide（PC / Pad）：顶部标签栏
 
 ```
-┌ ▎● webterm ✕ │ ○ api •   │ ⇵ logs    │ ○ build   │   + ──────────── ● ┐   等宽，120–240px
-┌ │ ○ api •   │ ⇵ logs    │ ○ build   │ ▎● webterm ✕ │   + ● ┐            放不下：标签条滚动，+ 不动
+┌ ▎● webterm ✕ │ ○ api •   │ ⇵ logs    │ ○ build   │   + ────────── ● ⚙ ┐   等宽，120–240px
+┌ │ ○ api •   │ ⇵ logs    │ ○ build   │ ▎● webterm ✕ │   + ● ⚙ ┐          放不下：标签条滚动，+ 不动
 ```
 
-- 顶栏 `.topbar` 高 36px（`pointer: coarse` 时 40px），常驻。从左到右：可横向滚动的标签条 `data-testid="tabbar"`（**只装标签**）、`+`、空白、连接状态点（`conn-dot`）。`+` 和状态点都不在标签条里，不跟着滚（[ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)）。
+- 顶栏 `.topbar` 高 36px（`pointer: coarse` 时 40px），常驻。从左到右：可横向滚动的标签条 `data-testid="tabbar"`（**只装标签**）、`+`、空白、连接状态点（`conn-dot`）、设置（`open-settings`）。`+`、状态点、设置都不在标签条里，不跟着滚（[ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)）。
 - 一个标签（`tab-<sid>`）= 会话名 + 未读点；开着保持接收的名前有 `⇵`；已退出的变灰。名字过长截断加省略号，`title` 里是全名与 CWD。
 - **宽度**（[ADR-0031](../20-architecture/adr/0031-tabs-equal-width.md)）：每个标签一样宽，等分标签条的可用宽度，最宽 240px、最窄 120px。
 - **`+`**（`new-session`）在标签条右边：放得下时标签条正好是标签的总宽，`+` 跟在最后一个标签后面；放不下时标签条缩到剩下的宽度、自己滚动，`+` 停在它右边，**始终可见**。
 - `+` 与标签条之间留 **12px（触屏 16px）不可点的间隔**，免得想新建却点到当前标签的 ✕。
 - `+` 是一个 SVG 图标，不是文字字符：它和状态点都按几何中心在顶栏里垂直居中，在同一条水平线上。
-- 最右边是连接状态点（`conn-dot`）。
+- 最右边是连接状态点（`conn-dot`）和设置（`open-settings`，⚙，与 `+` 同宽同高、同一种线条图标，垂直中心与状态点对齐）。
 - **点标签** = 切过去。**中键点标签** = 关闭。
 - **✕**（`tab-<sid>-close`）：鼠标设备上悬停或当前标签显示；触屏上只有当前标签显示，免得误点。
 - **右键（鼠标）/ 长按（触屏）标签** = 弹出会话菜单。**双击标签** = 直接改名。

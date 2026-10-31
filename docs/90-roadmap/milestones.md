@@ -144,7 +144,7 @@ feat/<docs编号>-<主题>
 | `short` 布局（手机横屏） | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 删除 |
 | 已退出会话的保留与"重开" | 已随 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) 换成进程结束提示行，见 [session-ux.md](../40-frontend/session-ux.md) |
 | 订阅策略 + "保持接收"开关 | [session-ux.md](../40-frontend/session-ux.md) |
-| 主题（三态）、字号、PWA + Service Worker（主题后由 [ADR-0030](../20-architecture/adr/0030-no-settings.md) 改为只跟随系统，字号固定） | [layout.md](../40-frontend/layout.md) |
+| 主题（三态）、字号、PWA + Service Worker（主题后由 [ADR-0030](../20-architecture/adr/0030-no-settings.md) 改为只跟随系统，字号固定；又由 [ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) 加回主题三态与字号两项设置） | [layout.md](../40-frontend/layout.md) |
 
 **测试**：**`E2E-6`、`E2E-11`、`E2E-15`、`E2E-16`、`E2E-17`**
 
@@ -233,7 +233,7 @@ m9 / m10 只依赖 m8，彼此独立。
 | 形态判定（屏幕短边 600px 分 `compact` / `wide`） | [layout.md](../40-frontend/layout.md#形态ac-518) |
 | 两行静态附加键（Termux 默认 14 键，CTRL / ALT 粘滞，DECCKM） | [input.md](../40-frontend/input.md#附加键ac-318) + [keymap.md](../40-frontend/keymap.md) |
 | 文本输入页（✎ / 左右滑动切换；回车：有内容不追加回车、空回车发 `\r`；后由 [ADR-0027](../20-architecture/adr/0027-text-page-enter-submits.md) 改为发内容并回车） | [input.md](../40-frontend/input.md) |
-| `compact`：☰ + 底部会话抽屉（未读点、系统返回键关抽屉）；`wide`：顶部标签栏（☰ 后由 [ADR-0030](../20-architecture/adr/0030-no-settings.md) 换成显示会话数的会话按钮，设置删除） | [session-ux.md](../40-frontend/session-ux.md#切换会话ac-410) |
+| `compact`：☰ + 底部会话抽屉（未读点、系统返回键关抽屉）；`wide`：顶部标签栏（☰ 后由 [ADR-0030](../20-architecture/adr/0030-no-settings.md) 换成显示会话数的会话按钮，设置删除；设置后由 [ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) 加回两项） | [session-ux.md](../40-frontend/session-ux.md#切换会话ac-410) |
 | 点终端切换软键盘 / 鼠标跟踪时上报点击；滚动用 xterm 原生；鼠标跟踪时纵向拖转滚轮（后由 [ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md) 补上） | [layout.md](../40-frontend/layout.md) |
 | 连接横幅（覆盖、不改几何）、进程结束提示行、删除 `Ctrl/Cmd+F` 搜索 | [session-ux.md](../40-frontend/session-ux.md) |
 | `internal/vterm`（tuios.dev/vt）：同锁喂入、快照、改列数重发快照、热升级交接状态 | [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)、[session-manager.md](../50-backend/session-manager.md) |
@@ -271,7 +271,7 @@ m9 / m10 只依赖 m8，彼此独立。
 
 | 交付 | 对应文档 |
 |---|---|
-| 双指捏合改字号：过程中只做 CSS 预览，松手改 `fontSize` + `fit()` + 补发 `resize`，按形态保存 | [layout.md](../40-frontend/layout.md) |
+| 双指捏合改字号：过程中只做 CSS 预览，松手改 `fontSize` + `fit()` + 补发 `resize`，和设置里的字号是同一个值（[ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)） | [layout.md](../40-frontend/layout.md) |
 | 长按选区：选词、拖手柄、「复制 · 粘贴 · 更多」（选择链接 / 分享 / 保持亮屏） | 同上 |
 | 响铃振动（Android） | 同上 |
 
