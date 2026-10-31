@@ -114,7 +114,7 @@ describe('应用级快捷键', () => {
     expect(appAction(key('B', { ctrlKey: true, shiftKey: true }))).toBe('toggleSessions')
   })
 
-  it('UT-look-1 Ctrl+Shift+, 不再是快捷键（没有设置，ADR-0030），交给终端', () => {
+  it('UT-look-1 Ctrl+Shift+, 不是快捷键（设置不占组合键，ADR-0037 §2），交给终端', () => {
     expect(appAction(key('<', { ctrlKey: true, shiftKey: true }))).toBeNull()
     expect(appAction(key(',', { ctrlKey: true, shiftKey: true }))).toBeNull()
   })

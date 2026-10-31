@@ -18,7 +18,7 @@ import { Terminal, type ITheme } from '@xterm/xterm'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 
-/** 终端字号：固定，不提供设置（AC-5.3，ADR-0030）。 */
+/** 终端默认字号（AC-5.3）。设置里可改，见 `ui/prefs.ts`（ADR-0037）。 */
 export const FONT_SIZE = 14
 
 /**
@@ -90,9 +90,9 @@ export interface TermHandle {
   dispose(): void
 }
 
-export function createTerminal(theme?: ITheme): TermHandle {
+export function createTerminal(theme?: ITheme, fontSize = FONT_SIZE): TermHandle {
   const term = new Terminal({
-    fontSize: FONT_SIZE,
+    fontSize,
     fontFamily: FONT_FAMILY,
     scrollback: SCROLLBACK,
     allowProposedApi: true,

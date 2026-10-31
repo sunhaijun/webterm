@@ -8,10 +8,11 @@ import { Sticky, appAction, extraKeyBytes, type ExtraKeyId } from '../keys/keyma
 import { RawIme, cursorPosition } from '../keys/raw'
 import { TextPages, type KeyPage, type TextPageEls, type TextSend } from '../keys/textpage'
 import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
-import { SessionStore, displayName, routeInput, type SessionView } from '../sessions/store'
+import { SessionStore, routeInput, type SessionView } from '../sessions/store'
 import { installDragWheel, installTapToggle } from '../term/gestures'
 import { themeFromCss } from '../term/terminal'
 import { inUserInputEvent } from '../term/userinput'
+import { applyTheme, readFontSize, readTheme, validFontSize, writeFontSize, writeTheme, type Theme } from '../ui/prefs'
 import { debounce, installAppFit, isCoarsePointer, watchCoarse } from '../ui/viewport'
 import { readForm, type Form } from './form'
 
@@ -47,6 +48,13 @@ export interface AppState {
   preview: ImePreviewState | null
   /** compact 的会话抽屉。 */
   sessionsOpen: boolean
+  /** 设置浮层（AC-5.3，ADR-0037）。 */
+  settingsOpen: boolean
+  /** 等用户确认要关的会话（AC-4.11，ADR-0038）。 */
+  closing: number | null
+  theme: Theme
+  /** 终端字号（px）。 */
+  fontSize: number
   /** 当前会话的附加键槽停在哪一页（ADR-0036：每个会话各记一份）。 */
   page: KeyPage
 }
@@ -82,6 +90,11 @@ export class AppController {
   /** 自己发起的 session.create → 建好之后要不要把焦点给它。 */
   private readonly pendingCreate = new Map<string, boolean>()
   private drawerFocus: FocusPlace = null
+  /** 打开设置之前焦点在哪：关掉设置后按它恢复。 */
+  private settingsFocus: FocusPlace = null
+  /** 打开关闭确认之前焦点在哪、是不是从会话抽屉里打开的（ADR-0038 §3）。 */
+  private closeFocus: FocusPlace = null
+  private closeFromDrawer = false
   /** 附加键 / 文本页正在往终端里送字节：onData 出口别再套一次粘滞修饰。 */
   private keyBypass = false
   private lastW = 0
@@ -116,6 +129,10 @@ export class AppController {
       toast: null,
       preview: null,
       sessionsOpen: false,
+      settingsOpen: false,
+      closing: null,
+      theme: readTheme(),
+      fontSize: readFontSize(),
       page: 'keys',
     }
     this.conn = new Connection({
@@ -149,6 +166,7 @@ export class AppController {
       onBinary: (sid, data) => this.onTermBinary(sid, data),
       allowKey: (e) => appAction(e) === null,
       theme: () => cssTheme(),
+      fontSize: () => this.state.fontSize,
     })
   }
 
@@ -170,7 +188,9 @@ export class AppController {
 
   private refresh(): void {
     this.syncTextPage()
-    this.set({ sessions: this.store.list(), active: this.store.active, page: this.pages.page(this.store.active) })
+    // 确认浮层开着时会话没了（别处关掉、agent 重启）：跟着关，sid 会复用（ADR-0038 §4）
+    const closing = this.state.closing !== null && this.store.has(this.state.closing) ? this.state.closing : null
+    this.set({ sessions: this.store.list(), active: this.store.active, page: this.pages.page(this.store.active), closing })
   }
 
   private toast(kind: Toast['kind'], text: string): void {
@@ -249,7 +269,8 @@ export class AppController {
     })
     const undrag = installDragWheel(area, () => this.activeTerm() ?? null)
 
-    // 主题只跟随系统（AC-5.3）：系统切深浅色时 CSS 变量已经变了，xterm 的要重读一遍
+    // 主题跟随系统时（AC-5.3）：系统切深浅色时 CSS 变量已经变了，xterm 的要重读一遍。
+    // 强制了浅色 / 深色时重读的结果不变，无害
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
     const onScheme = () => this.store.setTheme(cssTheme())
     mq?.addEventListener('change', onScheme)
@@ -356,10 +377,41 @@ export class AppController {
   }
 
   /** 关闭会话：running 要二次确认，exited 直接关（session-ux.md §关闭会话）。 */
+  /** 关闭会话：`running` 的先弹确认浮层（AC-4.11，ADR-0038），`exited` 的直接关。 */
   requestClose(sid: number): void {
     const info = this.store.info(sid)
     if (!info) return
-    if (info.status === 'running' && !confirm(`关闭会话「${displayName(info)}」？会话内可能有正在跑的程序。`)) return
+    if (info.status !== 'running') {
+      this.sendClose(sid)
+      return
+    }
+    this.closeFromDrawer = this.state.sessionsOpen
+    this.closeFocus = this.focusPlace()
+    this.set({ closing: sid })
+  }
+
+  /**
+   * 确认关闭。【先还焦点、再发 session.close】：agent 回 session.closed 后切到相邻会话，
+   * 那一步看焦点在不在终端里决定给不给新会话焦点（AC-4.8）；先发再还就被判成「没在打字」。
+   */
+  confirmClose(): void {
+    const sid = this.state.closing
+    if (sid === null) return
+    this.endClosing()
+    if (this.store.has(sid)) this.sendClose(sid)
+  }
+
+  cancelClose(): void {
+    if (this.state.closing === null) return
+    this.endClosing()
+  }
+
+  private endClosing(): void {
+    this.set({ closing: null })
+    if (!this.closeFromDrawer && (this.closeFocus !== null || !this.state.coarse)) this.focusInput()
+  }
+
+  private sendClose(sid: number): void {
     this.conn.send({ t: T.sessionClose, req_id: `close-${++this.reqSeq}`, sid })
   }
 
@@ -379,7 +431,7 @@ export class AppController {
 
   openSessions(): void {
     this.drawerFocus = this.focusPlace()
-    this.set({ sessionsOpen: true })
+    this.set({ sessionsOpen: true, settingsOpen: false })
   }
 
   closeSessions(): void {
@@ -397,6 +449,41 @@ export class AppController {
     const place = this.drawerFocus
     this.set({ sessionsOpen: false })
     this.newSession(place !== null || !this.state.coarse)
+  }
+
+  /**
+   * 打开设置（ADR-0037 §2）。从会话抽屉里打开的，焦点此刻在抽屉里，「之前在哪」看打开抽屉之前。
+   */
+  openSettings(): void {
+    this.settingsFocus = this.state.sessionsOpen ? this.drawerFocus : this.focusPlace()
+    this.set({ settingsOpen: true, sessionsOpen: false })
+  }
+
+  /** 关掉设置：打开前在打字的、或非触摸设备，焦点还回去（ADR-0037 §4）。 */
+  closeSettings(): void {
+    if (!this.state.settingsOpen) return
+    const place = this.settingsFocus
+    this.set({ settingsOpen: false })
+    if (place !== null || !this.state.coarse) this.focusInput()
+  }
+
+  // ---------- 偏好（AC-5.3，ADR-0037） ----------
+
+  setTheme(theme: Theme): void {
+    if (theme === this.state.theme) return
+    applyTheme(theme)
+    writeTheme(theme)
+    this.set({ theme })
+    this.store.setTheme(cssTheme())
+  }
+
+  /** 改字号：所有实例一起换 → fit → 补一条 resize（容器没变，ResizeObserver 不会响）。 */
+  setFontSize(px: number): void {
+    if (!validFontSize(px) || px === this.state.fontSize) return
+    writeFontSize(px)
+    this.set({ fontSize: px })
+    this.store.setFontSize(px)
+    this.measure(true)
   }
 
   // ---------- 输入 ----------
@@ -560,13 +647,16 @@ export class AppController {
 
   // ---------- 尺寸 ----------
 
-  /** 容器尺寸变了 → fit → 防抖发 resize。cell 尺寸运行时不变（字号字体固定），只看容器。 */
-  private measure(): void {
+  /**
+   * 容器尺寸变了 → fit → 防抖发 resize。`force`：容器没变但字符格变了（改字号），
+   * 尺寸去重会把整次量算吞掉，客户端与 PTY 的 cols/rows 就分了家。
+   */
+  private measure(force = false): void {
     const area = this.area
     if (!area) return
     const w = area.clientWidth
     const h = area.clientHeight
-    if (w === this.lastW && h === this.lastH) return
+    if (!force && w === this.lastW && h === this.lastH) return
     this.lastW = w
     this.lastH = h
     const t = this.activeTerm()
@@ -694,6 +784,7 @@ export class AppController {
       resizes: () => this.resizeCount,
       sid: () => this.store.active,
       form: () => this.state.form,
+      fontSize: () => term()?.options.fontSize ?? 0,
       altScreen: () => this.activeTerm()?.altScreen() ?? false,
       unread: (sid: number) => this.conn.isUnread(sid),
       /** 最近收到的二进制帧 `{type, kind, sid, seq, flags, bytes, replay}`。 */

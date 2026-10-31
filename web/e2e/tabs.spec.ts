@@ -1,11 +1,12 @@
 /**
- * E2E-41 宽屏标签栏 —— AC-4.10（另含 AC-4.8 的「切换不改几何」）；`+` 的位置见 ADR-0035。
+ * E2E-41 宽屏标签栏 —— AC-4.10 / AC-4.11 / AC-5.11（另含 AC-4.8 的「切换不改几何」）；
+ * `+` 的位置见 ADR-0035，⚙ 与设置浮窗见 ADR-0037，关闭确认见 ADR-0038。
  *
  * 1440×900 鼠标；第 7 步用 iPad Mini 设备描述（触屏 wide）。
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 
-import { Agent, EMIT, framesSince, hooks, newSession, rectOf, submit, switchTo, waitFor, waitText } from './harness'
+import { Agent, EMIT, focusTerm, framesSince, hooks, newSession, rectOf, submit, switchTo, waitFor, waitText } from './harness'
 
 const WIDE = { viewport: { width: 1440, height: 900 }, contextOptions: { screen: { width: 1440, height: 900 } } }
 const { defaultBrowserType: _p, ...IPAD } = devices['iPad Mini']!
@@ -35,7 +36,7 @@ test.describe('1440×900 鼠标', () => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
 
-    // ① 顶栏在终端上方；标签条里一个标签 + `+`；右侧钉住状态点（在最右）；没有设置、没有会话按钮、没有附加键
+    // ① 顶栏在终端上方；标签条里一个标签；`+` 在标签条外；右侧钉住状态点与 ⚙（⚙ 在最右）；没有会话按钮、没有附加键
     await expect(page.locator('.app')).toHaveAttribute('data-form', 'wide')
     const bar = (await rectOf(page, '.topbar'))!
     const term = (await rectOf(page, '[data-testid=terminal]'))!
@@ -48,20 +49,30 @@ test.describe('1440×900 鼠标', () => {
     expect(Math.abs((await plusGap(page)) - 12), '`+` 前留 12px').toBeLessThanOrEqual(0.5)
     await expect(tabbar.getByTestId('conn-dot'), '状态点不在可滚动的标签条里').toHaveCount(0)
     await expect(page.locator('.topbar').getByTestId('conn-dot')).toHaveAttribute('data-state', 'online')
-    await expect(page.getByTestId('open-settings'), '没有设置（ADR-0030）').toHaveCount(0)
+    await expect(tabbar.getByTestId('open-settings'), '⚙ 不在标签条里').toHaveCount(0)
     const dot = (await rectOf(page, '[data-testid=conn-dot]'))!
+    const gear = (await rectOf(page, '[data-testid=open-settings]'))!
     const strip = (await rectOf(page, '[data-testid=tabbar]'))!
     expect(dot.left, '状态点在标签条右边').toBeGreaterThanOrEqual(strip.right - 1)
-    expect(bar.right - dot.right, '状态点在最右（只隔它自己的外边距）').toBeLessThanOrEqual(12)
-    // `+` 是图标、按几何中心居中：和状态点在同一条水平线上（ADR-0035 §3）
+    expect(Math.abs(bar.right - gear.right), '⚙ 在最右').toBeLessThanOrEqual(1)
+    expect(gear.left - dot.right, '状态点紧挨在 ⚙ 左边（只隔外边距）').toBeLessThanOrEqual(6)
+    expect(gear.left).toBeGreaterThanOrEqual(dot.right)
+    // `+` 与 ⚙ 是同一套线条图标、按几何中心居中：和状态点在同一条水平线上（ADR-0035 §3、ADR-0037 §3）
     const mid = await page.evaluate(() => {
-      const c = (s: string) => {
-        const r = document.querySelector(s)!.getBoundingClientRect()
-        return r.top + r.height / 2
+      const r = (s: string) => document.querySelector(s)!.getBoundingClientRect()
+      const c = (s: string) => r(s).top + r(s).height / 2
+      return {
+        plus: c('[data-testid=new-session] svg'),
+        gear: c('[data-testid=open-settings] svg'),
+        dot: c('[data-testid=conn-dot]'),
+        plusW: r('[data-testid=new-session] svg').width,
+        gearW: r('[data-testid=open-settings] svg').width,
       }
-      return { plus: c('[data-testid=new-session] svg'), dot: c('[data-testid=conn-dot]') }
     })
-    expect(Math.abs(mid.plus - mid.dot), `\`+\` 与状态点垂直对齐：${JSON.stringify(mid)}`).toBeLessThanOrEqual(0.5)
+    const m = JSON.stringify(mid)
+    expect(Math.abs(mid.plus - mid.dot), `\`+\` 与状态点垂直对齐：${m}`).toBeLessThanOrEqual(0.5)
+    expect(Math.abs(mid.gear - mid.dot), `⚙ 与状态点垂直对齐：${m}`).toBeLessThanOrEqual(0.5)
+    expect(mid.gearW, `两个图标一样大：${m}`).toBe(mid.plusW)
     await expect(page.getByTestId('open-sessions')).toHaveCount(0)
     await expect(page.getByTestId('extrakeys')).toHaveCount(0)
 
@@ -79,7 +90,7 @@ test.describe('1440×900 鼠标', () => {
     expect(await geo(page)).toEqual(g0)
   })
 
-  test('E2E-41 ③ 关闭：悬停出 ✕、在跑先确认；中键同样关闭', async ({ page }) => {
+  test('E2E-41 ③ 关闭：悬停出 ✕、在跑先弹自己的确认浮窗；中键同样；Ctrl+Shift+W 再 Enter', async ({ page }) => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
     const b = await newSession(page)
@@ -90,20 +101,46 @@ test.describe('1440×900 鼠标', () => {
     await page.getByTestId(`tab-${a}`).hover()
     expect(await closeVisible(page, a), '悬停出 ✕').toBe(true)
 
-    const dialogs: string[] = []
+    let dialogs = 0
     page.on('dialog', (d) => {
-      dialogs.push(d.message())
-      void d.accept()
+      dialogs++
+      void d.dismiss()
     })
+    const confirm = page.getByTestId('close-confirm')
     await page.getByTestId(`tab-${a}-close`).click()
-    await expect.poll(() => dialogs.length, { message: '会话在跑：先弹确认' }).toBe(1)
+    await expect(confirm, '会话在跑：先弹确认（自己的浮层，ADR-0038）').toBeVisible()
+    // wide：居中浮窗，没有抓手
+    const r = (await rectOf(page, '[data-testid=close-confirm]'))!
+    expect(Math.abs((r.left + r.right) / 2 - 720), '水平居中').toBeLessThanOrEqual(1)
+    expect(Math.abs((r.top + r.bottom) / 2 - 450), '垂直居中').toBeLessThanOrEqual(1)
+    await expect(confirm.locator('.drawer-grab')).toBeHidden()
+    await expect(page.getByTestId(`tab-${a}`), '确认之前不关').toBeVisible()
+    await page.getByTestId('close-ok').click()
+    await expect(confirm).toHaveCount(0)
     await expect(page.getByTestId(`tab-${a}`)).toHaveCount(0)
     expect(await hooks.sid(page), '关的不是当前标签，当前不变').toBe(c)
 
-    // 中键点标签 = 关闭
+    // 中键点标签 = 关闭，同样先确认；取消就不关
     await page.getByTestId(`tab-${b}`).click({ button: 'middle' })
-    await expect.poll(() => dialogs.length).toBe(2)
+    await expect(confirm).toBeVisible()
+    await page.getByTestId('close-cancel').click()
+    await expect(confirm).toHaveCount(0)
+    await expect(page.getByTestId(`tab-${b}`), '取消了就不关').toBeVisible()
+    await page.getByTestId(`tab-${b}`).click({ button: 'middle' })
+    await page.getByTestId('close-ok').click()
     await expect(page.getByTestId(`tab-${b}`)).toHaveCount(0)
+
+    // 键盘：焦点在终端里 Ctrl+Shift+W → 确认（焦点在「关闭」上）→ Enter 关掉；焦点回到新当前会话的终端
+    const d = await newSession(page)
+    await focusTerm(page)
+    await page.keyboard.press('Control+Shift+W')
+    await expect(confirm).toBeVisible()
+    await expect(page.getByTestId('close-ok'), '打开时焦点在「关闭」上').toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId(`tab-${d}`)).toHaveCount(0)
+    await waitFor(async () => (await hooks.sid(page)) === c, '切到相邻会话')
+    await expect(page.locator('.xterm-helper-textarea'), '焦点回到新当前会话的终端').toBeFocused()
+    expect(dialogs, '不用浏览器对话框').toBe(0)
   })
 
   test('E2E-41 ④ 改名：双击 → 输入框 → 回车；清空回车恢复自动命名', async ({ page }) => {
@@ -255,6 +292,27 @@ test.describe('1440×900 鼠标', () => {
       await page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea') ?? false),
       '焦点还在终端里',
     ).toBe(true)
+  })
+
+  test('E2E-41 ⑩ 设置是居中浮窗：不改终端几何，Esc 关掉后焦点回终端（ADR-0037 §4）', async ({ page }) => {
+    await agent.open(page)
+    await focusTerm(page)
+    await page.waitForTimeout(300)
+    const g0 = await geo(page)
+    await page.getByTestId('open-settings').click()
+    const st = page.getByTestId('settings')
+    await expect(st).toBeVisible()
+    const r = (await rectOf(page, '[data-testid=settings]'))!
+    expect(Math.abs((r.left + r.right) / 2 - 720), '水平居中').toBeLessThanOrEqual(1)
+    expect(Math.abs((r.top + r.bottom) / 2 - 450), '垂直居中').toBeLessThanOrEqual(1)
+    expect(r.right - r.left, '宽 420px').toBe(420)
+    await expect(st.locator('.drawer-grab'), '居中浮窗没有抓手').toBeHidden()
+    expect(await geo(page), '开设置不改终端几何').toEqual(g0)
+    await page.keyboard.press('Escape')
+    await expect(st).toHaveCount(0)
+    await expect(page.locator('.xterm-helper-textarea'), '关掉后焦点回到终端').toBeFocused()
+    await page.keyboard.type('echo SETTINGS-BACK')
+    await waitText(page, 'echo SETTINGS-BACK', '打字有回显')
   })
 })
 

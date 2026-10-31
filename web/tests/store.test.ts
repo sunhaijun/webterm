@@ -62,6 +62,7 @@ function make() {
     onData() {},
     allowKey: () => true,
     theme: () => undefined,
+    fontSize: () => 14,
   })
   const area = document.createElement('div')
   document.body.appendChild(area)

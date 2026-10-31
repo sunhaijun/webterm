@@ -51,6 +51,8 @@ export interface StoreHooks {
   /** 应用级快捷键：返回 false 表示拦下来，不让它进 PTY。 */
   allowKey(e: KeyboardEvent): boolean
   theme(): ITheme | undefined
+  /** 当前设置的终端字号（AC-5.3）：新建的实例用它。 */
+  fontSize(): number
 }
 
 interface Entry {
@@ -116,7 +118,7 @@ export class SessionStore {
       this.h.onChange()
       return
     }
-    const term = createTerminal(this.h.theme())
+    const term = createTerminal(this.h.theme(), this.h.fontSize())
     const host = document.createElement('div')
     host.className = 'term-host'
     host.dataset.sid = String(info.sid)
@@ -228,9 +230,20 @@ export class SessionStore {
     this.maybeExitLine(e)
   }
 
-  /** 系统切换了深浅色：所有实例一起换（layout.md §主题）。 */
+  /** 改了主题、或系统切换了深浅色：所有实例一起换（layout.md §主题）。 */
   setTheme(theme: ITheme | undefined): void {
     for (const e of this.entries.values()) e.term.term.options.theme = theme ?? {}
+  }
+
+  /**
+   * 改字号：所有实例一起换，对挂着的那个 fit()；没挂着的切过去时 activate() 会 fit。
+   * 【调用方还欠一条 resize】：字符格变了而容器没变，ResizeObserver 不会响（AC-5.3）。
+   */
+  setFontSize(px: number): void {
+    for (const e of this.entries.values()) {
+      e.term.term.options.fontSize = px
+      if (e.opened && e.info.sid === this.activeSid) e.term.fit()
+    }
   }
 
   /** 关闭之后切到相邻会话：优先后一个，没有就前一个。 */

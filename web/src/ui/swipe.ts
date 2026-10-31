@@ -9,6 +9,8 @@ export interface SwipeDismissOptions {
   threshold?: number
   /** 找内部滚动区：返回它的 scrollTop，用来判断「是否已到顶」。默认找 Drawer 的 .drawer-body。 */
   scroller?: (host: HTMLElement) => HTMLElement | null
+  /** 此刻接不接这个手势（居中浮窗不接，ADR-0037 §4）。默认一直接。 */
+  enabled?: () => boolean
 }
 
 export function installSwipeDismiss(host: HTMLElement, onDismiss: () => void, opts: SwipeDismissOptions = {}): () => void {
@@ -26,7 +28,7 @@ export function installSwipeDismiss(host: HTMLElement, onDismiss: () => void, op
     if (e.touches.length !== 1) return
     startY = e.touches[0]!.clientY
     dy = 0
-    dragging = atTop()
+    dragging = (opts.enabled?.() ?? true) && atTop()
   }
   const onMove = (e: TouchEvent) => {
     if (!dragging || e.touches.length !== 1) return

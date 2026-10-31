@@ -1,7 +1,8 @@
 /**
- * E2E-28 浮层与手机会话抽屉 —— AC-4.10 / AC-5.11 / AC-4.8。
+ * E2E-28 浮层与手机会话抽屉 —— AC-4.10 / AC-4.11 / AC-5.11 / AC-4.8。
  *
  * 手机会话抽屉：贴底整宽 + 抓手 + 标题栏 + ✕，浮层【不挤终端】；会话按钮的方框里是会话数。
+ * 至少半屏高、底部一行四周留白（ADR-0037 §5）；关闭确认叠在抽屉上（ADR-0038）；从抽屉进设置。
  * 抽屉有约 170ms 的进场动画，量矩形前先等它落位。
  */
 import { devices, expect, test, type Page } from '@playwright/test'
@@ -54,11 +55,12 @@ test.describe('Pixel 5', () => {
     expect(r.right, '整宽').toBeGreaterThanOrEqual(v.w)
     await expect(page.getByTestId('session-drawer').locator('.drawer-grab'), '触屏有抓手').toBeVisible()
     await expect(page.getByTestId('session-drawer').getByTestId('drawer-close'), '标题栏有 ✕').toBeVisible()
-    // 底部固定一行：只有新会话，没有设置（ADR-0030）
+    // 底部固定一行：新会话与设置，各有一个线条图标（ADR-0037）
     const foot = page.getByTestId('session-drawer').locator('.drawer-foot')
     await expect(foot.getByTestId('new-session')).toBeVisible()
-    await expect(foot.locator('button')).toHaveCount(1)
-    await expect(page.getByTestId('open-settings')).toHaveCount(0)
+    await expect(foot.getByTestId('open-settings')).toBeVisible()
+    await expect(foot.locator('button')).toHaveCount(2)
+    await expect(foot.locator('button svg')).toHaveCount(2)
     expect(await activeInDrawer(page), '打开时焦点进浮层').toBe(true)
 
     expect(await termGeo(page), '开抽屉不改终端几何、不发 resize').toEqual(before)
@@ -68,14 +70,35 @@ test.describe('Pixel 5', () => {
     // 会话数跟着新建 / 关闭即时变
     const b = await newSession(page)
     await expect(button, '新建之后').toHaveText('2')
-    page.once('dialog', (d) => d.accept())
+    let dialogs = 0
+    page.on('dialog', (d) => {
+      dialogs++
+      void d.dismiss()
+    })
     await openDrawer(page)
-    const row = page.getByTestId(`session-${b}`)
-    const box = (await row.boundingBox())!
-    await longPress(page, box.x + box.width / 2, box.y + box.height / 2)
-    await page.getByTestId('session-close').click()
+    const closeFromMenu = async () => {
+      const box = (await page.getByTestId(`session-${b}`).boundingBox())!
+      await longPress(page, box.x + box.width / 2, box.y + box.height / 2)
+      await page.getByTestId('session-close').click()
+      await settled(page, 'close-confirm')
+    }
+    // 关闭确认：贴底 sheet，叠在抽屉上；Esc 只关最上面那层（AC-4.11）
+    await closeFromMenu()
+    const c = (await rectOf(page, '[data-testid=close-confirm]'))!
+    expect(Math.abs(c.bottom - v.h), '确认也是贴底 sheet').toBeLessThanOrEqual(1)
+    expect(c.right - c.left, '整宽').toBeGreaterThanOrEqual(v.w)
+    await expect(page.locator('.drawer'), '叠在会话抽屉上').toHaveCount(2)
+    await expect(page.getByTestId('close-confirm')).toContainText('关闭「')
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('close-confirm')).toHaveCount(0)
+    await expect(page.getByTestId('session-drawer'), 'Esc 只关确认，抽屉还在').toBeVisible()
+    await expect(page.getByTestId(`session-${b}`)).toBeVisible()
+    await closeFromMenu()
+    await page.getByTestId('close-ok').click()
     await expect(page.getByTestId(`session-${b}`)).toHaveCount(0)
+    await expect(page.getByTestId('session-drawer'), '确认之后仍在列表里').toBeVisible()
     await expect(button, '关掉之后').toHaveText('1')
+    expect(dialogs, '不用浏览器对话框').toBe(0)
   })
 
   test('E2E-28 ③ 会话抽屉五种关法：遮罩 / Esc / ✕ / 选中会话 / 返回键；历史记录不累积', async ({ page }) => {
@@ -169,5 +192,42 @@ test.describe('Pixel 5', () => {
     await expect(menu).toBeVisible()
     await page.getByTestId('session-menu-scrim').click({ position: { x: 10, y: 10 } })
     await expect(menu).toHaveCount(0)
+  })
+
+  test('E2E-28 ⑦ 会话抽屉至少半屏；底部一行四周留白（ADR-0037 §5）', async ({ page }) => {
+    await agent.open(page)
+    await openDrawer(page)
+    const v = await vp(page)
+    const d = (await rectOf(page, '[data-testid=session-drawer]'))!
+    expect(d.bottom - d.top, '只有 1 个会话也至少半屏').toBeGreaterThanOrEqual(v.h / 2 - 1)
+    const foot = (await rectOf(page, '[data-testid=session-drawer] .drawer-foot'))!
+    expect(Math.abs(foot.bottom - d.bottom), '底部一行贴着 sheet 底部').toBeLessThanOrEqual(1)
+    const n = (await rectOf(page, '[data-testid=session-drawer] [data-testid=new-session]'))!
+    const s = (await rectOf(page, '[data-testid=session-drawer] [data-testid=open-settings]'))!
+    expect(d.bottom - n.bottom, '按钮与 sheet 底边留白').toBeGreaterThanOrEqual(16 - 0.5)
+    expect(Math.abs(n.left - d.left - 16), '左边 16px').toBeLessThanOrEqual(1)
+    expect(Math.abs(d.right - s.right - 16), '右边 16px').toBeLessThanOrEqual(1)
+    expect(Math.abs(s.left - n.right - 12), '按钮之间 12px').toBeLessThanOrEqual(1)
+    expect(Math.round(n.bottom - n.top)).toBe(48)
+    expect(Math.round(s.bottom - s.top)).toBe(48)
+    expect(Math.round(s.right - s.left), '设置是方块').toBe(48)
+  })
+
+  test('E2E-28 ⑧ 从抽屉进设置：抽屉关、设置是贴底 sheet，不套半屏最小高度，底部留白', async ({ page }) => {
+    await agent.open(page)
+    await openDrawer(page)
+    await page.getByTestId('session-drawer').getByTestId('open-settings').click()
+    await expect(page.getByTestId('session-drawer')).toHaveCount(0)
+    await settled(page, 'settings')
+    const v = await vp(page)
+    const r = (await rectOf(page, '[data-testid=settings]'))!
+    expect(Math.abs(r.bottom - v.h), '贴底').toBeLessThanOrEqual(1)
+    expect(r.right - r.left, '整宽').toBeGreaterThanOrEqual(v.w)
+    await expect(page.getByTestId('settings').locator('.drawer-grab')).toBeVisible()
+    expect(r.bottom - r.top, '两行设置，不撑到半屏').toBeLessThan(v.h / 2)
+    const inc = (await rectOf(page, '[data-testid=font-inc]'))!
+    expect(r.bottom - inc.bottom, '底部留白').toBeGreaterThanOrEqual(16)
+    await page.mouse.click(v.w / 2, 40) // 点遮罩
+    await expect(page.getByTestId('settings')).toHaveCount(0)
   })
 })

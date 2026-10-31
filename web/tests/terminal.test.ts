@@ -198,10 +198,11 @@ describe('xterm 配置', () => {
     h.dispose()
   })
 
-  it('UT-look-1 字号 14px、字体是系统等宽栈，带 CJK 等宽回退（AC-5.3）', () => {
+  it('UT-look-1 默认字号 14px、字体是系统等宽栈，带 CJK 等宽回退（AC-5.3）', () => {
     const h = mk()
     expect(FONT_SIZE).toBe(14)
     expect(h.term.options.fontSize).toBe(14)
+    expect(createTerminal(undefined, 18).term.options.fontSize, '设置里改过字号：新实例用它').toBe(18)
     expect(h.term.options.fontFamily).toBe(FONT_FAMILY)
     expect(FONT_FAMILY).toMatch(/^ui-monospace, /)
     expect(FONT_FAMILY).toMatch(/"Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace$/)

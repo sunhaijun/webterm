@@ -187,23 +187,42 @@ test.describe('E2E-11 会话生命周期（上限 5）', () => {
     await page.keyboard.press('Enter')
     await expect(page.getByTestId(`tab-${sid}`)).toHaveCount(0)
     expect(asked, 'exited 会话关闭不需要确认').toBe(false)
+    await expect(page.getByTestId('close-confirm'), 'exited 会话关闭不弹确认浮层').toHaveCount(0)
     await waitFor(async () => (await hooks.sid(page)) === keep, '切到相邻会话')
   })
 
-  test('⑦ 关闭 running 会话（会话菜单 → 关闭）需要二次确认，取消就不关', async ({ page }) => {
+  test('⑦ 关闭 running 会话（会话菜单 → 关闭）弹自己的确认浮层：取消 / Esc 不关，Enter 关（ADR-0038）', async ({ page }) => {
     await agent.open(page)
     const sid = await newSession(page)
+    const name = (await page.getByTestId(`tab-${sid}`).locator('.tab-name').textContent())!
 
-    const asked: string[] = []
+    let dialogs = 0
     page.on('dialog', (d) => {
-      asked.push(d.message())
+      dialogs++
       void d.dismiss()
     })
-    await page.getByTestId(`tab-${sid}`).click({ button: 'right' })
-    await page.getByTestId('session-close').click()
-    await expect.poll(() => asked.length, { message: '关闭 running 会话必须二次确认' }).toBe(1)
-    expect(asked[0]).toContain('会话内可能有正在跑的程序')
+    const confirm = page.getByTestId('close-confirm')
+    const ask = async () => {
+      await page.getByTestId(`tab-${sid}`).click({ button: 'right' })
+      await page.getByTestId('session-close').click()
+      await expect(confirm, '关闭 running 会话必须二次确认').toBeVisible()
+    }
+    await ask()
+    await expect(confirm).toContainText(`关闭「${name}」？`)
+    await expect(page.getByTestId('close-ok'), '焦点在「关闭」上').toBeFocused()
+    await page.getByTestId('close-cancel').click()
+    await expect(confirm).toHaveCount(0)
     await expect(page.getByTestId(`tab-${sid}`), '取消了就不该关掉').toBeVisible()
+
+    await ask()
+    await page.keyboard.press('Escape')
+    await expect(confirm).toHaveCount(0)
+    await expect(page.getByTestId(`tab-${sid}`), 'Esc 也是取消').toBeVisible()
+
+    await ask()
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId(`tab-${sid}`), 'Enter 确认').toHaveCount(0)
+    expect(dialogs, '不用浏览器对话框').toBe(0)
   })
 })
 

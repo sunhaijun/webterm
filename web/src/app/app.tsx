@@ -7,10 +7,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 
 import { ExtraKeys } from '../keys/extrakeys'
 import { Drawer } from '../ui/drawer'
+import { GearIcon, PlusIcon } from '../ui/icons'
 import { AppController } from './controller'
 import { showsExtraKeys } from './form'
 import { ConnBanner, ImePreview, ToastView } from './notices'
+import { CloseConfirm } from './confirm'
 import { SessionList, SessionMenu } from './sessions'
+import { Settings } from './settings'
 import { TopBar } from './tabs'
 
 interface MenuAt {
@@ -46,6 +49,7 @@ export function App({ onRevoked }: AppProps = {}) {
   const keys = showsExtraKeys(s.form, s.coarse)
   const atLimit = s.sessions.length >= s.maxSessions
   const menuSession = menu ? s.sessions.find((x) => x.sid === menu.sid) : undefined
+  const closing = s.closing === null ? undefined : s.sessions.find((x) => x.sid === s.closing)
   const anyUnread = s.sessions.some((x) => x.unread)
   const empty = s.welcomed && s.sessions.length === 0
 
@@ -76,6 +80,7 @@ export function App({ onRevoked }: AppProps = {}) {
           onRenameStart={(sid) => setRenaming(sid)}
           onRename={rename}
           onCancelRename={endRename}
+          onSettings={() => ctl.openSettings()}
         />
       )}
 
@@ -83,7 +88,7 @@ export function App({ onRevoked }: AppProps = {}) {
         <div class="term" data-testid="terminal" ref={areaRef} />
         <ConnBanner state={s.conn} info={s.connInfo} fatal={s.fatal} />
         <ToastView toast={s.toast} />
-        <ImePreview preview={s.preview} />
+        <ImePreview preview={s.preview} fontSize={s.fontSize} />
         {empty && (
           <div class="empty" data-testid="empty">
             <p>没有会话</p>
@@ -113,6 +118,7 @@ export function App({ onRevoked }: AppProps = {}) {
         <Drawer
           title="会话"
           testid="session-drawer"
+          variant="sessions"
           backButton
           onClose={() => {
             setRenaming(null)
@@ -121,12 +127,24 @@ export function App({ onRevoked }: AppProps = {}) {
           foot={
             <div class="drawer-actions">
               <button
+                type="button"
+                class="drawer-btn drawer-new"
                 data-testid="new-session"
                 disabled={atLimit}
                 title={atLimit ? `会话数已达上限 ${s.maxSessions}` : undefined}
                 onClick={() => ctl.newFromDrawer()}
               >
-                + 新会话
+                <PlusIcon />
+                新会话
+              </button>
+              <button
+                type="button"
+                class="drawer-btn drawer-settings"
+                data-testid="open-settings"
+                aria-label="设置"
+                onClick={() => ctl.openSettings()}
+              >
+                <GearIcon />
               </button>
             </div>
           }
@@ -141,6 +159,16 @@ export function App({ onRevoked }: AppProps = {}) {
             onCancelRename={() => setRenaming(null)}
           />
         </Drawer>
+      )}
+
+      {s.settingsOpen && (
+        <Settings
+          theme={s.theme}
+          fontSize={s.fontSize}
+          onTheme={(t) => ctl.setTheme(t)}
+          onFontSize={(px) => ctl.setFontSize(px)}
+          onClose={() => ctl.closeSettings()}
+        />
       )}
 
       {menu && menuSession && (
@@ -163,6 +191,8 @@ export function App({ onRevoked }: AppProps = {}) {
           }}
         />
       )}
+
+      {closing && <CloseConfirm name={closing.name} onOk={() => ctl.confirmClose()} onCancel={() => ctl.cancelClose()} />}
     </div>
   )
 }
