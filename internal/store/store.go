@@ -3,8 +3,9 @@
 // 选型见 ADR-0005（modernc.org/sqlite，纯 Go 无 cgo），schema 见
 // docs/50-backend/storage-schema.md。
 //
-// 这个库里【绝对不能】出现终端输出内容（不变式 3 / AC-8.4）——
-// 只有命令原文、CWD、退出码、耗时、时间戳，以及设备与配对的哈希。
+// 这个库里【绝对不能】出现终端输出内容（不变式 3 / AC-8.4），也不存用户敲过的
+// 命令（命令历史随 ADR-0026 删除）—— 只有设备与配对（token 与配对码只存哈希）
+// 和 schema 版本。
 package store
 
 import (
@@ -27,8 +28,8 @@ const schemaVersionKey = "schema_version"
 
 // Store 是数据库句柄。
 //
-// 单连接 + 写锁：WAL 下 SQLite 支持并发读，但本项目的负载是每分钟几条命令
-// 记录，串行化是最简单可靠的选择。不要为了性能引入连接池的复杂度。
+// 单连接 + 写锁：WAL 下 SQLite 支持并发读，但本项目的负载只有配对、设备校验与
+// last_seen_at 的节流更新，串行化是最简单可靠的选择。不要为了性能引入连接池的复杂度。
 type Store struct {
 	db *sql.DB
 	mu sync.Mutex
@@ -39,8 +40,8 @@ func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("store: 创建数据目录: %w", err)
 	}
-	// MkdirAll 对已存在的目录是空操作，权限得显式收紧 —— 数据目录里是完整的
-	// 命令历史，同机的其它用户不在信任边界内。
+	// MkdirAll 对已存在的目录是空操作，权限得显式收紧 —— 数据目录里有设备凭据
+	// 的哈希与证书私钥，同机的其它用户不在信任边界内。
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("store: 设置数据目录权限: %w", err)
 	}
@@ -122,6 +123,7 @@ func (s *Store) migrate() error {
 	}
 	sort.Strings(names)
 
+	applied := 0
 	for _, name := range names {
 		v, err := strconv.Atoi(name[:4])
 		if err != nil {
@@ -154,6 +156,18 @@ func (s *Store) migrate() error {
 			return err
 		}
 		current = v
+		applied++
+	}
+	if applied > 0 {
+		// 删表（0003 删命令历史）留下的空闲页还给文件系统。auto_vacuum 是
+		// INCREMENTAL，不跑这一句页就一直留在文件里。每一步回收一页，得把行读完。
+		rows, err := s.db.Query("PRAGMA incremental_vacuum")
+		if err != nil {
+			return fmt.Errorf("store: incremental_vacuum: %w", err)
+		}
+		for rows.Next() {
+		}
+		rows.Close()
 	}
 	return nil
 }
@@ -177,19 +191,6 @@ func (s *Store) getSetting(key string) (string, bool, error) {
 		return "", false, fmt.Errorf("store: 读 setting %q: %w", key, err)
 	}
 	return v, true, nil
-}
-
-// Setting 读取一个设置项。
-func (s *Store) Setting(key string) (string, bool, error) { return s.getSetting(key) }
-
-// SetSetting 写入一个设置项。
-func (s *Store) SetSetting(key, value string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.db.Exec(
-		`INSERT INTO settings(key, value) VALUES(?, ?)
-		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
-	return err
 }
 
 // Close 关闭数据库。

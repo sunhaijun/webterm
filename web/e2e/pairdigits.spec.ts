@@ -1,13 +1,13 @@
-import { expect, test } from '@playwright/test'
-
-import { Agent } from './harness'
-
 /**
- * E2E-27 手输数字配对码（ADR-0017，AC-1.15）。
+ * E2E-27 手输数字配对码 —— AC-1.15（ADR-0017）。
  *
  * 扫不了码的人打开 /pair 输入终端里那 16 位数字。和二维码是同一次配对的两把钥匙：
  * 任一把用掉，另一把作废。
  */
+import { expect, test } from '@playwright/test'
+
+import { Agent, waitOnline } from './harness'
+
 let agent: Agent
 test.beforeEach(async () => {
   agent = await Agent.start()
@@ -38,7 +38,7 @@ test('E2E-27 /pair 无 fragment 显示输入框；空格分隔的数字码能配
   await expect(input).toHaveValue(digits)
   await submit.click()
   await page.waitForURL((u) => u.pathname === '/' && !u.hash, { timeout: 20_000 })
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await waitOnline(page)
 
   // 同一次配对的 URL 码（二维码那把）已经作废
   const ctx2 = await browser.newContext()

@@ -24,7 +24,6 @@ type Config struct {
 	Dev        bool
 	TrustProxy bool
 	MaxConns   int
-	MaxHistory int
 	Version    string
 	Logger     *slog.Logger
 
@@ -102,32 +101,26 @@ func (a *Agent) routes() {
 	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeDevice)))
 	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(http.HandlerFunc(a.handleRevokeAll)))
 
-	a.mux.Handle("GET /api/commands", a.requireAuth(http.HandlerFunc(a.handleListCommands)))
-	a.mux.Handle("POST /api/commands", a.requireAuth(http.HandlerFunc(a.handleNewSnippet)))
-	a.mux.Handle("PATCH /api/commands", a.requireAuth(http.HandlerFunc(a.handleReorderCommands)))
-	a.mux.Handle("PATCH /api/commands/{id}", a.requireAuth(http.HandlerFunc(a.handlePatchCommand)))
-	a.mux.Handle("DELETE /api/commands/{id}", a.requireAuth(http.HandlerFunc(a.handleDeleteCommand)))
-	a.mux.Handle("DELETE /api/commands", a.requireAuth(http.HandlerFunc(a.handleClearCommands)))
-
-	// 写态路径补全（ADR-0011 ③）：与 shell 同权限，见 fs.go
-	a.mux.Handle("GET /api/fs", a.requireAuth(http.HandlerFunc(a.handleFS)))
-
-	a.mux.Handle("GET /api/settings", a.requireAuth(http.HandlerFunc(a.handleGetSettings)))
-	a.mux.Handle("PATCH /api/settings", a.requireAuth(http.HandlerFunc(a.handlePatchSettings)))
+	// 其余 /api/* 一律先认证、再 404（路由认证矩阵：/api/* ✓）。不兜住的话它们会
+	// 落进 GET / 的 SPA 回退，未认证也能拿到 200 + index.html —— 删掉的
+	// /api/commands、/api/fs、/api/settings（ADR-0026 §6）就是这么一批路径。
+	//
+	// 按方法逐个登记：不带方法的 "/api/" 与 "GET /" 在 ServeMux 里算冲突。
+	apiNotFound := a.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.writeError(w, http.StatusNotFound, "not_found", "没有这个接口")
+	}))
+	for _, m := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		a.mux.Handle(m+" /api/", apiNotFound)
+	}
 }
 
-// PurgeLoop 周期性清理过期配对码与超额历史。
+// PurgeLoop 周期性清理过期配对码。
 func (a *Agent) PurgeLoop(stop <-chan struct{}) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	purge := func() {
 		if _, err := a.store.PurgePairings(time.Now()); err != nil {
 			a.log.Warn("清理配对码失败", "err", err)
-		}
-		if a.cfg.MaxHistory > 0 {
-			if _, err := a.store.Evict(a.cfg.MaxHistory); err != nil {
-				a.log.Warn("淘汰历史失败", "err", err)
-			}
 		}
 	}
 	purge() // 启动时先跑一次

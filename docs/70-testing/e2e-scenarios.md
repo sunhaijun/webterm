@@ -11,8 +11,8 @@
 ```
 1. go build 出真二进制（含 go:embed 的前端产物）
 2. webterm serve --dev --data-dir <临时目录> --max-sessions 5
-   默认 ring-bytes（1 MiB）—— 断线窗口内的输出不会溢出，字节级比较才稳定
-   只有 E2E-2c / E2E-4 / E2E-30 / E2E-31 用 --ring-bytes 65536 单独起一个实例，让 reset 路径可测
+   默认 ring-bytes（256 KiB）—— 断线窗口内的输出不会溢出，增量路径的字节级比较才稳定
+   只有 E2E-2c / E2E-4 / E2E-30 / E2E-31 用 --ring-bytes 65536 单独起一个实例，让快照路径可测
 3. 从 stdout 抓配对 URL
 4. Playwright 打开 URL，完成配对
 ```
@@ -23,8 +23,9 @@
 
 ```bash
 #!/bin/bash
-# 用法: emit.sh <总行数> [每行延迟ms]
-# 内容含：ANSI 颜色、CJK 宽字符、超长行
+# 用法: emit.sh <总行数> [每行延迟ms] [mono]
+# 内容含：ANSI 颜色、CJK 宽字符、超长行；每行以 `line NNNNN` 开头、147 列宽
+# mono：整段只有开头一个 SGR、结尾一个复位（一段跨越很多帧的同色文本）
 ```
 
 必须**完全确定性**（不含时间戳、不含随机数、不含主机名、不含 `$PWD`），否则字节级比较无意义。
@@ -58,7 +59,7 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 1. 配对成功，进入主界面
 2. Cookie 属性正确（`HttpOnly` / `SameSite=Strict`）
 3. 自动创建（或手动创建）一个会话
-4. Composer 输入 `echo hello-webterm`，回车
+4. 点终端，输入 `echo hello-webterm`，回车
 5. 终端出现 `hello-webterm`
 6. `stty size` 的输出与前端的 cols/rows 一致
 
@@ -80,17 +81,18 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 
 同上，但断开后 `page.waitForTimeout(5000)` 再允许重连。断言字节一致。
 
-### E2E-2c 断开期间输出超过 ring_bytes → reset
+### E2E-2c 断开期间输出超过 ring_bytes → 快照
 
 > 用 `--ring-bytes 65536` 的实例。
 
-1. 断开，在断开期间让会话产出 > 64 KiB 输出（`emit.sh 5000`）
-2. 重连
-3. 断言：
-   - `resumed[].status == "reset"`（可通过 UI 提示间接验证）
-   - 屏幕出现"历史输出已截断"分隔线
+1. 跑基准：`emit.sh 5000`，不断开 → 序列化**最后 2000 行 + 当前屏** → 基准
+2. 新会话，断开，在断开期间让会话产出 > 64 KiB 输出（`emit.sh 5000`）
+3. 重连
+4. 断言：
+   - `resumed[].status == "snapshot"`，随后收到 SNAPSHOT 帧
+   - **没有**「历史输出已截断」之类的提示
+   - 序列化的最后 2000 行 + 当前屏与基准**逐行一致**（屏幕级，AC-2.21）。比较前去掉行尾空白：快照把写出来的行尾空格记成空格子，`translateToString` 却会保留写出来的空格，Vitest 的逐格比较也是这样归一的
    - **重连后新产生的输出完全正确**（后续 `echo marker-xyz` 能正常显示）
-   - 屏幕上没有长串乱码（允许回放起点有少量垃圾字符，见环形缓冲的已知限制）
 
 ### E2E-2d 连续快速断开
 
@@ -98,10 +100,10 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 
 ### E2E-2e 断点落在着色区间内
 
-让 `emit.sh` 输出一段跨越多帧的同色文本，**在这段中间**断开重连。断言：
+用 `emit.sh <行数> <延迟> mono` 输出一段跨越多帧的同色文本，**在这段中间**断开重连。断言：
 
-- 回放的第一帧 `flags == 0`（`status == "ok"` 时**不得**注入 `ESC[0m`）
-- 断点之后的文本颜色与基准一致 —— 这是 AC-2.7 最容易写错的一面
+- 走的是增量（`status == "ok"`），回放的字节与基准在同一位置逐字节相同 —— agent 不改写输出流（AC-2.5）
+- 断点之后的文本颜色与基准一致
 
 ---
 
@@ -109,10 +111,10 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 
 > AC-2.4
 
-1. 建立会话，确认在 Composer 模式
+1. 建立会话，点终端
 2. 切断 WS（不让它立即重连）
-3. 在 Composer 里提交三条命令：`echo A1`、`echo A2`、`echo A3`
-4. UI 应显示这些输入处于"待发送"状态（而不是静默吞掉）
+3. 在终端里敲三条命令：`echo A1`、`echo A2`、`echo A3`，各自回车
+4. 输入没被静默吞掉：连接横幅显示「重连中」，且 `__webterm.inputStats().unackedBytes > 0`（这些字节在重发队列里）
 5. 恢复连接
 6. 终端依次出现 `A1`、`A2`、`A3`，**顺序正确、无重复、无丢失**
 7. 断言重连过程中**没有出现 `input_gap`**：`welcome.resumed[].in_ack` 必须是断开前的累计值而不是 0（AC-2.12）
@@ -121,11 +123,11 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 
 ---
 
-## E2E-4 缓冲溢出的 reset 路径
+## E2E-4 快照路径的 UI 表现
 
 > AC-2.6
 
-见 E2E-2c。独立列出是因为它还要验证 UI 侧的表现：清屏发生、提示可见、提示可关闭。
+见 E2E-2c。独立列出是因为它还要验证 UI 侧的表现：写快照之前清了屏（同一段内容只出现一份）、回看位置回到底部、不出现任何"截断"提示。
 
 ---
 
@@ -133,10 +135,13 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 
 > AC-2.10
 
-1. 在线 → 绿点
-2. 切断 → 橙点 + "重连中 · Ns 后重试"，倒计时递减
-3. 恢复 → 绿点 + toast "已恢复 · 补齐 N KB"，3 秒后消失
-4. 断言 toast 里的字节数与实际回放量一致（数量级即可）
+Pixel 5（`compact`）与 1440×900（`wide`）各跑一遍。
+
+1. 在线：`compact` 上看不到横幅，`conn-text` 在 DOM 里、文本为「在线」、视觉隐藏；`wide` 上标签栏右侧 `conn-dot` 是在线色
+2. 切断 → 横幅出现「重连中 · Ns 后重试」，倒计时递减；`wide` 上状态点变色
+3. **横幅不改几何**：横幅出现前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `__webterm.resizes()` 不变
+4. 恢复 → 横幅消失，toast「已恢复 · 补齐 N KB」，3 秒后消失
+5. 断言 toast 里的字节数与实际回放量一致（数量级即可）
 
 ---
 
@@ -147,7 +152,7 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 1. 创建会话 A、B
 2. 在 A 里跑 `emit.sh 100 50`（持续输出）
 3. 切到 B
-4. A 的列表项出现未读标记（由 `session.updated{head_seq}` > 本地 `out_seq` 推导）
+4. A 出现未读标记（由 `session.updated{head_seq}` > 本地 `out_seq` 推导）：Pixel 5 上 `open-sessions` 带红点（`data-unread=true`）、抽屉里 A 那行有未读点；1440×900 上 A 的标签有未读点
 5. 在 B 里 `echo in-b`，正常工作
 6. 切回 A：内容**完整**（切走期间的输出全在），未读标记清除
 7. A 的滚动位置保持在切走前的位置（除非之前在底部，则跟到底部）
@@ -156,34 +161,25 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 
 ## E2E-7 中文 IME 输入
 
-> AC-3.1, AC-3.3, AC-3.14
+> AC-3.3, AC-3.14。文本输入页的组字见 E2E-40。
 
 Playwright 可以派发 composition 事件。
 
-### Composer 模式
+### 终端直输
 
-1. 聚焦 Composer
+1. 点终端
 2. 派发 `compositionstart` → `compositionupdate`（data: `ni`）→ `compositionupdate`（data: `你`）→ `compositionend`（data: `你好`）
-3. 断言：**composition 期间没有任何 WebSocket INPUT 帧发出**
-4. Composer 内容为 `你好`
-5. 组字期间按 `Enter`（`isComposing: true`）→ **不提交**
-6. `compositionend` 后按 `Enter` → 提交，终端收到
-
-### Raw 模式
-
-1. 手动切到 Raw
-2. 同样派发 composition 事件
 3. 断言：`compositionend` 之前零 INPUT 帧；`compositionend` 时**一次**发出 `你好`
 4. 组字期间光标位置有内联预览浮层
 
-### Raw 模式 · 切过会话之后（回归）
+### 终端直输 · 切过会话之后（回归）
 
 **每个会话有自己的 xterm 实例，也就有自己的 helper textarea**，而
 `store.activate()` 会把上一个会话的 host 从 DOM 摘掉。所以切会话必须
 重新挂 `RawIme`。
 
 1. 建第二个会话并切过去
-2. 手动切到 Raw，派发 composition 事件
+2. 点终端，派发 composition 事件
 3. 断言：内联预览浮层可见 —— 没重新挂就不会出现。**这条是有效的回归点**
    （已用变异验证：还原成"只挂一次"后它失败）
 4. 断言：`compositionend` 之前零 INPUT 帧 —— 留着防回归，但**它测不到本
@@ -191,12 +187,12 @@ Playwright 可以派发 composition 事件。
    所以「`isComposing` 恒为 false → 组字字节直通 PTY，违反 AC-3.3」这个
    后果只有真输入法能演示（见 [自动化边界](../90-roadmap/milestones.md)）
 
-### Raw 模式 · 软键盘直接插入的标点（AC-3.14）
+### 终端直输 · 软键盘直接插入的标点（AC-3.14）
 
 iPhone 中文键盘下「逗号打不进终端，句号可以」—— 同一个键盘上两个键报的 `keyCode` 不同，
-xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input-modes.md) §直接插入的文本）。
+xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#直接插入的文本ac-314)）。
 
-在终端直通输入下，对 helper textarea 按软键盘的样子派发 `keydown` → 插字符 → `input(insertText)` → `keyup`：
+终端直输时，对 helper textarea 按软键盘的样子派发 `keydown` → 插字符 → `input(insertText)` → `keyup`：
 
 1. `keyCode: 0` 的「，」「！」→ **必须进终端**（修复前这里丢字，是本 bug 的要害）
 2. `keyCode: 229` 的「。」→ 仍然进终端（xterm 的差量路，别被改坏）
@@ -216,49 +212,24 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 ---
 
-## E2E-8 Composer 提交格式
+## E2E-10 手机布局与附加键
 
-> AC-3.2
+> AC-3.18, AC-3.20
 
-1. 在 Composer 里输入多行内容：
-   ```
-   echo line1
-   echo line2
-   ```
-2. 提交
-3. 拦截 WebSocket 帧，断言 payload 为 `ESC[200~ … ESC[201~ CR`
-4. 终端里这两行**作为一整块待编辑的输入**出现，不是被逐条执行
+`web/e2e/mobile.spec.ts`，Pixel 5 设备描述（触屏）。hook `WebSocket.send` 记 INPUT 帧。
 
----
+1. **结构**：`data-form=compact`；没有 `tabbar`；附加键区在终端下方、高 80px；左列是 `open-sessions` 与 `toggle-text`；键区 14 个键的 testid 依次为 `key-Escape key-Slash key-Minus key-Home key-ArrowUp key-End key-PageUp key-Tab key-Ctrl key-Alt key-ArrowLeft key-ArrowDown key-ArrowRight key-PageDown`
+2. **全可见、不横滑**：键区 `scrollWidth ≤ clientWidth + 1`，14 个键的矩形都在视口内
+3. **静态**：`sleep 30` 在跑、`less` 占屏、退出 `less` 之后，键区的 testid 序列都与第 1 步一致
+4. **字节**：`key-Escape` → `1b`；`key-ArrowUp` → `1b5b41`；`printf '\033[?1h'` 打开 DECCKM 后 `key-ArrowUp` → `1b4f41`、`key-Home` → `1b4f48`；`printf '\033[?1l'` 后复原。每按一次，`inputStats().data.n` 都涨
+5. **不抢焦点**：先点终端让它有焦点，按 `key-Tab` → `document.activeElement` 不变
+6. **粘滞 CTRL**：点 `key-Ctrl` → `data-sticky=armed`；`keyboard.type('c')` → 发出 `03`，`data-sticky=off`；点 `key-Ctrl` 再点 `key-ArrowLeft` → 发出 `1b5b313b3544`（`ESC[1;5D`）
+7. **锁定**：长按 `key-Ctrl`（> 500ms）→ `data-sticky=locked`；连续 `c` `u` → `03` `15`（不用 `d`：空提示符下的 `^D` 会让 bash 退出）；再点一下 → `off`
+8. **点按终端**（AC-3.20）：点 `.term` 一下 → 焦点进 xterm 的 helper textarea；再点一下 → 焦点离开；纵向拖 30px 不改变焦点；**纵向拖动真的在滚**（有足够 scrollback 时连续拖 20 帧，`viewportY` 变化不止一行 —— 防 DOM 渲染器换掉行元素后 touchmove 落到脱离文档的节点上，只滚第一帧）；`printf '\033[?1000h'` 开鼠标跟踪后点一下 → 焦点不变、INPUT 帧里出现鼠标上报（`1b5b4d` 开头），`printf '\033[?1000l'` 复原
+9. **安全区**：Chromium 里 `env(safe-area-inset-*)` 恒为 0，所以直接在 `.app` 上覆盖 `--sa-top: 47px`、`--sa-bottom: 34px` → 终端顶边落到 47px、附加键底边离 `.app` 底边 34px、`.app` 高度不变、终端正好矮 81px、页面不溢出；清掉 `--sa-bottom` → 复位
+10. **横屏**：`viewport` 与 `screen` 都是 851×393 → 仍是 `compact`，附加键 80px、14 个键全可见
 
-## E2E-9 输入模式自动切换
-
-> AC-3.5
-
-1. 停在 prompt → Composer 模式（输入框可见）
-2. 提交 `sleep 3` → 120ms 去抖后切到 Raw（输入框仍在，功能键条出现；ADR-0012）
-3. 3 秒后命令结束 → 立即切回 Composer
-4. 提交 `ls`（瞬间结束）→ **不应该出现 Raw 模式的闪烁**（去抖生效）
-5. 点终端区打字 → 直送 PTY，不切模式（ADR-0013：输入按触摸位置判定，没有手动模式开关）
-
----
-
-## E2E-10 移动端布局与功能键条
-
-> AC-3.8, AC-3.9
-
-在 `viewport: { width: 390, height: 844 }`（iPhone 14）下：
-
-1. 底栏是一条键行：第一个键是互切键 `to-edit`，行尾是 `open-more`；停在 prompt 键区是提示符键集（有 `key-Tab`、没有 `key-Escape`）；`sleep 30` 起来后键区换成通用键集，**前 5 个（`Esc ^C Tab Ctrl ↑`）无需滚动即可见**，且【`^C` 在其中】（ADR-0015）
-2. 点 `Ctrl` → 激活态有视觉反馈；再按 `c` → 发出 `0x03`；`Ctrl` 自动取消激活
-2b. 直接点 `^C` → 发出 `0x03`，不需要先点 `Ctrl`；Composer 模式下同样直发
-3. 长按 `Ctrl` → 锁定态；连续两次组合都带 `Ctrl`；再点解锁
-4. 聚焦 Composer（模拟 `visualViewport` 收缩）→ 终端区收缩，功能键条与 Composer 仍完全可见，布局无跳动
-5. 断言：`resize` 消息发出，cols/rows 更新
-6. 切到横屏（`844 × 390`）→ `short` 布局生效（功能键条 32px、快捷命令条隐藏）
-7. **安全区**（PWA 全屏刘海 / Home 指示条）：Chromium 里 `env(safe-area-inset-*)` 恒为 0，所以直接在 `.app` 上覆盖 `--sa-top: 47px`、`--sa-bottom: 34px` → 状态栏顶边落到 47px、键行底边离 `.app` 底边 34px、`.app` 高度不变（JS 写的可视视口高度）、终端正好矮 81px、页面不溢出；再把 `--sa-bottom` 清掉 → 全部复位
-
-> **注**：Playwright 无法真正弹出软键盘。这里通过直接修改容器高度并派发 `visualViewport` resize 事件来模拟。真机验证放在手工清单。
+> **注**：Playwright 无法真正弹出软键盘。软键盘几何见 E2E-21（改容器高度、重放 `visualViewport` 事件来模拟），真机放在手工清单。
 
 ---
 
@@ -266,65 +237,25 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 > AC-4.2, AC-4.5, US-7.3
 
-1. 创建到上限（5 个，夹具里配的）→ 新建按钮禁用 + 显示"会话数已达上限 5"
-2. 在某会话里 `exit 1` → 状态变 `exited`，列表项显示 `exit 1`
-3. **已退出会话的内容仍可滚动、可搜索、可复制**
-4. Composer 收起为提示带：`会话已结束（exit 1）· 重开 · 关闭`
-5. 点「重开」→ 在同一 CWD 新建会话
-6. 关闭 `running` 会话 → 二次确认
-7. 关闭 `exited` 会话 → 无需确认
+1. 创建到上限（5 个，夹具里配的）→ `new-session` 禁用，并提示「会话数已达上限 5」
+2. 在某会话里先 `printf 'LAST-%s\n' LINE`，再 `exit 1` → 终端末尾出现 `[进程已结束（退出码 1）· 按 Enter 关闭]`，它在 `LAST-LINE` **之后**；提示行是前端自己写的、不计入 seq：它出现之后 `__webterm.outSeq()` 不再变，且等于 agent 的 `head_seq`（刷新后用 `welcome.sessions[].head_seq` 核对）
+3. 已退出会话的内容仍可滚动、可选择复制
+4. 抽屉列表里显示 `exit 1`（警示色）；标签只变灰（`data-exited`），不显示退出码
+5. **刷新页面** → 提示行在缓冲里**只出现一次**
+6. 在该会话里按 `Enter` → 会话关闭（不需要确认），切到相邻会话
+7. 关闭 `running` 会话（会话菜单 → 关闭）→ 二次确认
 
 ---
 
 ## E2E-12 阅读输出
 
-> AC-5.1, AC-5.2, AC-5.3, AC-5.4, AC-5.13
+> AC-5.1, AC-5.3, AC-5.4, AC-5.13
 
 1. 跑 `emit.sh 3000` → 向上滚动能看到早期输出（无需进入任何模式）
-2. `Ctrl+F` 搜索一个已知字符串 → 命中数正确、`Enter` 逐个跳转、高亮可见
-3. 调整字号 → 生效并持久化（刷新后保持），并且**补了 `resize`**（`__webterm.resizes()` 变大、列数跟着变）—— cell 尺寸变了而容器没变，`ResizeObserver` 不会响
-4. 选中一段文本，此时有新输出到达 → **选择不被破坏**，自动滚动暂停
-5. 复制 → 剪贴板内容正确
-6. **回看时暂停跟随**（AC-5.9，桌面与 Pixel 5 各跑一遍）：跑一条持续输出的命令，中途 `__webterm.scrollLines(-N)` 把视口滚上去 → 之后终端缓冲里的行数**不再增长**，`follow-pill` 出现且「新增 N 行」在涨；点提示条 → 全部行一次到齐、每行恰好一次、顺序正确，提示条消失
-   - **空闲时回滚也要有提示条**，且必须走**真实的滚动路径**（不是 `scrollLines` 钩子）：命令跑完、没有新输出 → 桌面用 `mouse.wheel` 往上滚，Pixel 5 直接改 `.xterm-viewport.scrollTop`（单指拖动就是这么做的）→ `follow-pill` 出现、文本是「回到底部」；点它 → 视口回到 `baseY`、提示条消失。xterm 对 DOM 驱动的滚动不发 `onScroll`，只用钩子滚的用例测不出这条
-7. **渲染器可见**（AC-5.10）：⋯ → 设置 里有 `renderer`，文本是 WebGL 或 Canvas 之一
-8. **换终端字体**（AC-5.13）：设置里的 `font-family` 下拉至少有「系统默认」，且列出的每一项都是**本机装得到**的（把列出来的名字拿回页面里用同一套判据再量一遍，一个都不该是「没装」；一台机器一个清单字体都没装时，换字体那半边 `test.skip`）；换成另一项 → xterm 的 `options.fontFamily` 换成对应 stack、`__webterm.size().cols` 跟着变、`resizes()` 变大；刷新后仍是它；把 `localStorage['webterm.font.family']` 写成不存在的 id 再刷新 → 回落「系统默认」，不报错
-
----
-
-## E2E-13 shell 集成降级
-
-> AC-3.7, AC-7.6, US-7.1
-
-夹具用 `--no-shell-integration`（或指向一个会破坏集成的 `.bashrc`）启动。
-
-1. 会话的 `integration` 变为 `inactive`
-2. 顶部出现不打扰的提示：`shell 集成未生效 · 了解原因`
-3. **终端照常可用**：能执行命令、能看输出、能滚动
-4. 模式固定为 Composer，自动切换不发生
-5. 手动切到 Raw → vim 之类的 TUI 能正常操作
-6. 历史面板里没有新记录产生，但**旧记录仍可搜索和使用**
-
----
-
-## E2E-14 命令历史与快捷命令
-
-> AC-6.1, AC-6.4 – AC-6.9
-
-1. 执行 `echo one`、`echo two`、`false` → 历史面板出现三条，退出码分别 0/0/1
-2. `false` 那条的退出码用警示色显示
-3. 执行 ` echo secret`（**前导空格**）→ 历史里**没有**这条（AC-6.2）
-4. 点历史里的 `echo one` → 填入 Composer，光标在末尾，**未执行**
-5. `Shift+点击` → 直接执行
-6. 点 ☆ 置顶 `echo two` → 出现在置顶区
-7. 设置 label 为 `测试二` → 显示 label
-8. 拖动排序 → 刷新后顺序保持
-9. Composer 里按 `↑` → 翻到 `echo two`；输入 `echo ` 后按 `↑` → 只翻以此开头的
-10. 删除单条 → 3 秒撤销 toast，撤销后恢复
-11. 清空全部 → 二次确认，告知保留 N 条快捷命令；执行后置顶仍在
-12. 移动端视口：快捷命令条可见、可横滑、点击填入、长按执行
-
-> 命令面板（原第 9 条：`Ctrl+K` 模糊搜索）已随 [ADR-0022](../20-architecture/adr/0022-drop-command-palette.md) 删除，用例一并移除。
+2. 在设置里调整字号（`font-size`）→ 生效并持久化到 `localStorage['webterm.fontSize.<形态>']`（刷新后保持），并且**补了 `resize`**（`__webterm.resizes()` 变大、列数跟着变）—— cell 尺寸变了而容器没变，`ResizeObserver` 不会响
+3. 选中一段文本，此时有新输出到达 → **选区不被破坏**（选中的仍是原来那几行的内容）
+4. 复制 → 剪贴板内容正确
+5. **换终端字体**（AC-5.13）：设置里的 `font-family` 下拉至少有「系统默认」，且列出的每一项都是**本机装得到**的（把列出来的名字拿回页面里用同一套判据再量一遍，一个都不该是「没装」；一台机器一个清单字体都没装时，换字体那半边 `test.skip`）；换成另一项 → xterm 的 `options.fontFamily` 换成对应 stack、`resizes()` 变大；挑一个与当前字宽不同的字体时 `__webterm.size().cols` 跟着变（装得到的字体都与系统默认同宽时只断言前两条，并在报告里留注 —— 系统默认的 `monospace` 往往就解析成清单里的某一项）；刷新后仍是它；把 `localStorage['webterm.font.family']` 写成不存在的 id 再刷新 → 回落「系统默认」，不报错
 
 ---
 
@@ -335,8 +266,9 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 1. `GET /api/devices` 返回当前设备，`current: true`
 2. 用第二个 browser context 完成第二次配对 → 两台设备
 3. 从设备一吊销设备二 → **设备二的 WebSocket 在 5 秒内断开**，界面显示"此设备已被吊销"并跳到配对引导页
-4. 尝试吊销自己 → 二次确认
-5. 一键吊销全部 → 自己也退出
+4. 一键吊销全部（`POST /api/devices/revoke-all`）→ 自己也退出，跳到配对引导页
+
+> 前端没有设备管理界面（列表与吊销走 API 和 `webterm devices`），所以这里直接调 API。
 
 ---
 
@@ -348,7 +280,7 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 2. `GET /api/devices` → 401
 3. **`GET /ws` 升级 → 401**（不能只测 REST）
 4. 伪造 `Origin: https://evil.com` 的 WS 升级（带有效 Cookie）→ 403
-5. 用错误的配对码 `POST /auth/pair` 6 次 → 第 6 次返回 429
+5. 用错误的配对码 `POST /auth/pair`，按连续失败的退避间隔（1s、2s、4s、8s，见 [auth-pairing.md §限速](../60-security/auth-pairing.md#限速ac-16)）重试 → 前 5 次 401，第 6 次落在同一分钟里返回 429 + `Retry-After`；退避期内不等就重试也是 429
 
 ---
 
@@ -363,6 +295,8 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 3. 同一次配对的 URL 码（二维码那把）此时已作废：另一个 context 打开配对链接 → 「配对码无效或已过期」
 4. 输一个 16 位但错误的码 → 401 提示「配对码无效或已过期」，输入框仍在可重试
 
+---
+
 ## E2E-17 PWA
 
 > AC-1.14
@@ -371,8 +305,6 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 2. Service Worker 注册成功
 3. 断网后刷新 → 显示"无法连接到 agent"的明确状态页（不是浏览器的默认错误页，也不假装能用）
 4. 断言 Service Worker **没有缓存任何 `/api/*` 或 `/ws` 的响应**
-
----
 
 ---
 
@@ -388,75 +320,15 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 ---
 
-## E2E-19 编辑面板 sheet（ADR-0014 互切模型；ADR-0015 键行）
+## E2E-21 软键盘几何：键盘一弹附加键仍在可视区
 
-`web/e2e/sheet.spec.ts`，Pixel 5 视口。
+> AC-3.8。`web/e2e/keyboard.spec.ts`，Pixel 5 视口。两种浏览器模型都覆盖（见 [`../40-frontend/layout.md`](../40-frontend/layout.md#高度计算ac-38)）：
 
-1. **档位**：默认终端输入，底栏一条键行（< 70px），`to-edit` 与 `open-more` 可见、没有编辑键；`to-edit` 升半屏（主区高的 35%–60%），`to-terminal` 是 `editkeys` 的第一个键；抓手点一下到全屏（> 80%），全屏时 composer 高度 ≥ `.bottom` 的 70%；`to-terminal` 回终端输入。全程 `.canvas` 的矩形与 `__webterm.size()` 一个字不变
-2. **收回的时机**：提交后（harness）回终端；有内容时 `Esc` 只清空、空输入时 `Esc` 收回；命令跑起来（`sleep 30`）是终端输入 + 通用键集（`key-Escape` `key-CtrlC`），`^C` 回到 prompt 后键区换回提示符键集（`key-Escape` 退场、`key-Tab` 仍在）
-3. **chips**：`mktemp -d` 造 `src/commands`、`docs`、`src/a.go` 并 `cd` 进去；空输入出现同目录历史、没有路径 chip；敲 `cd s` 出现 `src/`（没有 `docs`），点一下变 `cd src/` 且焦点不丢；`Tab` 编辑键补成 `cd src/commands/`；`|` 插 ` | `，`⌫词` 删词；发送键提交后留在面板、输入框清空
-4. **⋯ 菜单**：会话 / 历史 / 设置从这里进；点外面收起
-
-## E2E-11b 占屏程序自动进控（已随 ADR-0013 移除；占屏改为换键条上下文，见 control.spec）
-
-`web/e2e/control.spec.ts`，Pixel 5 视口。
-
-1. 备用缓冲：裸 `\e[?1049h … \e[?1049l` → 自动进终端、退出回读、不写偏好
-2. **主屏全屏程序**：合成"建立 Kitty 键盘协议 `\e[>1u` + 藏光标上移重写、跑完自退"的程序（claude/codex 的机械签名，不切备用缓冲）→ `interactive` 被识别为 true 且 `altScreen` 为 false、自动进终端，退出后自动回读、不写偏好；npm 式多行进度条（无键盘协议）不误触发
-3. `less` 占屏：键条换成分页器键，`q` 退出回读
-4. 用户手动选终端后，备用缓冲进出都不改它
-
-## E2E-12b 块最大化 / 恢复（已随 ADR-0013 移除）
-
-`web/e2e/readview.spec.ts`。跑 `seq 1 80` 展开块 → 点最大化，`.block-maxwrap` 铺满整屏（高 > 90% 视口、宽 = 视口）、标题栏含命令原文、正文含末尾 `DONE-OK`；点「恢复」→ 覆盖层消失、块仍展开。
-
-## E2E-20 在终端里看 → 定位到该块（已随 ADR-0013 移除）
-
-`web/e2e/locate.spec.ts`，Pixel 5 视口。
-
-1. 跑 `seq 1 150; echo ALPHA-END`、`seq 200 350; echo BETA-END`、`echo GAMMA-LAST` 三块；读视图里展开块 A 点「在终端里看」→ 视图切到终端，**视口顶行正是 `1`**（块 A 输出的第一行），且不是滚到顶；回读再看块 B → 顶行 `200`，且比 A 更靠下
-2. 终端视图的「块」面板（⋯ → 块）里点同一动作 → 面板关掉、终端滚到块首行
-
-## E2E-21 软键盘几何：键盘一弹输入控件仍在可视区
-
-`web/e2e/keyboard.spec.ts`，Pixel 5 视口。两种浏览器模型都覆盖（见 [`../40-frontend/layout-responsive.md`](../40-frontend/layout-responsive.md) §高度计算）：
-
-1. **布局视口一起缩**（`resizes-content`）：聚焦 Composer 后把视口从 727 缩到 450 → `.app` 高 450、无 `translateY`、Composer 在 [0,450]；终端视图「⌨ 打字」后同样，键条在 [0,450]
-2. **只缩可视视口 + 上推**（iOS Safari / Chrome `resizes-visual`）：假 `visualViewport` 重放"可视 727→400、`offsetTop`→327"，分别在 **Safari 语义（`innerHeight` 跟着变 400）** 与 Chrome 语义（恒 727）下 → `.app` 必须 `translateY(327px)`、顶部 = 327、Composer 在可视区 [327,727]；键盘收起全部复位
+1. **布局视口一起缩**（`resizes-content`）：点终端后把视口从 727 缩到 450 → `.app` 高 450、无 `translateY`、附加键完整落在 [0,450]、`data-form` 仍是 `compact`、`resize` 发出且 rows 变少
+2. **只缩可视视口 + 上推**（iOS Safari / Chrome `resizes-visual`）：假 `visualViewport` 重放"可视 727→400、`offsetTop`→327"，分别在 **Safari 语义（`innerHeight` 跟着变 400）** 与 Chrome 语义（恒 727）下 → `.app` 必须 `translateY(327px)`、顶部 = 327、附加键在可视区 [327,727]；文本输入页聚焦时同样；键盘收起全部复位
 3. **普通回弹不补偿**：`offsetTop` 变成 −40 / 60 而高度不变 → `.app` 无 `translateY`（守住拖动抖动的修复）
 
-## E2E-23 转录视图（已随 ADR-0013 移除）
-
-`web/e2e/transcript.spec.ts`，Pixel 5 视口。用 shell 函数冒充 `claude`：键盘协议入栈（占屏）+ 往 `WEBTERM_TRANSCRIPT_HOME`（测试前设成临时目录，agent 与会话 shell 都继承）下的 `.claude/projects/<slug>/e2e.jsonl` 写两行 JSONL，然后 `read` 一行回显、长睡。
-
-1. 起假 claude → 读视图换成转录视图，尾巴条出现程序打的那行；等 1.2 秒仍在读视图（占屏但不自动进终端）；键条 `data-context=claude`
-2. 卡片：用户气泡有 prompt；助手卡片里 `h2` / `strong` / `pre code` 都渲出来了；工具摘要 `Bash` + `go test ./...`
-3. Composer 填一行回车 → 尾巴条看到程序的 `GOT-…` 回显（整段粘贴 + 回车进了程序 stdin）
-4. 点尾巴进终端；键条「读」回来，卡片仍在
-5. `^C` 打断 → 命令结束 → 回到块流（转录条目留着，供回放）
-6. **刷新页面**（另起一次假 claude）：`GET /api/transcript` 回放 → 转录视图与卡片都回来，用户气泡只有一个（去重）
-7. 非 AI 的占屏程序（`printf '\033[>1u'; sleep`）照旧自动进终端，没有转录视图
-
-## E2E-25 底栏键行（ADR-0015）
-
-`web/e2e/inputmodel.spec.ts` 与 `web/e2e/sheet.spec.ts`，Pixel 5 视口。
-
-1. **不盖终端**：停在提示符、`sleep 30` 在跑、进备用缓冲三种情况下，终端态 `.bottom` 的高度都 ≤ `.bottom-slot` 的高度
-2. **互切键在行首**：终端态 `to-edit` 是 `.keybar` 的第一个子元素；编辑面板里 `to-terminal` 是 `editkeys` 的第一个子元素；两者高度相同（44px）；面板里没有 `sheet-close`
-3. **编辑态并入程序键**：`sleep 30` 在跑时切编辑面板，`editkeys` 里出现 `key-Escape` `key-CtrlC`，页面上只有一条键行（没有 `keybar`）；点 `key-CtrlC` 回到 prompt 后它们退场
-4. **主屏占屏程序的键条**：`printf '\033[>1u'; sleep` 在终端态时 `keybar` 的 `data-context` 不是 `shell`（与编辑态一致）
-
-`web/e2e/tablet.spec.ts`，iPad mini（触屏 UA，`hasTouch`）：
-
-5. **横屏 1133×744**：`data-bp=desktop`、侧栏可见（宽 ≥ 200px）；**没有 `modebar`**，有 `term-bar`，`to-edit` 是键行第一个键，`.bottom` ≤ `.bottom-slot`；点 `⋯` → `more-menu` 宽 ≤ 320px 且右缘贴着 `.main` 右缘（≤ 16px）；菜单里「设置」能打开 `settings`（模态浮层，点 ✕ 关掉再继续）
-6. **竖屏 744×1133**：`data-bp=tablet`；提示符键集 12 个键全部免滚（`.keybar-scroll` 的 `scrollWidth ≤ clientWidth + 1`）；`to-edit` 升半屏后 `.bottom` 高度在 [190, 420]；`⋯` 菜单宽 ≤ 320px
-
-## E2E-24 双指缩放读（ADR-0013）
-
-`web/e2e/pinch.spec.ts`，Pixel 5 视口。在 `.term` 上派发两指 `touchstart`/`touchmove`/`touchend`：
-
-1. 双指张开 → `__webterm.zoom() > 1`、`.xterm-screen` 有 `scale(...)`、`__webterm.size()`（PTY cols/rows）**不变**；双击复位到 1× 且 transform 清空
-2. 捏合（缩小）不放大：`zoom()` 保持 1、transform 为空
+---
 
 ## E2E-26 热升级不丢会话（ADR-0016）
 
@@ -467,105 +339,89 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 2. 浏览器只看到一次重连：`conn-text` 短暂离开「在线」后回到「在线」；重连后的 `welcome.resumed[0].status == "ok"`（`instance_id` 没变）
 3. 命令跑完后终端里 300 行**每行恰好一次、顺序正确**（不丢不重），`REEXEC-DONE` 在
 4. shell 仍活着：再提交一条命令有输出；`webterm reload --probe` 对新进程返回 0，`status` 里的 `generation` 为 1
-5. 预检失败路径：把 `--handoff-check-fail` 之类的注入留给 Go 集成测试（IT-handoff-1），E2E 不模拟
+5. **模拟器状态交接了**：等输出跑完、会话静止，再热升级一次；这次升级前后各开一个新标签页（`out_seq == 0`，走快照）序列化终端，两份逐行一致
+6. 预检失败路径：把 `--handoff-check-fail` 之类的注入留给 Go 集成测试（IT-handoff-1），E2E 不模拟
 
-## E2E-28 浮层统一（ADR-0018）
+---
 
-`web/e2e/drawer.spec.ts`，Pixel 5 与 iPad 竖屏（744×1133）视口。
+## E2E-28 浮层与手机会话抽屉
 
-1. **三个入口是同一种壳**（Pixel 5）：⋯ → 会话 / 历史 / 设置逐个打开，每个都满足：`.drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽（宽度 = 视口宽）、有抓手 `.drawer-grab`、标题栏里有标题与 ✕
-2. **关闭方式一致**：设置用三种都关得掉（点遮罩、`Esc`、✕），每次打开都先确认**焦点已进浮层**（`document.activeElement.closest('.drawer')`）；会话、历史各验一种
-3. **浮层不挤终端**（AC-5.11）：打开设置前后 `.term` 的矩形逐字段相同，`__webterm.size()` 的 cols/rows 不变 —— 老的设置横幅会把终端顶上去并触发 resize
-4. **平板上会话也从底部出来**（744×1133）：`sidebar` 浮层左缘为 0、宽度 = 视口宽（不是 280px 的左侧抽屉）
-5. **设置内容仍完整**：`theme-select` / `font-size` / `renderer`（文本为 WebGL 或 Canvas）/ `privacy-note` 都在；把字号改成 18 后 `__webterm.fontSize()` 为 18
+> AC-4.10, AC-5.11, AC-4.8。`web/e2e/drawer.spec.ts`，Pixel 5 与 1440×900。触屏抽屉有约 170ms 的 `sheet-up` 进场动画：量「贴底」或长按抽屉里的行之前先等动画结束（`animationend`，或等矩形两次读数相同），否则拿到的是半路的位置。
 
-## E2E-29 左右滑动切会话（AC-4.7）
+1. **形态**（Pixel 5）：点 `open-sessions` → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行有 `new-session` 与 `open-settings`。1440×900 上打开设置（`Ctrl+Shift+,`）是居中浮窗、没有抓手
+2. **焦点进浮层**：每次打开，`document.activeElement.closest('.drawer')` 非空
+3. **关闭方式**（会话抽屉）：点遮罩、`Esc`、✕、选中一个会话、`page.goBack()`（系统返回键）各关一次；`goBack` 之后页面仍在 `/`；五次开关之后 `history.length` 至多比开始时多 1
+4. **不挤终端**：开关抽屉与设置前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
+5. **焦点恢复**（AC-4.8）：先点终端让它有焦点 → 开抽屉 → 选另一个会话 → 焦点在新会话的 helper textarea 上；先让终端失焦 → 开抽屉 → 选会话 → 焦点**不**在终端
+6. **会话菜单**：长按抽屉里的一行 → `session-menu` 出现，有 `session-rename` `session-pin` `session-close`；改名后列表里的名字跟着变；点外面关闭菜单
+7. **设置内容完整**：`theme-select` / `font-size` / `font-family` 都在；把字号改成 18 后 `__webterm.fontSize()` 为 18
 
-`web/e2e/swipe.spec.ts`，Pixel 5 视口。先建第二个会话（两个会话才有得切），在 `.term` 上派发单指 `touchstart`/`touchmove`/`touchend`：
-
-1. **左滑切到下一个**：横向拖 140px → `__webterm.sid()` 变成相邻会话；终端里是那个会话的内容
-2. **右滑切回来**：反方向同样的拖 → `sid()` 回到原来那个
-3. **纵向拖不切会话**：垂直拖 140px → `sid()` 不变（走的是滚 scrollback 那一路）
-4. **短拖不切**：横向只拖 30px（慢速，逐帧给时间戳）→ `sid()` 不变，终端 transform 弹回空
-5. **切换不动 PTY**：整段过程前后 `__webterm.size()` 的 cols/rows 完全一致
-6. **只有一个会话时横滑什么也不发生**：关掉第二个会话后横拖 140px，`sid()` 不变
+---
 
 ## E2E-30 切走 → 积压超过 ring_bytes → 切回（AC-2.6 / AC-2.15）
 
 > 用 `--ring-bytes 65536` 的实例。`web/e2e/subscribe-reset.spec.ts`。
 >
-> **这条补的是「切回」那半边。** E2E-2c / E2E-4 走的是重连（`welcome.resumed[].status`），
-> 而切回走 `subscribe` —— 是另一条代码路径，之前没有任何覆盖，漏掉的正是"清屏"这一步。
+> E2E-2c / E2E-4 走的是重连（`welcome.resumed[].status`），这条走切回（`subscribe`），是另一条代码路径。
 
-两个用例，分别对应 reset 与增量两条分支。
+**后台产出必须先 `sleep` 几秒再开始**（`(sleep 3; for …; done; printf '\033[6n'; touch <done>) &`）：那几秒用来切到别的会话，保证整段输出都落在「未订阅」期间。完成信号走**文件**（测试进程直接 `existsSync`）—— 会话已经切走，屏幕上看不到它跑完没有。
 
-**后台产出必须先 `sleep` 几秒再开始**（`(sleep 3; for …; done; printf '\033[6n'; touch <done>) &`）：那几秒用来切到别的会话，保证整段输出都落在「未订阅」期间。不等的话几百毫秒就打完了，客户端还订阅着、全收下来，`out_seq` 追平 `head_seq`，切回来根本走不到要测的分支。完成信号走**文件**（测试进程直接 `existsSync`）—— 会话已经切走，屏幕上看不到它跑完没有。
-
-### ① 积压超过 ring_bytes → reset
+### ① 积压超过 ring_bytes → 快照
 
 1. 建会话 A。A 里 `printf 'MARK-%s\n' ONE`，等它显示
 2. A 里起后台输出：2500 行 × 70 B ≈ 175 KiB，末尾一个 CPR 查询（`\033[6n`）
 3. 新建 B 切过去，等完成文件出现
 4. 切回 A，断言：
-   - 客户端发出的 `subscribe` **自带 `cols`/`rows`**，并且**没有任何 `resize` 排在它前面**（hook `WebSocket.send` 记下发出去的控制消息）。切回之后因为布局变化再来一条 resize 是正常的，排在前面的那条才致命
-   - 出现"历史输出已截断"提示
-   - **`MARK-ONE` 在终端里出现 0 次** —— 它早被裁出窗口了。还在就说明没清屏，新内容被接在了旧屏幕后面（这正是"很多份 logo"的成因）
+   - 客户端发出的 `subscribe` **自带 `cols`/`rows`**，并且**没有任何 `resize` 排在它前面**（hook `WebSocket.send`）
+   - 收到的是 SNAPSHOT 帧，不是从旧位置接着的 OUTPUT
+   - **`MARK-ONE` 在终端里出现 0 次** —— 快照只带最后 2000 行，它早已超出。还在就说明没清屏，快照被接在了旧屏幕后面
    - 客户端**没有**把 CPR 应答（`ESC[<行>;<列>R`）作为 INPUT 发出去
-5. 再来一轮（切走、再顶掉一轮缓冲、切回），断言**缓冲区行数与上一轮相差不到一屏**：每轮都是重建，不是往后追加。这条是"越切越乱"的回归红线
+5. 再来一轮（切走、再产出一轮、切回），断言**缓冲区行数与上一轮相差不到一屏**：每轮都是重建，不是往后追加
 
 ### ② 积压没超过 ring_bytes → 增量补齐
 
 同样的流程，但只产 200 行（≈ 14 KiB，远小于 64 KiB），末尾同样带一个 CPR。切回后断言：
 
-- **没有**"历史输出已截断"提示，`MARK-ONE` 还在 —— 增量补齐不该清屏
+- 收到的是 OUTPUT 帧（增量），没有 SNAPSHOT；`MARK-ONE` 还在 —— 增量补齐不该清屏
 - 切走期间的输出补齐了（`few 0200` 可见）
 - 客户端**没有**发出 CPR 应答
 
-> ② 是 AC-2.15 真正的看门人。① 走的是 reset 分支，帧上带 `ATTR_PREFIX`，客户端天然把它当回放；而 ② 走 `status == "ok"`，**没有任何线上信号说"这段是历史"**，全靠客户端自己记 `catchup_to`。漏了它，每切回一次会话，前台程序就收到一串乱码按键。
+### ③ 重连补课同样不应答（对照）
 
-## E2E-31 备用屏会话切回 = 重画（AC-2.16 / AC-2.17，ADR-0019）
+`web/e2e/replay-echo.spec.ts`。② 测的是切回（`subscribe`）路径的增量补课，这条是同一规则在**重连**（`welcome.resumed[].status == "ok"`）路径上的对照：
+
+1. 提交 `sleep 2; printf '\033[6n'; sleep 30`，立刻断开，让这个 DSR 查询落在离线窗口里
+2. 3 秒后恢复，断言走的是增量（`status == "ok"`）
+3. 等补课写进 xterm，断言客户端**没有**把 CPR 应答作为 INPUT 发出去
+
+> ② 是 AC-2.15 真正的看门人：增量路径上**没有任何线上信号说"这段是历史"**，全靠客户端自己记 `catchup_to`。漏了它，每切回一次会话，前台程序就收到一串乱码按键。
+
+---
+
+## E2E-31 备用屏会话切回 = 当前屏（AC-2.6 / AC-2.21）
 
 > 用 `--ring-bytes 65536` 的实例。`web/e2e/redraw.spec.ts`。
 >
-> E2E-30 测的是**主屏**那条路（字节回放）。这条测**备用屏**：不回放，改成让程序自己重画。
+> 字节窗口拼不出备用屏程序的当前屏（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §背景），快照可以：模拟器手里就是那一屏。
 
 夹具 `e2e/fixtures/altscreen.sh <快跑秒数> <完成标记文件>` —— 一个假的全屏 TUI，行为对齐实测到的 claude：
 
 - 启动就 `ESC[?1049h` 进备用屏，**整个生命周期只发这一次**
 - 画一屏（含一行 `FRAME <n>` 标记），之后只重画内容行（差分、绝对定位、**不清屏**），约 30 KB/s
 - 快跑到点之后 `touch` 标记文件并**转入空闲，一个字节都不产**
-- 收到 `SIGWINCH` 整屏重画（`ESC[2J` + 全屏内容），`FRAME` 计数加一
-- 收到 `SIGINT` / `SIGTERM` 时 `ESC[?1049l` 退回主屏
-
-> **两段式是有意的。** 快跑那几秒把环形缓冲顶掉好几轮（制造要测的状态），之后安静下来，
-> 切回时量到的字节才只是"重建这一屏"的成本，而不是掺了几秒的实时输出 —— AC-2.17
-> 那条断言否则没法写。真实的 AI CLI 也是这个形状：干活时刷屏，等人时安静。
+- 收到 `SIGWINCH` 整屏重画，`FRAME` 计数加一；收到 `SIGINT` / `SIGTERM` 时 `ESC[?1049l` 退回主屏
 
 1. 建会话 A，跑 `altscreen.sh`，等屏幕出现 `FRAME`
 2. 新建 B 切过去；等标记文件出现（= A 的积压已经顶过 64 KiB 且已转入空闲）
 3. 切回 A，断言：
-   - 收到的是 `redraw` 消息，而**不是** `ATTR_PREFIX` 回放帧（hook `WebSocket` 的 message 事件）
-   - **没有**"历史输出已截断"提示 —— 备用屏没有历史，那条提示是误导
-   - `__webterm.altScreen()` 为 `true`：模式前缀确实把客户端带回了备用屏
-   - 屏幕上 `FRAME` 只出现 **1 次**（旧帧不该留副本），且是重画之后的那一帧
-   - 切回过程中收到的 OUTPUT 字节 **< 8 KiB**（AC-2.17：整屏重画是 KB 量级，不是整个 `ring_bytes`）
-4. 让 `altscreen.sh` 退出（它发 `ESC[?1049l`），再切走 / 切回一次，断言这次走**主屏**那条路（有截断提示、有 `ATTR_PREFIX` 帧）—— 判据跟着程序实时变，不是一次定死
+   - 收到 SNAPSHOT 帧，且 **SNAPSHOT 的字节数 < 8 KiB**（当前屏是 KB 量级，不是整个 `ring_bytes`）
+   - `__webterm.altScreen()` 为 `true`：快照把客户端带回了备用屏
+   - 屏幕上 `FRAME` 只出现 **1 次**，scrollback 里没有这个程序界面的任何副本
+   - 切回时 agent **没有**改窗口尺寸（`altscreen.sh` 的 `FRAME` 计数没有因为 SIGWINCH 增加）
+4. 让 `altscreen.sh` 退出（回到主屏），再在 A 里积压一轮超过 `ring_bytes` 的输出，切走 / 切回一次：仍走快照，主屏是 shell 的内容，没有残影。不积压的话退出后会话空闲，切回走的是增量，测不到快照
 
-## E2E-32 侧栏拖宽与收起（AC-5.12）
+---
 
-> `web/e2e/sidebar.spec.ts`。两个 context：1440×900 鼠标键盘、iPad 横屏 1133×744 触屏（`pointer: coarse`，最小宽 260px 那条分支）。
-
-1. **拖宽只预览**（[ADR-0021](../20-architecture/adr/0021-drag-preview-not-live-relayout.md)）：从分隔条按下、右移 120px、抬起。断言
-   - 拖动过程中 `.sidebar` 宽度**一点不变**，跟着指针走的是**分隔条自己的视觉位置**（`.sidebar-resizer` 的 `getBoundingClientRect().left`）—— 拖动期间不重排是这条的要害
-   - **拖动全程 `__webterm.resizes()` 不变**，松手后只加 1 —— 这是这条场景的核心，别的都是附带
-   - 松手后 `.sidebar` 宽度落在预览线所在的位置，`__webterm.size().cols` 比拖之前小
-2. **上下限**：一直拖到窗口右侧，宽度停在 `min(480, 窗口宽 × 40%)`；往左拖到 100px 以下松手 → 变成收起态
-3. **点一下收起 / 展开**：不移动地点分隔条 → `data-sidebar='closed'`、`.sidebar` 宽度 0、终端变宽；再点左缘把手 → 回到收起前的宽度
-4. **收起态仍可拖出**：收起后直接从把手拖到 320px。拖动中 `data-sidebar` **仍是 `closed`**（不再「先展开给人看」，统一走预览），松手后展开且宽度 = 320 − 起手点
-5. **持久化**：刷新页面，宽度与收起状态还在；把窗口缩到 tablet 再放回 desktop，宽度按上下限夹紧且不写坏存储
-6. **只在 desktop 生效**：phone（390×844）加载时 `data-sidebar` 必须是 `closed`（不因为 localStorage 里存着 open 就自己弹出会话浮层），且**没有** `.sidebar-resizer`
-7. **键盘**：聚焦分隔条按 `→` 三次 → 宽度 +48px；`Home` → 最小宽。键盘**不走预览**，按一下就改宽
-8. **预览 = 松手结果**：同一次拖动里，松手前分隔条的视觉位置就是松手后的边界 —— 拖到离 240 只差几像素时预览线已经吸附在 240；拖到最小宽 60% 以下时预览线已经贴到左缘（看得出松手会收起）
 ## E2E-33 僵尸连接：回到前台立刻戳穿（AC-2.20，ADR-0020）
 
 > `web/e2e/zombie.spec.ts`。
@@ -580,6 +436,8 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 4. 断言 **5 秒内**状态条离开「在线」（变成「重连中」/「连接中」）。改之前这里要等 40 秒（30s 心跳 + 10s pong 超时）
 5. `net.goOnline()`，断言回到「在线」
 6. 断言僵尸期间敲进去的那行命令**最终执行了**（按 `in_ack` 重发，AC-2.4）—— 探活不能把输入弄丢
+
+---
 
 ## E2E-34 打字不该消失（AC-4.8 / AC-2.15 / AC-3.3，ADR-0020）
 
@@ -596,12 +454,12 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 ### ② 回放期间打字（AC-2.15）
 
-1. 会话 A 里起后台输出，产 **1.5 MiB**（默认 ring 1 MiB，保证切回时走满窗口的 reset 回放）
+1. 会话 A 里起后台输出，产 **1 MiB**（默认 ring 256 KiB，保证切回时走快照）
 2. 切到 B，等完成文件出现
 3. 切回 A，**不等任何东西**，立刻 `keyboard.type('echo REPLAYKEY')` + 回车
 4. 断言 `REPLAYKEY` 的回显出现
 
-> 回放门原本按会话一刀切，这几百毫秒到几秒里的按键全被丢掉。这一步和 E2E-30 ② 是一对：那条断言自动应答**不**进 PTY，这条断言用户按键**要**进 PTY。
+> 回放门要按来源区分，不能按"此刻是否在回放"一刀切。这一步和 E2E-30 ② 是一对：那条断言自动应答**不**进 PTY，这条断言用户按键**要**进 PTY。
 
 ### ③ `compositionend` 没来（AC-3.3）
 
@@ -622,59 +480,110 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 
 > 这条不测"输入能不能进去"（那是 ①②③ 的事），测的是**卡住时能不能一眼看出断在哪一段**。ADR-0020 的原则本身需要可观测性，否则下次还是从猜开始。
 
-## E2E-35 会话选中态一眼可辨（AC-4.9）
+---
 
-> `web/e2e/sessionactive.spec.ts`，1440×900。**断言的是"看得出来"，所以量计算样式，不量 class 名。**
+---
 
-1. 建三个会话（侧栏常驻）
-2. **只有一个选中**：`[aria-current="true"]` 恰好一条，且 `data-sid` = `__webterm.sid()`
-3. **选中 ≠ hover ≠ 普通**：把鼠标悬到某个未选中项上，取三处 `backgroundColor` —— 选中项、hover 项、既不选中也不 hover 的项，**两两不相等**；选中项的左侧强调条存在（`box-shadow` 含 inset 且不是 `none`）
-4. **选中态跟着切换搬家**：`Ctrl+Shift+↓` → `aria-current` 落到相邻会话，原来那条不再有
-5. **已经可见时不滚**：四个会话都看得见，来回切两次，`.sidebar` 的 `scrollTop` 始终是 0
-6. **滚进可视区**：注入 `.sidebar{max-height:120px}` 把列表压到放不下，`Ctrl+Shift+↓` 切到列表末尾那个 → 该行的矩形**完全落在** `.sidebar` 的矩形内（上下都不越界）且 `scrollTop > 0`；再切回第一个 → 同样完全可见
+## E2E-35 当前会话一眼可辨（AC-4.9）
+
+> `web/e2e/sessionactive.spec.ts`，1440×900（标签栏）与 Pixel 5（抽屉）。**断言的是"看得出来"，所以量计算样式，不量 class 名。**
+
+1. 建三个会话
+2. **只有一个当前**：`tabbar` 里 `[aria-current="true"]` 恰好一个，且 `data-sid` = `__webterm.sid()`
+3. **当前 ≠ hover ≠ 普通**：鼠标悬到某个非当前标签上，取三处 `backgroundColor` —— 当前、hover、两者都不是的标签，**两两不相等**；当前标签有强调色下划线
+4. **跟着切换搬家**：`Ctrl+Shift+↓` → `aria-current` 落到相邻标签，原来那个不再有
+5. **已经可见时不滚**：标签都看得见时来回切两次，`tabbar` 的 `scrollLeft` 始终是 0
+6. **滚进可视区**：`screen` 1440×900、`viewport` 600×900，先 `cd` 进一个名字很长的目录（新会话继承它，标签名都撑到最大宽度；5 个名为 `~` 的标签在 600px 里放得下），建到 5 个会话，`Ctrl+Shift+↓` 切到最后一个 → 该标签的矩形**完全落在** `tabbar` 的矩形内且 `scrollLeft > 0`；再切回第一个 → 同样完全可见
+7. **抽屉里同一套**（Pixel 5）：打开抽屉，当前行 `aria-current="true"` 恰好一条，且有强调色左条（`box-shadow` 含 inset）
+
+---
 
 ## E2E-36 刷新之后仍能往回拖（AC-5.14）
 
 > `web/e2e/refresh-scrollback.spec.ts`。默认 `--ring-bytes`。
 
 1. 起会话，`emit.sh 3000 0`，等 `EMIT-DONE`
-2. 记下序列化结果里的三个锚点行：`EMIT-0100` / `EMIT-1500` / `EMIT-2999`
-3. `page.reload()`，等重新连上
-4. **能滚回去**：序列化结果里 `EMIT-1500` 仍在（刷新前的 2000 行窗口内）
-5. **只有一份**：`EMIT-1500` 在整个缓冲里出现次数 **== 1**（快照 + 增量续传叠加是最容易出重复的地方）
-6. **接得上**：刷新后再跑一次 `printf 'AFTER-%s\n' RELOAD`，它出现且前面的内容不重排
-7. **agent 重启则不用快照**：杀掉 agent 重新起（`instance_id` 变，会话全部销毁 —— [ADR-0003](../20-architecture/adr/0003-no-tmux.md)），刷新后新建会话 → 终端里**不出现任何 `EMIT-*`**。快照按 `instance_id` 作废，否则新 `sid` 会被旧会话的内容张冠李戴（AC-2.13 同一条理由）
-8. **备用屏不存快照**：`fixtures/altscreen.sh` 的会话刷新后，scrollback 里不出现该程序界面的任何副本（与 E2E-31 同一条断言）
+2. `page.reload()`，等重新连上：订阅走快照（`out_seq == 0`）
+3. **能滚回去**：序列化结果里 `line 01500` 仍在（最后 2000 行之内），`line 00100` 不在（超出 2000 行）。视口要够宽（1440×900，≥ 147 列）：一行折成两行的话，2000 行只装得下约 1000 条，`line 01500` 会掉出去
+4. **只有一份**：`line 01500` 在整个缓冲里出现次数 **== 1**
+5. **接得上**：刷新后再跑一次 `printf 'AFTER-%s\n' RELOAD`，它出现且前面的内容不重排
+6. **agent 重启则没有旧会话**：杀掉 agent 重新起（`instance_id` 变，会话全部销毁 —— [ADR-0003](../20-architecture/adr/0003-no-tmux.md)），刷新后新建会话 → 终端里**不出现任何 `line 0…`**
+7. **备用屏会话刷新后是当前屏**：`fixtures/altscreen.sh` 的会话刷新后，`FRAME` 只出现一次，scrollback 里没有它界面的副本
 
-> 第 5 步是这条场景的核心。快照恢复一旦与 `out_seq` 脱钩（用了快照却报 `out_seq: 0`），agent 会把整段历史再追加一遍 —— 屏幕上就是两份。
+---
 
-## E2E-37 滚动跟手与写入预算（AC-5.15 / AC-5.16）
+## E2E-37 滚动与写入的基线测量（只记录，不断言）
 
-> `web/e2e/scrollperf.spec.ts`，phone 视口。**这台机器没 GPU，绝对帧率没有意义** —— 断言的是主线程长任务个数与写入次数，不是 FPS。
+> `web/e2e/scrollperf.spec.ts`，phone 视口。[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §7：输出链路先用原生，这条场景量出原生的表现，作为将来"要不要加优化"的依据。**这台机器没 GPU，只看主线程毫秒数。**
 
-1. `emit.sh 4000 0`，等完成
-2. 页面里装 `PerformanceObserver({entryTypes:['longtask']})` 收集
-3. 合成 20 **帧**的单指纵向拖，每帧走 12px、**每帧派发 3 个 `touchmove`**（共 60 个事件），帧与帧之间真的等一帧
-4. **跟手**：拖动期间 `duration > 50` 的 longtask **== 0**；`.xterm-viewport` 的 `scrollTop` 写入次数 ≤ 拖动帧数（每帧至多落一次）
+记录并打印（写进测试报告，不做断言）：
 
-> 第 3 步的「每帧 3 个」不是凑数：**每帧只发一个的话这条场景区分不出新旧实现** —— 旧实现是每个 `touchmove` 改一次 `scrollTop`，每帧一个事件时它也是"每帧一次"，断言照样过。一帧堆好几个事件也不是臆造的，主线程忙时浏览器就是这么派发的。计数必须**钩 `scrollTop` 的 setter**，不能听 `scroll` 事件：后者被浏览器合并到每帧一个，无论实现每帧写几次都只看到一次。
->
-> 第 4 步在 E2E 里只能断言「**写入次数远少于事件数**」（< 事件数的一半）：`.xterm-viewport.scrollTop` 不只有我们写，xterm 的 `syncScrollArea` 也会写（把视口对齐到行边界），那几次混在计数里、也不归我们管。**精确的「每帧至多一次」在 UT-scroll-1**（`web/tests/dragscroll.test.ts`）里量 —— 那边没有 xterm，自己接管 `scrollTop` 属性当计数器，数到的每一次都是我们的，连惯性滑行与「再触摸立刻停」也一并钉住。
-5. **惯性**：松手后 `scrollTop` 继续变化并在 1 秒内停下；停下前再触摸一次 → 立刻停
-6. **写入有预算**：用**默认 ring（1 MiB）**的实例造一次满窗口回放 —— 切走会话 A、让它产出 > 1 MiB、再切回（这是单次写入量最大的一条路）。回放期间 `keyboard.type('BUDGETKEY')` → 回显出现（输入没被吃掉，与 E2E-34 ② 同一条纪律），且回放期间 `duration > 50` 的 longtask **== 0**
+1. `emit.sh 4000 0` 期间，主线程 `duration > 50` 的长任务个数与最长一次
+2. 输出跑完后，合成 20 帧的单指纵向拖（每帧 12px），拖动期间的长任务个数
+3. 切回一个积压 1 MiB 的会话（走快照）时，从按下切换键到快照写完的耗时与长任务个数
 
-> 第 6 步有两个坑。**切会话要用键盘**（`Ctrl+Shift+Enter` 新建 / `Ctrl+Shift+↑` 切回），不能走抽屉：抽屉会把焦点收进浮层（AC-5.11），关掉之后敲的字未必回到终端，那样测的是焦点不是预算。**长任务探针要在按下切换键之后才归零**：切会话本身要摘挂 DOM、`fit()`、`reset()` 终端，是一个同步的大任务（实测 ~54ms），它发生在按键处理里、**不在回放窗口内** —— 这条场景量的是回放写入有没有把主线程占死，切换本身的重排是 [ADR-0021](../20-architecture/adr/0021-drag-preview-not-live-relayout.md) / E2E-32 的事。
+要加回任何一项优化（按帧合并、回看暂停、写入预算、WebGL、自写滚动），先拿这几个数对比，带着数据写 ADR。
 
-## E2E-38 备用屏的回滚交给程序（AC-5.17）
+---
 
-> `web/e2e/altscroll.spec.ts`。需要新夹具 `e2e/fixtures/mousereport.sh`：进备用屏、开 `?1000h` + `?1006h`，把收到的输入原样打在屏幕上。
+## E2E-39 形态（AC-5.18）
 
-1. 起会话跑 `mousereport.sh`，等它进备用屏
-2. 单指纵向拖 5 行的距离
-3. **转成了滚轮上报**：屏幕上出现 SGR 编码的滚轮事件（`<64;` 前缀），条数与行步长一致，且受节流上限约束（每 16 ms ≤ 3 行）
-4. **没开跟踪就什么都不发**：换 `fixtures/altscreen.sh`（不开鼠标跟踪）重来一遍，屏幕**逐字节不变** —— 绝不能退化成 PageUp / 方向键
-5. 主屏会话不受影响：普通 shell 会话的纵向拖仍然滚本地 scrollback
-6. **看得见的出口**：夹具收到滚轮上报后**不重画**（模拟 tmux 进了 copy-mode：键进去了但屏幕不动），此时打字 → ~1.5s 内右下角提示条出现并写明按 `Esc` / `q`；点掉之后同一会话不再出现
+> `web/e2e/form.spec.ts`。形态按屏幕短边判，所以 context 要同时给 `viewport` 与 `screen`。
+
+1. Pixel 5（`screen` 393×851）→ `data-form=compact`：有 `open-sessions`，没有 `tabbar`
+2. `viewport` 与 `screen` 都是 851×393（手机横屏）→ 仍是 `compact`
+3. iPad Mini 设备描述（`screen` 768×1024，触屏）→ `wide`：有 `tabbar`（高 40px），没有 `open-sessions`；附加键在，左列只有 `toggle-text`
+4. 1440×900 鼠标 → `wide`：`tabbar` 高 36px，没有附加键
+5. **键盘弹出不改形态**：在 3 的 context 里把视口高度缩到 344（模拟平板横屏弹键盘）→ `data-form` 仍是 `wide`、`tabbar` 仍在
+6. **旋转不改形态**：3 的 context 把视口换成横屏 → 仍是 `wide`
+
+---
+
+## E2E-40 文本输入页（AC-3.19, AC-3.10）
+
+> `web/e2e/textinput.spec.ts`，Pixel 5。hook `WebSocket.send` 记 INPUT 帧。
+
+1. **切换不动几何**：点 `toggle-text` → `textinput` 可见且有焦点；前后 `__webterm.size()` 与 `resizes()` 不变；再点 `toggle-text` → 回键位页
+2. **滑动也能切**：在键区上横向拖 80px → 文本页；反向拖回 → 键位页
+3. **attribute**：`textinput` 的 `autocorrect` / `autocapitalize` / `spellcheck` 的 attribute 实际值分别是 `off` / `off` / `false`，`enterkeyhint` 是 `send`
+4. **有内容回车**：填 `echo TEXT-ONE` 回车 → INPUT 帧是 `echo TEXT-ONE`，**不带 `0d`**；命令行上出现 `echo TEXT-ONE` 但没执行；文本框已清空、焦点仍在文本框；`inputStats().data.n` 与 `sent.n` 都涨
+5. **空回车**：再回车 → INPUT 帧是 `0d`，命令执行、`TEXT-ONE` 出现
+6. **组字**：派发 `compositionstart` → `compositionupdate`（`ni`）→ 按 `Enter`（`isComposing: true`）→ **没有 INPUT 帧**；`compositionend`（`你好`）后回车 → INPUT 帧是 `你好`
+7. **换行走括号粘贴**：往文本框粘贴 `echo L1⏎echo L2` 后回车 → INPUT 帧以 `1b5b3230307e` 开头、以 `1b5b3230317e` 结尾；两行作为一整块出现在命令行上，没被逐条执行
+8. **回车不插换行**：以上每一步之后，`textinput.value` 里都没有 `\n`
+
+---
+
+## E2E-41 宽屏标签栏（AC-4.10）
+
+> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述。
+
+1. **结构**：顶栏在终端上方；`tabbar`（可横滚的标签条）里有一个标签和 `new-session`，右侧钉住 `conn-dot` 与 `open-settings`；没有 `open-sessions`，没有附加键
+2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
+3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹确认，确认后标签消失；中键点标签同样关闭
+4. **改名**：双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
+5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现 `⇵`；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
+6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点；切回 A → 消失
+7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签 → `session-menu`；附加键在，左列只有 `toggle-text`
+
+---
+
+## E2E-42 列数变了重发快照（AC-2.22）
+
+> `web/e2e/resync.spec.ts`。hook `WebSocket` 的 message 与 send。
+
+1. 起会话，`emit.sh 300 0`，等完成
+2. 在设置里把字号从 14 改到 18（列数变少）→ 客户端发出 `resize`，随后收到一份 SNAPSHOT
+3. 断言：快照之后终端的列数等于新的 `cols`；`line 00300` 仍在且只出现一次
+4. 只改高度（`page.setViewportSize` 只改 height，模拟软键盘）→ 发出 `resize`，**不**收到 SNAPSHOT
+
+## E2E-43 切开的 UTF-8 不丢字（AC-2.23）
+
+> `web/e2e/utf8split.spec.ts`。
+
+1. 在终端里跑 `printf '\xe3\x80'; sleep 0.3; printf '\x82\xe2\x80'; sleep 0.3; printf '\xa6\xe2\x80'; sleep 0.3; printf '\x94END\n'` —— `。`、`…`、`—` 各被切在第 2 字节之后，分别落在不同的 OUTPUT 帧里
+2. 断言终端那一行是 `。…—END`
+3. 刷新页面（走快照）后同一行仍是 `。…—END`
 
 ## 不在 E2E 覆盖范围（放手工清单）
 
@@ -683,4 +592,5 @@ xterm 一个接得住一个接不住（见 [input-modes.md](../40-frontend/input
 - 真实网络切换（Wi-Fi ↔ 4G ↔ 隧道）
 - 真实 Let's Encrypt 签发
 - PWA 真机安装
+- Android 系统返回键（E2E 用 `page.goBack()` 模拟）
 - 触觉反馈

@@ -218,3 +218,11 @@ func (s *Store) PurgePairings(now time.Time) (int64, error) {
 	}
 	return res.RowsAffected()
 }
+
+// nullStr 把空字符串存成 NULL。
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}

@@ -1,12 +1,17 @@
 /**
- * E2E-35 会话选中态一眼可辨（AC-4.9）
+ * E2E-35 当前会话一眼可辨 —— AC-4.9。
  *
- * 断言的是【看得出来】，所以量的是计算样式与矩形，不是 class 名 —— 改之前
- * 选中是 --fg 14%、hover 是 8%，两个中性灰在同一屏上分不开，而 class 名一直是对的。
+ * 1440×900（标签栏）与 Pixel 5（抽屉）。断言的是【看得出来】，所以量计算样式与矩形，
+ * 不量 class 名。
  */
-import { expect, test, type Page } from '@playwright/test'
+import { mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { devices, expect, test, type Page } from '@playwright/test'
 
-import { Agent } from './harness'
+import { Agent, focusTerm, hooks, newSession, openDrawer, submit, waitFor } from './harness'
+
+const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -14,103 +19,126 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-const sid = (p: Page) => p.evaluate(() => (window as unknown as { __webterm: { sid(): number | null } }).__webterm.sid())
+const bg = (p: Page, sel: string) => p.locator(sel).evaluate((el) => getComputedStyle(el).backgroundColor)
+const accent = (p: Page) =>
+  p.evaluate(() => {
+    const d = document.createElement('div')
+    d.style.color = 'var(--accent)'
+    document.body.appendChild(d)
+    const c = getComputedStyle(d).color
+    d.remove()
+    return c
+  })
 
-const bg = (p: Page, sel: string) =>
-  p.evaluate((s) => getComputedStyle(document.querySelector(s)!).backgroundColor, sel)
-
-/** 一直按到选中项落在列表的头 / 尾（`Ctrl+Shift+↑/↓` 到头会回绕，按固定次数会落错行）。 */
+/** 一直按到当前会话落在标签的头 / 尾（Ctrl+Shift+↑/↓ 到头会回绕）。 */
 async function stepUntil(page: Page, key: string, where: 'first' | 'last') {
-  const target = await page.locator('.session-item')[where]().getAttribute('data-sid')
-  for (let i = 0; i < 8; i++) {
-    if (String(await sid(page)) === target) break
+  const target = Number(await page.locator('.tabbar .tab')[where]().getAttribute('data-sid'))
+  for (let i = 0; i < 8 && (await hooks.sid(page)) !== target; i++) {
+    await focusTerm(page)
     await page.keyboard.press(key)
+    await page.waitForTimeout(150)
   }
-  expect(String(await sid(page)), `切到了${where === 'first' ? '第一个' : '最后一个'}会话`).toBe(target)
+  expect(await hooks.sid(page), `切到了${where === 'first' ? '第一个' : '最后一个'}会话`).toBe(target)
 }
 
-/** 打开页面并建到 n 个会话（桌面侧栏常驻，新建按钮就在列表底下）。 */
-async function open(page: Page, n: number) {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  await expect(page.getByTestId('sidebar')).toBeVisible()
-  for (let i = 1; i < n; i++) {
-    await page.getByTestId('new-session').click()
-    await expect(page.locator('.session-item')).toHaveCount(i + 1)
-  }
-}
+/** 当前标签整个落在标签条里。 */
+const currentFullyVisible = (page: Page) =>
+  page.evaluate(() => {
+    const box = document.querySelector('[data-testid=tabbar]')!.getBoundingClientRect()
+    const el = document.querySelector('.tabbar .tab[aria-current="true"]')!.getBoundingClientRect()
+    return { inside: el.left >= box.left - 1 && el.right <= box.right + 1, scrollLeft: (document.querySelector('[data-testid=tabbar]') as HTMLElement).scrollLeft }
+  })
 
-test('选中项与 hover、普通项两两不同，且带强调条', async ({ page }) => {
-  await open(page, 3)
+test.describe('1440×900 标签栏', () => {
+  test.use({ viewport: { width: 1440, height: 900 }, contextOptions: { screen: { width: 1440, height: 900 } } })
 
-  // ① 只有一条选中，且就是当前会话
-  const current = page.locator('.session-item[aria-current="true"]')
-  await expect(current).toHaveCount(1)
-  expect(await current.getAttribute('data-sid')).toBe(String(await sid(page)))
+  test('E2E-35 ①–⑤ 只有一个当前；当前 ≠ hover ≠ 普通且带强调色下划线；跟着切换搬家；可见时不滚', async ({ page }) => {
+    await agent.open(page)
+    await newSession(page)
+    await newSession(page)
+    await expect(page.locator('.tabbar .tab')).toHaveCount(3)
 
-  // ② 三种状态两两不同：选中 / hover / 都不是
-  const items = page.locator('.session-item')
-  const n = await items.count()
-  const activeIdx = Number(await current.evaluate((el) => [...el.parentElement!.querySelectorAll('.session-item')].indexOf(el)))
-  const others = [...Array(n).keys()].filter((i) => i !== activeIdx)
-  await items.nth(others[0]!).hover()
+    // ② 只有一个当前，且就是 __webterm.sid()
+    const current = page.locator('.tabbar .tab[aria-current="true"]')
+    await expect(current).toHaveCount(1)
+    expect(await current.getAttribute('data-sid')).toBe(String(await hooks.sid(page)))
 
-  const selected = await bg(page, '.session-item[aria-current="true"]')
-  const hovered = await items.nth(others[0]!).evaluate((el) => getComputedStyle(el).backgroundColor)
-  const plain = await items.nth(others[1]!).evaluate((el) => getComputedStyle(el).backgroundColor)
-  expect(selected, '选中和 hover 必须分得开').not.toBe(hovered)
-  expect(selected, '选中和普通项必须分得开').not.toBe(plain)
-  expect(hovered, 'hover 和普通项也该有区别').not.toBe(plain)
+    // ③ 当前 / hover / 普通，两两不同
+    const others = page.locator('.tabbar .tab:not([aria-current="true"])')
+    await others.nth(0).hover()
+    const sel = await bg(page, '.tabbar .tab[aria-current="true"]')
+    const hov = await others.nth(0).evaluate((el) => getComputedStyle(el).backgroundColor)
+    const plain = await others.nth(1).evaluate((el) => getComputedStyle(el).backgroundColor)
+    expect(sel, '当前与 hover 必须分得开').not.toBe(hov)
+    expect(sel, '当前与普通必须分得开').not.toBe(plain)
+    expect(hov, 'hover 与普通也要有区别').not.toBe(plain)
+    const shadow = await current.evaluate((el) => getComputedStyle(el).boxShadow)
+    expect(shadow, '当前标签有下划线（inset 阴影）').toContain('inset')
+    expect(shadow, '下划线是强调色').toContain(await accent(page))
 
-  // ③ 左侧强调条
-  const shadow = await current.evaluate((el) => getComputedStyle(el).boxShadow)
-  expect(shadow).not.toBe('none')
-  expect(shadow).toContain('inset')
+    // ④ 跟着切换搬家
+    const before = await hooks.sid(page)
+    await focusTerm(page)
+    await page.keyboard.press('Control+Shift+ArrowDown')
+    await expect.poll(() => hooks.sid(page)).not.toBe(before)
+    await expect(current).toHaveCount(1)
+    expect(await current.getAttribute('data-sid')).toBe(String(await hooks.sid(page)))
+    await expect(page.locator(`.tabbar .tab[data-sid="${before}"]`)).not.toHaveAttribute('aria-current', 'true')
+
+    // ⑤ 都看得见时来回切两次，标签条一次都不滚
+    for (const k of ['Control+Shift+ArrowDown', 'Control+Shift+ArrowUp', 'Control+Shift+ArrowDown', 'Control+Shift+ArrowUp']) {
+      await focusTerm(page)
+      await page.keyboard.press(k)
+      await page.waitForTimeout(100)
+      expect(await page.getByTestId('tabbar').evaluate((el) => el.scrollLeft), '全可见时不滚').toBe(0)
+    }
+  })
 })
 
-test('切换会话时选中态跟着搬家', async ({ page }) => {
-  await open(page, 3)
-  const before = await sid(page)
+test.describe('600×900 窄窗口（screen 1440×900）', () => {
+  test.use({ viewport: { width: 600, height: 900 }, contextOptions: { screen: { width: 1440, height: 900 } } })
 
-  await page.keyboard.press('Control+Shift+ArrowDown')
-  await expect
-    .poll(async () => sid(page), { message: '切到了相邻会话' })
-    .not.toBe(before)
+  test('E2E-35 ⑥ 当前标签被切到视区外时滚进来；切回第一个同样完整可见', async ({ page }) => {
+    // 名字要够长，5 个标签才放不下（标签最小 72px，名字 `~` 时 5 个也塞得进 600px）
+    const dir = join(tmpdir(), `webterm-e2e35-a-rather-long-directory-name-${process.pid}`)
+    mkdirSync(dir, { recursive: true })
+    await agent.open(page)
+    await submit(page, `cd ${dir}`)
+    const first = (await hooks.sid(page))!
+    await waitFor(async () => ((await page.getByTestId(`tab-${first}`).locator('.tab-name').textContent()) ?? '').startsWith('webterm-e2e35'), '自动命名跟上 CWD', 10_000)
+    for (let i = 1; i < 5; i++) await newSession(page)
+    await expect(page.locator('.tabbar .tab')).toHaveCount(5)
+    const w = await page.getByTestId('tabbar').evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth }))
+    expect(w.sw, '标签条确实放不下').toBeGreaterThan(w.cw)
 
-  const current = page.locator('.session-item[aria-current="true"]')
-  await expect(current).toHaveCount(1)
-  expect(await current.getAttribute('data-sid')).toBe(String(await sid(page)))
-  await expect(page.locator(`.session-item[data-sid="${before}"]`)).not.toHaveAttribute('aria-current', 'true')
+    await stepUntil(page, 'Control+Shift+ArrowUp', 'first')
+    await stepUntil(page, 'Control+Shift+ArrowDown', 'last')
+    const last = await currentFullyVisible(page)
+    expect(last.inside, '最后一个标签整个落在标签条里').toBe(true)
+    expect(last.scrollLeft, '确实是靠滚动做到的').toBeGreaterThan(0)
+
+    await stepUntil(page, 'Control+Shift+ArrowUp', 'first')
+    expect((await currentFullyVisible(page)).inside, '切回第一个也完整可见').toBe(true)
+  })
 })
 
-test('选中项被切到视区外时滚回来；本来就可见则不滚', async ({ page }) => {
-  await open(page, 4)
+test.describe('Pixel 5 抽屉', () => {
+  test.use(PIXEL)
 
-  // 列表本来全都看得见：来回切两次，一次都不该滚
-  await page.keyboard.press('Control+Shift+ArrowDown')
-  await page.keyboard.press('Control+Shift+ArrowUp')
-  expect(await page.locator('.sidebar').evaluate((el) => el.scrollTop), '全可见时不滚').toBe(0)
-
-  // 压到放不下：先切到第一个（列表滚到顶），再切到最后一个 —— 它必须自己滚下来
-  await page.addStyleTag({ content: '.sidebar { max-height: 120px }' })
-  await stepUntil(page, 'Control+Shift+ArrowUp', 'first')
-  await stepUntil(page, 'Control+Shift+ArrowDown', 'last')
-
-  const inside = await page.evaluate(() => {
-    const box = document.querySelector('.sidebar')!.getBoundingClientRect()
-    const el = document.querySelector('.session-item[aria-current="true"]')!.getBoundingClientRect()
-    return { top: el.top >= box.top - 1, bottom: el.bottom <= box.bottom + 1, scrolled: document.querySelector('.sidebar')!.scrollTop }
+  test('E2E-35 ⑦ 抽屉里同一套：当前行恰好一条、带强调色左条', async ({ page }) => {
+    await agent.open(page)
+    await newSession(page)
+    await newSession(page)
+    await openDrawer(page)
+    const cur = page.locator('[data-testid=session-list] [aria-current="true"]')
+    await expect(cur).toHaveCount(1)
+    expect(await cur.getAttribute('data-sid')).toBe(String(await hooks.sid(page)))
+    const shadow = await cur.evaluate((el) => getComputedStyle(el).boxShadow)
+    expect(shadow, '当前行有左条（inset 阴影）').toContain('inset')
+    expect(shadow, '左条是强调色').toContain(await accent(page))
+    const other = page.locator('[data-testid=session-list] .session-row:not([aria-current="true"])').first()
+    expect(await cur.evaluate((el) => getComputedStyle(el).backgroundColor), '当前行有底色').not.toBe(
+      await other.evaluate((el) => getComputedStyle(el).backgroundColor),
+    )
   })
-  expect(inside.top && inside.bottom, '选中项整条落在侧栏可视区内').toBe(true)
-  expect(inside.scrolled, '确实是靠滚动做到的').toBeGreaterThan(0)
-
-  // 切回第一个，同样要完整可见
-  await stepUntil(page, 'Control+Shift+ArrowUp', 'first')
-  const backInside = await page.evaluate(() => {
-    const box = document.querySelector('.sidebar')!.getBoundingClientRect()
-    const el = document.querySelector('.session-item[aria-current="true"]')!.getBoundingClientRect()
-    return el.top >= box.top - 1 && el.bottom <= box.bottom + 1
-  })
-  expect(backInside).toBe(true)
 })

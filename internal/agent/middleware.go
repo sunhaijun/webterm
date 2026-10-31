@@ -42,8 +42,8 @@ func (a *Agent) requireAuth(next http.Handler) http.Handler {
 
 // securityHeaders 给所有响应加安全头。
 func (a *Agent) securityHeaders(next http.Handler) http.Handler {
-	// 终端内容根本不进 DOM（xterm 渲染到 canvas/WebGL），所以 XSS 面很小；
-	// CSP 是为了兜住"服务端数据进 DOM"的唯一一处（命令历史面板）。
+	// 终端输出由 xterm 的 DOM 渲染器逐格写 textContent，从不当 HTML 解析；会话名与 CWD
+	// 同样按文本渲染（threat-model.md T5）。CSP 是兜底：哪里漏了也执行不了外来脚本。
 	connectSrc := "'self'"
 	if a.cfg.Domain != "" {
 		connectSrc += " wss://" + a.cfg.Domain

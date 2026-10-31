@@ -1,6 +1,10 @@
+/**
+ * E2E-1 基础往返 —— AC-1.3 / AC-1.9 / AC-4.1。
+ * 另含配对页的两条前端侧护栏：未配对的引导页（AC-1.7）、配对码一次性（AC-1.4 / AC-1.5）。
+ */
 import { expect, test } from '@playwright/test'
 
-import { Agent, submit, termSize, terminalText, waitFor } from './harness'
+import { Agent, hooks, terminalText, termSize, waitFor, waitOnline } from './harness'
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -8,8 +12,7 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-/** E2E-1 基础往返 —— AC-1.3, AC-1.9, AC-4.1。 */
-test('E2E-1 配对 → 建会话 → 敲命令 → 看到输出', async ({ page, context }) => {
+test('E2E-1 配对 → 自动建会话 → 点终端敲命令 → 看到输出，stty size 与前端一致', async ({ page, context }) => {
   await agent.pair(page)
 
   // Cookie 属性正确（AC-1.9）
@@ -19,15 +22,26 @@ test('E2E-1 配对 → 建会话 → 敲命令 → 看到输出', async ({ page,
   expect(cookie!.sameSite, 'Cookie 必须 SameSite=Strict').toBe('Strict')
 
   await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await waitOnline(page)
+  // 第一次连上、一个会话都没有 → 自动建一个
+  await waitFor(async () => (await hooks.sid(page)) !== null, '自动建了第一个会话')
 
-  await submit(page, 'printf "HELLO-%s\\n" WEBTERM')
-  await waitFor(async () => (await terminalText(page)).includes('HELLO-WEBTERM'), '终端出现输出')
+  // 点终端，直接打字（没有输入模式，ADR-0025）
+  await page.getByTestId('terminal').click({ position: { x: 80, y: 80 } })
+  await page.keyboard.type('echo hello-webterm')
+  await page.keyboard.press('Enter')
+  // 【断言输出行，不是回显行】：回显的命令行里也含 hello-webterm
+  await waitFor(
+    async () => (await terminalText(page)).split('\n').some((l) => l.trimEnd() === 'hello-webterm'),
+    '终端出现 hello-webterm 这一行输出',
+  )
 
   // PTY 的尺寸必须和前端算出来的 cols/rows 一致 —— 对不上的话
   // 换行位置就会错，所有跟布局有关的东西都跟着错
   const size = await termSize(page)
-  await submit(page, 'stty size')
+  expect(size.cols).toBeGreaterThan(20)
+  await page.keyboard.type('stty size')
+  await page.keyboard.press('Enter')
   await waitFor(
     async () => new RegExp(`^${size.rows} ${size.cols}$`, 'm').test(await terminalText(page)),
     `stty size 输出 "${size.rows} ${size.cols}"`,
@@ -41,7 +55,7 @@ test('未配对时展示配对引导', async ({ page }) => {
   await expect(page.getByTestId('unpaired')).toContainText('webterm pair')
 })
 
-/** 配对码是一次性的：同一个链接开第二次必须失败（AC-1.4）。 */
+/** 配对码是一次性的：同一个链接开第二次必须失败（AC-1.4），且不留在历史里（AC-1.5）。 */
 test('配对码用过即废', async ({ page, browser }) => {
   await agent.pair(page)
 

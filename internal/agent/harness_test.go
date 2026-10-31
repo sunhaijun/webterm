@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +18,6 @@ import (
 	"github.com/sunhaijun/webterm/internal/agent"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/session"
-	"github.com/sunhaijun/webterm/internal/shellinit"
 	"github.com/sunhaijun/webterm/internal/store"
 )
 
@@ -35,9 +34,8 @@ type harness struct {
 
 // harnessOpts 是夹具的可调项。
 type harnessOpts struct {
-	ringBytes        int
-	shellIntegration bool
-	tune             func(*agent.Config)
+	ringBytes int
+	tune      func(*agent.Config)
 }
 
 type lockedBuffer struct {
@@ -82,14 +80,11 @@ func newHarnessWith(t *testing.T, o harnessOpts) *harness {
 	if ring == 0 {
 		ring = 1 << 20
 	}
-	sessCfg := session.Config{MaxSessions: 5, RingBytes: ring, Shell: "bash", History: true}
-	if o.shellIntegration {
-		runD := filepath.Join(t.TempDir(), "run")
-		sessCfg.RCFileFor = func(sid uint16) (string, error) {
-			return shellinit.Render(sid, shellinit.Options{Dir: runD})
-		}
-	}
-	sessions := session.NewManager(sessCfg, st)
+	// 不读 dotfile 的 bash：断言才有确定性
+	sessions := session.NewManager(session.Config{
+		MaxSessions: 5, RingBytes: ring, Shell: "bash",
+		ShellArgs: []string{"--norc", "--noprofile", "-i"},
+	})
 	t.Cleanup(sessions.Shutdown)
 
 	logs := &lockedBuffer{}
@@ -178,29 +173,56 @@ func (h *harness) dial(ctx context.Context, c *http.Client, origin string) (*web
 	})
 }
 
-// wsClient 是一个最小的协议客户端，够用来跑 m2 的集成测试。
+// wsClient 是一个最小的协议客户端，够用来跑集成测试。
+//
+// 它像真客户端那样处理两种帧：OUTPUT 接在屏幕后面、推进 out_seq；SNAPSHOT 收齐
+// （MORE 位清零的那一帧）之后清屏、写快照、out_seq = seq。
 type wsClient struct {
 	t        *testing.T
 	ws       *websocket.Conn
 	clientID string
 
-	mu       sync.Mutex
-	msgs     []any
-	screen   map[uint16]*bytes.Buffer
-	outSeq   map[uint16]uint64
-	inSeq    map[uint16]uint64
-	errs     []*protocol.Error
-	closed   bool
-	stopRead bool
-	reqSeq   int
-	attrSeen map[uint16]bool
+	mu        sync.Mutex
+	msgs      []any
+	screen    map[uint16]*bytes.Buffer
+	outSeq    map[uint16]uint64
+	inSeq     map[uint16]uint64
+	errs      []*protocol.Error
+	closed    bool
+	stopRead  bool
+	reqSeq    int
+	partial   map[uint16][]byte // 还没收齐的快照
+	snapshots map[uint16]int    // 收齐了几份快照
+	frames    []protocol.Frame  // 收到的二进制帧（payload 不留），按到达顺序
+	order     []string          // "welcome" / "binary" / 其它控制消息的 t，按到达顺序
+	seqErrs   []string          // OUTPUT 的 seq 不连续
 }
 
-// sawAttrPrefix 报告是否收到过带属性修正前缀的帧（即一次 reset 回放）。
-func (c *wsClient) sawAttrPrefix(sid uint16) bool {
+// snapshotCount 返回某个会话收齐了几份快照。
+func (c *wsClient) snapshotCount(sid uint16) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.attrSeen[sid]
+	return c.snapshots[sid]
+}
+
+// binaryFrames 返回收到的二进制帧头（按到达顺序）。
+func (c *wsClient) binaryFrames() []protocol.Frame {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]protocol.Frame(nil), c.frames...)
+}
+
+// arrival 返回帧到达的先后（"binary" 代表一个二进制帧，其余是控制消息的 t）。
+func (c *wsClient) arrival() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.order...)
+}
+
+func (c *wsClient) seqErrors() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.seqErrs...)
 }
 
 // headSeqOf 返回 session.updated 报过的最新 head_seq。
@@ -234,9 +256,11 @@ func (h *harness) connectRaw(ctx context.Context, c *http.Client, clientID strin
 	ws.SetReadLimit(4 << 20)
 	cl := &wsClient{
 		t: h.t, ws: ws, clientID: clientID,
-		screen: map[uint16]*bytes.Buffer{},
-		outSeq: map[uint16]uint64{},
-		inSeq:  map[uint16]uint64{},
+		screen:    map[uint16]*bytes.Buffer{},
+		outSeq:    map[uint16]uint64{},
+		inSeq:     map[uint16]uint64{},
+		partial:   map[uint16][]byte{},
+		snapshots: map[uint16]int{},
 	}
 	go cl.readLoop(ctx)
 	return cl
@@ -302,22 +326,35 @@ func (c *wsClient) readLoop(ctx context.Context) {
 				continue
 			}
 			c.mu.Lock()
+			c.order = append(c.order, "binary")
+			c.frames = append(c.frames, protocol.Frame{Type: f.Type, Flags: f.Flags, SID: f.SID, Seq: f.Seq,
+				Payload: make([]byte, len(f.Payload))})
 			buf := c.screen[f.SID]
 			if buf == nil {
 				buf = &bytes.Buffer{}
 				c.screen[f.SID] = buf
 			}
-			payload := f.Payload
-			if f.Flags&protocol.FlagAttrPrefix != 0 {
-				buf.Reset() // reset 回放：客户端清屏
-				payload = payload[len(protocol.AttrPrefix):]
-				if c.attrSeen == nil {
-					c.attrSeen = map[uint16]bool{}
+			switch f.Type {
+			case protocol.TypeSnapshot:
+				c.partial[f.SID] = append(c.partial[f.SID], f.Payload...)
+				if !f.More() {
+					// 收齐：清屏 → 写快照 → out_seq = seq（快照字节不计入 seq）
+					buf.Reset()
+					buf.Write(c.partial[f.SID])
+					delete(c.partial, f.SID)
+					c.outSeq[f.SID] = f.Seq
+					c.snapshots[f.SID]++
 				}
-				c.attrSeen[f.SID] = true
+			case protocol.TypeOutput:
+				if _, mid := c.partial[f.SID]; mid {
+					c.seqErrs = append(c.seqErrs, "快照的各帧之间夹了 OUTPUT")
+				}
+				if want, ok := c.outSeq[f.SID]; ok && f.Seq != want {
+					c.seqErrs = append(c.seqErrs, fmt.Sprintf("sid %d: OUTPUT seq %d, 期望 %d", f.SID, f.Seq, want))
+				}
+				buf.Write(f.Payload)
+				c.outSeq[f.SID] = f.Seq + uint64(f.DataLen())
 			}
-			buf.Write(payload)
-			c.outSeq[f.SID] = f.Seq + uint64(f.DataLen())
 			c.mu.Unlock()
 		case websocket.MessageText:
 			msg, err := protocol.Decode(data)
@@ -326,6 +363,11 @@ func (c *wsClient) readLoop(ctx context.Context) {
 			}
 			c.mu.Lock()
 			c.msgs = append(c.msgs, msg)
+			var probe struct {
+				T string `json:"t"`
+			}
+			_ = json.Unmarshal(data, &probe)
+			c.order = append(c.order, probe.T)
 			if e, ok := msg.(*protocol.Error); ok {
 				c.errs = append(c.errs, e)
 			}
@@ -341,6 +383,14 @@ func (c *wsClient) screenOf(sid uint16) string {
 		return b.String()
 	}
 	return ""
+}
+
+// screenHas 不拷贝缓冲：大输出的测试每 10ms 轮询一次，拷一份 MiB 级的串会拖慢读循环。
+func (c *wsClient) screenHas(sid uint16, sub string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b := c.screen[sid]
+	return b != nil && bytes.Contains(b.Bytes(), []byte(sub))
 }
 
 func (c *wsClient) messages() []any {
@@ -377,7 +427,7 @@ func (c *wsClient) welcome() *protocol.Welcome {
 	return w
 }
 
-// createSession 建一个会话并等它对应的 session.created。
+// createSession 建一个会话、等它对应的 session.created，然后订阅它。
 //
 // 【必须按 req_id 匹配】：一条连接可能建多个会话，认第一条 session.created
 // 会让第二次调用拿回第一个会话的 sid —— 那种 bug 会把后面所有断言都带偏。
@@ -400,6 +450,9 @@ func (c *wsClient) createSession(cwd string) uint16 {
 		}
 		return false
 	})
+	// 建会话不自动订阅（协议 §4.1）：像真客户端一样自己订阅，out_seq 为 0 → 快照
+	c.send(&protocol.Subscribe{SID: sid, OutSeq: 0})
+	waitFor(c.t, "新会话的第一份快照", func() bool { return c.snapshotCount(sid) >= 1 })
 	return sid
 }
 

@@ -25,7 +25,6 @@ var usage = "webterm " + version + ` —— 浏览器终端 agent
   webterm doctor [--domain X]    检查部署前置条件
   webterm update                 升级到最新版（按上次的安装参数重装；默认热升级，会话保留）
   webterm reload [--when-idle]   让运行中的 agent 原地换成磁盘上的新二进制，会话保留
-  webterm shell-init bash        输出 shell 集成脚本（手动接入的降级路径）
   webterm version                版本信息
 
 不带子命令直接跑 webterm，会打印一张状态总览（服务、证书、设备、地址）。
@@ -59,8 +58,6 @@ func main() {
 		err = runReload(os.Args[2:])
 	case "handoff-check":
 		err = runHandoffCheck()
-	case "shell-init":
-		err = runShellInit(os.Args[2:])
 	case "version":
 		fmt.Printf("webterm %s\n", version)
 	case "-h", "--help", "help":

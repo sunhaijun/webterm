@@ -36,7 +36,7 @@ func TestITResume1_SessionKeepsRunningWhileDisconnected(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")
-	s.Subscribe(c, 0)
+	s.Subscribe(c, 0, 0, 0)
 
 	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
 
@@ -54,7 +54,9 @@ func TestITResume1_SessionKeepsRunningWhileDisconnected(t *testing.T) {
 	}
 	// 重连补齐：断线期间的输出必须一个字节不少地回来
 	c2 := newConn(t, m, "tab")
-	s.Subscribe(c2, before)
+	if st, _ := s.Subscribe(c2, before, 0, 0); st != protocol.ResumeOK {
+		t.Fatalf("status = %q, want ok", st)
+	}
 	waitScreen(t, c2, "while-offline")
 }
 
@@ -63,7 +65,7 @@ func TestITResume2_IncrementalReplay(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")
-	s.Subscribe(c, 0)
+	s.Subscribe(c, 0, 0, 0)
 
 	// 标记必须【只出现在输出里】—— 直接写 "echo ONE-MARK" 的话，被回显的
 	// 命令行本身就含这个串，断点会落在命令刚敲完、输出还没出来的位置。
@@ -84,14 +86,17 @@ func TestITResume2_IncrementalReplay(t *testing.T) {
 
 	// 从断点续订：只应收到断点之后的内容
 	c2 := newConn(t, m, "tab")
-	s.Subscribe(c2, at)
+	st, from := s.Subscribe(c2, at, 0, 0)
+	if st != protocol.ResumeOK || from != at {
+		t.Fatalf("续传 = %s/%d, want ok/%d", st, from, at)
+	}
 	waitScreen(t, c2, "TWO-MARK")
 
 	if strings.Contains(c2.Screen(), "ONE-MARK") {
 		t.Fatal("重发了客户端已经收到的字节 —— 续传应当是增量的")
 	}
-	if c2.Resets() != 0 {
-		t.Fatal("缓冲没溢出却走了 reset 路径")
+	if c2.Snapshots() != 0 {
+		t.Fatal("缓冲没溢出却走了快照路径")
 	}
 }
 
@@ -104,7 +109,7 @@ func TestITResume3_InputSurvivesReconnect(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab-1")
-	s.Subscribe(c, 0)
+	s.Subscribe(c, 0, 0, 0)
 
 	if err := c.Send(s, "echo A1\r"); err != nil {
 		t.Fatal(err)
@@ -116,9 +121,9 @@ func TestITResume3_InputSurvivesReconnect(t *testing.T) {
 	s.Unsubscribe(c)
 	s.DetachClient("tab-1")
 
-	// 重连：同一个 client_id 拿回自己的 in_ack
+	// 重连：同一个 client_id 拿回自己的 in_ack（Resume 顺带订阅上去）
 	c2 := newConn(t, m, "tab-1")
-	resumed := m.Resume("tab-1", m.InstanceID(), []protocol.ResumeReq{
+	resumed := m.Resume(c2, m.InstanceID(), []protocol.ResumeReq{
 		{SID: s.SID(), OutSeq: c.OutSeq()},
 	})
 	if len(resumed) != 1 {
@@ -134,7 +139,6 @@ func TestITResume3_InputSurvivesReconnect(t *testing.T) {
 	if r.InAck != c.inSeqNext {
 		t.Fatalf("in_ack = %d, want %d（断开前已全部写入）", r.InAck, c.inSeqNext)
 	}
-	s.Subscribe(c2, r.FromSeq)
 
 	// 客户端按 in_ack 裁剪重发队列，然后继续发新输入
 	c2.TrimTo(r.InAck)
@@ -154,7 +158,7 @@ func TestInputResendIsDeduplicated(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")
-	s.Subscribe(c, 0)
+	s.Subscribe(c, 0, 0, 0)
 
 	first := "echo DEDUP-"
 	if err := c.Send(s, first); err != nil {
@@ -206,22 +210,24 @@ func TestInputAccountingIsPerClient(t *testing.T) {
 // IT-resume-4：instance_id 不符 → 所有 resume 判 gone。
 //
 // agent 重启后 sid 从头分配。没有实例标识的话，resume{sid:1, out_seq:很大}
-// 会落进"客户端领先"分支 —— 屏幕上留着旧会话的内容，之后接的却是一个
-// 毫不相干的新会话的输出。
+// 会被接到一个毫不相干的新会话上 —— 屏幕上留着旧会话的内容，之后接的却是
+// 另一个会话的输出。
 func TestITResume4_InstanceMismatchIsGone(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	waitFor(t, "有输出", func() bool { return s.HeadSeq() > 0 })
 
-	t.Run("实例相符正常续传", func(t *testing.T) {
-		got := m.Resume("tab", m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: 0}})
-		if got[0].Status != protocol.ResumeOK {
-			t.Fatalf("status = %q, want ok", got[0].Status)
+	t.Run("实例相符、进度在窗口内：增量", func(t *testing.T) {
+		head := s.HeadSeq()
+		got := m.Resume(newConn(t, m, "tab"), m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: head}})
+		if got[0].Status != protocol.ResumeOK || got[0].FromSeq != head {
+			t.Fatalf("got %+v, want ok/%d", got[0], head)
 		}
 	})
 
-	t.Run("实例不符一律 gone", func(t *testing.T) {
-		got := m.Resume("tab", "some-old-instance", []protocol.ResumeReq{
+	t.Run("实例不符一律 gone，什么都不推", func(t *testing.T) {
+		c := newConn(t, m, "tab")
+		got := m.Resume(c, "some-old-instance", []protocol.ResumeReq{
 			{SID: s.SID(), OutSeq: 999999},
 			{SID: s.SID(), OutSeq: 0},
 		})
@@ -230,75 +236,86 @@ func TestITResume4_InstanceMismatchIsGone(t *testing.T) {
 				t.Fatalf("sid %d status = %q, want gone", r.SID, r.Status)
 			}
 		}
+		if len(c.Frames()) != 0 {
+			t.Fatal("gone 的会话不该推任何帧")
+		}
 	})
 
 	t.Run("首次连接没有 instance_id 时按正常流程走", func(t *testing.T) {
-		got := m.Resume("tab", "", []protocol.ResumeReq{{SID: s.SID(), OutSeq: 0}})
-		if got[0].Status != protocol.ResumeOK {
-			t.Fatalf("status = %q, want ok", got[0].Status)
+		got := m.Resume(newConn(t, m, "tab"), "", []protocol.ResumeReq{{SID: s.SID(), OutSeq: 0}})
+		if got[0].Status != protocol.ResumeSnapshot {
+			t.Fatalf("status = %q, want snapshot（out_seq 为 0）", got[0].Status)
 		}
 	})
 
 	t.Run("sid 不存在也是 gone", func(t *testing.T) {
-		got := m.Resume("tab", m.InstanceID(), []protocol.ResumeReq{{SID: 60000, OutSeq: 0}})
+		got := m.Resume(newConn(t, m, "tab"), m.InstanceID(), []protocol.ResumeReq{{SID: 60000, OutSeq: 0}})
 		if got[0].Status != protocol.ResumeGone {
 			t.Fatalf("status = %q, want gone", got[0].Status)
 		}
 	})
 }
 
-// 缓冲被覆盖 → reset，并且【只有】这种情况才前置 ESC[0m。
-func TestResumeResetWhenBufferOverwritten(t *testing.T) {
+// 增量还是快照（协议 §5.1）：out_seq > 0 且在窗口内 → 增量；其余一律快照。
+// hello.resume 与 subscribe 走同一个判定。
+func TestResumeSnapshotWhenOutOfWindow(t *testing.T) {
 	c := cfg()
-	c.RingBytes = 4096 // 调小，让 reset 路径可测
+	c.RingBytes = 4096 // 调小，让落出窗口可测
 	m := newManager(t, c)
 	s := create(t, m)
 	conn := newConn(t, m, "tab")
-	s.Subscribe(conn, 0)
+	s.Subscribe(conn, 0, 0, 0)
 
 	if err := conn.Send(s, emitScript(300)); err != nil {
 		t.Fatal(err)
 	}
 	waitScreen(t, conn, "EMIT-DONE")
-	waitFor(t, "缓冲发生裁剪", func() bool { return s.Snapshot().BaseSeq > 0 })
+	waitFor(t, "缓冲发生裁剪", func() bool { return s.Info().BaseSeq > 0 })
+	waitQuiet(t, s, 200*time.Millisecond)
 
-	got := m.Resume("tab", m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: 0}})
-	if got[0].Status != protocol.ResumeReset {
-		t.Fatalf("status = %q, want reset", got[0].Status)
-	}
-	if got[0].FromSeq != s.Snapshot().BaseSeq {
-		t.Fatalf("from_seq = %d, want base_seq %d", got[0].FromSeq, s.Snapshot().BaseSeq)
-	}
+	t.Run("落出窗口 → 快照，from_seq = 快照的 seq", func(t *testing.T) {
+		re := newConn(t, m, "tab-r")
+		got := m.Resume(re, m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: 1}})
+		if got[0].Status != protocol.ResumeSnapshot {
+			t.Fatalf("status = %q, want snapshot", got[0].Status)
+		}
+		if re.Snapshots() != 1 || got[0].FromSeq != re.OutSeq() || got[0].FromSeq != s.HeadSeq() {
+			t.Fatalf("from_seq = %d，快照 seq = %d，head = %d —— 三者应当相等", got[0].FromSeq, re.OutSeq(), s.HeadSeq())
+		}
+		// 快照就是完整的画面：落出窗口的那段历史照样在里面（AC-2.6 不再"截断"）
+		if !strings.Contains(render(re, 80, 24), "EMIT-DONE") {
+			t.Fatal("快照里没有当前屏")
+		}
+	})
 
-	// 走 reset 路径的订阅：必须带属性修正前缀
-	fresh := newConn(t, m, "tab-2")
-	s.Subscribe(fresh, 0)
-	if fresh.Resets() != 1 {
-		t.Fatalf("reset 次数 = %d, want 1", fresh.Resets())
-	}
-	if !strings.HasPrefix(fresh.Screen(), string(protocol.AttrPrefix)) {
-		t.Fatal("reset 回放没有前置 ESC[0m")
-	}
+	t.Run("out_seq 为 0（第一次打开 / 刷新）→ 快照", func(t *testing.T) {
+		fresh := newConn(t, m, "tab-2")
+		if st, _ := s.Subscribe(fresh, 0, 0, 0); st != protocol.ResumeSnapshot || fresh.Snapshots() != 1 {
+			t.Fatalf("status = %q snapshots = %d", st, fresh.Snapshots())
+		}
+	})
 
-	// 而普通增量续传【绝不能】前置 —— 注入会清掉断点处生效中的属性
-	incr := newConn(t, m, "tab-3")
-	s.Subscribe(incr, s.Snapshot().BaseSeq+10)
-	if incr.Resets() != 0 {
-		t.Fatal("增量续传注入了 ESC[0m —— 会让字节级连续性失败")
-	}
-}
+	t.Run("领先于 head → 快照", func(t *testing.T) {
+		ahead := newConn(t, m, "tab-3")
+		if st, from := s.Subscribe(ahead, s.HeadSeq()+1000, 0, 0); st != protocol.ResumeSnapshot || from != s.HeadSeq() {
+			t.Fatalf("got %s/%d, want snapshot/%d", st, from, s.HeadSeq())
+		}
+	})
 
-// 客户端领先（out_seq > head_seq）时不回放，不当成空洞。
-func TestResumeClientAhead(t *testing.T) {
-	m := newManager(t, cfg())
-	s := create(t, m)
-	waitFor(t, "有输出", func() bool { return s.HeadSeq() > 0 })
-
-	head := s.HeadSeq()
-	got := m.Resume("tab", m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: head + 1000}})
-	if got[0].Status != protocol.ResumeOK || got[0].FromSeq != head {
-		t.Fatalf("got %+v, want ok/from_seq=%d", got[0], head)
-	}
+	t.Run("窗口内 → 增量，原样推缺的那段，不发快照", func(t *testing.T) {
+		base, head := s.Info().BaseSeq, s.HeadSeq()
+		incr := newConn(t, m, "tab-4")
+		st, from := s.Subscribe(incr, base+10, 0, 0)
+		if st != protocol.ResumeOK || from != base+10 {
+			t.Fatalf("got %s/%d, want ok/%d", st, from, base+10)
+		}
+		if incr.Snapshots() != 0 {
+			t.Fatal("窗口内却发了快照")
+		}
+		if uint64(len(incr.Screen())) != head-(base+10) || incr.OutSeq() != head {
+			t.Fatalf("补齐了 %d 字节，want %d", len(incr.Screen()), head-(base+10))
+		}
+	})
 }
 
 // 未订阅的会话产生输出时，未订阅的连接也要收到 head_seq —— 未读靠它推导。
@@ -309,7 +326,7 @@ func TestUnreadDerivedFromHeadSeq(t *testing.T) {
 	visible, background := create(t, m), create(t, m)
 
 	c := newConn(t, m, "tab")
-	visible.Subscribe(c, 0) // 只订阅当前可见的那个
+	visible.Subscribe(c, 0, 0, 0) // 只订阅当前可见的那个
 
 	if err := c.Send(background, "echo in-background\r"); err != nil {
 		t.Fatal(err)

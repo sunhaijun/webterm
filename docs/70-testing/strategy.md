@@ -14,10 +14,19 @@
 
 | 层 | 工具 | 覆盖 | 运行时间目标 |
 |---|---|---|---|
-| Go 单测 | `go test` | 环形缓冲、OSC 解析、协议编解码、存储查询、认证逻辑 | < 10s |
+| Go 单测 | `go test` | 环形缓冲、终端模拟器封装（`internal/vterm`）、协议编解码、存储、认证逻辑 | < 10s |
 | Go 集成 | `go test -tags=integration` | 真 PTY、真 SQLite、真 HTTP、真 WebSocket（进程内） | < 60s |
-| 前端单测 | Vitest | seq 记账、重发队列、输入模式状态机、keymap、退避 | < 15s |
+| 前端单测 | Vitest | seq 记账、重发队列、快照帧拼接、回放门、keymap 与附加键、文本输入页、退避；快照的屏幕级一致性（`@xterm/headless` 当裁判） | < 30s |
 | E2E | Playwright | 真二进制 + 真浏览器，完整用户流程 | < 5min |
+
+## 两条口径（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §10）
+
+输出只有两条路，各有各的口径：
+
+| 路径 | 口径 | 测试 |
+|---|---|---|
+| **增量**（断线短、切走短） | **字节级**：断开重连后的序列化结果与不断开逐字节一致 | 下面这一节、E2E-2 |
+| **快照**（第一次打开、刷新、落出窗口、改列数） | **屏幕级**：xterm 先吃快照再吃之后的字节，逐格等于直接吃全部字节（字符、宽度、颜色、属性、光标、模式；软换行标记与 ADR-0026 列出的三处已知差异除外） | 下面的「屏幕级一致性」、E2E-30 / 31 / 36 |
 
 ## 关键测试：字节级连续性（AC-2.1）★
 
@@ -45,34 +54,41 @@
 |---|---|---|
 | E2E-2a | Playwright 路由拦截切断 WS | 基本续传 |
 | E2E-2b | 断开 5 秒（缓冲不溢出） | 增量回放正确 |
-| E2E-2c | 断开期间输出 > `ring_bytes` | 走 reset 路径，屏幕**不要求**一致，但要求：无乱码残留、有截断提示、后续输出正确 |
+| E2E-2c | 断开期间输出 > `ring_bytes` | 走快照路径：**屏幕级**一致（不要求字节级），后续输出正确 |
 | E2E-2d | 连续快速断开 10 次 | 无累积错位 |
-| E2E-3 | 断开期间通过 Composer 提交输入 | 输入不丢、不重、顺序正确 |
+| E2E-3 | 断开期间在终端里输入 | 输入不丢、不重、顺序正确 |
 
-E2E-2c 是唯一不要求字节一致的变体 —— 因为 reset 本质上就是丢历史。但它要求**丢的部分之后的内容完全正确**。
+E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画出来的画面，不是原始字节。它要求的是**画面**一致，且之后的输出接得上。
+
+## 关键测试：屏幕级一致性（AC-2.21）★
+
+快照那条路的看门人。做法照搬 2026-10-30 的离线试验：
+
+```
+1. 录制夹具：在伪终端里跑真实程序（claude 两种渲染方式、codex、vim、tmux、less、top、
+   python、长日志、中文彩色输出），把原始输出字节录成 internal/vterm/testdata/rec/*.bin
+2. Go 测试：对每段录制取一组截断点（均匀的 + 随机的，随机的会落在转义序列与多字节字符中间），
+   在每个截断点用 internal/vterm 生成快照，写成 testdata 下的快照文件
+3. Vitest：@xterm/headless（unicode11）当裁判
+     参照 = 直接吃全部原始字节
+     对照 = 新终端先吃截断点的快照、再吃截断点之后的原始字节
+   逐格比较；写入前都先过流式 TextDecoder（xterm 写 Uint8Array 会在切开的 UTF-8 上丢字）
+```
+
+只比「看得见」的东西：空格的前景色归一、备用屏的软换行标记不比。ADR-0026 列出的三处已知差异（top 末格反白、SGR 53、关闭自动换行时光标 x 的记法）以白名单的形式写在测试里，新增差异必须先改 ADR。
 
 ## Go 单测清单
 
 ### `internal/ringbuf`（见 [`../50-backend/ring-buffer.md`](../50-backend/ring-buffer.md#必测用例)）
 
-`UT-ring-1..9`。其中 `UT-ring-8`（模糊测试，随机 Append/Slice 序列断言不变式）是这个模块最有价值的测试 —— 环形缓冲的 bug 几乎全在边界。
+`UT-ring-1、2、5–10`。其中 `UT-ring-8`（模糊测试，随机 Append/Slice 序列断言不变式）是这个模块最有价值的测试 —— 环形缓冲的 bug 几乎全在边界。
 
-### `internal/oscparse`（见 [`../30-protocol/shell-integration.md`](../30-protocol/shell-integration.md#5-agent-侧-osc-解析器要求)）
+### `internal/vterm`
 
-`UT-osc-1..9`。其中 `UT-osc-3` 必须**对序列的每个字节位置都切一次**并逐一验证 —— 流式解析器的 bug 就藏在分片边界。
-
-```go
-func TestOSCSplitAtEveryByte(t *testing.T) {
-    input := []byte("before\x1b]133;D;0\x07after")
-    for split := 1; split < len(input); split++ {
-        p := oscparse.New()
-        out1, ev1 := p.Feed(input[:split])
-        out2, ev2 := p.Feed(input[split:])
-        assertEqual(t, "beforeafter", string(out1)+string(out2))
-        assertEvents(t, append(ev1, ev2...), []Event{CommandEnd{ExitCode: 0}})
-    }
-}
-```
+- 同一段字节按任意分片喂入，快照逐字节相等（分片无关）
+- `导出状态 → 导入` 前后快照逐字节相等（热升级用）
+- 改列数后快照里的行宽等于新列数；只改行数时历史行不变
+- 模拟器的查询应答被丢弃，不会写进 PTY
 
 ### `internal/protocol`
 
@@ -83,8 +99,8 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 
 ### `internal/store`
 
-- `UT-store-1..4`：历史查询过滤/分页、置顶排序、删除、淘汰保护置顶
-- 迁移幂等性：连续跑两次迁移，结果一致
+- 迁移幂等性：连续跑两次迁移，结果一致；`0003` 把老库里的 `commands` 表删掉
+- 设备与配对的查询
 - 权限：创建后文件是 `0600`
 
 ### `internal/auth`
@@ -98,9 +114,9 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 
 | ID | 内容 |
 |---|---|
-| `IT-session-1..5` | 多会话独立性、上限、自动命名、退出保留缓冲、关闭杀进程组 |
+| `IT-session-1..5` | 多会话独立性、上限、自动命名（CWD 读 `/proc`）、退出保留缓冲与模拟器、关闭杀进程组 |
 | `IT-resume-1..4` | 断线期间会话不暂停、增量回放不重发、输入重发不丢不重（`in_ack` 跨重连存活）、`instance_id` 不符判 `gone` |
-| `IT-shell-1..7` | 命令记录、空格跳过、rcfile 注入、不覆盖用户配置、登录/非登录 profile 链、握手超时、脚本出错不影响 shell |
+| `IT-snapshot-1..3` | 落出窗口 / `out_seq == 0` 走快照且之后的 OUTPUT 从快照的 `seq` 接上；改列数向每个订阅者重发快照、只改行数不发；快照超过单帧上限时按 `MORE` 拆帧 |
 | `IT-auth-1..4` | 路由认证矩阵（**含 `/ws`**）、Origin 校验、Cookie 属性、吊销即时生效 |
 | `IT-pair-1..3` | 二维码输出、配对码不进日志、限速 |
 | `IT-tls-1..3` | 用本地假 ACME CA（`internal/acmetest`）验证：真的签出证书并能握手；`--dev` 一次都不找 CA；挑战打不进来时给可读诊断（AC-1.13）。见下方「为什么不用 pebble」 |
@@ -110,7 +126,8 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 | `IT-hb-1` | 60 秒无帧的连接被关闭 |
 | `IT-queue-1` | 会话输入队列满 → `input_stalled`，入队非阻塞，其它会话不受影响（m1） |
 | `IT-queue-2` | 连接写队列满 → 关闭该连接而不是阻塞 Session（m2，需要连接层） |
-| `IT-sub-1` | 未订阅会话继续缓冲，`subscribe{out_seq}` 补齐正确 |
+| `IT-sub-1` | 未订阅会话继续缓冲、继续喂给模拟器，`subscribe{out_seq}` 按增量或快照补齐 |
+| `IT-handoff-1` | 热升级前后：增量路径字节级连续、同一会话的快照逐字节相等（`TestHandoffByteLevelContinuity`） |
 
 ### 为什么不用 pebble
 
@@ -132,23 +149,23 @@ func TestOSCSplitAtEveryByte(t *testing.T) {
 > 也就是说**最常见的真实故障（安全组没放行）根本走不到那段诊断**。
 > 这正是"只有手动验证"覆盖不到的东西。
 
-**shell 集成测试需要真 bash。** CI 里确保有 bash 4.4+；测试跑一个受控的 `.bashrc`（通过 `HOME` 指向临时目录）以获得确定性。
+**会话集成测试需要一个真 shell。** 测试跑一个受控的 `.bashrc`（通过 `HOME` 指向临时目录）以获得确定性。
 
 ## 前端单测清单（Vitest）
 
 | ID | 内容 |
 |---|---|
-| `UT-seq-1` | `out_seq` 记账：连续帧、空洞检测、重复检测 |
-| `UT-input-1..3` | bracketed paste 包裹、composition 期间不发送、输入框属性 |
-| `UT-mode-1..2` | 模式状态机转移表、`running` 去抖、`locked` 行为 |
+| `UT-seq-1` | `out_seq` 记账：连续帧、空洞检测、重复检测；SNAPSHOT 后 `out_seq` 跳到快照的 `seq` |
+| `UT-snapshot-1` | SNAPSHOT 帧：`MORE` 拼接、收齐才应用、应用时 `reset` 并换新的 UTF-8 解码器 |
+| `UT-utf8-1` | 输出按任意字节切开写入，中文标点（。…—“”）一个不丢（AC-2.23） |
+| `UT-input-1..3` | 文本输入页：回车语义（有内容不追加回车 / 空回车发 `\r` / 含换行走括号粘贴）、composition 期间不发送、输入框属性 |
 | `UT-keymap-1` | 控制键映射表（对照 [`../40-frontend/keymap.md`](../40-frontend/keymap.md)） |
 | `UT-reconnect-1` | 指数退避序列、抖动范围、`online` 事件立即重试 |
 | `UT-hb-1` | 心跳间隔、pong 超时判死 |
 | `UT-hb-2` | 自认在线时的即时探活：`online` / 页面可见 → 发 `ping`，2 秒无 `pong` → 关连接；`pong` 来了就不关（AC-2.20） |
-| `UT-replay-2` | 回放门：用户输入事件派发期间的 `onData` 放行，`message` / 定时器里产生的在回放中丢弃（AC-2.15） |
+| `UT-replay-2` | 回放门：用户输入事件派发期间的 `onData` 放行，`message` / 定时器里产生的在回放（增量补课、快照）中丢弃（AC-2.15） |
 | `UT-raw-2` | 组字兜底复位：`blur` / `isComposing === false` 的 `keydown` 都把 `composing` 置回 false（AC-3.3） |
 | `UT-resize-1` | resize 防抖 |
-| `UT-render-1` | WebGL 失败时回退不抛异常 |
 | `UT-name-1` | 会话自动命名规则（home → `~`、`/` → `/`、手动名优先） |
 | 协议向量 | 跑 `internal/protocol/testdata/vectors.json`（与 Go 侧同一份） |
 
@@ -209,9 +226,9 @@ e2e.yml  # 【CI 上不自动跑】：只留手动触发，见下
 不设硬性覆盖率门槛（会诱导写无意义的测试）。但以下模块**必须有近乎完全的分支覆盖**，review 时人工确认：
 
 - `internal/ringbuf`
-- `internal/oscparse`
+- `internal/vterm`（快照与状态导出）
 - `internal/protocol`
-- `web/src/conn`（seq 记账与重发队列）
+- `web/src/conn`（seq 记账、快照帧、重发队列）
 
 这四个是"断线续传"的全部实现。它们错了，产品的核心承诺就是假的。
 

@@ -1,5 +1,7 @@
 # ADR-0009 WebSocket 混合帧：二进制数据 + JSON 控制
 
+> **被 [ADR-0026](0026-agent-holds-terminal-state.md) 修订**：新增 `SNAPSHOT` 帧类型（`0x03`，`flags` bit0 = `MORE`），删除 `ATTR_PREFIX`；协议版本 1 → 2。帧布局的其余部分不变。
+
 > 状态：Accepted · 2026-09-06
 
 ## 背景

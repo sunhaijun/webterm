@@ -12,7 +12,7 @@ $XDG_DATA_HOME/webterm/          （否则 ~/.local/share/webterm/）
 ├── webterm.db-wal      0600
 ├── webterm.db-shm      0600
 ├── certs/              0700     autocert 缓存
-└── run/                0700     临时 rcfile（会话结束即删）
+└── run/                0700     控制 socket agent.sock（热升级用）
 ```
 
 可用 `--data-dir` 覆盖。
@@ -40,7 +40,8 @@ CREATE TABLE settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
--- schema_version 存在这里，启动时读它决定跑哪些迁移
+-- schema_version 存在这里，启动时读它决定跑哪些迁移。
+-- 只为命令历史服务的 history_enabled 由 0003 删除
 ```
 
 ### `devices`
@@ -78,104 +79,17 @@ CREATE TABLE pairings (
 
 过期记录由启动时和每小时的清理任务删除。
 
-### `commands`
-
-```sql
-CREATE TABLE commands (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    text         TEXT    NOT NULL,
-    session_name TEXT,                  -- 快照，非外键（会话不持久化）
-    cwd          TEXT,
-    exit_code    INTEGER,               -- NULL = 未完成 或 手动新建的快捷命令
-    started_at   INTEGER NOT NULL,      -- unix ms
-    duration_ms  INTEGER,               -- NULL 同上
-    pinned       INTEGER NOT NULL DEFAULT 0,   -- 1 = 快捷命令
-    label        TEXT,                  -- 快捷命令的短名
-    pin_order    INTEGER                -- 置顶排序，非置顶为 NULL
-);
-
-CREATE INDEX idx_cmd_started  ON commands(started_at DESC);
-CREATE INDEX idx_cmd_pinned   ON commands(pin_order) WHERE pinned = 1;
-CREATE INDEX idx_cmd_cwd      ON commands(cwd, started_at DESC);
-```
-
-**一张表承载历史和快捷命令**（[ADR-0008](../20-architecture/adr/0008-pinned-history-as-snippets.md)）。
-
-`session_name` 是**字符串快照**不是外键 —— 会话不持久化（[ADR-0005](../20-architecture/adr/0005-sqlite-pure-go.md)），存 sid 或外键都会立刻变成孤儿。
-
-## 查询
-
-### 历史列表（AC-6.3）
-
-```sql
-SELECT * FROM commands
-WHERE (:q      IS NULL OR text LIKE '%' || :q || '%')
-  AND (:cwd    IS NULL OR cwd = :cwd)
-  AND (:failed = 0     OR (exit_code IS NOT NULL AND exit_code != 0))
-  AND (:before IS NULL OR started_at < :before)
-ORDER BY started_at DESC
-LIMIT :limit;
-```
-
-**游标分页（`:before`）而不是 `OFFSET`** —— 历史一直在追加，翻页期间新插入的行会让 `OFFSET` 漏行和重行。端点契约见 [`../30-protocol/http-api.md`](../30-protocol/http-api.md#get-apicommands)。
-
-**v0.1 用 `LIKE` 不用 FTS5。** 5 万行的 `LIKE '%x%'` 是毫秒级。等真的慢了再加 FTS5 虚拟表 —— 那是纯增量改动。
-
-### 快捷命令列表
-
-```sql
-SELECT * FROM commands WHERE pinned = 1 ORDER BY pin_order ASC;
-```
-
-### Composer 的历史导航（前缀匹配）
-
-```sql
-SELECT DISTINCT text FROM commands
-WHERE text LIKE :prefix || '%'
-ORDER BY started_at DESC LIMIT 50;
-```
-
-`DISTINCT` 很重要 —— 否则连按 `↑` 会翻到同一条命令十几次。
-
-## 写入路径
-
-命令记录分两次写（对应 `133;C` 和 `133;D`）：
-
-```
-133;C  →  INSERT INTO commands (text, session_name, cwd, started_at, pinned)
-          VALUES (?, ?, ?, ?, 0)                      → 得到 cmd_id
-133;D  →  UPDATE commands SET exit_code = ?, duration_ms = ?
-          WHERE id = ?
-```
-
-shell 在 `133;D` 之前死掉 → 该行的 `exit_code` / `duration_ms` 永久为 NULL。查询时按"未完成"展示（UI 显示 `—`）。这是可接受的：知道"我跑了什么"比知道"结果如何"更重要。
-
-## 淘汰（AC-6.10）
-
-每小时一次，以及每 1000 条插入后触发一次：
-
-```sql
-DELETE FROM commands
-WHERE pinned = 0
-  AND id NOT IN (
-      SELECT id FROM commands WHERE pinned = 0
-      ORDER BY started_at DESC LIMIT :max_history
-  );
-```
-
-`max_history` 默认 50000，`--max-history` 可配。
-
-**置顶记录永不淘汰** —— 这是 [ADR-0008](../20-architecture/adr/0008-pinned-history-as-snippets.md) 的直接要求，因为快捷命令的生命周期跟历史行绑定。
-
-淘汰后周期性 `PRAGMA incremental_vacuum`（或每月一次 `VACUUM`），避免文件无限增长。
-
 ## 迁移
 
 ```
 internal/store/migrations/
   0001_init.sql
-  0002_….sql
+  0002_pairing_digits.sql
+  0003_drop_commands.sql      DROP TABLE IF EXISTS commands;
+                              DELETE FROM settings WHERE key = 'history_enabled';
 ```
+
+`0003` 随 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 删除命令历史：老库升级后不再留着用户的命令原文。删完跑一次 `PRAGMA incremental_vacuum` 把页还给文件系统。
 
 `go:embed` 进二进制。启动时读 `settings.schema_version`，顺序执行未应用的脚本，每个脚本在一个事务里，成功后更新版本号。
 
@@ -189,16 +103,10 @@ internal/store/migrations/
 
 单个 `*sql.DB`，`SetMaxOpenConns(1)` + 应用层 `sync.Mutex` 保护写。
 
-WAL 模式下 SQLite 支持并发读，但在本项目的负载（每分钟几条命令记录 + 偶尔的历史查询）下，串行化是最简单可靠的选择。**不要为了性能引入连接池的复杂度** —— 这里永远不会是瓶颈。
+WAL 模式下 SQLite 支持并发读，但在本项目的负载（配对、设备校验与 `last_seen_at` 的节流更新）下，串行化是最简单可靠的选择。**不要为了性能引入连接池的复杂度** —— 这里永远不会是瓶颈。
 
 ## 隐私（AC-8.4）
 
-**这个库里绝对不能出现终端输出内容。** 存的只有：
-
-- 命令原文（用户主动输入的）
-- CWD、退出码、耗时、时间戳
-- 设备与配对的哈希
-
-见 [`../60-security/privacy-history.md`](../60-security/privacy-history.md)。
+**这个库里绝对不能出现终端输出内容，也不存用户敲过的命令。** 存的只有设备与配对（token 与配对码只存哈希）、设置项。终端输出只在内存里（环形缓冲与终端模拟器），见 [`../60-security/threat-model.md`](../60-security/threat-model.md)。
 
 `IT-privacy-1` 的做法：跑一个会话输出一个特征字符串（如 `WEBTERM_CANARY_9f3a`），然后 grep 整个数据目录，断言零命中。

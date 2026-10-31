@@ -1,4 +1,4 @@
-/** 控制消息类型与错误码 —— 协议 §4 / §7。 */
+/** 控制消息类型与错误码 —— 协议 §4 / §7（v2）。 */
 
 export const T = {
   hello: 'hello',
@@ -15,12 +15,6 @@ export const T = {
   sessionClosed: 'session.closed',
   sessionUpdated: 'session.updated',
   ack: 'ack',
-  reset: 'reset',
-  redraw: 'redraw',
-  cwd: 'cwd',
-  prompt: 'prompt',
-  commandStart: 'command.start',
-  commandEnd: 'command.end',
   pong: 'pong',
   error: 'error',
   notice: 'notice',
@@ -42,9 +36,8 @@ export const Code = {
 } as const
 
 export type SessionStatus = 'running' | 'exited'
-export type Integration = 'pending' | 'active' | 'inactive'
-export type PromptState = 'input' | 'running' | 'done'
-export type ResumeStatus = 'ok' | 'reset' | 'gone'
+/** `resumed[].status`（§4.2）：增量 / 快照 / 会话已不存在。 */
+export type ResumeStatus = 'ok' | 'snapshot' | 'gone'
 
 export interface ResumeReq {
   sid: number
@@ -55,7 +48,7 @@ export interface Hello {
   t: 'hello'
   protocol: number
   client_id: string
-  instance_id?: string
+  instance_id?: string | null
   resume: ResumeReq[]
 }
 
@@ -68,20 +61,6 @@ export interface SessionInfo {
   exit_code: number | null
   cols: number
   rows: number
-  integration: Integration
-  /**
-   * 输入正去往一个没有 shell 集成的子程序（ssh / su / 容器 / REPL）。
-   * 由 agent 的按命令活性探测得出（协议 §4.7）。外层 integration 不受影响。
-   * 老 agent 不发这个字段，所以可选。
-   */
-  unmarked_input?: boolean
-  /**
-   * 重连时用来重新对齐输入模式（协议 §4.2）。
-   *
-   * prompt 消息只在状态变化时发一次，离线期间的那些就丢了 —— 断线跨过
-   * 命令边界的话，客户端会停在 Raw、Composer 收起，用户连字都打不了。
-   */
-  prompt_state: PromptState | null
   base_seq: number
   head_seq: number
   created_at: number
@@ -99,6 +78,8 @@ export interface Welcome {
   protocol: number
   server_version: string
   instance_id: string
+  /** agent 用户的家目录，界面把 CWD 里的它缩写成 `~`（§4.2）。老 agent 不发。 */
+  home?: string
   limits: { max_sessions: number; ring_bytes: number; max_frame_bytes: number }
   sessions: SessionInfo[]
   resumed: ResumeResult[]
@@ -128,8 +109,6 @@ export interface SessionUpdated {
   exit_code?: number | null
   cols?: number
   rows?: number
-  integration?: Integration
-  unmarked_input?: boolean
   head_seq?: number
 }
 
@@ -137,50 +116,6 @@ export interface Ack {
   t: 'ack'
   sid: number
   in_ack: number
-}
-export interface ResetMsg {
-  t: 'reset'
-  sid: number
-  base_seq: number
-}
-/**
- * 备用屏会话的 reset 走这条：不回放窗口，清屏 + 恢复模式 + 等程序自己重画
- * （协议 §4.2 / ADR-0019）。
- */
-export interface Redraw {
-  t: 'redraw'
-  sid: number
-  /** 把 out_seq 直接跳到这里；跳过的字节【有意丢弃】。 */
-  seq: number
-  /** 恢复粘性模式的转义序列。这些字节【不计入 out_seq】。 */
-  modes: string
-}
-export interface Cwd {
-  t: 'cwd'
-  sid: number
-  path: string
-}
-export interface Prompt {
-  t: 'prompt'
-  sid: number
-  state: PromptState
-}
-export interface CommandStart {
-  t: 'command.start'
-  sid: number
-  cmd_id: number
-  text: string
-  cwd: string
-  at: number
-  out_seq: number
-}
-export interface CommandEnd {
-  t: 'command.end'
-  sid: number
-  cmd_id: number
-  exit_code: number | null
-  duration_ms: number
-  out_seq: number
 }
 export interface Pong {
   t: 'pong'
@@ -206,12 +141,6 @@ export type ServerMessage =
   | SessionClosed
   | SessionUpdated
   | Ack
-  | ResetMsg
-  | Redraw
-  | Cwd
-  | Prompt
-  | CommandStart
-  | CommandEnd
   | Pong
   | ErrorMsg
   | Notice

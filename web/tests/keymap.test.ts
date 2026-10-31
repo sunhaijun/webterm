@@ -1,7 +1,18 @@
-/** UT-keymap-1：控制键映射表，对照 docs/40-frontend/keymap.md。 */
+/** UT-keymap-1 / UT-keys-1：键到字节、附加键、粘滞修饰、应用快捷键，对照 docs/40-frontend/keymap.md。 */
 import { describe, expect, it } from 'vitest'
 
-import { CTRL_KEYS, EDIT_INSERT, EDIT_KEYS, KEY_BAR, KEY_BYTES, PROGRAM_EDIT_KEYS, PROMPT_KEYS, appAction, bytesOf, chord, keyBarFor, programOf } from '../src/input/keymap'
+import {
+  EXTRA_KEYS,
+  KEY_BYTES,
+  NO_MODS,
+  Sticky,
+  appAction,
+  chord,
+  cursorKey,
+  extraKeyBytes,
+  isModifierKey,
+  type ExtraKeyId,
+} from '../src/keys/keymap'
 
 const ESC = '\x1b'
 
@@ -14,10 +25,22 @@ describe('UT-keymap-1 控制键映射', () => {
     expect(chord('C', { ctrl: true }), '大写也要认').toBe('\x03')
   })
 
-  it('Ctrl+[ / \\ / ] 的控制码', () => {
+  it('Ctrl+[ \\ ] ^ _ 的控制码', () => {
     expect(chord('[', { ctrl: true })).toBe('\x1b')
     expect(chord('\\', { ctrl: true })).toBe('\x1c')
     expect(chord(']', { ctrl: true })).toBe('\x1d')
+    expect(chord('^', { ctrl: true })).toBe('\x1e')
+    expect(chord('_', { ctrl: true })).toBe('\x1f')
+  })
+
+  it('Ctrl+@ / 空格 → 0x00，Ctrl+? → 0x7f，其它可打印字符原样', () => {
+    expect(chord('@', { ctrl: true })).toBe('\x00')
+    expect(chord(' ', { ctrl: true })).toBe('\x00')
+    expect(chord('?', { ctrl: true })).toBe('\x7f')
+    expect(chord('/', { ctrl: true })).toBe('/')
+    expect(chord('-', { ctrl: true })).toBe('-')
+    expect(chord('1', { ctrl: true })).toBe('1')
+    expect(chord('中', { ctrl: true })).toBe('中')
   })
 
   it('Alt+<字符> → ESC + 字符', () => {
@@ -75,9 +98,10 @@ describe('应用级快捷键', () => {
     expect(appAction(key('k', { metaKey: true }))).toBeNull()
   })
 
-  it('Ctrl/Cmd+F 仍然是会话内搜索（终端不用它）', () => {
-    expect(appAction(key('f', { ctrlKey: true }))).toBe('search')
-    expect(appAction(key('f', { metaKey: true }))).toBe('search')
+  it('Ctrl/Cmd+F 不再拦截（会话内搜索已删除，ADR-0025 §7），交还给浏览器或终端', () => {
+    expect(appAction(key('f', { ctrlKey: true }))).toBeNull()
+    expect(appAction(key('F', { ctrlKey: true }))).toBeNull()
+    expect(appAction(key('f', { metaKey: true }))).toBeNull()
   })
 
   it('Ctrl+Shift+* 是应用快捷键', () => {
@@ -85,6 +109,16 @@ describe('应用级快捷键', () => {
     // Ctrl+M 就是终端的 Enter（CR）—— 绝不能拿 Ctrl+Shift+M 当应用快捷键，会撞回车
     expect(appAction(key('M', { ctrlKey: true, shiftKey: true })), 'Ctrl+M 是终端 Enter').toBeNull()
     expect(appAction(key('ArrowUp', { ctrlKey: true, shiftKey: true }))).toBe('prevSession')
+    expect(appAction(key('ArrowDown', { ctrlKey: true, shiftKey: true }))).toBe('nextSession')
+    expect(appAction(key('W', { ctrlKey: true, shiftKey: true }))).toBe('closeSession')
+    expect(appAction(key('B', { ctrlKey: true, shiftKey: true }))).toBe('toggleSessions')
+    expect(appAction(key('<', { ctrlKey: true, shiftKey: true }))).toBe('settings')
+    expect(appAction(key(',', { ctrlKey: true, shiftKey: true }))).toBe('settings')
+  })
+
+  it('Ctrl+Alt+* 不当快捷键（Windows / 欧洲键盘上是 AltGr）', () => {
+    expect(appAction(key('Enter', { ctrlKey: true, shiftKey: true, altKey: true }))).toBeNull()
+    expect(appAction(key('b', { ctrlKey: true, altKey: true }))).toBeNull()
   })
 
   it('【绝不能】拦截终端要用的组合', () => {
@@ -103,147 +137,155 @@ describe('应用级快捷键', () => {
   })
 })
 
-describe('功能键条', () => {
-  it('前 5 个键在 393px 宽下必须无需滚动即可见（ADR-0015：互切键与 ⋯ 并进同一行）', () => {
-    const first5 = KEY_BAR.slice(0, 5).map((k) => k.label)
-    // Alt 让位给 ^C。手机上 Alt 远比 ^C 罕见，而要 ^C 的时候通常
-    // 已经卡住了（比如误进 top），不能还要求先横向滚一下。
-    expect(first5).toEqual(['Esc', '^C', 'Tab', 'Ctrl', '↑'])
+describe('UT-keymap-1 DECCKM：方向键与 HOME / END 跟随应用光标键模式', () => {
+  it('关着时 CSI，开着时 SS3', () => {
+    expect(cursorKey('ArrowUp', false)).toBe(`${ESC}[A`)
+    expect(cursorKey('ArrowUp', true)).toBe(`${ESC}OA`)
+    expect(cursorKey('ArrowLeft', true)).toBe(`${ESC}OD`)
+    expect(cursorKey('Home', false)).toBe(`${ESC}[H`)
+    expect(cursorKey('Home', true)).toBe(`${ESC}OH`)
+    expect(cursorKey('End', true)).toBe(`${ESC}OF`)
+    expect(cursorKey('PageUp', true), 'PGUP 不跟随 DECCKM').toBeUndefined()
+  })
+})
+
+describe('UT-keys-1 附加键（AC-3.18）', () => {
+  it('两行共 14 个键，依次是 Termux 的默认键位', () => {
+    expect(EXTRA_KEYS.map((row) => row.map((k) => k.label))).toEqual([
+      ['ESC', '/', '-', 'HOME', '↑', 'END', 'PGUP'],
+      ['TAB', 'CTRL', 'ALT', '←', '↓', '→', 'PGDN'],
+    ])
+    expect(EXTRA_KEYS.flat().map((k) => `key-${k.id}`)).toEqual([
+      'key-Escape', 'key-Slash', 'key-Minus', 'key-Home', 'key-ArrowUp', 'key-End', 'key-PageUp',
+      'key-Tab', 'key-Ctrl', 'key-Alt', 'key-ArrowLeft', 'key-ArrowDown', 'key-ArrowRight', 'key-PageDown',
+    ])
   })
 
-  it('包含文档要求的全部按键（AC-3.9）', () => {
-    const labels = KEY_BAR.map((k) => k.label)
-    const want_ = ['Esc', 'Tab', 'Ctrl', 'Alt', '↑', '↓', '←', '→', '|', '~', '/', '-', '^C', '^D', '^Z', '^L']
-    for (const want of want_) {
-      expect(labels, `功能键条缺 ${want}`).toContain(want)
+  it('无修饰时与实体键盘同一编码', () => {
+    const b = (id: ExtraKeyId, decckm = false) => extraKeyBytes(id, NO_MODS, decckm)
+    expect(b('Escape')).toBe('\x1b')
+    expect(b('Slash')).toBe('/')
+    expect(b('Minus')).toBe('-')
+    expect(b('Tab')).toBe('\t')
+    expect(b('ArrowUp')).toBe('\x1b[A')
+    expect(b('ArrowDown')).toBe('\x1b[B')
+    expect(b('ArrowRight')).toBe('\x1b[C')
+    expect(b('ArrowLeft')).toBe('\x1b[D')
+    expect(b('Home')).toBe('\x1b[H')
+    expect(b('End')).toBe('\x1b[F')
+    expect(b('PageUp')).toBe('\x1b[5~')
+    expect(b('PageDown')).toBe('\x1b[6~')
+    for (const id of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'] as const) {
+      expect(b(id), `${id} 与 KEY_BYTES 一致`).toBe(KEY_BYTES[id])
     }
   })
-})
 
-/**
- * 一按直发的控制码。
- *
- * 【粘滞 Ctrl 不够用】：它要求"点 Ctrl 再从软键盘打 c"，而 Raw 模式下
- * 看 top 时软键盘根本没弹出来 —— 真卡住过，进了 top 退不出来。
- */
-describe('CTRL_KEYS 直发控制码', () => {
-  it('^C 是 0x03', () => {
-    expect(CTRL_KEYS.CtrlC).toBe('\x03')
+  it('DECCKM 开着时方向键 / HOME / END 发 SS3（E2E-10 ④：↑ → 1b4f41，HOME → 1b4f48）', () => {
+    expect(extraKeyBytes('ArrowUp', NO_MODS, true)).toBe('\x1bOA')
+    expect(extraKeyBytes('Home', NO_MODS, true)).toBe('\x1bOH')
+    expect(extraKeyBytes('End', NO_MODS, true)).toBe('\x1bOF')
+    expect(extraKeyBytes('PageUp', NO_MODS, true), 'PGUP 不受影响').toBe('\x1b[5~')
   })
-  it('^D / ^Z / ^L 分别是 0x04 / 0x1a / 0x0c', () => {
-    expect(CTRL_KEYS.CtrlD).toBe('\x04')
-    expect(CTRL_KEYS.CtrlZ).toBe('\x1a')
-    expect(CTRL_KEYS.CtrlL).toBe('\x0c')
-  })
-  it('和粘滞 Ctrl 走 chord 得到的结果一致', () => {
-    expect(CTRL_KEYS.CtrlC).toBe(chord('c', { ctrl: true }))
-    expect(CTRL_KEYS.CtrlD).toBe(chord('d', { ctrl: true }))
-  })
-})
 
-describe('功能键条的排布', () => {
-  it('^C 必须在免滚动的前 5 个里 —— 它是唯一的通用脱困键', () => {
-    const first5 = KEY_BAR.slice(0, 5).map((k) => k.key)
-    expect(first5).toContain('CtrlC')
+  it('CTRL / ALT 下的方向键用 xterm 的修饰编码（E2E-10 ⑥：CTRL+← → 1b5b313b3544）', () => {
+    expect(extraKeyBytes('ArrowLeft', { ctrl: true, alt: false }, false)).toBe('\x1b[1;5D')
+    expect(extraKeyBytes('ArrowUp', { ctrl: false, alt: true }, false)).toBe('\x1b[1;3A')
+    expect(extraKeyBytes('ArrowUp', { ctrl: true, alt: true }, false)).toBe('\x1b[1;7A')
+    expect(extraKeyBytes('ArrowUp', { ctrl: true, alt: false }, true), '修饰形式不随 DECCKM').toBe('\x1b[1;5A')
+    expect(extraKeyBytes('Home', { ctrl: true, alt: false }, false)).toBe('\x1b[1;5H')
+    expect(extraKeyBytes('PageUp', { ctrl: true, alt: false }, false)).toBe('\x1b[5;5~')
+    expect(extraKeyBytes('PageDown', { ctrl: false, alt: true }, false)).toBe('\x1b[6;3~')
   })
-  it('每个 CTRL_KEYS 都要有对应的按键', () => {
-    const keys = KEY_BAR.map((k) => k.key)
-    for (const k of Object.keys(CTRL_KEYS)) expect(keys).toContain(k)
+
+  it('ESC / TAB：CTRL 下原样，ALT 下前缀 ESC；/ - 按 chord', () => {
+    expect(extraKeyBytes('Escape', { ctrl: true, alt: false }, false)).toBe('\x1b')
+    expect(extraKeyBytes('Escape', { ctrl: false, alt: true }, false)).toBe('\x1b\x1b')
+    expect(extraKeyBytes('Tab', { ctrl: true, alt: false }, false)).toBe('\t')
+    expect(extraKeyBytes('Tab', { ctrl: false, alt: true }, false)).toBe('\x1b\t')
+    expect(extraKeyBytes('Slash', { ctrl: true, alt: false }, false)).toBe('/')
+    expect(extraKeyBytes('Minus', { ctrl: false, alt: true }, false)).toBe('\x1b-')
   })
-  it('按键不重复', () => {
-    const keys = KEY_BAR.map((k) => k.key)
-    expect(new Set(keys).size).toBe(keys.length)
+
+  it('CTRL / ALT 本身不发字节', () => {
+    expect(isModifierKey('Ctrl')).toBe(true)
+    expect(isModifierKey('Alt')).toBe(true)
+    expect(isModifierKey('Tab')).toBe(false)
+    expect(extraKeyBytes('Ctrl', NO_MODS, false)).toBe('')
   })
 })
 
-/**
- * 上下文键条（ADR-0011 分片 ②）：键条内容由"谁在占屏"决定。
- */
-describe('programOf：从命令原文取前台程序名', () => {
-  it('取第一个词的 basename', () => {
-    expect(programOf('vim foo.txt')).toBe('vim')
-    expect(programOf('/usr/bin/htop')).toBe('htop')
+describe('UT-keys-1 CTRL / ALT 粘滞', () => {
+  it('点一下 armed，只对下一个键生效，然后自动回到 off', () => {
+    const s = new Sticky()
+    s.tap('ctrl')
+    expect(s.state('ctrl')).toBe('armed')
+    expect(s.take()).toEqual({ ctrl: true, alt: false })
+    expect(s.state('ctrl')).toBe('off')
+    expect(s.take()).toEqual({ ctrl: false, alt: false })
   })
-  it('跳过环境变量赋值与 sudo 之类的包装', () => {
-    expect(programOf('FOO=1 BAR=2 top')).toBe('top')
-    expect(programOf('sudo vim /etc/hosts')).toBe('vim')
-    expect(programOf('nohup less x')).toBe('less')
-  })
-  it('管道取末端 —— 占屏的是管道最后那个', () => {
-    expect(programOf('git log --oneline | less')).toBe('less')
-    expect(programOf('cat a | grep b | most')).toBe('most')
-  })
-  it('拿不到就 null', () => {
-    expect(programOf('')).toBeNull()
-    expect(programOf('FOO=1')).toBeNull()
-  })
-})
 
-describe('keyBarFor：按占屏程序换键', () => {
-  it('没有程序占屏 → 默认那一排', () => {
-    expect(keyBarFor({ altScreen: false, program: 'vim' })).toBe(KEY_BAR)
+  it('armed 时再点一下就解除', () => {
+    const s = new Sticky()
+    s.tap('alt')
+    s.tap('alt')
+    expect(s.state('alt')).toBe('off')
   })
-  it('less → 分页器键：q 退出直接发 q', () => {
-    const keys = keyBarFor({ altScreen: true, program: 'less' })
-    expect(keys.find((k) => k.key === 'pager-quit')?.bytes).toBe('q')
-    expect(keys.some((k) => k.key === 'CtrlC')).toBe(true) // 脱困键永远在
-  })
-  it('vim → :q 要先 Esc 再 :q 回车，避免停在插入模式', () => {
-    const keys = keyBarFor({ altScreen: true, program: 'vim' })
-    expect(keys.find((k) => k.key === 'vim-quit')?.bytes).toBe('\x1b:q\r')
-    expect(keys[0]?.key).toBe('Escape')
-  })
-  it('top / htop 同一套', () => {
-    expect(keyBarFor({ altScreen: true, program: 'htop' })).toBe(keyBarFor({ altScreen: true, program: 'top' }))
-  })
-  it('不认识的占屏程序 → 通用 TUI 键，Esc 在最前', () => {
-    const keys = keyBarFor({ altScreen: true, program: 'some-tui' })
-    expect(keys[0]?.key).toBe('Escape')
-    expect(keys.some((k) => k.key === 'CtrlC')).toBe(true)
-  })
-  it('所有上下文键的 key 不重复', () => {
-    for (const program of ['less', 'top', 'vim', 'nano', null]) {
-      const keys = keyBarFor({ altScreen: true, program }).map((k) => k.key)
-      expect(new Set(keys).size).toBe(keys.length)
-    }
-  })
-})
 
-describe('EDIT_KEYS：写态编辑键条（ADR-0011 ③）', () => {
-  it('key 不重复；每个键要么是编辑动作要么有字面可插', () => {
-    const keys = EDIT_KEYS.map((k) => k.key)
-    expect(new Set(keys).size).toBe(keys.length)
-    const actions = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'DeleteWord', 'Home', 'End'])
-    for (const k of keys) expect(actions.has(k) || k in EDIT_INSERT, `${k} 没有对应动作`).toBe(true)
+  it('长按锁定：连续多次组合（Ctrl+C 接 Ctrl+D），再点一下解锁', () => {
+    const s = new Sticky()
+    s.hold('ctrl')
+    expect(s.state('ctrl')).toBe('locked')
+    expect(s.apply('c')).toBe('\x03')
+    expect(s.apply('d')).toBe('\x04')
+    expect(s.state('ctrl')).toBe('locked')
+    s.tap('ctrl')
+    expect(s.state('ctrl')).toBe('off')
+    expect(s.apply('c')).toBe('c')
   })
-  it('软键盘上难打的符号都在：| ~ / - _ " \' $', () => {
-    expect(Object.values(EDIT_INSERT).map((s) => s.trim())).toEqual(expect.arrayContaining(['|', '~', '/', '-', '_', '"', "'", '$']))
-  })
-})
 
-/** ADR-0015：键行的三组键集。 */
-describe('键行键集（ADR-0015）', () => {
-  it('提示符键集：Tab 补全、翻历史、^C 都在前 5 个；没有 Esc / Ctrl（提示符下用不上，也是与通用键集的可测区别）', () => {
-    const first5 = PROMPT_KEYS.slice(0, 5).map((k) => k.key)
-    expect(first5).toContain('Tab')
-    expect(first5).toContain('ArrowUp')
-    expect(first5).toContain('CtrlC')
-    const keys = PROMPT_KEYS.map((k) => k.key)
-    expect(keys).not.toContain('Escape')
-    expect(keys).not.toContain('Ctrl')
-    expect(new Set(keys).size, '按键不重复').toBe(keys.length)
+  it('软键盘打出来的下一个字符也吃修饰（onData 出口）', () => {
+    const s = new Sticky()
+    s.tap('ctrl')
+    expect(s.apply('c'), 'E2E-10 ⑥：CTRL armed + 软键盘 c → 03').toBe('\x03')
+    expect(s.state('ctrl')).toBe('off')
+    s.tap('alt')
+    expect(s.apply('b')).toBe('\x1bb')
+    expect(s.state('alt')).toBe('off')
   })
-  it('提示符键集里每个键都能算出要发的字节', () => {
-    for (const k of PROMPT_KEYS) {
-      // 单字符键（| ~ / - _）走 chord 原样发，其余查 CTRL_KEYS / KEY_BYTES
-      const b = bytesOf(k) ?? (k.key.length === 1 ? chord(k.key, {}) : undefined)
-      expect(b, `${k.label} 没有字节`).toBeTypeOf('string')
-    }
-    expect(bytesOf({ label: '^L', key: 'CtrlL' })).toBe('\x0c')
-    expect(bytesOf({ label: '↑', key: 'ArrowUp' })).toBe(`${ESC}[A`)
+
+  it('CTRL 与 ALT 同时：先 CTRL 变换再加 ESC', () => {
+    const s = new Sticky()
+    s.tap('ctrl')
+    s.tap('alt')
+    expect(s.apply('c')).toBe('\x1b\x03')
+    expect(s.mods()).toEqual({ ctrl: false, alt: false })
   })
-  it('编辑面板并入的程序键只有 Esc 与 ^C，且都直发 PTY', () => {
-    expect(PROGRAM_EDIT_KEYS.map((k) => k.key)).toEqual(['Escape', 'CtrlC'])
-    expect(PROGRAM_EDIT_KEYS.map((k) => bytesOf(k))).toEqual([ESC, '\x03'])
+
+  it('不是单个字符（粘贴、组字提交的一段、终端应答）原样放过，也不消耗', () => {
+    const s = new Sticky()
+    s.tap('ctrl')
+    expect(s.apply('你好')).toBe('你好')
+    expect(s.apply('\x1b[12;1R')).toBe('\x1b[12;1R')
+    expect(s.state('ctrl')).toBe('armed')
+    expect(s.apply('中'), '单个汉字也算一个字符：原样但消耗').toBe('中')
+    expect(s.state('ctrl')).toBe('off')
+  })
+
+  it('没有修饰时什么都不做', () => {
+    const s = new Sticky()
+    expect(s.apply('a')).toBe('a')
+  })
+
+  it('状态变化通知订阅者（界面靠它刷新 data-sticky）', () => {
+    const s = new Sticky()
+    let n = 0
+    const off = s.subscribe(() => n++)
+    s.tap('ctrl') // off → armed
+    s.apply('x') // armed → off
+    s.apply('y') // 没变化，不通知
+    s.hold('alt')
+    off()
+    s.tap('alt')
+    expect(n).toBe(3)
   })
 })

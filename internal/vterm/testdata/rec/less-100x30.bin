@@ -1,0 +1,214 @@
+[?1049h[22;0;0t[30;1H[?1h=[32m00001[0m 文本 x[m
+[33m00002[0m 文本 文本 xx[m
+[34m00003[0m 文本 文本 文本 xxx[m
+[35m00004[0m 文本 文本 文本 文本 xxxx[m
+[36m00005[0m 文本 文本 文本 文本 文本 xxxxx[m
+[37m00006[0m 文本 文本 文本 文本 文本 文本 xxxxxx[m
+[31m00007[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxx[m
+[32m00008[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxx[m
+[33m00009[0m xxxxxxxxx[m
+[34m00010[0m 文本 xxxxxxxxxx[m
+[35m00011[0m 文本 文本 xxxxxxxxxxx[m
+[36m00012[0m 文本 文本 文本 xxxxxxxxxxxx[m
+[37m00013[0m 文本 文本 文本 文本 xxxxxxxxxxxxx[m
+[31m00014[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxx[m
+[32m00015[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxx[m
+[33m00016[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxx[m
+[34m00017[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxx[m
+[35m00018[0m xxxxxxxxxxxxxxxxxx[m
+[36m00019[0m 文本 xxxxxxxxxxxxxxxxxxx[m
+[37m00020[0m 文本 文本 xxxxxxxxxxxxxxxxxxxx[m
+[31m00021[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxx[m
+[32m00022[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxx[m
+[33m00023[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxx[m
+[34m00024[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00025[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00026[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00027[0m xxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00028[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00029[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[7m1000/-home-usr-github-webterm/fdaf6aff-02bd-4675-864b-cf8dd553d4cc/scratchpad/vtspike/fx/colored.txt[27m[K[K[33m00030[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m00031[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00032[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00033[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00034[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00035[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00036[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m00037[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m00038[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00039[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00040[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00041[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00042[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00043[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m00044[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m00045[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00046[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00047[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00048[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00049[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00050[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m00051[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m00052[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00053[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00054[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00055[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00056[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00057[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m00058[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+:[K[K[34m00059[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00060[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00061[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [36m[0mxx[m
+[37m00062[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [37m[0mxxxxxxxx[m
+[31m00063[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00064[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m00065[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m00066[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00067[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00068[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00069[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [37m[0mxxxxx[m
+[31m00070[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [31m[0mxxxxxxxxxxx[m
+[32m00071[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [32m[0mxxxxxxxxxxxxxxxxx[m
+[33m00072[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m00073[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00074[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00075[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00076[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [37m[0mxx[m
+[31m00077[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [31m[0mxxxxxxxx[m
+[32m00078[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [32m[0mxxxxxxxxxxxxxx[m
+[33m00079[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m :[K[K[33m[0mxxxxxxxxxxxxxxxxxxxx[m
+[34m00080[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [34m[0mxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00081[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00082[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00083[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00084[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [31m[0mxxxxx[m
+[32m00085[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [32m[0mxxxxxxxxxxx[m
+[33m00086[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [33m[0mxxxxxxxxxxxxxxxxx[m
+[34m00087[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [34m[0mxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00088[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [35m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00089[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [36m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00090[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00091[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [31m[0mxx[m
+[32m00092[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [32m[0mxxxxxxxx[m
+[33m00093[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [33m[0mxxxxxxxxxxxxxx[m
+[34m00094[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [34m[0mxxxxxxxxxxxxxxxxxxxx[m
+[35m00095[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [35m[0mxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[K/[Knn[Kee[Kee[Kdd[Kll[Kee[K[1;1H[K[33m[0mxxxxxxxxxxxxxxxxxxxx[m
+[2;1H[K[34m00080[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [3;1H[K[34m[0mxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[4;1H[K[35m00081[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[5;1H[K[36m00082[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[6;1H[K[37m00083[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[7;1H[K[31m00084[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [8;1H[K[31m[0mxxxxx[m
+[9;1H[K[32m00085[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [10;1H[K[32m[0mxxxxxxxxxxx[m
+[11;1H[K[33m00086[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [12;1H[K[33m[0mxxxxxxxxxxxxxxxxx[m
+[13;1H[K[34m00087[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [14;1H[K[34m[0mxxxxxxxxxxxxxxxxxxxxxxx[m
+[15;1H[K[35m00088[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [16;1H[K[35m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[17;1H[K[36m00089[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [18;1H[K[36m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[19;1H[K[37m00090[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[20;1H[K[31m00091[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [21;1H[K[31m[0mxx[m
+[22;1H[K[32m00092[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [23;1H[K[32m[0mxxxxxxxx[m
+[24;1H[K[33m00093[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [25;1H[K[33m[0mxxxxxxxxxxxxxx[m
+[26;1H[K[34m00094[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [27;1H[K[34m[0mxxxxxxxxxxxxxxxxxxxx[m
+[28;1H[K[35m00095[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [29;1H[K[35m[0mxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[30;1H[1;1H[K[33m[0mxxxxxxxxxxxxxxxxxxxx[m
+[2;1H[K[34m00080[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [3;1H[K[34m[0mxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[4;1H[K[35m00081[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[5;1H[K[36m00082[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[6;1H[K[37m00083[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[7;1H[K[31m00084[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [8;1H[K[31m[0mxxxxx[m
+[9;1H[K[32m00085[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [10;1H[K[32m[0mxxxxxxxxxxx[m
+[11;1H[K[33m00086[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [12;1H[K[33m[0mxxxxxxxxxxxxxxxxx[m
+[13;1H[K[34m00087[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [14;1H[K[34m[0mxxxxxxxxxxxxxxxxxxxxxxx[m
+[15;1H[K[35m00088[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [16;1H[K[35m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[17;1H[K[36m00089[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [18;1H[K[36m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[19;1H[K[37m00090[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[20;1H[K[31m00091[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [21;1H[K[31m[0mxx[m
+[22;1H[K[32m00092[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [23;1H[K[32m[0mxxxxxxxx[m
+[24;1H[K[33m00093[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [25;1H[K[33m[0mxxxxxxxxxxxxxx[m
+[26;1H[K[34m00094[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [27;1H[K[34m[0mxxxxxxxxxxxxxxxxxxxx[m
+[28;1H[K[35m00095[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [29;1H[K[35m[0mxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[30;1H...skipping...
+[37m00097[0m [7mneedle[27m[37m[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [37m[0m[37m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00098[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [31m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00099[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [32m[0mxxxxx[m
+[33m00100[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [33m[0mxxxxxxxxxxx[m
+[34m00101[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [34m[0mxxxxxxxxxxxxxxxxx[m
+[35m00102[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [35m[0mxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00103[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [36m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00104[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [37m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00105[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [31m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00106[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [32m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m00107[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [33m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m00108[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [34m[0mxxxxxxxxxxxxxx[m
+[35m00109[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [35m[0mxxxxxxxxxxxxxxxxxxxx[m
+[36m00110[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [36m[0mxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00111[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m :[K[K/[K...skipping...
+[36m00194[0m [7mneedle[27m[36m[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00195[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00196[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00197[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [32m[0mxxx[m
+[33m00198[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m00199[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m00200[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00201[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00202[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00203[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00204[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m00205[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [33m[0mxxxxxx[m
+[34m00206[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [34m[0mxxxxxxxxxxxx[m
+[35m00207[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[36m00208[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[37m00209[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[31m00210[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m00211[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m00212[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [33m[0mxxx[m
+[34m00213[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [34m[0mxxxxxxxxx[m
+[35m00214[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [35m[0mxxxxxxxxxxxxxxx[m
+[36m00215[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [36m[0mxxxxxxxxxxxxxxxxxxxxx[m
+[K...skipping...
+[31m01484[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [31m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m01485[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m01486[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m01487[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [34m[0mxxx[m
+[35m01488[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [35m[0mxxxxxxxxx[m
+[36m01489[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [36m[0mxxxxxxxxxxxxxxx[m
+[37m01490[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [37m[0mxxxxxxxxxxxxxxxxxxxxx[m
+[31m01491[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [31m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m01492[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [32m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[33m01493[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [33m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[34m01494[0m xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[35m01495[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [35m[0mxxxxxx[m
+[36m01496[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [36m[0mxxxxxxxxxxxx[m
+[37m01497[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [37m[0mxxxxxxxxxxxxxxxxxx[m
+[31m01498[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [31m[0mxxxxxxxxxxxxxxxxxxxxxxxx[m
+[32m01499[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m [32m[0mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[K[H[2J[HM[32m00029[0m 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[HM[31m00028[0m 文本 xxxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[HM[37m00027[0m xxxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[HM[36m00026[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxxx[m
+[HM[35m00025[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxxx[m
+[HM[34m00024[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxxx[m
+[HM[33m00023[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxxx[m
+[HM[32m00022[0m 文本 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxxx[m
+[HM[31m00021[0m 文本 文本 文本 xxxxxxxxxxxxxxxxxxxxx[m
+[HM[37m00020[0m 文本 文本 xxxxxxxxxxxxxxxxxxxx[m
+[HM[36m00019[0m 文本 xxxxxxxxxxxxxxxxxxx[m
+[HM[35m00018[0m xxxxxxxxxxxxxxxxxx[m
+[HM[34m00017[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxxx[m
+[HM[33m00016[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxxx[m
+[HM[32m00015[0m 文本 文本 文本 文本 文本 文本 xxxxxxxxxxxxxxx[m
+[HM[31m00014[0m 文本 文本 文本 文本 文本 xxxxxxxxxxxxxx[m
+[HM[37m00013[0m 文本 文本 文本 文本 xxxxxxxxxxxxx[m
+[HM[36m00012[0m 文本 文本 文本 xxxxxxxxxxxx[m
+[HM[35m00011[0m 文本 文本 xxxxxxxxxxx[m
+[HM[34m00010[0m 文本 xxxxxxxxxx[m
+[HM[33m00009[0m xxxxxxxxx[m
+[HM[32m00008[0m 文本 文本 文本 文本 文本 文本 文本 文本 xxxxxxxx[m
+[HM[31m00007[0m 文本 文本 文本 文本 文本 文本 文本 xxxxxxx[m
+[HM[37m00006[0m 文本 文本 文本 文本 文本 文本 xxxxxx[m
+[HM[36m00005[0m 文本 文本 文本 文本 文本 xxxxx[m
+[HM[35m00004[0m 文本 文本 文本 文本 xxxx[m
+[HM[34m00003[0m 文本 文本 文本 xxx[m
+[HM[33m00002[0m 文本 文本 xx[m
+[HM[32m00001[0m 文本 x[m
+[30;1H[K[?1l>[?1049l[23;0;0t

@@ -1,7 +1,6 @@
 package session
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -14,42 +13,35 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/sunhaijun/webterm/internal/handoff"
-	"github.com/sunhaijun/webterm/internal/oscparse"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/ringbuf"
-	"github.com/sunhaijun/webterm/internal/store"
-	"github.com/sunhaijun/webterm/internal/termstate"
+	"github.com/sunhaijun/webterm/internal/vterm"
 )
 
 const (
 	// ptyReadBuf 是 PTY 读缓冲大小。
 	ptyReadBuf = 32 << 10
-	// integrationHelloTimeout 是集成握手的等待时间（AC-7.6）。
-	integrationHelloTimeout = 10 * time.Second
-	// integrationIdleTimeout：距上一个 OSC 133 标记超过这么久就判定集成失效。
-	// 刻意宽松 —— 误判的代价必须低，它只影响降级提示与自动切换。
-	integrationIdleTimeout = 5 * time.Minute
 	// killGrace 是 SIGHUP 到 SIGKILL 之间的宽限。
 	killGrace = 2 * time.Second
-
-	// probeGrace：一次 Enter 之后等这么久还没有任何 133 标记，就算一次
-	// "未标记往返"。有钩子的 shell 里 133;C 在几十毫秒内就到，2 秒非常宽松。
-	probeGrace = 2 * time.Second
-	// probeMisses：连续几次未标记往返才下结论 —— 单次可能是巧合。
-	probeMisses = 2
+	// drainGrace：shell 退出之后等 readLoop 读到 EOF 的上限。后台进程还占着 PTY
+	// 从端时 EOF 不会来，到点照样宣布退出。
+	drainGrace = 500 * time.Millisecond
+	// maxDim 是 cols / rows 的上限。
+	maxDim = 1000
 )
 
 var (
 	ErrInputGap       = errors.New("session: 输入序列号出现空洞")
 	ErrSessionExited  = errors.New("session: 会话已退出")
 	ErrUnknownSession = errors.New("session: 会话不存在")
+	ErrBadSize        = errors.New("session: cols/rows 必须在 1..1000")
 )
 
-// Session 是一个 PTY + 它上面跑的 shell + 它的输出环形缓冲。
+// Session 是一个 PTY + 它上面跑的 shell + 输出的环形缓冲 + 终端模拟器。
 //
 // 会话不跨 agent【重启】存活（ADR-0003），但跨【热升级】存活（ADR-0016）：
 // 原地 exec 时 ptmx fd 与 shell 进程原样交给新进程，状态走 export / restore。
-// 新增字段时先问一句"要不要进快照"（handoff.Session 是那张清单）。
+// 新增字段时先问一句"要不要进交接"（handoff.Session 是那张清单）。
 type Session struct {
 	mgr *Manager
 	sid uint16
@@ -59,63 +51,30 @@ type Session struct {
 	ptmx      *os.File
 	fd        int
 	proc      *os.Process // shell；交接过来的会话用 os.FindProcess 接回
-	rcPath    string      // 临时 rcfile，销毁时删除
 	createdAt time.Time
-	store     *store.Store
-	// mgrHistory 报告此刻是否记录命令历史。取成函数是因为用户可以在会话
-	// 运行期间从 UI 上关掉它（做敏感工作时一键静默）。
-	mgrHistory func() bool
 
-	mu          sync.RWMutex // 保护以下所有字段
-	name        string
-	nameManual  bool
-	cwd         string
-	status      string
-	exitCode    *int
-	cols, rows  uint16
-	integration string
-	promptState string    // 最近一次 prompt 状态，重连时回给客户端
-	lastMark    time.Time // 上一个 OSC 133 标记的时间
-	lastInput   time.Time // 上一次收到用户输入的时间，判定集成是否真的失效要用
-	helloSeen   bool      // 收到过 1701;hello —— 脚本已开始加载（不等于钩子已装好）
-
-	// ---- 按命令的活性探测（协议 §4.7）----
-	//
-	// 一次 Enter 之后有没有等到【任何】133 标记。有钩子的 shell 里，非空
-	// 命令几十毫秒内发 133;C，空 Enter 重画 prompt 发 133;A/B ——
-	// 所以【有输出却零标记】才说明这次输入去了一个没有钩子的 shell。
-	// "多久没标记"不是存活信号（见 checkIntegrationIdle 的注释）。
-	probeArmed    bool
-	probeGen      int           // 每次装探针 +1；到期定时器只认自己那一代
-	probeAt       time.Time     // 那次 Enter 的时间
-	probeOutput   bool          // 那次 Enter 之后有过输出
-	probeState    string        // Enter 时的 promptState —— 决定结论归谁
-	unmarkedRuns  int           // 连续未标记往返计数
-	unmarkedInput bool          // 对外报告：输入正去往一个没有集成的子程序
-	sink          func(msg any) // 测试观察钩子，生产为 nil
-	ring          *ringbuf.Buffer
-	// modes 跟踪粘性终端模式（备用屏、鼠标、Kitty 键盘…）。它在锁内更新，
-	// 因为 subscribe 要在同一把锁下读它来决定回放还是重画（ADR-0019）。
-	modes *termstate.Tracker
-	subs  map[Subscriber]struct{}
-	// inAck/inQueued 按 client_id 记账，【跨重连存活】（协议 §5.3）。
+	mu         sync.RWMutex // 保护以下所有字段
+	name       string
+	nameManual bool
+	cwd        string
+	status     string
+	exitCode   *int
+	cols, rows uint16
+	// ring 与 term 【在同一把锁下、对同一段字节】更新：任何时刻模拟器吃到的
+	// 字节数都等于 ring.HeadSeq()，快照的 seq 直接取它（ADR-0026 §1）。
+	ring *ringbuf.Buffer
+	term *vterm.Terminal
+	subs map[Subscriber]struct{}
+	// inAck/inQueued 按 client_id 记账，【跨重连存活】（协议 §5.4）。
 	// inQueued 是已接受入队的字节数（用于校验 seq 连续性），
 	// inAck 是已真正写进 PTY 的字节数（用于 ack 与重连后的重发起点）。
 	inQueued map[string]uint64
 	inAck    map[string]uint64
 
-	// 以下只在 readLoop 里访问，不需要锁
-	osc      *oscparse.Parser
-	pendCmd  string
-	curCmdID *int64
-	curCmdAt time.Time
-
 	inputQ    *inputQueue
 	done      chan struct{}
+	readDone  chan struct{} // readLoop 退出（读到 EOF / EIO）时关闭
 	closeOnce sync.Once
-
-	// repainting 保证同一时刻只有一次 winsize 抖动（ADR-0019）。
-	repainting atomic.Bool
 
 	// 热升级冻结（ADR-0016）：见 freeze.go
 	fz         freezer
@@ -126,29 +85,22 @@ type Session struct {
 // SID 返回会话 id。
 func (s *Session) SID() uint16 { return s.sid }
 
-// Snapshot 返回会话的完整快照（welcome.sessions[] / session.created）。
-func (s *Session) Snapshot() protocol.SessionInfo {
+// Info 返回会话的元数据（welcome.sessions[] / session.created）。
+func (s *Session) Info() protocol.SessionInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.snapshotLocked()
-}
-
-func (s *Session) snapshotLocked() protocol.SessionInfo {
 	return protocol.SessionInfo{
-		SID:           s.sid,
-		Name:          s.displayNameLocked(),
-		NameIsManual:  s.nameManual,
-		CWD:           s.cwd,
-		Status:        s.status,
-		ExitCode:      s.exitCode,
-		Cols:          s.cols,
-		Rows:          s.rows,
-		Integration:   s.integration,
-		UnmarkedInput: s.unmarkedInput,
-		PromptState:   optStr(s.promptState),
-		BaseSeq:       s.ring.BaseSeq(),
-		HeadSeq:       s.ring.HeadSeq(),
-		CreatedAt:     s.createdAt.UnixMilli(),
+		SID:          s.sid,
+		Name:         s.displayNameLocked(),
+		NameIsManual: s.nameManual,
+		CWD:          s.cwd,
+		Status:       s.status,
+		ExitCode:     s.exitCode,
+		Cols:         s.cols,
+		Rows:         s.rows,
+		BaseSeq:      s.ring.BaseSeq(),
+		HeadSeq:      s.ring.HeadSeq(),
+		CreatedAt:    s.createdAt.UnixMilli(),
 	}
 }
 
@@ -177,7 +129,7 @@ func (s *Session) Status() string {
 	return s.status
 }
 
-// HeadSeq 返回该会话累计产出的字节数（剥离 OSC 之后）。
+// HeadSeq 返回该会话累计的 PTY 输出字节数。
 func (s *Session) HeadSeq() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -189,6 +141,14 @@ func (s *Session) InAck(clientID string) uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.inAck[clientID]
+}
+
+// TermSnapshot 返回此刻的快照与它对应的 seq（= head_seq）。测试与排障用 ——
+// 协议路径上快照只经 Subscribe / Resize 发出。
+func (s *Session) TermSnapshot() (seq uint64, data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ring.HeadSeq(), s.term.Snapshot()
 }
 
 // Rename 设置手动名。传 nil 恢复跟随 CWD 自动改名。
@@ -210,175 +170,112 @@ func (s *Session) Rename(name *string) {
 	s.emit(msg)
 }
 
-// Resize 调整 PTY 窗口大小。
+func validSize(cols, rows uint16) bool {
+	return cols > 0 && rows > 0 && cols <= maxDim && rows <= maxDim
+}
+
+// Resize 调整终端尺寸（协议 §4.1 resize）。
+//
+//	列数变了：锁内 模拟器.Resize → 生成快照（seq = head_seq）→ 推给【每个】订阅者；
+//	          锁外 TIOCSWINSZ。两边各自重排的结果不一致，以 agent 的为准（ADR-0026 §4）
+//	只改行数：模拟器.Resize + TIOCSWINSZ，不发快照 —— 手机每弹一次软键盘就改
+//	          一次行数，每次重发上百 KiB、清掉浏览器的回看位置，代价太大
 func (s *Session) Resize(cols, rows uint16) error {
-	if cols == 0 || rows == 0 || cols > 1000 || rows > 1000 {
-		return errors.New("session: cols/rows 必须在 1..1000")
+	if !validSize(cols, rows) {
+		return ErrBadSize
 	}
 	s.mu.Lock()
-	s.cols, s.rows = cols, rows
+	changed := s.applySizeLocked(cols, rows, nil)
+	running := s.status == protocol.StatusRunning
 	s.mu.Unlock()
-	if s.Status() != protocol.StatusRunning {
-		return nil // 已退出：只记尺寸，PTY 可能已经没了
+	if changed && running {
+		// 【锁外、入队之后】：程序因 SIGWINCH 重画的字节一定排在快照之后
+		return setWinsize(s.ptmx, cols, rows)
 	}
-	return setWinsize(s.ptmx, cols, rows)
+	return nil
+}
+
+// applySizeLocked 把尺寸应用到模拟器（须持写锁），返回尺寸是否变了。
+//
+// 列数变了就生成一份快照推给每个订阅者，以及 extra（还没进集合的新订阅者）。
+// TIOCSWINSZ 由调用方在锁外做。
+func (s *Session) applySizeLocked(cols, rows uint16, extra Subscriber) bool {
+	if cols == s.cols && rows == s.rows {
+		return false
+	}
+	colsChanged := cols != s.cols
+	s.cols, s.rows = cols, rows
+	s.term.Resize(int(cols), int(rows))
+	if colsChanged {
+		seq, snap := s.ring.HeadSeq(), s.term.Snapshot()
+		for sub := range s.subs {
+			sub.Snapshot(s.sid, seq, snap)
+		}
+		if extra != nil {
+			if _, already := s.subs[extra]; !already {
+				extra.Snapshot(s.sid, seq, snap)
+			}
+		}
+	}
+	return true
 }
 
 // ---------- 订阅 ----------
 
-// Subscribe 把 sub 加入订阅者集合，并补齐它从 fromSeq 起缺的输出。
+// Subscribe 把 sub 加入订阅者集合，并按协议 §5.1 补齐它缺的输出：
 //
-// 【取切片与加入集合必须在同一把锁下完成】—— 分开做的话，中间到达的一批
-// 输出要么被回放和推送各发一遍（重复），要么两边都漏（空洞），而协议 §3
-// 规定客户端遇到空洞直接关连接。
+//	cols/rows 带来的列数与会话当前不同 → 模拟器.Resize → 快照（发给每个订阅者）
+//	outSeq > 0 且 base_seq ≤ outSeq ≤ head_seq → 增量：推 [outSeq, head_seq) 的原始字节
+//	其余（outSeq == 0、落出窗口、领先于 head） → 快照
 //
-// 补齐的那一次 Push 也在锁内完成，保证它排在后续实时 Push 之前。
-// Push 按契约是非阻塞的，所以这里不会卡住 PTY 读取。
-func (s *Session) Subscribe(sub Subscriber, fromSeq uint64) {
-	s.subscribe(sub, fromSeq, subscribeOpts{})
-}
-
-// SubscribeNotifyReset 与 Subscribe 相同，但判定 reset 时先给 sub 发一条
-// protocol.Reset。
+// 返回走了哪条路（protocol.ResumeOK / ResumeSnapshot）与 from_seq（增量时是
+// outSeq，快照时是快照的 seq）。cols/rows 为 0 或越界表示沿用会话当前尺寸 ——
+// hello.resume 不带尺寸。
 //
-// 切回会话（`subscribe` 消息）走这条：客户端手里还留着切走前的那一屏，接下来
-// 收到的却是一段【接不上】的内容，得有人告诉用户"历史输出已截断"。重连走
-// Subscribe —— `welcome.resumed[].status` 已经带了这个信息，再发一条只会让
-// 客户端多清一次屏（协议 §4.2）。
+// 【判定、推送、加入订阅者集合在同一把锁下完成】—— 分开做的话，中间到达的
+// 一批输出要么被发两遍（重复），要么两边都漏（空洞），而协议 §3 规定客户端
+// 遇到空洞直接关连接。推送按契约是非阻塞的，所以这里不会卡住 PTY 读取。
 //
-// 清屏本身不靠这条消息，靠回放帧上的 ATTR_PREFIX（协议 §3）：帧自己就带着
-// "这是重建不是续写"的语义，少一条通知也不会把内容接歪。
-func (s *Session) SubscribeNotifyReset(sub Subscriber, fromSeq uint64, cols, rows uint16) {
-	s.subscribe(sub, fromSeq, subscribeOpts{notifyReset: true, cols: cols, rows: rows})
-}
-
-// subscribeOpts 是 subscribe 的可选参数。
-type subscribeOpts struct {
-	// notifyReset：判定 reset 时先发一条 protocol.Reset（只有切回那条路要）。
-	notifyReset bool
-	// cols/rows：客户端切回时的终端尺寸，0 = 沿用会话当前尺寸。
-	// 【它必须在这里而不是单发的 resize 里】，理由见协议 §4.1。
-	cols, rows uint16
-}
-
-func (s *Session) subscribe(sub Subscriber, fromSeq uint64, o subscribeOpts) {
+// 尺寸变化的 TIOCSWINSZ 在锁外、入队之后：程序因 SIGWINCH 重画的字节因此
+// 一定排在快照或增量之后。反过来的话，那批重画字节会进入快照之前的位置，
+// 客户端拿不到那一屏（协议 §4.1）。
+func (s *Session) Subscribe(sub Subscriber, outSeq uint64, cols, rows uint16) (status string, fromSeq uint64) {
 	s.mu.Lock()
-	data, attrPrefix, _ := s.ring.Replay(fromSeq)
-	s.subs[sub] = struct{}{}
-
-	var redrawAt uint64
-	needRedraw := false
-	switch {
-	case len(data) == 0:
-		// 客户端已经跟上了，没有要补的
-
-	case attrPrefix && s.modes.AltScreen():
-		// 【备用屏：不回放窗口，改成让程序自己重画】（ADR-0019）。
-		// 窗口里是一串离开 ESC[?1049h 就没有意义的差分补丁，回放必然画错；
-		// 而备用屏没有 scrollback，那段历史对用户本来就是零价值。
-		redrawAt = s.ring.HeadSeq()
-		needRedraw = true
-		sub.Event(&protocol.Redraw{SID: s.sid, Seq: redrawAt, Modes: string(s.modes.Prelude())})
-
-	default:
-		seq := fromSeq
-		if attrPrefix {
-			// reset 回放：起点是缓冲现存内容的开头，不是客户端要的位置
-			seq = s.ring.BaseSeq()
-			if o.notifyReset {
-				// 【必须排在 Push 之前】：事件与帧走同一条按序写队列，提示要在
-				// 重建之前到，否则用户先看见屏幕跳一下，才被告知发生了什么
-				sub.Event(&protocol.Reset{SID: s.sid, BaseSeq: seq})
-			}
-		}
-		sub.Push(s.sid, seq, data, attrPrefix)
+	resized, colsChanged := false, false
+	if validSize(cols, rows) {
+		colsChanged = cols != s.cols
+		// 列数变了：快照已经推给了每个订阅者，包括 sub
+		resized = s.applySizeLocked(cols, rows, sub)
 	}
+	if colsChanged {
+		status, fromSeq = protocol.ResumeSnapshot, s.ring.HeadSeq()
+	} else {
+		var data []byte
+		ok := false
+		if outSeq > 0 {
+			data, ok = s.ring.Slice(outSeq)
+		}
+		if ok {
+			status, fromSeq = protocol.ResumeOK, outSeq
+			if len(data) > 0 {
+				sub.Push(s.sid, outSeq, data)
+			}
+		} else {
+			status, fromSeq = protocol.ResumeSnapshot, s.ring.HeadSeq()
+			sub.Snapshot(s.sid, fromSeq, s.term.Snapshot())
+		}
+	}
+	s.subs[sub] = struct{}{}
+	running := s.status == protocol.StatusRunning
 	s.mu.Unlock()
 
-	// 【尺寸必须在这之后应用】。反过来的话，程序被 SIGWINCH 逼出的整屏重画会落在
-	// redrawAt 之前，被客户端当历史跳过 —— 该看到的那一屏反而丢了（协议 §4.2）。
-	resized := false
-	if o.cols > 0 && o.rows > 0 {
-		resized = s.resizeIfChanged(o.cols, o.rows)
+	if resized && running {
+		_ = setWinsize(s.ptmx, cols, rows)
 	}
-	if needRedraw {
-		go s.forceRepaint(sub, redrawAt, resized)
-	}
+	return status, fromSeq
 }
 
-// resizeIfChanged 应用尺寸，返回【是否真的变了】。
-//
-// 没变就别劳烦内核：`tty_do_resize` 对相同的 winsize 直接返回，不发 SIGWINCH
-// （实测：同尺寸的 TIOCSWINSZ 之后程序只吐 43 字节，没有重画）。
-func (s *Session) resizeIfChanged(cols, rows uint16) bool {
-	s.mu.RLock()
-	same := s.cols == cols && s.rows == rows
-	s.mu.RUnlock()
-	if same {
-		return false
-	}
-	return s.Resize(cols, rows) == nil
-}
-
-// forceRepaint 逼前台程序整屏重画，并在它不配合时兜底。
-//
-// 已经因为尺寸变化收到过 SIGWINCH 的，什么都不用做；否则抖一下 winsize。
-func (s *Session) forceRepaint(sub Subscriber, seq uint64, alreadyResized bool) {
-	if !alreadyResized {
-		s.jiggleWinsize()
-	}
-	time.Sleep(repaintGrace)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ring.HeadSeq() > seq {
-		return // 程序画了，正常路径
-	}
-	if _, ok := s.subs[sub]; !ok {
-		return // 用户又切走了
-	}
-	// 【兜底】：程序不响应 SIGWINCH（或已经退出）。退回主屏那条路，
-	// 把窗口内容按 reset 规则发出去 —— 内容陈旧，但总比一块清过屏的空白强。
-	base := s.ring.BaseSeq()
-	data, _, _ := s.ring.Replay(base)
-	if len(data) == 0 {
-		return
-	}
-	sub.Push(s.sid, base, data, true)
-}
-
-// jiggleWinsize 抖一下窗口尺寸，逼前台程序整屏重画。
-//
-// 【两次之间必须留间隔】：SIGWINCH 是可合并的普通信号。无间隔地改回去，程序只
-// 会收到一个信号、读到的尺寸和原来一样，多半什么都不画（实测：无间隔 43 字节、
-// 不重画；隔 80ms 则是 2509 字节、重画两次）。
-//
-// 抖 rows 而不是 cols：改列宽会让客户端主屏的 scrollback 整体重排。
-func (s *Session) jiggleWinsize() {
-	if !s.repainting.CompareAndSwap(false, true) {
-		return // 已经有一次在抖了，别叠
-	}
-	defer s.repainting.Store(false)
-
-	s.mu.RLock()
-	cols, rows := s.cols, s.rows
-	s.mu.RUnlock()
-	if rows < 2 || cols == 0 || s.Status() != protocol.StatusRunning {
-		return
-	}
-	_ = setWinsize(s.ptmx, cols, rows-1)
-	time.Sleep(repaintJiggle)
-	_ = setWinsize(s.ptmx, cols, rows)
-}
-
-const (
-	// repaintJiggle 是抖动 winsize 时两次 ioctl 之间的间隔。见 jiggleWinsize。
-	repaintJiggle = 80 * time.Millisecond
-	// repaintGrace 是等程序重画的宽限期，超时走兜底（AC-2.18）。
-	repaintGrace = 300 * time.Millisecond
-)
-
-// Unsubscribe 把 sub 从订阅者集合里摘掉。会话在 agent 侧照常运行和缓冲。
+// Unsubscribe 把 sub 从订阅者集合里摘掉。会话在 agent 侧照常运行、照常喂模拟器。
 func (s *Session) Unsubscribe(sub Subscriber) {
 	s.mu.Lock()
 	delete(s.subs, sub)
@@ -397,14 +294,6 @@ func (s *Session) DetachClient(clientID string) {
 	s.mu.Lock()
 	s.inQueued[clientID] = s.inAck[clientID]
 	s.mu.Unlock()
-}
-
-func (s *Session) subsLocked() []Subscriber {
-	out := make([]Subscriber, 0, len(s.subs))
-	for sub := range s.subs {
-		out = append(out, sub)
-	}
-	return out
 }
 
 // ---------- 输入 ----------
@@ -436,9 +325,6 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 		data = data[skip:]
 	}
 	s.inQueued[clientID] = queued + uint64(len(data))
-	now := time.Now()
-	s.lastInput = now
-	s.armProbeLocked(data, now)
 	s.mu.Unlock()
 
 	cp := make([]byte, len(data))
@@ -453,65 +339,52 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 	return nil
 }
 
-// ---------- 三个 goroutine ----------
+// ---------- goroutine ----------
 
-// readLoop：PTY.Read() → OSC 剥离 → 环形缓冲 → 广播给订阅者。
+// consume 处理一次 PTY 读到的字节：进环形缓冲、喂模拟器、推给订阅者。
 //
-// 关键顺序（ADR-0006）：Feed 剥离 → Append 计数。out_seq 永远等于剥离后
-// 字节的累计数 —— 先计数再剥离的话，续传时按 out_seq 切片就会错位。
-// consume 处理一次 PTY 读到的字节：剥离 OSC、进环形缓冲、推给订阅者、
-// 再按【精确位置】处理事件。单独抽出来是为了不起 PTY 也能测盖戳逻辑。
+// 【agent 不改写输出流】：seq 就是 PTY 输出的累计字节数（ADR-0026 §2）。
+//
+// 推送也在锁内。Push 按契约非阻塞，放在锁内的代价只是几次入队；换来的是同一
+// 会话的所有帧（实时输出、订阅补齐、改列数的快照）按锁的次序进入每条连接的
+// 写队列。放到锁外的话，一段已经算进快照的输出可能排在那份快照【之后】才到
+// 客户端，违反协议 §3 的 seq 连续性。
 func (s *Session) consume(chunk []byte) {
-	clean, events := s.osc.Feed(chunk)
-	// 事件在本块干净输出里的偏移，与 events 一一对应（见 oscparse.Offsets）
-	offs := s.osc.Offsets()
-
-	var data []byte
-	var seq uint64
-	var subs []Subscriber
-	s.mu.Lock()
-	// Append 返回本块【首字节】的 seq（空块是 no-op，返回当前 head）。
-	// 事件的精确位置 = seq + 偏移 —— 不能用 append 之后的 head，
-	// 否则同一块里的 133;C 与 133;D 会拿到同一个值，块区间为空。
-	seq = s.ring.Append(clean)
-	// 与 Append 在同一把锁下【观察】这批字节：只读，一个字节都不改（ADR-0019）
-	s.modes.Observe(clean)
-	if len(clean) > 0 {
-		if s.probeArmed {
-			s.probeOutput = true
-		}
-		// 必须拷贝：clean 可能指向 Feed 复用的缓冲或 buf 本身，
-		// 而订阅者的写队列会持有它到下一次 Read 之后。
-		data = make([]byte, len(clean))
-		copy(data, clean)
+	if len(chunk) == 0 {
+		return
 	}
-	subs = s.subsLocked()
+	// 必须拷贝：chunk 是 readLoop 复用的缓冲，订阅者的写队列会持有它
+	data := make([]byte, len(chunk))
+	copy(data, chunk)
+
+	s.mu.Lock()
+	seq := s.ring.Append(data)
+	s.term.Write(data)
+	for sub := range s.subs {
+		sub.Push(s.sid, seq, data)
+	}
 	s.mu.Unlock()
 
-	// 【先发事件，再推帧】（协议 §4 command.start/end 的顺序承诺）。
-	// 事件与帧走同一条按序写队列（wsconn.Conn.enqueue），所以这里的先后就是
-	// 客户端收到的先后。client 靠它在写入 xterm 时把帧在 out_seq 处切开、
-	// 登记行锚点 ——「在终端里看」才能定位到块（ADR-0011 ④）。反过来的话，
-	// 帧先到，锚点就只能是事后估的。
-	for i, ev := range events {
-		s.handleOSCEvent(ev, seq+uint64(offs[i]))
-	}
-	for _, sub := range subs {
-		if data != nil {
-			sub.Push(s.sid, seq, data, false)
-		}
-	}
-	if data != nil {
-		// 未订阅的连接靠 head_seq 推导未读（连接层做 1s 节流）
-		head := seq + uint64(len(data))
-		s.emit(&protocol.SessionUpdated{SID: s.sid, HeadSeq: &head})
-	}
+	// 未订阅的连接靠 head_seq 推导未读（连接层做 1s 节流，已订阅的直接丢掉）
+	head := seq + uint64(len(data))
+	s.emit(&protocol.SessionUpdated{SID: s.sid, HeadSeq: &head})
+}
+
+// startLoops 起四个 goroutine。alive 标记要在 go 之前置好：freeze 靠它数要等几个循环。
+func (s *Session) startLoops() {
+	s.readAlive.Store(true)
+	s.writeAlive.Store(true)
+	go s.readLoop()
+	go s.writeLoop()
+	go s.waitLoop()
+	go s.cwdLoop(s.mgr.cfg.CWDPollInterval)
 }
 
 func (s *Session) readLoop() {
 	defer func() {
 		s.fz.exiting()
 		s.readAlive.Store(false)
+		close(s.readDone)
 	}()
 	buf := make([]byte, ptyReadBuf)
 	for {
@@ -522,7 +395,7 @@ func (s *Session) readLoop() {
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				// 热升级冻结：deadline 只有 freeze 会设。停在这里 —— consume 已做完，
-				// ring 与 out_seq 一致 —— 等解冻再回去读
+				// ring、模拟器与 out_seq 一致 —— 等解冻再回去读
 				s.fz.park()
 				continue
 			}
@@ -575,18 +448,32 @@ func (s *Session) writeLoop() {
 }
 
 // waitLoop：等 shell 退出，设置 exited 状态与退出码。
+//
+// 【先等 readLoop 把 PTY 里剩下的输出读完】，再宣布退出：shell 退出时内核里往往
+// 还躺着最后几行输出，readLoop 还没读到。先发 exited 的话，这几行 OUTPUT 会排在
+// 它后面，前端的「进程结束」提示行就插到了输出前面。读到 EOF（EIO）说明从端都
+// 关了、输出读完了；后台进程还占着从端时 EOF 不会来，最多等 drainGrace。
+//
+// 这条 session.updated 带上此刻的 head_seq：客户端据此知道「已退出」之前的输出
+// 一共有多少，与最后一帧 OUTPUT 的末尾对得上。
 func (s *Session) waitLoop() {
 	// 用 *os.Process 而不是 exec.Cmd.Wait：交接过来的会话只有 pid（os.FindProcess），
 	// 同 PID exec 之后它们仍是子进程，Wait 照常拿退出码。
 	st, err := s.proc.Wait()
 	code := -1
 	if err == nil && st != nil {
-		code = st.ExitCode() // 被信号杀掉时是 -1，与原来 exec.ExitError 的语义一致
+		code = st.ExitCode() // 被信号杀掉时是 -1
+	}
+
+	select {
+	case <-s.readDone:
+	case <-time.After(drainGrace):
 	}
 
 	s.mu.Lock()
 	s.status = protocol.StatusExited
 	s.exitCode = &code
+	head := s.ring.HeadSeq()
 	s.mu.Unlock()
 
 	s.inputQ.close() // 停止接受输入
@@ -596,160 +483,17 @@ func (s *Session) waitLoop() {
 		SID:      s.sid,
 		Status:   strPtr(protocol.StatusExited),
 		ExitCode: &code,
+		HeadSeq:  &head,
 	})
-	// ring 保留，不释放：构建失败了要能回看报错（AC-4.5）。
-	if s.rcPath != "" {
-		os.Remove(s.rcPath)
-	}
-}
-
-// ---------- OSC 事件处理 ----------
-
-// at 是该标记在输出流里的精确 out_seq（块首 seq + 事件偏移）。
-func (s *Session) handleOSCEvent(ev oscparse.Event, at uint64) {
-	switch e := ev.(type) {
-	case oscparse.PromptEvent:
-		s.markIntegrationAlive()
-		s.mu.Lock()
-		s.promptState = e.State
-		s.mu.Unlock()
-		if e.State == protocol.PromptRunning {
-			s.beginCommand(at)
-		}
-		s.emit(&protocol.Prompt{SID: s.sid, State: e.State})
-
-	case oscparse.CommandEndEvent:
-		s.endCommand(e.ExitCode, at)
-
-	case oscparse.CommandTextEvent:
-		// 连续两个 1701;cmd 中间没有 133;C → 后者覆盖前者
-		s.pendCmd = e.Text
-
-	case oscparse.CWDEvent:
-		s.setCWD(e.Path)
-
-	case oscparse.IntegrationHelloEvent:
-		// 【hello 不再直接置 active】。它现在发在 rcfile 最前面、用户 dotfile
-		// 之前，意思只是"脚本开始加载"——这样一个慢的 .bash_profile 不会让
-		// 握手超时误判。钩子真的装好了，由之后第一个 133 标记来证明。
-		s.mu.Lock()
-		s.helloSeen = true
-		s.mu.Unlock()
-	}
-}
-
-// markIntegrationAlive 记下"刚见到一个 133 标记"。
-// 从 inactive 收到标记要立即转回 active。
-func (s *Session) markIntegrationAlive() {
-	s.mu.Lock()
-	s.lastMark = time.Now()
-	changed := s.integration != protocol.IntegrationActive
-	s.integration = protocol.IntegrationActive
-	unmarkedChanged := s.probeMarkSeenLocked()
-	s.mu.Unlock()
-	if unmarkedChanged {
-		s.emitUnmarked()
-	}
-	if changed {
-		s.emit(&protocol.SessionUpdated{
-			SID: s.sid, Integration: strPtr(protocol.IntegrationActive),
-		})
-	}
-}
-
-func (s *Session) setIntegration(v string) {
-	s.mu.Lock()
-	if s.integration == v {
-		s.mu.Unlock()
-		return
-	}
-	s.integration = v
-	if v == protocol.IntegrationActive {
-		s.lastMark = time.Now()
-	}
-	s.mu.Unlock()
-	s.emit(&protocol.SessionUpdated{SID: s.sid, Integration: strPtr(v)})
-}
-
-func (s *Session) setCWD(path string) {
-	s.mu.Lock()
-	if s.cwd == path {
-		s.mu.Unlock()
-		return // 仅在路径实际变化时发送
-	}
-	oldName := s.displayNameLocked()
-	s.cwd = path
-	newName := s.displayNameLocked()
-	upd := &protocol.SessionUpdated{SID: s.sid, CWD: strPtr(path)}
-	if newName != oldName {
-		upd.Name = strPtr(newName)
-	}
-	s.mu.Unlock()
-	s.emit(&protocol.CWD{SID: s.sid, Path: path})
-	s.emit(upd)
-}
-
-// beginCommand 在 133;C 时结算命令开始。
-//
-// 没有前置的 1701;cmd（空回车，或以空格开头被跳过）时不记录命令，
-// 但 prompt 状态照常上报。
-func (s *Session) beginCommand(at uint64) {
-	if s.pendCmd == "" {
-		return
-	}
-	text := s.pendCmd
-	s.pendCmd = ""
-
-	s.mu.RLock()
-	cwd, name := s.cwd, s.displayNameLocked()
-	s.mu.RUnlock()
-
-	now := time.Now()
-	s.curCmdAt = now
-	var cmdID int64
-	if s.historyOn() && s.store != nil {
-		id, err := s.store.BeginCommand(text, name, cwd, now)
-		if err != nil {
-			return
-		}
-		cmdID = id
-		s.curCmdID = &id
-	}
-	s.emit(&protocol.CommandStart{
-		SID: s.sid, CmdID: cmdID, Text: text, CWD: cwd,
-		At: now.UnixMilli(), OutSeq: at,
-	})
-}
-
-// endCommand 在 133;D 时补齐退出码与耗时。
-// 没有进行中的命令（133;D 没有前置的 133;C）时只发 prompt 状态，不结算。
-func (s *Session) endCommand(exitCode *int, at uint64) {
-	if s.curCmdID == nil {
-		return
-	}
-	id := *s.curCmdID
-	s.curCmdID = nil
-	dur := time.Since(s.curCmdAt)
-
-	if s.historyOn() && s.store != nil {
-		if err := s.store.FinishCommand(id, exitCode, dur); err != nil {
-			return
-		}
-	}
-	s.emit(&protocol.CommandEnd{
-		SID: s.sid, CmdID: id, ExitCode: exitCode,
-		DurationMS: dur.Milliseconds(), OutSeq: at,
-	})
+	// ring 与模拟器保留，不释放：构建失败了要能回看报错（AC-4.5），切回、刷新
+	// 都还能拿到快照。
 }
 
 // emit 把一条控制消息发给【所有连接】，不只是订阅者。
 //
-// 未订阅的连接也要收 session.updated / cwd / command.* —— 侧栏里的会话名、
-// 未读标记都靠它们。订阅只决定收不收 OUTPUT 字节。
+// 未订阅的连接也要收 session.updated —— 侧栏里的会话名、未读标记都靠它。
+// 订阅只决定收不收 OUTPUT / SNAPSHOT 帧。
 func (s *Session) emit(msg any) {
-	if s.sink != nil {
-		s.sink(msg) // 仅测试用：不经过 manager 也能观察到发出的消息
-	}
 	if s.mgr != nil {
 		s.mgr.fanout(msg)
 	}
@@ -759,120 +503,6 @@ func (s *Session) emit(msg any) {
 func (s *Session) emitTo(clientID string, msg any) {
 	if s.mgr != nil {
 		s.mgr.fanoutTo(clientID, msg)
-	}
-}
-
-// onHelloTimeout 在握手期结束时由 manager 调用。
-//
-// 只有【连 hello 都没收到】才判 inactive —— 那说明 rcfile 根本没被加载
-// （比如 bash 太老、被别的东西接管）。收到了 hello 但还没有标记，多半是
-// 用户 dotfile 慢，等它就是。
-func (s *Session) onHelloTimeout() {
-	s.mu.Lock()
-	stale := s.integration == protocol.IntegrationPending && !s.helloSeen
-	s.mu.Unlock()
-	if stale {
-		s.setIntegration(protocol.IntegrationInactive)
-	}
-}
-
-// armProbeLocked 在输入里含 Enter 时装一个探针（须持锁）。
-//
-// 已有探针在等就不重复装 —— 一次结论要连续几次 Enter 各自到期才成立，
-// 快速连按不能被合并成一次。到期靠定时器，不靠下一次输入或巡检，
-// 否则结论会拖到用户下次敲键才出来。
-func (s *Session) armProbeLocked(data []byte, now time.Time) {
-	if !bytes.ContainsAny(data, "\r\n") || s.probeArmed {
-		return
-	}
-	s.probeArmed = true
-	s.probeGen++
-	s.probeAt = now
-	s.probeOutput = false
-	s.probeState = s.promptState
-	gen := s.probeGen
-	time.AfterFunc(probeGrace, func() { s.resolveProbe(gen) })
-}
-
-// resolveProbe 在探针到期时结算：有输出却没有任何标记 → 记一次未标记往返。
-func (s *Session) resolveProbe(gen int) {
-	s.mu.Lock()
-	if !s.probeArmed || s.probeGen != gen {
-		s.mu.Unlock()
-		return // 标记到了（已清零）或已经是下一代探针
-	}
-	s.probeArmed = false
-	if !s.probeOutput {
-		s.mu.Unlock()
-		return // 没输出就不算：命令可能只是安静（sleep）
-	}
-	s.unmarkedRuns++
-	setInactive, unmarkedChanged := false, false
-	if s.unmarkedRuns >= probeMisses {
-		if s.probeState == protocol.PromptRunning {
-			// 在跑的命令里 Enter 有回应却无标记 —— 输入去了一个没有钩子的
-			// 子程序（ssh / su / 容器 / REPL）。外层 shell 本身没坏，
-			// 所以【不动 integration】，只报告这个事实。
-			if !s.unmarkedInput {
-				s.unmarkedInput = true
-				unmarkedChanged = true
-			}
-		} else if s.integration == protocol.IntegrationActive {
-			// 停在 prompt 前 Enter，有输出却零标记：这个 shell 自己的钩子没了
-			// （trap - DEBUG / PROMPT_COMMAND= / exec bash 之类）。
-			setInactive = true
-		}
-	}
-	s.mu.Unlock()
-	if setInactive {
-		s.setIntegration(protocol.IntegrationInactive)
-	}
-	if unmarkedChanged {
-		s.emitUnmarked()
-	}
-}
-
-// probeMarkSeenLocked：任何 133 标记到达 → 探针与计数清零（须持锁）。
-// 返回 unmarkedInput 是否因此变化。
-func (s *Session) probeMarkSeenLocked() bool {
-	s.probeArmed = false
-	s.unmarkedRuns = 0
-	if s.unmarkedInput {
-		s.unmarkedInput = false
-		return true
-	}
-	return false
-}
-
-func (s *Session) emitUnmarked() {
-	s.mu.Lock()
-	v := s.unmarkedInput
-	s.mu.Unlock()
-	s.emit(&protocol.SessionUpdated{SID: s.sid, UnmarkedInput: &v})
-}
-
-// checkIntegrationIdle 由 manager 的巡检 goroutine 周期性调用。
-func (s *Session) checkIntegrationIdle(now time.Time) {
-	s.mu.Lock()
-	// 【"多久没标记"不是存活信号】。OSC 133 只在 prompt 前后发，
-	// 所以没有标记只说明"什么都没发生"，不说明集成坏了。
-	// 原来只看时间差，于是两种完全正常的情况会被误判成失效：
-	//
-	//   1. 前台跑着长命令 —— top / tail -f / 一次长构建期间一个标记都没有。
-	//      真踩到了：用户在 top 里待了几分钟，UI 就弹出"shell 集成未生效"。
-	//   2. 停在 prompt 前发呆 —— 没有新 prompt 被画出来，自然没有新标记。
-	//
-	// 真正说明集成坏了的是【用户敲了东西、命令跑过了，却一个标记都没来】
-	// （比如 exec bash / su 之后 PROMPT_COMMAND 被换掉）。所以两个前提：
-	// 不在跑命令，且上次标记之后有过输入。
-	running := s.promptState == protocol.PromptRunning
-	typedSinceMark := s.lastInput.After(s.lastMark)
-	stale := s.integration == protocol.IntegrationActive &&
-		!s.lastMark.IsZero() && !running && typedSinceMark &&
-		now.Sub(s.lastMark) > integrationIdleTimeout
-	s.mu.Unlock()
-	if stale {
-		s.setIntegration(protocol.IntegrationInactive)
 	}
 }
 
@@ -909,34 +539,32 @@ func (s *Session) close() {
 			s.ptmx.Close()
 		}
 		s.inputQ.close()
-		if s.rcPath != "" {
-			os.Remove(s.rcPath)
-		}
 		s.mu.Lock()
 		s.subs = map[Subscriber]struct{}{}
 		s.mu.Unlock()
 	})
 }
 
-// export 拍会话快照（ADR-0016）。【必须在 freeze 之后调用】：readLoop 停了
-// osc / pendCmd / curCmd* 这些"只在 readLoop 里访问"的字段才能安全地读。
+// export 拍会话的交接快照（ADR-0016 / ADR-0026 §8）。【必须在 freeze 之后调用】：
+// readLoop 停了，ring 与模拟器不会再变。
 //
 // ptmx 交出去的是一个【dup】：新 fd 号、已清 CLOEXEC。会话自己那份保持原样 ——
 // 交接中止时不用改回来；同进程内恢复（测试）也不会撞上 epoll 里已登记的同一个 fd。
 func (s *Session) export() (handoff.Session, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	base, data := s.ring.Export()
+	vt, err := s.term.Export()
+	if err != nil {
+		return handoff.Session{}, fmt.Errorf("session %d: 导出模拟器状态: %w", s.sid, err)
+	}
 	h := handoff.Session{
-		SID: s.sid, PtmxFD: -1, RCPath: s.rcPath, CreatedAt: s.createdAt,
+		SID: s.sid, PtmxFD: -1, CreatedAt: s.createdAt,
 		Name: s.name, NameManual: s.nameManual, CWD: s.cwd, Status: s.status, ExitCode: s.exitCode,
-		Cols: s.cols, Rows: s.rows, Integration: s.integration, PromptState: s.promptState,
-		HelloSeen: s.helloSeen, LastMark: s.lastMark, LastInput: s.lastInput,
+		Cols: s.cols, Rows: s.rows,
 		RingBase: base, RingData: data,
+		VTerm:    vt,
 		InQueued: cloneCounts(s.inQueued), InAck: cloneCounts(s.inAck),
-		OSC: s.osc.Export(), PendCmd: s.pendCmd, CurCmdID: s.curCmdID, CurCmdAt: s.curCmdAt,
-		Modes:        s.modes.Export(),
-		UnmarkedRuns: s.unmarkedRuns, UnmarkedInput: s.unmarkedInput,
 		Pending: s.inputQ.snapshot(),
 	}
 	if s.status == protocol.StatusRunning {
@@ -963,17 +591,6 @@ func cloneCounts(m map[string]uint64) map[string]uint64 {
 	}
 	return out
 }
-
-// optStr 把空字符串转成 nil，让 JSON 里出现的是 null 而不是 ""。
-func optStr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-// historyOn 报告此刻是否记录命令历史。
-func (s *Session) historyOn() bool { return s.mgrHistory != nil && s.mgrHistory() }
 
 func strPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool    { return &b }

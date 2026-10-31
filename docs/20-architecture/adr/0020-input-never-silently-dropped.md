@@ -80,9 +80,9 @@ onData(data):
 
 ## 推论（不是新决策，是上面原则的直接后果）
 
-- **焦点跟着会话走。** `activate()` 把上一个会话的 DOM 摘掉时焦点会落回 `body`，切过去的新会话没人给它焦点。规则：切换前焦点在终端里，切换后就还给终端；桌面（非触摸）无条件还给终端 —— 那里没有软键盘要顾虑。见 [`../../40-frontend/session-ux.md`](../../40-frontend/session-ux.md#焦点跟着会话走ac-48)。
-- **组字状态必须有兜底复位。** `composing` 只由 `compositionend` 复位，而它在切输入法 / 切窗口时可能不来。加两条兜底：`blur`，以及捕获阶段一个 `isComposing === false` 的 `keydown`（它本身就证明组字已经结束）。见 [`../../40-frontend/input-modes.md`](../../40-frontend/input-modes.md#ime-处理)。
-- **这条原则要可观测**（2026-09-19 补）。上面只约束了实现，没有回答「**怎么确认它没被违反**」—— 四条路修完之后再遇到"打字没反应"，第一步仍然是猜。所以输入路径按段留计数：按键到达页面 → 焦点在终端 → xterm 吐出 `onData` → 发给 agent → agent 确认，每段都有计数与**最近一次发生的时刻**，断点落在哪一段一眼可见（`__webterm.inputStats()`，AC-3.17，见 [`../../40-frontend/input-modes.md`](../../40-frontend/input-modes.md#排障输入死在哪一段ac-317)）。它同样覆盖**不在 webterm 内**的那一类：四段全通而程序没反应，说明问题在 PTY 那一侧 —— 最常见的是 tmux 的 copy-mode（[ADR-0024](0024-scrollback-layered-model.md) §4）。
+- **焦点跟着会话走。** `activate()` 把上一个会话的 DOM 摘掉时焦点会落回 `body`，切过去的新会话没人给它焦点。规则：切换前焦点在终端里，切换后就还给终端；桌面（非触摸）无条件还给终端 —— 那里没有软键盘要顾虑。见 [`../../40-frontend/session-ux.md`](../../40-frontend/session-ux.md)。
+- **组字状态必须有兜底复位。** `composing` 只由 `compositionend` 复位，而它在切输入法 / 切窗口时可能不来。加两条兜底：`blur`，以及捕获阶段一个 `isComposing === false` 的 `keydown`（它本身就证明组字已经结束）。见 [`../../40-frontend/input.md`](../../40-frontend/input.md)。
+- **这条原则要可观测**（2026-09-19 补）。上面只约束了实现，没有回答「**怎么确认它没被违反**」—— 四条路修完之后再遇到"打字没反应"，第一步仍然是猜。所以输入路径按段留计数：按键到达页面 → 焦点在终端 → xterm 吐出 `onData` → 发给 agent → agent 确认，每段都有计数与**最近一次发生的时刻**，断点落在哪一段一眼可见（`__webterm.inputStats()`，AC-3.17，见 [`../../40-frontend/input.md`](../../40-frontend/input.md)）。它同样覆盖**不在 webterm 内**的那一类：四段全通而程序没反应，说明问题在 PTY 那一侧 —— 最常见的是 tmux 的 copy-mode（[ADR-0024](0024-scrollback-layered-model.md) §4）。
 
 ## 后果
 

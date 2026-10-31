@@ -15,8 +15,7 @@ webterm 把一台服务器的 shell 暴露到公网。**攻破 webterm = 拿到�
 | shell 访问权 | 完全沦陷：读写文件、启动进程、横向移动 |
 | 会话 Cookie | 等价于 shell 访问权 |
 | 配对码（未使用、未过期） | 等价于 shell 访问权 |
-| 命令历史 | 泄露工作内容、路径结构、有时含误贴的凭据 |
-| 终端输出 | 可能含密钥、token、日志中的敏感数据（**因此不落盘**） |
+| 终端输出 | 可能含密钥、token、日志中的敏感数据（**因此只在内存里**：环形缓冲与终端模拟器） |
 | TLS 私钥 | 中间人攻击 |
 
 ## 信任边界
@@ -34,7 +33,7 @@ webterm 把一台服务器的 shell 暴露到公网。**攻破 webterm = 拿到�
 ```
 
 **明确不在信任边界内**：
-- 同机的其它本地用户 → 因此 db `0600`、rcfile `0600`、不用 `/tmp`、不绑定 `0.0.0.0` 时的本地端口不做额外保护假设
+- 同机的其它本地用户 → 因此 db `0600`、控制 socket `0600`、不用 `/tmp`、不绑定 `0.0.0.0` 时的本地端口不做额外保护假设
 - 浏览器扩展 → 无法防御，超出范围
 
 **明确在信任边界内**：
@@ -100,39 +99,29 @@ webterm 把一台服务器的 shell 暴露到公网。**攻破 webterm = 拿到�
 
 | 缓解 | 实现 |
 |---|---|
-| xterm.js 渲染到 canvas/WebGL | 终端内容**根本不进 DOM**，不存在注入面 |
+| xterm.js 渲染（默认 DOM 渲染器） | 逐格写 `textContent`，终端输出**从不被当成 HTML 解析** |
 | 不启用 `linkHandler` 的自动 HTML | 超链接（OSC 8）只允许 `http`/`https` 协议，其它一律不可点 |
 | 会话名/CWD 等元数据 | 通过 `textContent` 设置，绝不用 `innerHTML` |
 | CSP | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://<domain>; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'` |
 
-命令历史面板会以文本形式展示命令原文 —— 必须用 `textContent`。这是唯一一处"服务端数据进 DOM"的地方，需要在 review 时特别注意。
+会话名与 CWD 是仅有的"服务端数据进 DOM"（标签栏、会话抽屉），一律 `textContent`，review 时特别注意。
 
 ### T6 拒绝服务
 
 | 威胁 | 缓解 |
 |---|---|
 | 大量未认证连接 | 认证前的处理极轻（查 Cookie 哈希）；配对限速 |
-| 会话耗尽内存 | 会话数上限 20，每会话缓冲 1 MiB → 上界 20 MiB |
+| 会话耗尽内存 | 会话数上限 20，每会话环形缓冲 256 KiB + 终端模拟器 2000 行（< 1 MiB）→ 上界约 25 MiB |
 | 连接耗尽内存 | 并发连接上限 16（`--max-conns`），每连接写队列 4 MiB → 上界 64 MiB。**必须有这个上限** —— 协议允许同设备开任意多标签页 |
-| 慢客户端拖死会话 | 连接写队列有界（4 MiB），满则**断开该连接**而不是阻塞 PTY（[协议 §5.5](../30-protocol/websocket-protocol.md#55-有界队列策略读写两侧)） |
+| 慢客户端拖死会话 | 连接写队列有界（4 MiB），满则**断开该连接**而不是阻塞 PTY（[协议 §5.6](../30-protocol/websocket-protocol.md#56-有界队列策略读写两侧)） |
 | 卡住的 shell 拖死整条连接 | 会话输入队列有界（256 KiB），满则回 `input_stalled` 并**断开该连接**，绝不阻塞连接读循环（同上） |
 | 巨帧内存放大 | 单帧上限 256 KiB，超出即断开 |
-| OSC 负载放大 | OSC 负载上限 8 KiB，超限原样吐出 |
+| 输出洪水 | agent 侧模拟器单核约 20 MB/s，PTY 读被它反压，不会无界堆积；历史固定 2000 行 |
 | 输入队列膨胀 | client 侧 `pending` 上限 64 KiB |
-| 历史表膨胀 | 5 万条上限 + 定期淘汰 |
 
 **注意**：失去了 Cloudflare 的 DDoS 防护（[ADR-0002](../20-architecture/adr/0002-self-contained-binary.md)）。缓解仅限应用层。网络层的 volumetric 攻击超出本项目范围 —— 如果用户面临这种威胁，应该自己套隧道或 CDN（架构上支持）。
 
-### T7 shell 集成引入的风险
-
-| 威胁 | 缓解 |
-|---|---|
-| rcfile 被同机其它用户读取/篡改 | `0600`，放 `$XDG_RUNTIME_DIR/webterm/` 或数据目录下的 `run/`（`0700`），**不放 `/tmp`** |
-| 命令注入进 rcfile | rcfile 内容完全由 agent 生成，**不插入任何用户输入** |
-| 集成脚本破坏用户 shell | 全部包在 `{…} 2>/dev/null \|\| true`，且不能导致 shell 启动失败（AC-7.7） |
-| OSC 带内信令被输出伪造 | **无法防御**（固有问题）。影响限于模式误切与命令记录错误，不涉权限。见 [`../30-protocol/shell-integration.md`](../30-protocol/shell-integration.md#6-已知限制) |
-
-### T8 TLS 相关
+### T7 TLS 相关
 
 | 威胁 | 缓解 |
 |---|---|
@@ -141,11 +130,11 @@ webterm 把一台服务器的 shell 暴露到公网。**攻破 webterm = 拿到�
 | 降级到 HTTP | HSTS `max-age=31536000`；`:80` 除 ACME 挑战外全部 301 |
 | 弱 TLS | `MinVersion: tls.VersionTLS12`，优先 TLS 1.3 |
 
-### T9 日志泄露
+### T8 日志泄露
 
 | 缓解 |
 |---|
-| 不记录配对码、Cookie token、命令原文（AC-8.5） |
+| 不记录配对码、Cookie token、用户输入（AC-8.5） |
 | 不记录终端输出（任何情况下） |
 | 记录 IP 与 User-Agent（用于设备列表与限速），这是刻意保留的 |
 | `IT-privacy-2` 用 canary 字符串验证 |
@@ -155,7 +144,7 @@ webterm 把一台服务器的 shell 暴露到公网。**攻破 webterm = 拿到�
 | 措施 | 为什么不做 |
 |---|---|
 | 沙箱化 shell / 限制可执行的命令 | 自欺欺人。用户本来就有这台机器的 shell 权限，webterm 不该假装能限制它 |
-| 命令级审计与告警 | 单用户工具，没有"审计谁"的场景。命令历史已经记录了一切 |
+| 命令级审计与告警 | 单用户工具，没有"审计谁"的场景 |
 | 二次认证执行危险命令 | 会成为纯粹的骚扰。真正的保护是"不要让未授权者进来" |
 | 多因素认证（v0.1） | 配对码 + 长效 Cookie 在单用户场景下已足够。Passkey 在 v0.2（那是体验优化，也顺带提升安全） |
 | 端到端加密（超越 TLS） | 没有多余的信任边界需要它 |
@@ -168,7 +157,7 @@ webterm 把一台服务器的 shell 暴露到公网。**攻破 webterm = 拿到�
 - [ ] 改动 Cookie 属性、认证中间件、Origin 校验
 - [ ] 新增落盘的数据（尤其是否可能包含终端输出）
 - [ ] 新增写入日志的字段
-- [ ] 改动 rcfile 生成逻辑
+- [ ] 改动会话启动方式（shell 参数、注入的环境变量）
 - [ ] 新增把服务端数据放进 DOM 的代码
 - [ ] 改动 CSP 或 TLS 配置
 - [ ] 新增无界的缓冲/队列/集合

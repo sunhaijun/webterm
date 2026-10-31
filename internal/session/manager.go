@@ -8,17 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 
-	"github.com/sunhaijun/webterm/internal/oscparse"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/ringbuf"
-	"github.com/sunhaijun/webterm/internal/store"
-	"github.com/sunhaijun/webterm/internal/termstate"
+	"github.com/sunhaijun/webterm/internal/vterm"
 )
 
 // ErrSessionLimit 表示会话数已达上限。
@@ -27,19 +24,25 @@ var ErrSessionLimit = errors.New("session: 会话数已达上限")
 // ErrFrozen：正在热升级交接，此刻不接受新会话（ADR-0016）。
 var ErrFrozen = errors.New("session: 正在热升级，稍后再试")
 
+// DefaultRingBytes 是每会话环形缓冲的默认容量（ADR-0026 §3）。它只服务增量
+// 续传：积压超过它时，快照（≤ 170 KiB）比重放更小更快。
+const DefaultRingBytes = 256 << 10
+
 // Config 是 Manager 的配置。
 type Config struct {
 	MaxSessions int    // 默认 20
-	RingBytes   int    // 每会话环形缓冲，默认 1 MiB
+	RingBytes   int    // 每会话环形缓冲，默认 DefaultRingBytes
 	Shell       string // 默认 bash
-	ShellArgs   []string
-	// History 是否【允许】记录命令历史。false = agent 以 --no-history 启动，
-	// 这是启动态覆盖，UI 上的开关会被锁死置灰。
-	History bool
 
-	// RCFileFor 生成会话的临时 rcfile，返回路径。nil 表示不注入 shell 集成
-	// （--no-shell-integration）。m5 由 internal/shellinit 提供实现。
-	RCFileFor func(sid uint16) (string, error)
+	// ShellArgs 覆盖 shell 的启动参数。nil 时按 NoLoginShell 选默认值：
+	// 登录交互 shell `-l -i`（按 shell 自己的规则加载 profile 链），或 `-i`。
+	// 测试用它给出确定的 `--norc --noprofile -i`。
+	ShellArgs []string
+	// NoLoginShell：--no-login-shell，用非登录交互 shell（bash 只读 ~/.bashrc）。
+	//
+	// 【故意是反的】：零值 = 登录 shell，与默认行为一致。默认开的布尔项写成正向
+	// 字段，任何忘了填 Config 的调用方都会静默失去默认行为。
+	NoLoginShell bool
 
 	// SessionEnv 是 --session-env 给的 KEY=VAL，注入每个会话的 PTY（AC-7.8）。
 	// 同一个键出现多次时后面的胜出 —— 配置文件先灌、命令行后 Parse，
@@ -47,17 +50,14 @@ type Config struct {
 	SessionEnv []string
 
 	// NoAltScreenCompat 关掉内置的备用屏兼容清单（--no-altscreen-compat）。
-	//
-	// 【故意是反的】：零值 = 清单生效。默认开的布尔项写成正向字段，
-	// 任何忘了填 Config 的调用方都会静默失去默认行为。
+	// 同样故意是反的：零值 = 清单生效。
 	NoAltScreenCompat bool
+
+	// CWDPollInterval 是读 /proc/<前台进程组>/cwd 的周期，默认 1 秒（ADR-0026 §6）。
+	CWDPollInterval time.Duration
 }
 
-// altScreenCompat 是"把全屏 AI CLI 拉回主屏"的内置清单
-// （AC-7.8，ADR-0024 §1）。
-//
-// 为什么要有它：只有主屏的输出是**追加流**，才有 scrollback 可以往回拖；备用屏
-// 的差分帧离开 ESC[?1049h 就没有意义，刷新后回放它只会画出同一屏（ADR-0019）。
+// altScreenCompat 是"把全屏 AI CLI 拉回主屏"的内置清单（AC-7.8，ADR-0024 §1）。
 //
 // 边界写死在这里：清单里**只放"把 TUI 拉回主屏"这一类开关**，任何改变程序行为
 // 的（模型、权限、遥测）一概不放。这些还都是上游的私有变量、没有兼容承诺，
@@ -126,28 +126,41 @@ func (c *Config) compatEnv() []string {
 	return altScreenCompat
 }
 
+// shellArgs 返回 shell 的启动参数（ADR-0026 §6：shell 照常启动，不注入任何东西）。
+func (c *Config) shellArgs() []string {
+	if c.ShellArgs != nil {
+		return c.ShellArgs
+	}
+	if c.NoLoginShell {
+		return []string{"-i"}
+	}
+	return []string{"-l", "-i"}
+}
+
 func (c *Config) withDefaults() {
 	if c.MaxSessions <= 0 {
 		c.MaxSessions = 20
 	}
 	if c.RingBytes <= 0 {
-		c.RingBytes = 1 << 20
+		c.RingBytes = DefaultRingBytes
 	}
 	if c.Shell == "" {
 		c.Shell = "bash"
+	}
+	if c.CWDPollInterval <= 0 {
+		c.CWDPollInterval = time.Second
 	}
 }
 
 // Manager 负责 sid 分配、会话表、上限控制与生命周期编排。
 type Manager struct {
-	cfg   Config
-	store *store.Store
+	cfg Config
 
 	// instanceID 是本次进程启动的随机 id。
 	//
 	// sid 是 uint16 且进程重启后从头分配 —— 没有实例标识的话，一个
-	// resume{sid:1, out_seq:很大} 会落进"客户端领先"分支，屏幕上留着旧会话
-	// 的内容，之后接的却是一个毫不相干的新会话的输出，用户无从察觉。
+	// resume{sid:1, out_seq:很大} 会被当成增量或快照接到一个毫不相干的新会话上，
+	// 用户无从察觉。
 	instanceID string
 
 	mu        sync.RWMutex
@@ -158,53 +171,30 @@ type Manager struct {
 	generation int
 	frozen     bool // Freeze 期间拒绝 Create
 
-	janitorStop  chan struct{}
-	janitorDone  chan struct{}
 	shutdownOnce sync.Once
-
-	// historyOn 是 UI 开关的当前值，只在 cfg.History 为 true 时有意义。
-	// 用户在做敏感工作时可以一键静默，而不是事后清理。
-	historyOn atomic.Bool
 }
 
 // NewManager 创建会话管理器。
-func NewManager(cfg Config, st *store.Store) *Manager {
+func NewManager(cfg Config) *Manager {
 	cfg.withDefaults()
 	var b [8]byte
 	_, _ = rand.Read(b[:])
-	m := &Manager{
-		cfg:         cfg,
-		store:       st,
-		instanceID:  hex.EncodeToString(b[:]),
-		sessions:    make(map[uint16]*Session),
-		observers:   make(map[Subscriber]struct{}),
-		nextSID:     1, // 0 保留为无效值
-		janitorStop: make(chan struct{}),
-		janitorDone: make(chan struct{}),
+	return &Manager{
+		cfg:        cfg,
+		instanceID: hex.EncodeToString(b[:]),
+		sessions:   make(map[uint16]*Session),
+		observers:  make(map[Subscriber]struct{}),
+		nextSID:    1, // 0 保留为无效值
 	}
-	m.historyOn.Store(cfg.History)
-	go m.janitor()
-	return m
 }
-
-// HistoryConfigured 报告 agent 是否允许记录历史（--no-history 会让它为 false）。
-func (m *Manager) HistoryConfigured() bool { return m.cfg.History }
-
-// SetHistoryEnabled 切换 UI 侧的历史开关。cfg.History 为 false 时无效。
-func (m *Manager) SetHistoryEnabled(on bool) {
-	m.historyOn.Store(m.cfg.History && on)
-}
-
-// HistoryEnabled 报告当前是否真的在记录历史。
-func (m *Manager) HistoryEnabled() bool { return m.historyOn.Load() }
 
 // InstanceID 返回本次进程启动的实例 id（放进 welcome）。
 func (m *Manager) InstanceID() string { return m.instanceID }
 
 // AddObserver / RemoveObserver 登记一条连接。
 //
-// 【订阅与观察是两件事】：订阅（Session.Subscribe）决定收不收 OUTPUT 字节，
-// 观察决定收不收控制消息。未订阅的连接照样要收 session.updated —— 未读正是
+// 【订阅与观察是两件事】：订阅（Session.Subscribe）决定收不收 OUTPUT / SNAPSHOT
+// 帧，观察决定收不收控制消息。未订阅的连接照样要收 session.updated —— 未读正是
 // 靠它带的 head_seq 推导出来的，只发给订阅者的话永远算不出未读。
 func (m *Manager) AddObserver(sub Subscriber) {
 	m.mu.Lock()
@@ -263,8 +253,8 @@ type Spec struct {
 
 // Create 新建一个会话。
 func (m *Manager) Create(spec Spec) (*Session, error) {
-	if spec.Cols == 0 || spec.Rows == 0 || spec.Cols > 1000 || spec.Rows > 1000 {
-		return nil, errors.New("session: cols/rows 必须在 1..1000")
+	if !validSize(spec.Cols, spec.Rows) {
+		return nil, ErrBadSize
 	}
 	cwd := spec.CWD
 	if cwd == "" {
@@ -321,23 +311,7 @@ func (m *Manager) allocSIDLocked() (uint16, error) {
 }
 
 func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
-	var rcPath string
-	args := m.cfg.ShellArgs
-	if m.cfg.RCFileFor != nil {
-		p, err := m.cfg.RCFileFor(sid)
-		if err != nil {
-			return nil, fmt.Errorf("session: 生成 rcfile: %w", err)
-		}
-		rcPath = p
-		// 【长选项必须排在短选项前面】：bash -i --rcfile F 会报
-		// "bash: --: invalid option" 然后打一屏用法直接退出。
-		args = []string{"--rcfile", rcPath, "-i"}
-	} else if args == nil {
-		// 没有 shell 集成时不读用户 dotfile，行为才是确定的
-		args = []string{"--norc", "--noprofile", "-i"}
-	}
-
-	cmd := exec.Command(m.cfg.Shell, args...)
+	cmd := exec.Command(m.cfg.Shell, m.cfg.shellArgs()...)
 	cmd.Dir = cwd
 	// 会话环境（AC-7.8）：继承的环境先清掉干扰 shell 初始化的两个键，
 	// 再叠兼容清单 / --session-env / webterm 自己的口径。优先级见 buildEnv。
@@ -346,16 +320,13 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 		m.cfg.compatEnv(),
 		m.cfg.SessionEnv,
 		[]string{
-			"TERM=xterm-256color", // xterm.js 的能力集与它最匹配
+			"TERM=xterm-256color", // xterm.js 的能力集与它最匹配，查询也由它回答
 			fmt.Sprintf("WEBTERM_SESSION=%d", sid),
 		},
 	)
 
 	raw, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
 	if err != nil {
-		if rcPath != "" {
-			os.Remove(rcPath)
-		}
 		return nil, fmt.Errorf("session: 启动 PTY: %w", err)
 	}
 	// 换成可轮询的 master（ADR-0016）：creack/pty 给的是阻塞文件，SetReadDeadline
@@ -365,62 +336,36 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 	if err != nil {
 		_ = raw.Close()
 		_ = cmd.Process.Kill()
-		if rcPath != "" {
-			os.Remove(rcPath)
-		}
 		return nil, fmt.Errorf("session: 包装 PTY: %w", err)
 	}
 
 	s := &Session{
-		mgr:         m,
-		sid:         sid,
-		ptmx:        ptmx,
-		fd:          fd,
-		proc:        cmd.Process,
-		rcPath:      rcPath,
-		createdAt:   time.Now(),
-		store:       m.store,
-		mgrHistory:  m.HistoryEnabled,
-		cwd:         cwd,
-		status:      protocol.StatusRunning,
-		cols:        spec.Cols,
-		rows:        spec.Rows,
-		integration: protocol.IntegrationPending,
-		ring:        ringbuf.New(m.cfg.RingBytes),
-		subs:        make(map[Subscriber]struct{}),
-		inQueued:    make(map[string]uint64),
-		inAck:       make(map[string]uint64),
-		osc:         oscparse.New(),
-		modes:       termstate.New(),
-		inputQ:      newInputQueue(),
-		done:        make(chan struct{}),
-		fz:          newFreezer(),
+		mgr:       m,
+		sid:       sid,
+		ptmx:      ptmx,
+		fd:        fd,
+		proc:      cmd.Process,
+		createdAt: time.Now(),
+		cwd:       cwd,
+		status:    protocol.StatusRunning,
+		cols:      spec.Cols,
+		rows:      spec.Rows,
+		ring:      ringbuf.New(m.cfg.RingBytes),
+		term:      vterm.New(int(spec.Cols), int(spec.Rows)),
+		subs:      make(map[Subscriber]struct{}),
+		inQueued:  make(map[string]uint64),
+		inAck:     make(map[string]uint64),
+		inputQ:    newInputQueue(),
+		done:      make(chan struct{}),
+		readDone:  make(chan struct{}),
+		fz:        newFreezer(),
 	}
 	if spec.Name != nil && *spec.Name != "" {
 		s.nameManual = true
 		s.name = *spec.Name
 	}
-	if m.cfg.RCFileFor == nil {
-		// 明确没有集成，不必等 10 秒握手
-		s.integration = protocol.IntegrationInactive
-	}
-
 	s.startLoops()
-
-	if m.cfg.RCFileFor != nil {
-		// 集成握手超时（AC-7.6）：只有连 hello 都没收到才判 inactive
-		time.AfterFunc(integrationHelloTimeout, s.onHelloTimeout)
-	}
 	return s, nil
-}
-
-// startLoops 起三个 goroutine。alive 标记要在 go 之前置好：freeze 靠它数要等几个循环。
-func (s *Session) startLoops() {
-	s.readAlive.Store(true)
-	s.writeAlive.Store(true)
-	go s.readLoop()
-	go s.writeLoop()
-	go s.waitLoop()
 }
 
 // pollable 把 creack/pty 给的阻塞 master 换成 Go poller 里的非阻塞文件。
@@ -465,12 +410,12 @@ func (m *Manager) List() []*Session {
 	return out
 }
 
-// Snapshot 返回所有会话的快照（welcome.sessions[]）。
-func (m *Manager) Snapshot() []protocol.SessionInfo {
+// Infos 返回所有会话的元数据（welcome.sessions[]）。
+func (m *Manager) Infos() []protocol.SessionInfo {
 	list := m.List()
 	out := make([]protocol.SessionInfo, 0, len(list))
 	for _, s := range list {
-		out = append(out, s.Snapshot())
+		out = append(out, s.Info())
 	}
 	return out
 }
@@ -495,12 +440,17 @@ func (m *Manager) Close(sid uint16) (*int, error) {
 	return code, nil
 }
 
-// Resume 处理 hello 里的续传请求，返回 welcome.resumed[]。
+// Resume 处理 hello 里的续传请求：对每一项按协议 §5.1 判定 ok / snapshot / gone，
+// 并【立刻】把 sub 订阅上去（补齐的帧随之入队）。返回 welcome.resumed[]。
+//
+// 判定与入队必须是同一个动作（见 Session.Subscribe），所以 welcome 要排在这些帧
+// 前面得靠连接层：调用 Resume 之前先把写队列"挂起"，welcome 入队之后再放行。
 //
 // 这是整个项目风险最高的一段逻辑，所以它不依赖网络也不依赖浏览器 ——
 // IT-resume-* 直接调它。
-func (m *Manager) Resume(clientID, instanceID string, reqs []protocol.ResumeReq) []protocol.ResumeResult {
+func (m *Manager) Resume(sub Subscriber, instanceID string, reqs []protocol.ResumeReq) []protocol.ResumeResult {
 	out := make([]protocol.ResumeResult, 0, len(reqs))
+	clientID := sub.ClientID()
 	// instance_id 不符 = agent 重启过，手里的 sid 全部作废
 	restarted := instanceID != "" && instanceID != m.instanceID
 	for _, r := range reqs {
@@ -511,38 +461,34 @@ func (m *Manager) Resume(clientID, instanceID string, reqs []protocol.ResumeReq)
 			out = append(out, res)
 			continue
 		}
-
 		// 丢掉该 client 已入队但还没写进 PTY 的输入，再报 in_ack。
 		// 否则报出去的 in_ack 偏小，客户端会重发那些正待写入的字节 → 重复。
 		s.DetachClient(clientID)
-
-		s.mu.RLock()
-		base, head := s.ring.BaseSeq(), s.ring.HeadSeq()
-		res.InAck = s.inAck[clientID]
-		s.mu.RUnlock()
-
-		switch {
-		case r.OutSeq < base:
-			res.Status, res.FromSeq = protocol.ResumeReset, base
-		case r.OutSeq > head:
-			// 客户端领先，不应发生；不回放
-			res.Status, res.FromSeq = protocol.ResumeOK, head
-		default:
-			res.Status, res.FromSeq = protocol.ResumeOK, r.OutSeq
-		}
+		res.InAck = s.InAck(clientID)
+		res.Status, res.FromSeq = s.Subscribe(sub, r.OutSeq, 0, 0)
 		out = append(out, res)
 	}
 	return out
 }
 
-// Shutdown 关闭所有会话并停止巡检。幂等 —— SIGTERM 处理和 defer 都会调它。
+// Busy 返回有命令在跑的会话数：PTY 的前台进程组不是 shell 自己（见 Session.busy）。
+// --when-idle 靠它等"所有会话都停在提示符"。
+func (m *Manager) Busy() int {
+	n := 0
+	for _, s := range m.List() {
+		if s.busy() {
+			n++
+		}
+	}
+	return n
+}
+
+// Shutdown 关闭所有会话。幂等 —— SIGTERM 处理和 defer 都会调它。
 func (m *Manager) Shutdown() {
 	m.shutdownOnce.Do(m.shutdown)
 }
 
 func (m *Manager) shutdown() {
-	close(m.janitorStop)
-	<-m.janitorDone
 	m.mu.Lock()
 	sessions := make([]*Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
@@ -559,23 +505,6 @@ func (m *Manager) shutdown() {
 		go func() { defer wg.Done(); s.close() }()
 	}
 	wg.Wait()
-}
-
-// janitor 周期性检查集成是否已经失效。
-func (m *Manager) janitor() {
-	defer close(m.janitorDone)
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-m.janitorStop:
-			return
-		case now := <-t.C:
-			for _, s := range m.List() {
-				s.checkIntegrationIdle(now)
-			}
-		}
-	}
 }
 
 func filterEnv(env []string, drop ...string) []string {

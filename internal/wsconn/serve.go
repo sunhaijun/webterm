@@ -3,6 +3,7 @@ package wsconn
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"time"
 
@@ -102,29 +103,32 @@ func (c *Conn) writeLoop(ctx context.Context) {
 		case <-ticker.C:
 			c.flushPendingAcks()
 			c.flushPendingHeads()
-		case f := <-c.out:
-			c.mu.Lock()
-			c.queued -= len(f.data)
-			c.mu.Unlock()
-
-			typ := websocket.MessageText
-			if f.binary {
-				typ = websocket.MessageBinary
-			}
-			// 【不能用 Serve 的 ctx】：closeWith 会把它取消，而 select 在
-			// done 与 c.out 同时就绪时是随机挑的 —— 挑中 c.out 就会拿着
-			// 一个已取消的 ctx 去写，那条正要告诉用户"为什么断"的 error
-			// 就这么丢了。写的时限由 writeTimeout 自己兜。
-			wctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-			err := c.ws.Write(wctx, typ, f.data)
-			cancel()
-			if err != nil {
-				c.flushedOnce.Do(func() { close(c.flushed) })
-				c.closeWith(websocket.StatusInternalError, "写失败")
-				return
+		case <-c.wake:
+			for {
+				f, ok := c.pop()
+				if !ok {
+					break
+				}
+				// 【不能用 Serve 的 ctx】：closeWith 会把它取消，而那一刻队列里往往
+				// 正躺着那条要告诉用户"为什么断"的 error。写的时限由 writeTimeout 自己兜。
+				wctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+				err := c.ws.Write(wctx, frameType(f), f.data)
+				cancel()
+				if err != nil {
+					c.flushedOnce.Do(func() { close(c.flushed) })
+					c.closeWith(websocket.StatusInternalError, "写失败")
+					return
+				}
 			}
 		}
 	}
+}
+
+func frameType(f outFrame) websocket.MessageType {
+	if f.binary {
+		return websocket.MessageBinary
+	}
+	return websocket.MessageText
 }
 
 // drain 在关闭前把写队列里剩下的帧刷出去。
@@ -135,16 +139,11 @@ func (c *Conn) drain() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	for {
-		select {
-		case f := <-c.out:
-			typ := websocket.MessageText
-			if f.binary {
-				typ = websocket.MessageBinary
-			}
-			if err := c.ws.Write(ctx, typ, f.data); err != nil {
-				return
-			}
-		default:
+		f, ok := c.pop()
+		if !ok {
+			return
+		}
+		if err := c.ws.Write(ctx, frameType(f), f.data); err != nil {
 			return
 		}
 	}
@@ -253,6 +252,11 @@ func (c *Conn) detachAll() {
 }
 
 // handleHello 处理首条消息并回 welcome。
+//
+// 续传的判定、补齐帧的入队、加入订阅者集合是同一个动作（Manager.Resume →
+// Session.Subscribe，在会话锁内）；welcome 要报出那个判定，所以它生成在补齐帧
+// 之后。连接从建立起就挂着写队列（见 Conn.holding），welcome 生成之后排到最前面
+// 一起放行 —— 客户端看到的顺序是 welcome → 各会话的 SNAPSHOT / OUTPUT。
 func (c *Conn) handleHello(h *protocol.Hello) error {
 	if h.Protocol != protocol.Version {
 		c.sendError("", nil, protocol.CodeProtocolUnsupported,
@@ -265,51 +269,44 @@ func (c *Conn) handleHello(h *protocol.Hello) error {
 		return errors.New("缺少 client_id")
 	}
 
-	resumed := c.deps.Sessions.Resume(c.clientID, h.InstanceID, h.Resume)
-	c.Event(&protocol.Welcome{
+	// 只订阅 client 明确要求续传的会话 —— 其余的它会在切过去时 subscribe
+	for _, r := range h.Resume {
+		if _, ok := c.deps.Sessions.Get(r.SID); ok {
+			c.markSubscribed(r.SID)
+		}
+	}
+	resumed := c.deps.Sessions.Resume(c, h.InstanceID, h.Resume)
+	c.mu.Lock()
+	for _, r := range resumed {
+		if r.Status == protocol.ResumeGone {
+			delete(c.subs, r.SID)
+		}
+	}
+	c.mu.Unlock()
+
+	home, _ := os.UserHomeDir()
+	b, err := protocol.Encode(&protocol.Welcome{
 		Protocol:      protocol.Version,
 		ServerVersion: c.deps.ServerVersion,
 		InstanceID:    c.deps.Sessions.InstanceID(),
+		Home:          home,
 		Limits:        c.deps.Sessions.Limits(),
-		Sessions:      c.deps.Sessions.Snapshot(),
+		Sessions:      c.deps.Sessions.Infos(),
 		Resumed:       resumed,
 	})
-
-	// welcome 之后立刻按 resume 结果补齐输出。
-	// 只订阅 client 明确要求续传的会话 —— 其余的它会在切过去时 subscribe。
-	want := make(map[uint16]uint64, len(h.Resume))
-	for _, req := range h.Resume {
-		want[req.SID] = req.OutSeq
+	if err != nil {
+		c.sendError("", nil, protocol.CodeInternal, "编码 welcome 失败", true)
+		return err
 	}
-	for _, r := range resumed {
-		if r.Status == protocol.ResumeGone {
-			continue
-		}
-		s, ok := c.deps.Sessions.Get(r.SID)
-		if !ok {
-			continue
-		}
-		// 【传 client 原本要的位置，不是钳过的 from_seq】。
-		//
-		// 缓冲被覆盖时 from_seq 已经被钳到 base_seq 上，拿它去 Replay
-		// 会落进"正常增量"分支 —— 于是 ESC[0m 属性修正不发、flags 不置位，
-		// 客户端也就不知道该清屏，会把一段毫不相干的内容接到旧屏幕后面。
-		// 钳位是 ring 自己的事，它比谁都清楚要不要 reset。
-		c.subscribe(s, want[r.SID])
-	}
+	c.releaseWith(b)
 	return nil
 }
 
-func (c *Conn) subscribe(s *session.Session, fromSeq uint64) {
+// subscribe 订阅一个会话：增量还是快照由会话判定（协议 §5.1）。
+// cols/rows 为 0 表示沿用会话当前尺寸。
+func (c *Conn) subscribe(s *session.Session, outSeq uint64, cols, rows uint16) {
 	c.markSubscribed(s.SID())
-	s.Subscribe(c, fromSeq)
-}
-
-// subscribeNotifyReset 用于 `subscribe` 消息：缓冲被覆盖时先发 reset 通知，
-// 并把客户端报上来的终端尺寸一起交给会话（cols/rows 为 0 表示沿用当前尺寸）。
-func (c *Conn) subscribeNotifyReset(s *session.Session, fromSeq uint64, cols, rows uint16) {
-	c.markSubscribed(s.SID())
-	s.SubscribeNotifyReset(c, fromSeq, cols, rows)
+	s.Subscribe(c, outSeq, cols, rows)
 }
 
 func (c *Conn) markSubscribed(sid uint16) {

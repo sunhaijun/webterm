@@ -3,16 +3,16 @@ package session
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/sunhaijun/webterm/internal/handoff"
-	"github.com/sunhaijun/webterm/internal/oscparse"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/ringbuf"
-	"github.com/sunhaijun/webterm/internal/termstate"
+	"github.com/sunhaijun/webterm/internal/vterm"
 )
 
 // 热升级交接（ADR-0016）：Freeze → Export → （exec）→ Restore；出错走 Thaw。
@@ -23,20 +23,6 @@ func (m *Manager) Generation() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.generation
-}
-
-// Busy 返回正在跑前台命令的会话数（promptState == running）。
-// --when-idle 靠它等"所有会话都停在提示符"。集成失效的会话看不出忙不忙，按空闲算。
-func (m *Manager) Busy() int {
-	n := 0
-	for _, s := range m.List() {
-		s.mu.RLock()
-		if s.status == protocol.StatusRunning && s.promptState == protocol.PromptRunning {
-			n++
-		}
-		s.mu.RUnlock()
-	}
-	return n
 }
 
 // Freeze 停住所有会话的读写循环并拒绝新会话。任何一个会话在 timeout 内没停好，
@@ -91,6 +77,8 @@ func (m *Manager) Export(fromVersion string) (*handoff.Snapshot, error) {
 //
 // 全部成功才生效；任何一个会话接不回来就整体失败 —— 那时新进程应当把错误
 // 报出去退出，让 systemd 拉起一个干净的进程（会话丢失，但状态是明确的）。
+// 模拟器状态例外：导不回来就从环形缓冲尽力还原（见 restoreTerm），不为一屏画面
+// 牺牲会话。
 func (m *Manager) Restore(snap *handoff.Snapshot) error {
 	if err := handoff.Validate(snap); err != nil {
 		return err
@@ -118,57 +106,37 @@ func (m *Manager) Restore(snap *handoff.Snapshot) error {
 	for _, s := range restored {
 		if s.Status() == protocol.StatusRunning {
 			s.startLoops()
-			if m.cfg.RCFileFor != nil {
-				s.mu.RLock()
-				pending := s.integration == protocol.IntegrationPending && !s.helloSeen
-				s.mu.RUnlock()
-				if pending {
-					time.AfterFunc(integrationHelloTimeout, s.onHelloTimeout)
-				}
-			}
 		}
 	}
 	return nil
 }
 
 func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
+	ring := ringbuf.Restore(m.cfg.RingBytes, hs.RingBase, hs.RingData)
 	s := &Session{
-		mgr:           m,
-		sid:           hs.SID,
-		fd:            -1,
-		rcPath:        hs.RCPath,
-		createdAt:     hs.CreatedAt,
-		store:         m.store,
-		mgrHistory:    m.HistoryEnabled,
-		name:          hs.Name,
-		nameManual:    hs.NameManual,
-		cwd:           hs.CWD,
-		status:        hs.Status,
-		exitCode:      hs.ExitCode,
-		cols:          hs.Cols,
-		rows:          hs.Rows,
-		integration:   hs.Integration,
-		promptState:   hs.PromptState,
-		helloSeen:     hs.HelloSeen,
-		lastMark:      hs.LastMark,
-		lastInput:     hs.LastInput,
-		unmarkedRuns:  hs.UnmarkedRuns,
-		unmarkedInput: hs.UnmarkedInput,
-		ring:          ringbuf.Restore(m.cfg.RingBytes, hs.RingBase, hs.RingData),
-		subs:          make(map[Subscriber]struct{}),
-		inQueued:      cloneCounts(hs.InQueued),
-		inAck:         cloneCounts(hs.InAck),
-		osc:           oscparse.Restore(hs.OSC),
-		modes:         termstate.Restore(hs.Modes),
-		pendCmd:       hs.PendCmd,
-		curCmdID:      hs.CurCmdID,
-		curCmdAt:      hs.CurCmdAt,
-		inputQ:        newInputQueue(),
-		done:          make(chan struct{}),
-		fz:            newFreezer(),
+		mgr:        m,
+		sid:        hs.SID,
+		fd:         -1,
+		createdAt:  hs.CreatedAt,
+		name:       hs.Name,
+		nameManual: hs.NameManual,
+		cwd:        hs.CWD,
+		status:     hs.Status,
+		exitCode:   hs.ExitCode,
+		cols:       hs.Cols,
+		rows:       hs.Rows,
+		ring:       ring,
+		term:       restoreTerm(hs),
+		subs:       make(map[Subscriber]struct{}),
+		inQueued:   cloneCounts(hs.InQueued),
+		inAck:      cloneCounts(hs.InAck),
+		inputQ:     newInputQueue(),
+		done:       make(chan struct{}),
+		readDone:   make(chan struct{}),
+		fz:         newFreezer(),
 	}
 	if hs.Status != protocol.StatusRunning {
-		// 已退出：ring 保留供回看（AC-4.5），没有 fd 也没有进程
+		// 已退出：ring 与模拟器保留供回看（AC-4.5），没有 fd 也没有进程
 		s.inputQ.close()
 		close(s.done)
 		return s, nil
@@ -190,4 +158,28 @@ func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
 	s.proc = proc
 	s.inputQ.restore(hs.Pending)
 	return s, nil
+}
+
+// restoreTerm 把模拟器接回来（ADR-0026 §8）。
+//
+// 正常路径：导入交接来的完整状态，导入后的快照与导出前逐字节相等。
+//
+// 从旧版本升级上来（交接数据里没有模拟器状态），或状态导不回来：新建一个
+// 模拟器，把交接来的环形缓冲内容喂进去，尽力还原。缓冲窗口如果正好从备用屏
+// 程序的中间开始，那个会话的画面会错一次，下一次程序重画（或用户按一下键）
+// 就恢复 —— 不为此中止升级：会话活下来比这一次画面更重要。
+func restoreTerm(hs handoff.Session) *vterm.Terminal {
+	if len(hs.VTerm) > 0 {
+		t, err := vterm.Import(hs.VTerm)
+		if err == nil {
+			if c, r := t.Size(); c != int(hs.Cols) || r != int(hs.Rows) {
+				t.Resize(int(hs.Cols), int(hs.Rows))
+			}
+			return t
+		}
+		slog.Warn("交接来的模拟器状态导不回来，改用环形缓冲尽力还原", "sid", hs.SID, "err", err)
+	}
+	t := vterm.New(int(hs.Cols), int(hs.Rows))
+	t.Write(hs.RingData)
+	return t
 }

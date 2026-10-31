@@ -9,14 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Backoff } from '../src/conn/backoff'
 import { Connection, PROBE_TIMEOUT, type WebSocketLike } from '../src/conn/connection'
 import { PENDING_LIMIT, PendingFullError, ResendQueue } from '../src/conn/resend'
-import {
-  ATTR_PREFIX,
-  FLAG_ATTR_PREFIX,
-  TYPE_INPUT,
-  TYPE_OUTPUT,
-  decodeFrame,
-  encodeFrame,
-} from '../src/protocol/frame'
+import { FLAG_MORE, TYPE_INPUT, TYPE_OUTPUT, TYPE_SNAPSHOT, decodeFrame, encodeFrame } from '../src/protocol/frame'
 
 /** 一个可编程的 WebSocket 替身。 */
 class FakeSocket implements WebSocketLike {
@@ -62,20 +55,30 @@ interface Harness {
   conn: Connection
   socket: () => FakeSocket
   output: { sid: number; data: Uint8Array; isReplay: boolean }[]
-  /** 按到达顺序记的事件流（`reset:1` / `redraw:1` / `out:1`）：清屏必须排在写入【之前】。 */
+  snapshots: { sid: number; data: Uint8Array; seq: number }[]
+  /** 按到达顺序记的事件流（`out:1` / `snap:1` / `restart`）。 */
   events: string[]
-  redraws: { sid: number; modes: string }[]
   fatals: string[]
-  states: { state: string; retryInMs?: number; replayedBytes?: number; rttMs?: number }[]
+  errors: string[]
+  recovered: number[]
+  unauthorized: string[]
+  closed: boolean[]
+  states: { state: string; retryInMs?: number; rttMs?: number }[]
 }
 
 function harness(opts: { backoff?: Backoff } = {}): Harness {
   const sockets: FakeSocket[] = []
-  const output: Harness['output'] = []
-  const events: string[] = []
-  const redraws: Harness['redraws'] = []
-  const fatals: string[] = []
-  const states: Harness['states'] = []
+  const h: Omit<Harness, 'conn' | 'socket'> = {
+    output: [],
+    snapshots: [],
+    events: [],
+    fatals: [],
+    errors: [],
+    recovered: [],
+    unauthorized: [],
+    closed: [],
+    states: [],
+  }
   const conn = new Connection({
     url: 'ws://test/ws',
     clientID: 'tab-1',
@@ -87,33 +90,67 @@ function harness(opts: { backoff?: Backoff } = {}): Harness {
     },
     handlers: {
       onOutput: (sid, data, isReplay) => {
-        output.push({ sid, data, isReplay })
-        events.push(`out:${sid}`)
+        h.output.push({ sid, data, isReplay })
+        h.events.push(`out:${sid}`)
       },
-      onResetScreen: (sid) => events.push(`reset:${sid}`),
-      onRedraw: (sid, modes) => {
-        events.push(`redraw:${sid}`)
-        redraws.push({ sid, modes })
+      onSnapshot: (sid, data, seq) => {
+        h.snapshots.push({ sid, data, seq })
+        h.events.push(`snap:${sid}`)
       },
       onMessage: () => {},
-      onState: (state, info) => states.push({ state, ...info }),
-      onFatal: (r) => fatals.push(r),
+      onState: (state, info) => h.states.push({ state, ...info }),
+      onRecovered: (bytes) => h.recovered.push(bytes),
+      onRestart: () => h.events.push('restart'),
+      onFatal: (r) => h.fatals.push(r),
+      onError: (r) => h.errors.push(r),
+      onUnauthorized: (m) => h.unauthorized.push(m),
+      onClosed: (w) => h.closed.push(w),
     },
   })
-  return { conn, socket: () => sockets[sockets.length - 1]!, output, events, redraws, fatals, states }
+  return { conn, socket: () => sockets[sockets.length - 1]!, ...h }
 }
 
 function welcome(extra: Record<string, unknown> = {}) {
   return {
     t: 'welcome',
-    protocol: 1,
+    protocol: 2,
     server_version: 'test',
     instance_id: 'inst-1',
-    limits: { max_sessions: 20, ring_bytes: 1048576, max_frame_bytes: 262144 },
+    limits: { max_sessions: 20, ring_bytes: 262144, max_frame_bytes: 262144 },
     sessions: [],
     resumed: [],
     ...extra,
   }
+}
+
+function sessionInfo(sid: number, head: number) {
+  return {
+    sid,
+    name: 's',
+    name_is_manual: false,
+    cwd: '/tmp',
+    status: 'running',
+    exit_code: null,
+    cols: 80,
+    rows: 24,
+    base_seq: 0,
+    head_seq: head,
+    created_at: 0,
+  }
+}
+
+/** 连上、收到 welcome。 */
+function online(h: Harness, w: Record<string, unknown> = {}) {
+  h.conn.connect()
+  h.socket().open()
+  h.socket().deliverText(welcome(w))
+}
+
+/** 断开 → 等退避 → 重新 open（还没 welcome）。 */
+function reconnect(h: Harness) {
+  h.socket().close()
+  vi.advanceTimersByTime(20_000)
+  h.socket().open()
 }
 
 const text = (s: string) => new TextEncoder().encode(s)
@@ -147,7 +184,7 @@ describe('UT-seq-1 输出 seq 记账', () => {
     // 跳过了 3..9
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 10n, payload: text('xyz') })
 
-    expect(h.fatals.join()).toMatch(/空洞/)
+    expect(h.errors.join()).toMatch(/空洞/)
     expect(h.socket().closed).toBe(true)
     // 空洞后的数据【不能】交给终端 —— 那会让屏幕错位
     expect(h.output.map((o) => str(o.data))).toEqual(['abc'])
@@ -180,125 +217,138 @@ describe('UT-seq-1 输出 seq 记账', () => {
     expect(h.conn.outSeqOf(1)).toBe(5)
   })
 
-  it('ATTR_PREFIX 的 4 个字节不计入 seq', () => {
+  it('agent 发来 INPUT 帧 = 方向不对，关连接', () => {
     const h = harness()
-    h.conn.connect()
-    h.socket().open()
-    h.socket().deliverText(welcome())
-
-    const payload = new Uint8Array([...ATTR_PREFIX, ...text('hello')])
-    h.socket().deliverFrame({
-      type: TYPE_OUTPUT,
-      flags: FLAG_ATTR_PREFIX,
-      sid: 1,
-      seq: 1000n,
-      payload,
-    })
-    // seq 只按 data 长度推进；算错了两侧会永久错开 4 字节
-    expect(h.conn.outSeqOf(1)).toBe(1005)
-    expect(h.output[0]!.isReplay).toBe(true)
-    // 但交给终端的字节【要】带上前缀，属性修正才生效
-    expect(str(h.output[0]!.data)).toBe('\x1b[0mhello')
+    online(h)
+    h.socket().deliverFrame({ type: TYPE_INPUT, flags: 0, sid: 1, seq: 0n, payload: text('x') })
+    expect(h.errors.join()).toMatch(/INPUT/)
+    expect(h.socket().closed).toBe(true)
   })
 })
 
-// UT-replay-1：回放的两条纪律 —— 接不上的内容先清屏，补课的字节算回放（AC-2.6 / AC-2.15）。
-describe('UT-replay-1 回放语义', () => {
-  const resetFrame = (seq: bigint, body: string) => ({
-    type: TYPE_OUTPUT,
-    flags: FLAG_ATTR_PREFIX,
-    sid: 1,
-    seq,
-    payload: new Uint8Array([...ATTR_PREFIX, ...text(body)]),
-  })
-
-  it('ATTR_PREFIX 帧先清屏再写，不依赖 reset 控制消息', () => {
+// UT-replay-1：回放区间 catch_up（协议 §5.3）与快照（§3）。
+describe('UT-replay-1 回放区间与快照', () => {
+  it('welcome status=ok：追到该会话 head_seq 之前的 OUTPUT 都是回放', () => {
     const h = harness()
-    h.conn.connect()
-    h.socket().open()
-    h.socket().deliverText(welcome())
-
-    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('old') })
-    h.socket().deliverFrame(resetFrame(1000n, 'rebuilt'))
-
-    // 没有任何 reset 控制消息，清屏也必须发生，而且排在写入之前 ——
-    // 否则这段接不上的内容会被叠在旧屏幕后面（"很多份 logo"的成因）
-    expect(h.events).toEqual(['out:1', 'reset:1', 'out:1'])
-  })
-
-  it('同一段 reset 回放到两次是重建两次，不是追加两次', () => {
-    const h = harness()
-    h.conn.connect()
-    h.socket().open()
-    h.socket().deliverText(welcome())
-
-    h.socket().deliverFrame(resetFrame(1000n, 'rebuilt'))
-    h.socket().deliverFrame(resetFrame(1000n, 'rebuilt'))
-
-    expect(h.events).toEqual(['reset:1', 'out:1', 'reset:1', 'out:1'])
-    // 记账不能因为重复而漂移
-    expect(h.conn.outSeqOf(1)).toBe(1007)
-  })
-
-  it('reset 之后回到 live：后续帧不再算回放', () => {
-    const h = harness()
-    h.conn.connect()
-    h.socket().open()
-    h.socket().deliverText(welcome())
-
-    h.socket().deliverFrame(resetFrame(1000n, 'rebuilt'))
-    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 1007n, payload: text('x') })
-
-    expect(h.output.map((o) => o.isReplay)).toEqual([true, false])
-  })
-
-  it('subscribe 把切回时补的那段标成回放', () => {
-    const h = harness()
-    h.conn.connect()
-    h.socket().open()
-    h.socket().deliverText(welcome({ sessions: [], resumed: [] }))
-
-    // 切走期间 agent 用 session.updated 报进度（未读就是这么推导的）
+    online(h)
+    h.conn.subscribe(1)
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('ab') })
+
+    reconnect(h)
+    h.socket().deliverText(
+      welcome({ sessions: [sessionInfo(1, 10)], resumed: [{ sid: 1, status: 'ok', from_seq: 2, in_ack: 0 }] }),
+    )
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 2n, payload: text('cdefghij') })
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 10n, payload: text('live') })
+    expect(h.output.map((o) => o.isReplay)).toEqual([false, true, false])
+  })
+
+  it('subscribe 走增量：追到已知 head（session.updated 维护）之前都是回放', () => {
+    const h = harness()
+    online(h)
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('ab') })
+    // 切走期间 agent 用 session.updated 报进度（未读就是这么推导的）
     h.socket().deliverText({ t: 'session.updated', sid: 1, head_seq: 100 })
     expect(h.conn.isUnread(1)).toBe(true)
 
     h.conn.subscribe(1)
-    // 补课：追到 head_seq 之前都是回放 —— 历史里的 DSR/DA 应答不能被当成用户输入
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 2n, payload: text('c'.repeat(98)) })
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 100n, payload: text('live') })
 
     expect(h.output.map((o) => o.isReplay)).toEqual([false, true, false])
+    expect(h.conn.isUnread(1)).toBe(false)
   })
 
-  it('redraw：out_seq 跳到 seq，modes 不计入 seq，之后是 live', () => {
+  it('SNAPSHOT：out_seq 置为快照的 seq（快照字节不计入 seq），之后从 seq 接 OUTPUT，是 live', () => {
     const h = harness()
-    h.conn.connect()
-    h.socket().open()
-    h.socket().deliverText(welcome())
+    online(h)
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('old') })
+    h.conn.subscribe(1)
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: 0, sid: 1, seq: 5000n, payload: text('\x1b[Hscreen') })
 
-    const modes = '\x1b[0m\x1b(B\x1b[?1049h'
-    h.socket().deliverText({ t: 'redraw', sid: 1, seq: 5000, modes })
-
-    expect(h.redraws).toEqual([{ sid: 1, modes }])
-    // modes 是渲染修正，不是流内容：seq 只认 redraw.seq，不加 modes 的长度
+    expect(h.snapshots).toHaveLength(1)
+    expect(h.snapshots[0]!.seq).toBe(5000)
+    expect(str(h.snapshots[0]!.data)).toBe('\x1b[Hscreen')
     expect(h.conn.outSeqOf(1)).toBe(5000)
 
-    // 紧接着的实时帧从 seq 开始，不该被判成空洞
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 5000n, payload: text('fresh') })
-    expect(h.fatals).toEqual([])
+    expect(h.errors).toEqual([])
     expect(h.conn.outSeqOf(1)).toBe(5005)
-    // 重画之后就是 live —— 程序此刻画的东西不是历史，查询该答就答
-    expect(h.output[h.output.length - 1]!.isReplay).toBe(false)
-    expect(h.events).toEqual(['out:1', 'redraw:1', 'out:1'])
+    expect(h.output[h.output.length - 1]!.isReplay, '快照之后就是 live').toBe(false)
+    expect(h.events).toEqual(['out:1', 'snap:1', 'out:1'])
+  })
+
+  it('快照拆成多帧：除最后一帧外都带 MORE，收齐才交出去', () => {
+    const h = harness()
+    online(h)
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: FLAG_MORE, sid: 1, seq: 42n, payload: text('aaa') })
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: FLAG_MORE, sid: 1, seq: 42n, payload: text('bbb') })
+    expect(h.snapshots, '没收齐不能应用').toHaveLength(0)
+    expect(h.conn.outSeqOf(1)).toBe(0)
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: 0, sid: 1, seq: 42n, payload: text('cc') })
+    expect(h.snapshots).toHaveLength(1)
+    expect(str(h.snapshots[0]!.data)).toBe('aaabbbcc')
+    expect(h.conn.outSeqOf(1)).toBe(42)
+  })
+
+  it('不同会话的快照各拼各的', () => {
+    const h = harness()
+    online(h)
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: FLAG_MORE, sid: 1, seq: 10n, payload: text('1a') })
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: FLAG_MORE, sid: 2, seq: 20n, payload: text('2a') })
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: 0, sid: 2, seq: 20n, payload: text('2b') })
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: 0, sid: 1, seq: 10n, payload: text('1b') })
+    expect(h.snapshots.map((x) => `${x.sid}:${str(x.data)}`)).toEqual(['2:2a2b', '1:1a1b'])
+  })
+
+  it('快照没收齐就来了同一会话的 OUTPUT = 协议错误，关连接走续传', () => {
+    const h = harness()
+    online(h)
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: FLAG_MORE, sid: 1, seq: 10n, payload: text('a') })
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('x') })
+    expect(h.socket().closed).toBe(true)
+    expect(h.output).toHaveLength(0)
+  })
+
+  it('同一份快照的帧 seq 不一致 = 协议错误', () => {
+    const h = harness()
+    online(h)
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: FLAG_MORE, sid: 1, seq: 10n, payload: text('a') })
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: 0, sid: 1, seq: 11n, payload: text('b') })
+    expect(h.socket().closed).toBe(true)
+    expect(h.snapshots).toHaveLength(0)
+  })
+
+  it('断线时丢掉半份快照：重连后 agent 重新判定', () => {
+    const h = harness()
+    online(h)
+    h.conn.subscribe(1)
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: FLAG_MORE, sid: 1, seq: 10n, payload: text('half') })
+    reconnect(h)
+    h.socket().deliverText(welcome({ sessions: [sessionInfo(1, 30)], resumed: [{ sid: 1, status: 'snapshot', from_seq: 30, in_ack: 0 }] }))
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: 0, sid: 1, seq: 30n, payload: text('whole') })
+    expect(h.snapshots.map((x) => str(x.data))).toEqual(['whole'])
+    expect(h.conn.outSeqOf(1)).toBe(30)
+  })
+
+  it('resumed status=snapshot：等 SNAPSHOT 帧，不当成空洞', () => {
+    const h = harness()
+    online(h)
+    h.conn.subscribe(1)
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('abc') })
+    reconnect(h)
+    // 落出窗口：agent 改发快照
+    h.socket().deliverText(welcome({ sessions: [sessionInfo(1, 900000)], resumed: [{ sid: 1, status: 'snapshot', from_seq: 900000, in_ack: 0 }] }))
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: 0, sid: 1, seq: 900000n, payload: text('S') })
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 900000n, payload: text('x') })
+    expect(h.errors).toEqual([])
+    expect(h.conn.outSeqOf(1)).toBe(900001)
+    expect(h.output.map((o) => o.isReplay)).toEqual([false, false])
   })
 
   it('subscribe 把尺寸带在同一条消息里', () => {
     const h = harness()
-    h.conn.connect()
-    h.socket().open()
-    h.socket().deliverText(welcome())
+    online(h)
 
     h.conn.subscribe(1, 90, 30)
     const sub = h.socket().sent.filter((s) => typeof s === 'string' && s.includes('"subscribe"'))
@@ -312,16 +362,87 @@ describe('UT-replay-1 回放语义', () => {
     expect(last.rows).toBeUndefined()
   })
 
-  it('subscribe 上报的是本地进度', () => {
+  it('subscribe 上报的是本地进度；第一次打开报 0', () => {
     const h = harness()
-    h.conn.connect()
-    h.socket().open()
-    h.socket().deliverText(welcome())
+    online(h)
+    h.conn.subscribe(7)
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('abc') })
-
     h.conn.subscribe(1)
-    const sub = h.socket().sent.filter((s) => typeof s === 'string' && s.includes('"subscribe"'))
-    expect(JSON.parse(sub[sub.length - 1] as string)).toMatchObject({ sid: 1, out_seq: 3 })
+    const subs = h.socket().sent.filter((s) => typeof s === 'string' && s.includes('"subscribe"')).map((s) => JSON.parse(s as string))
+    expect(subs[0]).toMatchObject({ sid: 7, out_seq: 0 })
+    expect(subs[1]).toMatchObject({ sid: 1, out_seq: 3 })
+  })
+
+  it('frames() 记下收到的帧类型（E2E-30 / 31 用）', () => {
+    const h = harness()
+    online(h)
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: FLAG_MORE, sid: 1, seq: 9n, payload: text('ab') })
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: 0, sid: 1, seq: 9n, payload: text('c') })
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 9n, payload: text('xyz') })
+    expect(h.conn.frames()).toEqual([
+      { type: 3, kind: 'SNAPSHOT', sid: 1, seq: 9, flags: 1, bytes: 2, replay: true },
+      { type: 3, kind: 'SNAPSHOT', sid: 1, seq: 9, flags: 0, bytes: 1, replay: true },
+      { type: 1, kind: 'OUTPUT', sid: 1, seq: 9, flags: 0, bytes: 3, replay: false },
+    ])
+  })
+})
+
+describe('「已恢复 · 补齐 N KB」（AC-2.10）', () => {
+  it('首次连接不报', () => {
+    const h = harness()
+    online(h)
+    expect(h.recovered).toEqual([])
+  })
+
+  it('重连后补课追平时报一次，字节数 = 补课的量', () => {
+    const h = harness()
+    online(h)
+    h.conn.subscribe(1)
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('ab') })
+    reconnect(h)
+    h.socket().deliverText(welcome({ sessions: [sessionInfo(1, 10)], resumed: [{ sid: 1, status: 'ok', from_seq: 2, in_ack: 0 }] }))
+    expect(h.recovered, '还没追平').toEqual([])
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 2n, payload: text('cdef') })
+    expect(h.recovered).toEqual([])
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 6n, payload: text('ghij') })
+    expect(h.recovered).toEqual([8])
+  })
+
+  it('走快照的会话：快照到了就算追平，字节数算快照的大小', () => {
+    const h = harness()
+    online(h)
+    h.conn.subscribe(1)
+    reconnect(h)
+    h.socket().deliverText(welcome({ sessions: [sessionInfo(1, 500)], resumed: [{ sid: 1, status: 'snapshot', from_seq: 500, in_ack: 0 }] }))
+    h.socket().deliverFrame({ type: TYPE_SNAPSHOT, flags: 0, sid: 1, seq: 500n, payload: text('0123456789') })
+    expect(h.recovered).toEqual([10])
+  })
+
+  it('什么都没错过：welcome 一到就报 0', () => {
+    const h = harness()
+    online(h)
+    h.conn.subscribe(1)
+    reconnect(h)
+    h.socket().deliverText(welcome({ sessions: [sessionInfo(1, 0)], resumed: [{ sid: 1, status: 'ok', from_seq: 0, in_ack: 0 }] }))
+    expect(h.recovered).toEqual([0])
+  })
+})
+
+describe('agent 重启过（instance_id 变了，AC-2.13）', () => {
+  it('本地记账全部作废，先通知 onRestart，不报「已恢复」', () => {
+    const h = harness()
+    online(h)
+    h.conn.subscribe(1)
+    h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('abcdef') })
+    h.conn.sendInput(1, text('pending'))
+    reconnect(h)
+    h.socket().deliverText(
+      welcome({ instance_id: 'inst-2', sessions: [sessionInfo(1, 3)], resumed: [{ sid: 1, status: 'gone', from_seq: 0, in_ack: 0 }] }),
+    )
+    expect(h.events).toContain('restart')
+    expect(h.conn.outSeqOf(1), '新的 sid 1 是另一个会话').toBe(0)
+    expect(h.conn.unackedOf(1)).toBe(0)
+    expect(h.recovered).toEqual([])
   })
 })
 
@@ -464,6 +585,14 @@ describe('重连续传', () => {
     expect(frames[0]!.type).toBe(TYPE_INPUT)
     expect(frames[0]!.seq).toBe(7n)
     expect(str(frames[0]!.payload)).toBe('echo B\r')
+  })
+
+  it('hello 带 protocol 2；首次连接 instance_id 为 null、resume 为空', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    const hello = h.socket().hello()
+    expect(hello).toMatchObject({ t: 'hello', protocol: 2, client_id: 'tab-1', instance_id: null, resume: [] })
   })
 
   it('status=gone 时清掉本地会话状态', () => {
@@ -653,5 +782,35 @@ describe('未读推导', () => {
       payload: new Uint8Array(500),
     })
     expect(h.conn.isUnread(2)).toBe(false)
+  })
+})
+
+describe('设备被吊销（AC-1.11）', () => {
+  it('error{code:"unauthorized"} 交给 onUnauthorized，不当成普通错误', () => {
+    const h = harness()
+    online(h)
+    h.socket().deliverText({ t: 'notice', level: 'error', message: '此设备已被吊销' })
+    h.socket().deliverText({ t: 'error', code: 'unauthorized', message: 'device revoked' })
+    expect(h.unauthorized).toEqual(['device revoked'])
+    expect(h.fatals).toEqual([])
+  })
+
+  it('onClosed 报这条连接有没有收到过 welcome：没收到 = 升级多半被拒（401）', () => {
+    const h = harness()
+    h.conn.connect()
+    h.socket().open()
+    h.socket().close() // 没有 welcome 就断了
+    vi.advanceTimersByTime(20_000)
+    h.socket().open()
+    h.socket().deliverText(welcome())
+    h.socket().close()
+    expect(h.closed).toEqual([false, true])
+  })
+
+  it('主动 close() 不报 onClosed', () => {
+    const h = harness()
+    online(h)
+    h.conn.close()
+    expect(h.closed).toEqual([])
   })
 })

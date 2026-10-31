@@ -1,7 +1,7 @@
-/** UT-resize-1：resize 防抖与断点。 */
+/** UT-resize-1：resize 防抖；软键盘闸门；选中项滚进视野；菜单定位。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { breakpoint, debounce, isShort } from '../src/ui/viewport'
+import { appFit, debounce, menuPosition, needsReveal } from '../src/ui/viewport'
 
 beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
@@ -39,27 +39,10 @@ describe('UT-resize-1 防抖', () => {
   })
 })
 
-describe('断点', () => {
-  it('只依据视口宽度', () => {
-    expect(breakpoint(390)).toBe('phone')
-    expect(breakpoint(639)).toBe('phone')
-    expect(breakpoint(640)).toBe('tablet')
-    expect(breakpoint(1023)).toBe('tablet')
-    expect(breakpoint(1024)).toBe('desktop')
-  })
-
-  it('高度受限是叠加规则，主要针对手机横屏', () => {
-    expect(isShort(390)).toBe(true)
-    expect(isShort(479)).toBe(true)
-    expect(isShort(480)).toBe(false)
-    expect(isShort(844)).toBe(false)
-  })
-})
-
 import { isKeyboardUp, KEYBOARD_MIN_PX, layoutViewportHeight } from '../src/ui/viewport'
 
 /**
- * 键盘闸门（app.tsx applyViewport）：可视视口比【布局视口】矮一大截才算键盘弹起。
+ * 键盘闸门（viewport.ts appFit）：可视视口比【布局视口】矮一大截才算键盘弹起。
  * 参照必须是布局视口（documentElement.clientHeight）而不是 window.innerHeight ——
  * Safari 的 innerHeight 是可视视口高度，键盘一弹跟着变矮，闸门永远关不上。
  */
@@ -86,5 +69,48 @@ describe('isKeyboardUp / layoutViewportHeight', () => {
     if (real) Object.defineProperty(Object.getPrototypeOf(document.documentElement), 'clientHeight', real)
     // @ts-expect-error 清掉实例上的覆盖
     delete document.documentElement.clientHeight
+  })
+})
+
+describe('appFit：.app 跟着可视视口走（AC-3.8）', () => {
+  it('键盘弹起：高度 = 可视高度，translateY 追 offsetTop，safe-area 下边距归零', () => {
+    expect(appFit({ height: 400, offsetTop: 327 }, 727)).toEqual({ height: 400, translateY: 327, keyboardUp: true })
+  })
+  it('布局视口一起缩（resizes-content）：offsetTop 为 0，不补偿', () => {
+    expect(appFit({ height: 450, offsetTop: 0 }, 450)).toEqual({ height: 450, translateY: 0, keyboardUp: false })
+  })
+  it('普通回弹：offsetTop 变而高度不变 → 不追（守住拖动抖动的修复）', () => {
+    expect(appFit({ height: 727, offsetTop: -40 }, 727).translateY).toBe(0)
+    expect(appFit({ height: 727, offsetTop: 60 }, 727).translateY).toBe(0)
+  })
+  it('高度取整', () => {
+    expect(appFit({ height: 399.6, offsetTop: 0 }, 400).height).toBe(400)
+  })
+})
+
+describe('needsReveal：选中项要不要滚进视野（AC-4.9）', () => {
+  const view = { left: 0, top: 0, right: 600, bottom: 40 }
+  it('整个已可见：不动', () => {
+    expect(needsReveal({ left: 10, top: 0, right: 200, bottom: 40 }, view)).toBe(false)
+    expect(needsReveal({ left: 0, top: 0, right: 600, bottom: 40 }, view)).toBe(false)
+  })
+  it('露出一半或完全在外：要滚', () => {
+    expect(needsReveal({ left: 550, top: 0, right: 650, bottom: 40 }, view)).toBe(true)
+    expect(needsReveal({ left: -20, top: 0, right: 80, bottom: 40 }, view)).toBe(true)
+    expect(needsReveal({ left: 700, top: 0, right: 800, bottom: 40 }, view)).toBe(true)
+  })
+  it('纵向列表同理', () => {
+    expect(needsReveal({ left: 0, top: 30, right: 100, bottom: 82 }, { left: 0, top: 0, right: 400, bottom: 60 })).toBe(true)
+  })
+})
+
+describe('menuPosition：会话菜单锚在触发点旁边，不出屏', () => {
+  const m = { width: 184, height: 152 }
+  it('放得下就放在触发点右下', () => {
+    expect(menuPosition(100, 100, m, 393, 851)).toEqual({ left: 100, top: 100 })
+  })
+  it('放不下就往回收，留 8px 边', () => {
+    expect(menuPosition(380, 840, m, 393, 851)).toEqual({ left: 393 - 184 - 8, top: 851 - 152 - 8 })
+    expect(menuPosition(-5, -5, m, 393, 851)).toEqual({ left: 8, top: 8 })
   })
 })

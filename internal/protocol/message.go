@@ -21,12 +21,6 @@ const (
 	TSessionClosed  = "session.closed"
 	TSessionUpdated = "session.updated"
 	TAck            = "ack"
-	TReset          = "reset"
-	TRedraw         = "redraw"
-	TCWD            = "cwd"
-	TPrompt         = "prompt"
-	TCommandStart   = "command.start"
-	TCommandEnd     = "command.end"
 	TPong           = "pong"
 	TError          = "error"
 	TNotice         = "notice"
@@ -48,28 +42,17 @@ const (
 	CodeInternal            = "internal"
 )
 
-// 会话状态与集成状态。
+// 会话状态。
 const (
 	StatusRunning = "running"
 	StatusExited  = "exited"
-
-	IntegrationPending  = "pending"
-	IntegrationActive   = "active"
-	IntegrationInactive = "inactive"
 )
 
-// prompt 状态（驱动输入模式自动切换）。
+// resumed[].status（协议 §4.2 / §5.1）。
 const (
-	PromptInput   = "input"
-	PromptRunning = "running"
-	PromptDone    = "done"
-)
-
-// resumed[].status。
-const (
-	ResumeOK    = "ok"
-	ResumeReset = "reset"
-	ResumeGone  = "gone"
+	ResumeOK       = "ok"       // 增量续传：从 from_seq（= 客户端的 out_seq）接 OUTPUT
+	ResumeSnapshot = "snapshot" // 发快照：等 SNAPSHOT 帧，from_seq = 快照的 seq
+	ResumeGone     = "gone"     // sid 不存在 / instance_id 不符
 )
 
 // ---------- client → agent ----------
@@ -118,12 +101,11 @@ type Subscribe struct {
 	T      string `json:"t"`
 	SID    uint16 `json:"sid"`
 	OutSeq uint64 `json:"out_seq"`
-	// Cols/Rows 是切回时的终端尺寸，0 表示"沿用会话当前尺寸"。
+	// Cols/Rows 是此刻的终端尺寸，0 表示"沿用会话当前尺寸"。
 	//
-	// 【尺寸必须和 subscribe 同一条消息】，不能单发 resize：排在后面 agent 补的
-	// 就是按旧尺寸排版的积压；排在前面，全屏程序被 SIGWINCH 逼出的整屏重画会落在
-	// subscribe 之前，被 redraw.seq 跳过。合成一条，agent 才能把顺序钉死
-	// （协议 §4.1 / ADR-0019）。
+	// 【尺寸必须和 subscribe 同一条消息】，不能单发 resize：agent 要在同一把锁里
+	// 先改模拟器尺寸、再判定增量 / 快照、再入队，锁外才 TIOCSWINSZ —— 程序因
+	// SIGWINCH 重画的字节因此一定排在快照或增量之后（协议 §4.1）。
 	Cols uint16 `json:"cols,omitempty"`
 	Rows uint16 `json:"rows,omitempty"`
 }
@@ -165,21 +147,15 @@ type SessionInfo struct {
 	ExitCode     *int   `json:"exit_code"`
 	Cols         uint16 `json:"cols"`
 	Rows         uint16 `json:"rows"`
-	Integration  string `json:"integration"`
-	// UnmarkedInput：输入正去往一个没有 shell 集成的子程序（ssh / su /
-	// 容器 / REPL）。由按命令的活性探测得出（shell-integration.md §4.7）。
-	// 外层 shell 的 integration 不受影响；子程序退出、标记恢复即清零。
-	UnmarkedInput bool `json:"unmarked_input"`
-	// PromptState 是重连时重新对齐输入模式用的（协议 §4.2）。
-	// prompt 消息只在状态变化时发一次，离线期间的那些就丢了 ——
-	// 断线跨过命令边界的话，客户端会停在 Raw、Composer 收起，用户连字都
-	// 打不了。集成不可用时为 nil。
-	PromptState *string `json:"prompt_state"`
-	BaseSeq     uint64  `json:"base_seq"`
-	HeadSeq     uint64  `json:"head_seq"`
-	CreatedAt   int64   `json:"created_at"`
+	BaseSeq      uint64 `json:"base_seq"`
+	HeadSeq      uint64 `json:"head_seq"`
+	CreatedAt    int64  `json:"created_at"`
 }
 
+// ResumeResult 是 welcome.resumed[] 的一项。
+//
+// FromSeq：ok 时是客户端自己的 out_seq；snapshot 时是快照的 seq（之后的
+// OUTPUT 从这里接）；gone 时为 0。
 type ResumeResult struct {
 	SID     uint16 `json:"sid"`
 	Status  string `json:"status"`
@@ -188,13 +164,15 @@ type ResumeResult struct {
 }
 
 type Welcome struct {
-	T             string         `json:"t"`
-	Protocol      int            `json:"protocol"`
-	ServerVersion string         `json:"server_version"`
-	InstanceID    string         `json:"instance_id"`
-	Limits        Limits         `json:"limits"`
-	Sessions      []SessionInfo  `json:"sessions"`
-	Resumed       []ResumeResult `json:"resumed"`
+	T             string `json:"t"`
+	Protocol      int    `json:"protocol"`
+	ServerVersion string `json:"server_version"`
+	InstanceID    string `json:"instance_id"`
+	// Home 是 agent 用户的家目录，前端用来把 CWD 缩写成 ~（协议 §4.2）。
+	Home     string         `json:"home"`
+	Limits   Limits         `json:"limits"`
+	Sessions []SessionInfo  `json:"sessions"`
+	Resumed  []ResumeResult `json:"resumed"`
 }
 
 type SessionCreated struct {
@@ -212,78 +190,22 @@ type SessionClosed struct {
 
 // SessionUpdated 只携带发生变化的字段 + sid，client 做增量合并。
 type SessionUpdated struct {
-	T             string  `json:"t"`
-	SID           uint16  `json:"sid"`
-	Name          *string `json:"name,omitempty"`
-	NameIsManual  *bool   `json:"name_is_manual,omitempty"`
-	CWD           *string `json:"cwd,omitempty"`
-	Status        *string `json:"status,omitempty"`
-	ExitCode      *int    `json:"exit_code,omitempty"`
-	Cols          *uint16 `json:"cols,omitempty"`
-	Rows          *uint16 `json:"rows,omitempty"`
-	Integration   *string `json:"integration,omitempty"`
-	UnmarkedInput *bool   `json:"unmarked_input,omitempty"`
-	HeadSeq       *uint64 `json:"head_seq,omitempty"`
+	T            string  `json:"t"`
+	SID          uint16  `json:"sid"`
+	Name         *string `json:"name,omitempty"`
+	NameIsManual *bool   `json:"name_is_manual,omitempty"`
+	CWD          *string `json:"cwd,omitempty"`
+	Status       *string `json:"status,omitempty"`
+	ExitCode     *int    `json:"exit_code,omitempty"`
+	Cols         *uint16 `json:"cols,omitempty"`
+	Rows         *uint16 `json:"rows,omitempty"`
+	HeadSeq      *uint64 `json:"head_seq,omitempty"`
 }
 
 type Ack struct {
 	T     string `json:"t"`
 	SID   uint16 `json:"sid"`
 	InAck uint64 `json:"in_ack"`
-}
-
-type Reset struct {
-	T       string `json:"t"`
-	SID     uint16 `json:"sid"`
-	BaseSeq uint64 `json:"base_seq"`
-}
-
-// Redraw 代替 reset 回放，用于会话当前在【备用屏】的情况（ADR-0019）。
-//
-// 备用屏没有 scrollback，环形缓冲窗口里那些差分帧离开会话开头那一个
-// ESC[?1049h 就没有意义 —— 回放它必然画错。改成：客户端清屏 + 写 Modes
-// 恢复粘性模式 + 把 out_seq 跳到 Seq，然后由 agent 逼程序自己整屏重画。
-type Redraw struct {
-	T   string `json:"t"`
-	SID uint16 `json:"sid"`
-	// Seq 是发出时的 head_seq。客户端把 out_seq 直接跳到这里，跳过的字节
-	// 【有意丢弃】。
-	Seq uint64 `json:"seq"`
-	// Modes 是恢复粘性模式的转义序列（internal/termstate 生成，纯 ASCII、
-	// 几十字节、不含任何程序输出的原文）。这些字节【不计入 out_seq】，
-	// 规则与 ATTR_PREFIX 相同（协议 §3）。
-	Modes string `json:"modes"`
-}
-
-type CWD struct {
-	T    string `json:"t"`
-	SID  uint16 `json:"sid"`
-	Path string `json:"path"`
-}
-
-type Prompt struct {
-	T     string `json:"t"`
-	SID   uint16 `json:"sid"`
-	State string `json:"state"`
-}
-
-type CommandStart struct {
-	T      string `json:"t"`
-	SID    uint16 `json:"sid"`
-	CmdID  int64  `json:"cmd_id"`
-	Text   string `json:"text"`
-	CWD    string `json:"cwd"`
-	At     int64  `json:"at"`
-	OutSeq uint64 `json:"out_seq"`
-}
-
-type CommandEnd struct {
-	T          string `json:"t"`
-	SID        uint16 `json:"sid"`
-	CmdID      int64  `json:"cmd_id"`
-	ExitCode   *int   `json:"exit_code"`
-	DurationMS int64  `json:"duration_ms"`
-	OutSeq     uint64 `json:"out_seq"`
 }
 
 type Pong struct {
@@ -342,18 +264,6 @@ func Encode(msg any) ([]byte, error) {
 		m.T = TSessionUpdated
 	case *Ack:
 		m.T = TAck
-	case *Reset:
-		m.T = TReset
-	case *Redraw:
-		m.T = TRedraw
-	case *CWD:
-		m.T = TCWD
-	case *Prompt:
-		m.T = TPrompt
-	case *CommandStart:
-		m.T = TCommandStart
-	case *CommandEnd:
-		m.T = TCommandEnd
 	case *Pong:
 		m.T = TPong
 	case *Error:
@@ -406,18 +316,6 @@ func Decode(data []byte) (any, error) {
 		dst = &SessionUpdated{}
 	case TAck:
 		dst = &Ack{}
-	case TReset:
-		dst = &Reset{}
-	case TRedraw:
-		dst = &Redraw{}
-	case TCWD:
-		dst = &CWD{}
-	case TPrompt:
-		dst = &Prompt{}
-	case TCommandStart:
-		dst = &CommandStart{}
-	case TCommandEnd:
-		dst = &CommandEnd{}
 	case TPong:
 		dst = &Pong{}
 	case TError:

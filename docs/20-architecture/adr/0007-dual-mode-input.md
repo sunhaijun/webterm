@@ -2,6 +2,8 @@
 
 > **用户可见的「Composer / Raw 模式」及手动切换/锁定已被 [ADR-0013](0013-terminal-only.md) 取代**（改为按触摸位置自动判定：点终端=直送，用输入条=编辑后发送）。内部的「命令是否在跑」状态机保留，只驱动功能键条的出现，不再对用户显示。
 
+> **其余部分（内部的「命令是否在跑」状态机）已被 [ADR-0025](0025-termux-style-ui.md) 取代并删除**：键行静态化之后它没有消费者。
+
 > 状态：Accepted · 2026-09-06
 
 ## 背景
@@ -82,4 +84,4 @@ xterm.js 用隐藏的 `textarea` + composition 事件尽力弥合，但候选框
   - 会话切换时模式状态跟随目标会话，不是全局的
   - 集成从 active 变 inactive（比如用户 `exec zsh`）→ 停止自动切换
 
-状态机细节见 [`../../40-frontend/input-modes.md`](../../40-frontend/input-modes.md)。
+状态机细节见 [`../../40-frontend/input.md`](../../40-frontend/input.md)。

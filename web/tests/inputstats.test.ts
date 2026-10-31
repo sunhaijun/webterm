@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { ACK_MS, InputTrace, type InputSnapshot, STALE_MS, verdictOf, viewOf } from '../src/input/inputstats'
+import { ACK_MS, InputTrace, type InputSnapshot, STALE_MS, verdictOf, viewOf } from '../src/keys/inputstats'
 
 const T = 1_000_000
 

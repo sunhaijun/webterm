@@ -1,5 +1,7 @@
 # ADR-0018 次要界面共用一个浮层原语：触屏底部 sheet，桌面居中浮窗
 
+> **⋯ 菜单、历史浮层、平板上的会话浮层已随 [ADR-0025](0025-termux-style-ui.md) 删除**。`Drawer` 原语保留，使用者只剩设置与手机上的会话抽屉。
+
 > **其中「命令面板」已随 [ADR-0022](0022-drop-command-palette.md) 删除**（`Drawer` 原语与其余三个使用者 —— 会话 / 历史 / 设置 —— 不变）。下文提到命令面板的部分保留作历史记录。
 
 状态：已接受（2026-09-12）。**收口 [ADR-0013](0013-terminal-only.md) §5「移动端 chrome 走原生模式」**：把会话、历史、命令面板、设置四个次要界面收进同一个 `Drawer` 原语。终端唯一显示面、互切模型（[ADR-0014](0014-input-toggle.md)）、底栏单行键行（[ADR-0015](0015-bottom-keyrow.md)）都不变。
@@ -41,7 +43,7 @@
 
 ## 影响
 
-- 文档：[layout-responsive.md](../../40-frontend/layout-responsive.md) 新增 §浮层；[session-ux.md](../../40-frontend/session-ux.md) tablet 一节改为底部 sheet；[input-modes.md](../../40-frontend/input-modes.md) §⋯ 菜单补一句「四项打开的是同一种浮层」；[e2e-scenarios.md](../../70-testing/e2e-scenarios.md) 新增 E2E-28。
+- 文档：[layout.md](../../40-frontend/layout.md) 新增 §浮层；[session-ux.md](../../40-frontend/session-ux.md) tablet 一节改为底部 sheet；[input.md](../../40-frontend/input.md) §⋯ 菜单补一句「四项打开的是同一种浮层」；[e2e-scenarios.md](../../70-testing/e2e-scenarios.md) 新增 E2E-28。
 - 前端：新增 `web/src/ui/drawer.tsx`；`web/src/ui/app.tsx`（设置改浮层、非 desktop 的会话改浮层、去掉 `sidebarRef` 上的手势挂载）、`web/src/commands/history.tsx` 与 `web/src/commands/palette.tsx`（改用 `Drawer`）、`web/src/ui/swipe.ts`（默认滚动区改 `.drawer-body`）、`web/src/style.css`（`.drawer-*` 一族；删 `.scrim`、`.sidebar` 的抽屉 / sheet 形态、`.palette-backdrop` / `.panel-backdrop` 的浮层壳）。
 - testid 全部保留：`sidebar` / `scrim` / `settings` / `history-panel` / `close-history` / `palette` / `palette-list` / `renderer` / `privacy-note` / `theme-select` / `font-size`；新增 `drawer-close`（各浮层的 ✕，历史仍叫 `close-history`）。
 - 不触及协议、重连、连接层、会话状态。

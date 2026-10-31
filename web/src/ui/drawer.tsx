@@ -1,11 +1,10 @@
 /**
- * 浮层原语 —— 会话 / 历史 / 设置共用这一个壳（ADR-0018）。
+ * 浮层原语 —— 设置与手机上的会话抽屉共用这一个壳（ADR-0018，layout.md §浮层）。
  *
- * 触屏：贴底整宽 sheet（抓手 + 下滑关闭）；桌面：居中浮窗。四种关法完全一致：
- * 点遮罩 · `Esc` · ✕ ·（触屏）下滑。
+ * 触屏：贴底整宽 sheet（抓手 + 下滑关闭）；鼠标：居中浮窗。关法一致：
+ * 点遮罩 · `Esc` · ✕ ·（触屏）下滑。`backButton` 时另加系统返回键。
  *
- * 【`position: fixed`，不参与 `.main` 的 flex 列】—— 开关浮层不改终端几何、
- * 不触发 fit / resize（设置横幅是这条老约束唯一的漏网之鱼，见 ADR-0018）。
+ * 【`position: fixed`，不参与 `.app` 的网格】—— 开关浮层不改终端几何、不发 resize。
  */
 import type { ComponentChildren } from 'preact'
 import { useLayoutEffect, useRef } from 'preact/hooks'
@@ -15,21 +14,19 @@ import { installSwipeDismiss } from './swipe'
 export interface DrawerProps {
   title: string
   onClose(): void
-  /** 遮罩的 testid：会话沿用 `scrim`，历史 `history-panel`。 */
-  backdropTestid?: string
   /** sheet 本体的 testid。 */
   testid?: string
+  /** 遮罩的 testid。 */
+  backdropTestid?: string
   /** 正文容器的 testid。 */
   bodyTestid?: string
-  /** ✕ 的 testid，默认 `drawer-close`；历史沿用 `close-history`。 */
-  closeTestid?: string
-  /** 列表型浮层（历史）用定高，免得条目一多一少尺寸就跳。 */
-  size?: 'auto' | 'wide'
-  /** 标题右侧的附加控件。 */
-  actions?: ComponentChildren
-  /** 标题栏下面的工具行（搜索 / 过滤）。 */
-  tools?: ComponentChildren
-  /** 底部脚注（快捷键提示之类）。 */
+  /**
+   * 系统返回键关闭（session-ux.md）：打开时 `history.pushState` 一条记录，`popstate`
+   * 时关闭；用别的方式关闭时 `history.back()` 把那条记录消掉，不让记录越积越多 ——
+   * 否则 Android 的 PWA 里按返回键会直接退出应用。
+   */
+  backButton?: boolean
+  /** 底部固定的一行（会话抽屉的「+ 新会话 · ⚙ 设置」）。 */
   foot?: ComponentChildren
   children: ComponentChildren
 }
@@ -37,46 +34,60 @@ export interface DrawerProps {
 export function Drawer({
   title,
   onClose,
-  backdropTestid,
   testid,
+  backdropTestid = 'drawer-backdrop',
   bodyTestid,
-  closeTestid = 'drawer-close',
-  size = 'auto',
-  actions,
-  tools,
+  backButton = false,
   foot,
   children,
 }: DrawerProps) {
   const sheetRef = useRef<HTMLDivElement>(null)
-  // 【用 useLayoutEffect 而不是 useEffect】：Preact 的 useEffect 排在绘制之后
-  // （rAF，最坏 100ms 后才跑），浮层已经能点了、手势与 Esc 还没挂上。
-  useLayoutEffect(() => (sheetRef.current ? installSwipeDismiss(sheetRef.current, onClose) : undefined), [onClose])
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+
+  // 【useLayoutEffect 而不是 useEffect】：Preact 的 useEffect 排在绘制之后，
+  // 浮层已经能点了、手势与 Esc 还没挂上。
+  useLayoutEffect(() => (sheetRef.current ? installSwipeDismiss(sheetRef.current, () => closeRef.current()) : undefined), [])
   useLayoutEffect(() => {
-    // 【焦点收进浮层】。它是模态：焦点留在外面的话，键盘 / 读屏用户还在背后那一层，
-    // Esc 也没有明确的接收者 —— 触发它的那个按钮（⋯ 菜单项）已经随菜单卸载，
-    // activeElement 退回 body，键事件全靠 window 上的兜底监听接。
-    // preventScroll：别因为聚焦把背后的终端滚走。
+    // 【焦点收进浮层】：它是模态，焦点留在外面的话 Esc 没有确定的接收者。
+    // 打开会话抽屉时这一步也让软键盘收起，抽屉拿到完整高度。
     const el = sheetRef.current
     if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true })
   }, [])
   useLayoutEffect(() => {
-    // 捕获阶段兜底：焦点万一不在浮层里（比如刚打开就有别的东西抢了焦点），
-    // Esc 仍归浮层，不落到终端 / Composer 里
+    // 捕获阶段兜底：焦点万一不在浮层里，Esc 仍归浮层，不落到终端里。
+    // 例外是自己处理 Esc 的控件（改名输入框、会话菜单，标了 data-esc-local）：
+    // Esc 是取消它们，不是关浮层
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      if ((e.target as Element | null)?.closest?.('[data-esc-local]')) return
       e.preventDefault()
       e.stopPropagation()
-      onClose()
+      closeRef.current()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [])
+  useLayoutEffect(() => {
+    if (!backButton) return
+    let popped = false
+    history.pushState({ webtermDrawer: true }, '')
+    const onPop = () => {
+      popped = true
+      closeRef.current()
+    }
+    window.addEventListener('popstate', onPop)
+    return () => {
+      window.removeEventListener('popstate', onPop)
+      // 不是返回键关的：把自己压的那条记录消掉
+      if (!popped) history.back()
+    }
+  }, [backButton])
 
   return (
-    <div class="drawer-backdrop" data-testid={backdropTestid} onClick={onClose}>
+    <div class="drawer-backdrop" data-testid={backdropTestid} onClick={() => closeRef.current()}>
       <div
         class="drawer"
-        data-size={size}
         data-testid={testid}
         role="dialog"
         aria-modal="true"
@@ -84,21 +95,14 @@ export function Drawer({
         ref={sheetRef}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key !== 'Escape') return
-          e.preventDefault()
-          onClose()
-        }}
       >
         <div class="drawer-grab" />
         <div class="drawer-head">
           <h2 class="drawer-title">{title}</h2>
-          {actions}
-          <button class="drawer-close" data-testid={closeTestid} aria-label="关闭" onClick={onClose}>
+          <button class="drawer-close" data-testid="drawer-close" aria-label="关闭" onClick={() => closeRef.current()}>
             ✕
           </button>
         </div>
-        {tools && <div class="drawer-tools">{tools}</div>}
         <div class="drawer-body" data-testid={bodyTestid}>
           {children}
         </div>

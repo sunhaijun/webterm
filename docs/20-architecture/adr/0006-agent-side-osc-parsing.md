@@ -1,5 +1,7 @@
 # ADR-0006 OSC 由 agent 解析并剥离
 
+> **已被 [ADR-0026](0026-agent-holds-terminal-state.md) 取代**：agent 不再解析、不再剥离任何 OSC，输出流原样计数；工作目录改读 `/proc`。以下保留作历史记录。
+
 > 状态：Accepted · 2026-09-06
 
 ## 背景

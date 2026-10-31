@@ -37,24 +37,22 @@
 |---|---|---|
 | AC-2.1 | **字节级连续性**：同一段输出脚本跑两遍，第二遍在中途强制断开并重连；两次结束时 xterm 缓冲区的序列化结果**逐字节一致** | E2E-2 ★ |
 | AC-2.2 | 断线期间会话不暂停：PTY 继续运行，环形缓冲继续累积 | IT-resume-1 |
-| AC-2.3 | 重连时 client 上报 `out_seq`，agent 仅回放 `out_seq` 之后的字节，不重发已收到的字节 | UT-ring-1, IT-resume-2 |
+| AC-2.3 | 重连 / 切回时 client 上报 `out_seq`；`out_seq > 0` 且仍在环形缓冲窗口内时走**增量**：agent 只发 `out_seq` 之后的原始字节，不重发已收到的字节 | UT-ring-1, IT-resume-2 |
 | AC-2.4 | 断线期间提交的输入在重连后按原顺序、不重复、不丢失地写入 PTY | E2E-3, IT-resume-3 |
-| AC-2.5 | `out_seq` 严格等于 agent 已发送的累计字节数；剥离 OSC 之后才计数 | UT-seq-1 |
-| AC-2.6 | client 的 `out_seq < base_seq` 时 agent 判 `reset`。**会话在主屏**：client 先清屏再写入缓冲现存内容，并显示"历史输出已截断"提示；**会话在备用屏**：改走 `redraw`（AC-2.16）。**重连（`welcome.resumed[].status`）与切回（`subscribe`）两条路都要满足**；清屏由帧上的 `ATTR_PREFIX` 驱动（协议 §3），不依赖控制消息先到，所以同一段回放收到两次也只是重建两次，不会叠在旧内容后面 | E2E-4, E2E-30, UT-ring-2, IT-sub-2, UT-replay-1 |
-| AC-2.7 | 环形缓冲裁剪优先在 `\n` 边界（64 KiB 窗口内找不到则硬裁）；`ESC[0m` 属性修正**只在 reset 回放时**前置，且不计入 `out_seq`（增量续传时注入会破坏 AC-2.1） | UT-ring-3, UT-ring-4 |
+| AC-2.5 | `out_seq` 严格等于会话累计的 PTY 输出字节数：agent 不改写输出流；`SNAPSHOT` 帧不计入 `out_seq` | UT-seq-1 |
+| AC-2.6 | **快照路径**（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)）：`out_seq == 0`（第一次打开、刷新）、落出环形缓冲窗口、或订阅时列数变了，agent 发 `SNAPSHOT`（`seq` = 生成时的 `head_seq`，内容 = 当前屏 + 至多 2000 行历史 + 模式），随后从 `seq` 起发 OUTPUT；client `reset` 后写入快照、`out_seq = seq`。**重连（`welcome.resumed[].status == "snapshot"`）与切回（`subscribe`）两条路都满足**；同一份快照拆成多帧时，除最后一帧都带 `MORE`，client 收齐才应用；不显示"历史输出已截断" | E2E-4, E2E-30, IT-sub-2, IT-snapshot-1 |
 | AC-2.8 | 心跳：client 每 30 秒发协议级 ping，发出后 10 秒未收到 `pong` 则判死重连；agent 60 秒未收到任何帧则关闭连接 | UT-hb-1, IT-hb-1 |
 | AC-2.9 | client 重连采用指数退避（0.5s 起，上限 15s，带抖动），网络恢复事件触发立即重试 | UT-reconnect-1 |
 | AC-2.20 | **僵尸连接要被立刻戳穿**（ADR-0020）：`online` 事件 / 页面重新可见时，即使 client 自认在线也立刻发一次 `ping` 探活，**2 秒**内没有 `pong` 就关闭并走重连；线路已断但没有 `onclose` 时（息屏、切网、NAT 回收），从「用户回到前台」到状态条变「重连中」**不超过 5 秒**（改之前最坏 40 秒，期间打字全部写进死 socket 且无任何提示） | UT-hb-2, E2E-33 |
-| AC-2.10 | 连接状态在 UI 上有明确指示：在线 / 重连中（含下次重试倒计时）/ 已恢复（含补齐字节数） | E2E-5 |
-| AC-2.11 | 未订阅的会话在 agent 侧照常缓冲；切回时通过 resume 补齐，不丢输出。**例外是备用屏会话**（ADR-0019）：切回补的是"当前屏"而不是历史字节 —— 备用屏没有 scrollback，那段字节用户本来也翻不到 | E2E-6, IT-sub-1, E2E-31 |
+| AC-2.21 | **快照屏幕级一致**（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §10）：对真实程序的录制字节在任意截断点 k（含切在转义序列与多字节字符中间）生成快照，xterm 先吃快照再吃 k 之后的字节，结果与直接吃全部字节逐格一致（字符、宽度、颜色、属性、光标、模式），只允许 ADR-0026 列出的三处已知差异与软换行标记不同 | UT-vterm-golden, UT-snapshot-xterm |
+| AC-2.22 | **列数变了重发快照**：`resize` 或 `subscribe` 带来的列数与会话当前不同时，agent 锁内先改模拟器尺寸、生成快照并发给该会话的每个订阅者，锁外才 `TIOCSWINSZ`，程序因 SIGWINCH 重画的字节排在快照之后；只改行数时不发快照 | IT-resize-2, E2E-42 |
+| AC-2.23 | **切开的 UTF-8 不丢字**：client 每会话用流式 UTF-8 解码器把字节解成字符串再写入 xterm；一个多字节字符被切在两个 OUTPUT 帧之间（含第 2 字节为 `0x80` 的 `。` `…` `—`）时，终端里照样出现这个字符；收到快照时换新的解码器 | UT-decode-1, E2E-43 |
+| AC-2.10 | 连接状态有明确指示：在线 / 重连中（含下次重试倒计时）/ 已恢复（含补齐字节数）。`compact` 在线时不显示，不在线时在终端顶部盖一条横幅；`wide` 在标签栏右侧常驻状态点，不在线时同样出横幅。横幅与 toast **盖在终端上**，出现与消失前后终端行列数不变、不发 `resize`；状态文字（`conn-text`）一直在 DOM 里，在线时只是视觉隐藏，`aria-live` 照常播报 | E2E-5 |
+| AC-2.11 | 未订阅的会话在 agent 侧照常缓冲、照常喂给模拟器；切回时按 AC-2.3 / AC-2.6 走增量或快照，不丢画面 | E2E-6, IT-sub-1, E2E-31 |
 | AC-2.12 | `in_ack` 按 `(client_id, sid)` 记账并**跨重连存活**：重连后 client 按 `welcome.resumed[].in_ack` 重发，不触发 `input_gap` | IT-resume-3 |
 | AC-2.13 | `hello.instance_id` 与 agent 当前值不符时，所有 `resume` 项判 `gone`（防止 agent 重启后 sid 复用导致张冠李戴） | IT-resume-4 |
-| AC-2.14 | **热升级不丢会话**（ADR-0016）：agent 收到 `SIGUSR2` / `reexec` 后原地 exec 新二进制，PID 不变；所有会话的 shell 仍在跑、`instance_id` 不变、环形缓冲与 `in_ack` 原样交接；跨交接的字节级连续性与 AC-2.1 同标准（中途交接与不交接的序列化结果逐字节一致），未写完的输入不丢不重；预检失败时中止并照常服务，**不自动退化成重启** | IT-handoff-1, UT-ring-10, UT-osc-restore, E2E-26 |
-| AC-2.15 | **回放不得回声**：重连续传与**切回补课**的字节都标记为回放（client 侧 `catchup_to`，协议 §5.2）；回放期间终端对历史里那些查询（DSR / DA / `CSI ?u` …）的自动应答**不得写进 PTY**。切会话时**尺寸随 `subscribe` 一起发**（`cols`/`rows` 就在这条消息里，不单发 `resize`）：排在后面会让积压按旧尺寸排版，排在前面会让程序的整屏重画落在 `redraw.seq` 之前被跳过 | E2E-30, E2E-31, E2E-34, UT-replay-1, UT-replay-2 |
-| AC-2.16 | **备用屏不回放历史，改为重画**（ADR-0019）：会话当前在备用屏而又要 reset 时，agent 发 `redraw{seq, modes}` 代替字节回放，随后逼出一次整屏重画（尺寸变了就直接 `TIOCSWINSZ`，没变就抖一下 winsize）。client 清屏 → 写 `modes` → `out_seq` 跳到 `seq`，**不显示"历史输出已截断"**。切走使积压超过 `ring_bytes` 后切回，终端显示的是该程序**当前**的完整一屏，scrollback 里不出现它界面的任何副本 | UT-termstate-*, IT-redraw-1, E2E-31 |
-| AC-2.17 | 同一场景下切回所传字节 < 8 KiB（改之前是整个 `ring_bytes`）；`modes` 不计入 `out_seq` | IT-redraw-2, E2E-31 |
-| AC-2.18 | 程序在 300ms 内没有重画（`head_seq` 没超过 `redraw.seq`）时退回主屏那条路（`ATTR_PREFIX` + 窗口内容），屏幕不留空白 | IT-redraw-3 |
-| AC-2.19 | 粘性模式观察器**只读**：观察前后的字节逐字节相等；状态进热升级快照，交接后备用屏判定不丢；`?2026`（同步输出）**绝不恢复** | UT-termstate-*, IT-handoff-2 |
+| AC-2.14 | **热升级不丢会话**（ADR-0016）：agent 收到 `SIGUSR2` / `reexec` 后原地 exec 新二进制，PID 不变；所有会话的 shell 仍在跑、`instance_id` 不变、环形缓冲、**模拟器状态**与 `in_ack` 原样交接，**交接前后同一会话生成的快照逐字节相等**；跨交接的增量续传与 AC-2.1 同标准，未写完的输入不丢不重；预检失败时中止并照常服务，**不自动退化成重启** | IT-handoff-1, UT-vterm-handoff, E2E-26 |
+| AC-2.15 | **回放不得回声**：写入 `SNAPSHOT`，以及增量补课（client 侧 `catchup_to` 之前）的字节，都标记为回放；回放期间终端对历史查询（DSR / DA / `CSI ?u` …）的自动应答**不得写进 PTY**，用户输入照常放行。订阅时**尺寸随 `subscribe` 一起发**，不单发 `resize` | E2E-30, E2E-31, E2E-34, UT-replay-1, UT-replay-2 |
 
 ---
 
@@ -62,27 +60,16 @@
 
 | ID | 标准 | 验证 |
 |---|---|---|
-| AC-3.1 | Composer 模式下，IME composition 事件不触发任何向 PTY 的写入；只有提交动作才写入 | E2E-7 |
-| AC-3.2 | Composer 提交：含换行时以 bracketed paste 包裹（不被逐条执行），单行与空输入不包裹；一律以 `CR` 结尾 | UT-input-1, E2E-8 |
-| AC-3.3 | Raw 模式下，composition 期间不向 PTY 写入；`compositionend` 时一次性写入最终文本。**组字状态必须有兜底复位**（ADR-0020）：`blur`，以及捕获阶段一个 `isComposing === false` 的 `keydown`，都立即把 `composing` 置回 false —— 切输入法 / 切窗口时 `compositionend` 可能不来，少了兜底该会话的终端输入会**永久**失效，用户只能刷新页面 | UT-input-2, UT-raw-2, E2E-34 |
+| AC-3.3 | 终端直输时，composition 期间不向 PTY 写入；`compositionend` 时一次性写入最终文本。**组字状态必须有兜底复位**（ADR-0020）：`blur`，以及捕获阶段一个 `isComposing === false` 的 `keydown`，都立即把 `composing` 置回 false —— 切输入法 / 切窗口时 `compositionend` 可能不来，少了兜底该会话的终端输入会**永久**失效，用户只能刷新页面 | UT-input-2, UT-raw-2, E2E-34 |
 | AC-3.17 | **输入路径可观测**（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 推论三）：`__webterm.inputStats()` 按四段给出计数与**最近一次发生的时刻** —— 按键到达页面（**捕获阶段**的 `keydown`）→ 焦点在终端 → xterm 吐出 `onData` → 发给 agent（INPUT 帧），外加被回放门丢掉的数量、未 ack 字节数、当前焦点元素，并给出 `verdict`（断点在哪一段）；**生产构建里也在** | UT-inputstats-1..2, E2E-34 ④ |
-| AC-3.14 | Raw 模式下**软键盘直接插入的字符**（iOS 中文键盘的全角标点等）必须进 PTY：非组字的 `beforeinput` / `insertText` 由前端自己接管发送并 `preventDefault`，不依赖 xterm 的 keydown/input 启发式；组字路径不受影响，同一段文字不重复发送。**去重只压「已经被另一条路送出去」的那一次且一次性**（`compositionend` 的补发、`keypress` 已送过的字符）；**连打两下同一个字符必须两下都进** —— 按内容 + 时间窗口判重会把第二下静默吃掉（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)） | UT-raw-1, E2E-7 |
-| AC-3.4 | Raw 模式下 `Ctrl+C` / `Ctrl+D` / 方向键 / `Esc` / 功能键正确映射为控制字节 | UT-keymap-1 |
-| AC-3.5（ADR-0013：仅内部，无 UI） | 输入模式随 shell 集成的 prompt 状态自动切换：`B`→Composer，`C`→Raw，`D`→Composer | UT-mode-1, E2E-9 |
-| ~~AC-3.6（ADR-0013 取代：无手动锁定）~~ | 用户手动切换模式后进入"锁定"状态，自动切换暂停，直到用户解锁 | UT-mode-2 |
-| AC-3.7 | shell 集成不可用时，模式默认为 Composer 且自动切换禁用，UI 显示降级提示 | E2E-13 |
-| AC-3.8 | 软键盘弹出时（`visualViewport` resize），终端可视区与功能键条不被遮挡，布局无跳动 | E2E-10 |
-| AC-3.9 | 底栏是**一条键行**（ADR-0015）：行首互切键 · 横向滚动的键区 · 行尾 `⋯`（编辑面板里行尾是「发送」）。键区：停在提示符给 `Tab ↑ ↓ ^C ^L \| ~ / - _ ← →`；命令在跑 / 降级给 `Esc ^C Tab Ctrl ↑ ↓ ← → Alt ^D ^Z ^L \| ~ / - _ Home End PgUp PgDn`；占屏按前台程序换。`Ctrl`/`Alt` 为粘滞修饰键，`^C`/`^D`/`^Z`/`^L` 一按直发控制码。**命令在跑时 `^C` 必须在免滚动的前 5 个里**（393px 宽；互切键与 `⋯` 并进同一行后免滚区从 8 个减到 5 个）—— 它是唯一的通用脱困键，而粘滞 `Ctrl` 在软键盘没弹出时（Raw 模式看 top）根本按不出组合 | E2E-10, E2E-25 |
-| AC-3.10 | 输入元素禁用 `autocorrect` / `autocapitalize` / `spellcheck` | UT-input-3 |
+| AC-3.14 | 终端直输时**软键盘直接插入的字符**（iOS 中文键盘的全角标点等）必须进 PTY：非组字的 `beforeinput` / `insertText` 由前端自己接管发送并 `preventDefault`，不依赖 xterm 的 keydown/input 启发式；组字路径不受影响，同一段文字不重复发送。**去重只压「已经被另一条路送出去」的那一次且一次性**（`compositionend` 的补发、`keypress` 已送过的字符）；**连打两下同一个字符必须两下都进** —— 按内容 + 时间窗口判重会把第二下静默吃掉（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)） | UT-raw-1, E2E-7 |
+| AC-3.4 | 终端直输与附加键的 `Ctrl+C` / `Ctrl+D` / 方向键 / `Esc` / 功能键正确映射为控制字节，附加键与实体键盘同一编码；方向键与 `Home` / `End` 跟随应用光标键模式（DECCKM 开启时发 `ESC O A` / `ESC O H`），按键时现读不缓存 | UT-keymap-1 |
+| AC-3.8 | 软键盘弹出时（`visualViewport` resize），终端区收缩而不被遮挡，附加键贴在键盘上方、完整可见，布局无跳动；形态不变 | E2E-21 |
+| AC-3.10 | 文本输入页的 `textarea` 禁用 `autocorrect` / `autocapitalize` / `spellcheck`，以 DOM attribute 的实际值为准（`autocorrect="off"`，不是被框架反射成的 `on`） | UT-input-3, E2E-40 |
 | AC-3.11 | 终端尺寸变化时向 agent 发 `resize`，agent 对 PTY 执行 `TIOCSWINSZ`；resize 消息做 100ms 防抖 | IT-resize-1, UT-resize-1 |
-| AC-3.12 | **终端是唯一显示面**（ADR-0013）：xterm 始终铺满、始终可见；命令在跑（Raw）时 Composer 不隐藏，提交 = 整段 `xterm.paste()` + 回车，「发送」长按 = 只粘贴不回车；占屏（备用缓冲 / 富键盘协议 / DECCKM / 鼠标）**不切视图**，只把键条换成对应上下文（less→分页器、top→top、claude/codex→AI 无 `q`、其余→通用 TUI）并给出「⌨ 打字」入口；占屏时不显示「没有集成」横幅；npm/cargo 多行进度条不误判 | UT-interactive-1, UT-keymap-ai, E2E-11 |
-| ~~AC-3.12（旧）~~ | ~~读视图的底栏是三档写态 sheet（收起 / 半屏 / 全屏）：碰输入框升半屏，把手点一下到全屏，拖到底、提交或空输入时 `Esc` 收起且输入框失焦；**三档之间 `.canvas` 几何与 PTY 尺寸不变**（sheet 盖在块流上，不挤画布） | E2E-19 |
-| AC-3.13 | **双指缩放读**（ADR-0013）：PTY 固定 43 列；双指放大是纯视觉 transform（只作用在 `.xterm-screen`，不 fit、不发 resize、PTY 尺寸不变），单指平移，缩回 1× 或双击 / 换命令 / 切会话复位 | UT-pinch, E2E-24 |
-| ~~AC-3.13（旧）~~ | ~~sheet 打开时有面向"写"的编辑键条 `Tab ↑ ↓ ← → ⌫词 \| ~ / - _ " ' $ ⇤ ⇥` + 发送；`Tab` 有路径 chip 时补第一个；按键不抢输入框焦点 | UT-keymap-2, E2E-19 |
-| AC-3.14 | **底栏键行不盖终端**（ADR-0015）：终端态 `.bottom` 的高度 ≤ `.bottom-slot`（56px；`short` 40px），停在提示符 / 命令在跑 / 占屏 / 降级都一样；互切键是两种态键行的**第一个键**、同尺寸（44px 高）；终端态 claude / codex 等主屏占屏程序拿到的键条与编辑态一致（按 `interactive` 判定）；编辑面板头部只有抓手、没有「收起」，全屏时输入框高度 ≥ 面板高度的 70%，chips 为空不占高度；编辑态命令在跑时键行里有 `Esc ^C`，没有第二条键条；**触摸设备在 ≥ 1024px（iPad 横屏）也是键行而不是经典底栏**（侧栏仍常驻）；tablet / desktop 的 ⋯ 是锚在键行行尾上方、宽 ≤ 320px 的弹出菜单；半屏高度 ≤ 420px | E2E-25 |
-| ~~AC-3.14（旧，ADR-0013 取代）~~ | 读视图下前台出现**占屏程序**时自动切到终端视图、退出后自动回读；占屏 = 备用缓冲激活 **或程序进入全屏输入模式**（富键盘 Kitty `\e[>…u` / modifyOtherKeys `\e[>…m`、应用光标键 DECCKM `\e[?1h`（top）、鼠标跟踪，或同步输出 2026）—— 覆盖 claude / codex / top / vim；**npm / cargo / docker 等多行进度条（藏光标 + 上移重绘但不进入输入模式）不误触发**；重连后从 xterm 当前模式补判（top 运行中刷新不卡）；自动切换不写偏好，手动切过不再自动回 | UT-interactive-1, E2E-11b |
-| ~~AC-3.15（ADR-0013 取代）~~ | 命令在跑（Raw）时读视图**仍是同一个 Composer**：提交 = 整段 `xterm.paste()`（按前台程序的括号粘贴模式包裹）+ 回车，sheet 可升起编辑长文；「发送」长按 = 只粘贴不回车；前台是 claude / codex 时键条换成 `Esc ^C Enter ⇧Tab / ↑ ↓ Tab Ctrl`（无 `q`，`⇧Tab` 发 `ESC [ Z`）；**占屏程序里不显示「没有集成」横幅** | UT-keymap-ai, E2E-11b, E2E-19 |
-| ~~AC-3.16（ADR-0013 取代）~~ | 前台是 claude / codex 时读视图是**转录视图**：对话卡片（用户 / 助手 Markdown / 工具摘要）原生滚动选择缩放、贴底跟随、「↓ 新内容」；底部**终端尾巴**（xterm 末 8 行纯文本，300ms 节流）点它进终端；数据来自 WS `transcript` + `GET /api/transcript` 回放（刷新后仍在）；命令结束回块流；**AI CLI 占屏不自动进终端**，vim / less / top 照旧 | UT-markdown, UT-transcriptstore, E2E-23 |
+| AC-3.18 | **附加键**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §2）：`compact` 恒显示、`wide` 在 `pointer: coarse` 时显示；两行共 14 个键，依次为 `ESC / - HOME ↑ END PGUP` 与 `TAB CTRL ALT ← ↓ → PGDN`，**不随前台程序、提示符状态变**；393px 宽下全部可见、不横向滚动；按键在 `pointerdown` 时 `preventDefault`，按下前后 `document.activeElement` 不变；字节走 `onData` 出口（计入 `inputStats`）；CTRL / ALT 点一下只对下一个键生效（含软键盘输入的下一个字符），长按锁定，再点解锁，激活与锁定有 `data-sticky` 与高亮 | UT-keys-1, E2E-10 |
+| AC-3.19 | **文本输入页**：点 ✎ 或在键区左右滑动切换，切换前后终端行列数不变、不发 `resize`；回车：组字中不处理，有内容 = 发内容**不追加回车**并清空，空 = 发 `\r`，回车不在框里插入换行；不含换行的内容等同键入（走 `onData`，计入 `inputStats`），含换行的走 `term.paste()`（对端开了括号粘贴就包裹）；发完留在文本页且焦点不变 | UT-textinput-1, E2E-40 |
+| AC-3.20 | **点按终端**：前台程序开了鼠标跟踪时点击交给 xterm 上报；没开时切换软键盘（终端有焦点则失焦，没有则聚焦），聚焦发生在这次触摸的处理函数里；位移 ≥ 10px 的是拖动，不算点 | E2E-10 |
 
 ---
 
@@ -93,12 +80,12 @@
 | AC-4.1 | 可同时存在多个会话，各自独立 PTY、独立缓冲、独立序列号 | IT-session-1 |
 | AC-4.2 | 会话数达上限（默认 20，可配）时 `session.create` 返回 `session_limit` 错误，UI 显示提示 | IT-session-2, E2E-11 |
 | AC-4.3 | 未订阅会话产生输出时，agent 发 `session.updated{head_seq}`；client 按 `head_seq > out_seq` 显示未读标记。**节流吞掉的那条必须补发最新值**（协议 §6.3）—— 输出一阵一阵的时候，最后一条被吞掉就意味着未读永远不亮 | E2E-6, IT-unread-1 |
-| AC-4.4 | 会话默认名为其 CWD 的 basename，CWD 变化时自动更新；手动改名后停止自动更新 | IT-session-3, UT-name-1 |
-| AC-4.5 | shell 退出后会话状态变 `exited` 并携带退出码；缓冲内容保留可查看，直到用户显式关闭 | IT-session-4, E2E-11 |
+| AC-4.4 | 会话默认名为其 CWD 的 basename；CWD 由 agent 每秒读一次 `/proc/<前台进程组>/cwd`，变了才发 `session.updated`，任何 shell 都适用；手动改名后停止自动更新，改成空字符串恢复 | IT-session-3, UT-name-1 |
+| AC-4.5 | shell 退出后会话状态变 `exited` 并携带退出码；缓冲内容保留可查看。终端末尾出现一行本地提示 `[进程已结束（退出码 N）· 按 Enter 关闭]`：它在最后一段输出**之后**、不改变 `outSeq`；在该会话里按 `Enter`（或文本输入页空回车）关闭会话；agent 的"已退出"消息排在最后一个 OUTPUT 之后并带 `head_seq`，client 在 `out_seq` 追到它之后才写提示行；刷新或重连拿到快照后（提示行不在 agent 的模拟器里）按会话状态再写一次，始终**只有一行** | IT-session-4, E2E-11 |
 | AC-4.6 | 关闭会话时先送 `SIGHUP`，2 秒后仍存活则 `SIGKILL`，并释放 PTY 与缓冲 | IT-session-5 |
-| AC-4.8 | **焦点跟着会话走**（ADR-0020）：切会话时 `activate()` 把上一个会话的 DOM 摘掉，焦点会落回 `body`；切换前焦点在终端里的，切换后必须还给新会话的终端，**桌面（非触摸）无条件还给终端**。少了这一步，用 `Ctrl+Shift+↑/↓`、横滑或会话列表切过去之后打字彻底没反应，且没有任何提示 | E2E-34 |
-| AC-4.7 | **左右滑动切会话**：终端区单指横向拖（轴锁：前 12px 横向占优才接管，放大态不接管）位移 > 80px 或速度 > 0.5 px/ms（另加 24px 位移下限）时切到相邻会话，左滑下一个 / 右滑上一个、到头回绕；只有一个会话时不接管。切换是纯 CSS 位移动画，**不 fit、不发 resize**，PTY 尺寸不变 | UT-swipe-1, E2E-29 |
-| AC-4.9 | **会话列表的选中态一眼可辨**：选中项 = 强调色左条 + 强调色底色 + `aria-current="true"`，与 hover（中性灰）在同一屏上分得开；三档（侧栏 / 抽屉 / sheet）共用这一套。选中项变化（点选、`Ctrl+Shift+↑/↓`、横滑、关掉当前会话后自动切）时把它**滚进列表可视区**，整条已可见则不动，不用 `smooth` | UT-reveal-1, E2E-35 |
+| AC-4.8 | **焦点跟着会话走**（ADR-0020）：切会话时 `activate()` 把上一个会话的 DOM 摘掉，焦点会落回 `body`；切换前（从抽屉切换时以**打开抽屉之前**为准）焦点在终端里的，切换后必须还给新会话的终端，**非触摸设备无条件还给终端**。少了这一步，用 `Ctrl+Shift+↑/↓`、标签栏或抽屉切过去之后打字彻底没反应，且没有任何提示 | E2E-34 |
+| AC-4.9 | **当前会话一眼可辨**：当前标签 / 抽屉里的当前行 = 强调色（下划线或左条）+ 强调色底色 + `aria-current="true"`，与 hover（中性灰）在同一屏上分得开。当前会话变化（点选、`Ctrl+Shift+↑/↓`、关掉当前会话后自动切）时把它**滚进可视区**，整个已可见则不动，不用 `smooth` | E2E-35 |
+| AC-4.10 | **会话切换两种形态**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §4）：`compact` 上 ☰ 打开底部会话抽屉，任一非当前会话未读时 ☰ 带红点；抽屉可由点遮罩、选中会话、`Esc`、✕、系统返回键关闭；系统返回键只关抽屉、不离开页面，反复开关不让历史记录累积（`history.length` 至多比初始多 1）。`wide` 上标签栏常驻：点标签切换、✕ 与中键关闭、双击改名、`+` 新建，右键 / 长按弹出会话菜单（改名 · 保持接收 · 关闭）；切换不改终端几何 | E2E-28, E2E-41 |
 
 ---
 
@@ -107,54 +94,19 @@
 | ID | 标准 | 验证 |
 |---|---|---|
 | AC-5.1 | scrollback 至少 5000 行，滚动不进入任何模式 | E2E-12 |
-| AC-5.2 | 搜索命中数与跳转正确，支持大小写敏感切换 | E2E-12 |
-| AC-5.3 | 字号可调，设置持久化到 localStorage；各断点有独立默认值；**改完要重新 `fit()` 并补一条 `resize`** —— cell 尺寸变了而容器没变，`ResizeObserver` 不会响，漏发就是客户端与 PTY 的 cols/rows 分家 | UT-font-1, E2E-12 |
-| AC-5.4 | 选中文本时自动滚动暂停，选择不被破坏 | E2E-12 |
-| AC-5.5 | 渲染使用 WebGL addon；WebGL 不可用时回退到 canvas 且不报错 | UT-render-1 |
-| AC-5.9 | **回看时暂停跟随**：视口离开底部（滚轮 / 触屏拖动 / 拖滚动条 / 程序化滚动，一律按真实视口位置判定）后实时输出只入队不写终端；右下角**立刻**出现提示条 —— 还没有新输出时写「回到底部 ↓」，有新输出后写「已暂停跟随 · 新增 N 行 ↓」（计数是暂停以来的总量，强制写入不清零）；回到底部 / 点提示 / 输入 / 占屏程序启动 / 回放到达时一次写完，顺序不变、不丢不重；暂停期间队列攒到 2 MiB 或 4000 行后转入**分片慢写**（每帧一小块，不再一次性 drain，[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）；备用缓冲不暂停；跟随状态每帧按真实视口位置自愈。贴底时同一帧的多个包合成一次写入。不开 xterm 平滑滚动（与持续输出打架） | UT-queue-1, E2E-12 |
-| AC-5.10 | 设置面板显示当前渲染器（WebGL / Canvas） | E2E-12 |
-| AC-5.11 | **次要界面共用一个浮层**（ADR-0018）：会话 / 历史 / 设置在触屏上都是贴底整宽 sheet（抓手 + 标题栏 + ✕），桌面上都是居中浮窗；点遮罩 / `Esc` / ✕ /（触屏）下滑都能关；打开时焦点进浮层；浮层 `fixed` 覆盖，**不改终端几何、不发 resize** | E2E-28 |
-| AC-5.12 | **desktop 侧栏可拖宽 / 可收起**：拖右缘分隔条**预览**新边界（分隔条跟手，**拖动期间栅格列不变、侧栏与终端都不重排**，ADR-0021），松手落宽度（200–480px，上限再受窗口宽 40% 约束；触屏最小 260px）；**预览位置 = 松手结果**，夹紧 / 吸附回 240 / 拖过门槛收起在拖动中就看得见；点一下分隔条或 `Ctrl+Shift+B` 收起 / 展开，收起后终端满屏且左缘仍留可拖的把手；键盘步进仍是即时改宽；宽度与收起状态持久化到 `localStorage`，且**只在 desktop 生效**（phone / tablet 的会话仍是浮层）；**拖动全程不重算 cols/rows、不发 `resize`，松手后只发一条** | UT-sidebar-1, E2E-32 |
-| AC-5.13 | **终端字体可选**（[ADR-0023](../20-architecture/adr/0023-terminal-font-list.md)）：一份硬编码的等宽优选清单，用 canvas `measureText` 与 `monospace` / `serif` / `sans-serif` 三条基线比宽度，**只列本机真的装了的**（三条都一样宽 = 没装）；每项是一整段 stack，尾巴恒为 CJK 等宽 + `monospace`；选择存 `webterm.font.family`（存 id、全局一份、**不按断点分**）；改字体后所有 xterm 实例一起换、重新 `fit()`、补一条 `resize`；探测不可用（拿不到 2d 上下文）时退化成只有「系统默认」，不报错；面板里写明连字不生效（WebGL 渲染器） | UT-font-1, E2E-12 |
-| AC-5.14 | **刷新之后仍能往回拖**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：刷新页面后能滚回刷新前缓冲的**最后 2000 行**（不足 2000 行则全部），恢复的内容与刷新前逐行一致且整段内容**只出现一份**；快照与 `out_seq` 同刻生成，任一步失败就整条不存；`instance_id` 不匹配 / 超过 24h / 备用屏会话 → 不用也不存；**配对失效或设备被吊销后本地快照必须清除** | UT-snap-1..4, E2E-36 |
-| AC-5.15 | **拖动跟手**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：触屏纵向拖每帧至多一次 `scrollTop` 写入，拖动期间**无 > 50 ms 长任务**；松手有惯性，碰到边界或再次触摸立刻停；`prefers-reduced-motion` 下不做惯性 | UT-scroll-1, E2E-37 |
-| AC-5.16 | **大块写入有预算**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：回放 / 快照恢复 / 回看期间的强制写入共用一个带预算的写入器，每帧 ≤ 64 KiB，**顺序不变、不丢不重**，期间用户输入不被丢弃 | UT-writer-1..3, E2E-37 |
-| AC-5.17 | **备用屏的回滚交给程序**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：备用缓冲且 `mouseTrackingMode !== 'none'` 时，纵向拖按行步长转成滚轮上报并有节流上限（每 16 ms ≤ 3 行）；**没开鼠标跟踪时不发任何按键**（绝不退化成 PageUp / 方向键）；**转发过滚轮之后必须有看得见的出口** —— 首次转发后若用户打字而屏幕 ~1.5s 内一个字节没变，提示条写明「按 `Esc` / `q` 退出程序的滚动模式」（每会话至多一次），因为滚轮上报可能把程序推进另一种模式（tmux 的 copy-mode），那时输入去向变了而 webterm 无从得知（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)） | UT-scroll-2, E2E-38 |
-| ~~AC-5.7（ADR-0013 取代）~~ | 读视图里展开的块可**最大化**铺满整屏细看（可滚动、含末尾输出）、点「恢复」回内联；「块」面板同样支持 | E2E-12b |
-| ~~AC-5.8（ADR-0013 取代）~~ | 读视图里**最新一条命令的块自动展开**（一眼看到最新输出）；切到更新的命令时上一条自动展开的收起，只留最新一条 —— 失败的块与用户手动展开过的不被自动收起 | E2E-12c |
-| ~~AC-5.6（ADR-0013 取代）~~ | 块的「在终端里看」切到终端视图并**滚到该块输出的第一行**：agent 发 `command.start/end` 先于对应输出帧（IT-order-1），client 写入时按 `out_seq` 切帧、切口处登记 xterm marker；marker 已滚出 scrollback 时退回按命令原文搜索，再不行滚到底 | UT-marks-1, IT-order-1, E2E-20 |
+| AC-5.3 | 字号可调，按形态各存一份（`webterm.fontSize.compact` / `.wide`，默认 14px，范围 8–32px）；**改完要重新 `fit()` 并补一条 `resize`** —— cell 尺寸变了而容器没变，`ResizeObserver` 不会响，漏发就是客户端与 PTY 的 cols/rows 分家 | UT-font-1, E2E-12 |
+| AC-5.4 | 选中文本后有新输出到达，选区不被破坏（xterm 的选区按缓冲区坐标记） | E2E-12 |
+| AC-5.11 | **浮层**（设置；`compact` 上的会话抽屉）共用一个 `Drawer`：`pointer: coarse` 贴底整宽（抓手 + 标题栏 + ✕），`pointer: fine` 居中浮窗；点遮罩 / `Esc` / ✕ /（触屏）下滑都能关；打开时焦点进浮层；浮层 `fixed` 覆盖，**不改终端几何、不发 resize** | E2E-28 |
+| AC-5.13 | **终端字体可选**（[ADR-0023](../20-architecture/adr/0023-terminal-font-list.md)）：一份硬编码的等宽优选清单，用 canvas `measureText` 与 `monospace` / `serif` / `sans-serif` 三条基线比宽度，**只列本机真的装了的**（三条都一样宽 = 没装）；每项是一整段 stack，尾巴恒为 CJK 等宽 + `monospace`；选择存 `webterm.font.family`（存 id、全局一份、**不按形态分**）；改字体后所有 xterm 实例一起换、重新 `fit()`、补一条 `resize`；探测不可用（拿不到 2d 上下文）时退化成只有「系统默认」，不报错；面板里写明连字不生效（没有加载连字插件） | UT-font-1, E2E-12 |
+| AC-5.14 | **刷新之后仍能往回拖**：刷新页面后订阅走快照，能滚回刷新前缓冲的**最后 2000 行**（不足 2000 行则全部），内容与刷新前逐行一致且**只出现一份**；浏览器不存任何本地快照（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)） | IT-snapshot-1, E2E-36 |
+| AC-5.18 | **形态**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §1）：`.app[data-form]` 由屏幕短边决定，`< 600px` 为 `compact`，否则 `wide`；`compact` 没有标签栏、有 ☰，`wide` 有标签栏、没有 ☰；可视视口变化（软键盘弹出、旋转）不改变形态 | UT-form-1, E2E-39 |
 
 ---
 
-## AC-6 命令历史与快捷命令（US-6）
+## AC-7 会话环境（US-7）
 
 | ID | 标准 | 验证 |
 |---|---|---|
-| AC-6.1 | 每条执行的命令产生一条记录，含原文、CWD、开始时间、退出码、耗时、所属会话名；**连续两次执行同一条命令产生两条记录** | IT-shell-1 |
-| AC-6.2 | 以空格开头的命令不产生记录 | IT-shell-2 |
-| AC-6.3 | 历史可按原文子串和 CWD 过滤，按时间倒序**游标分页**（翻页期间新增记录不导致漏行/重行） | UT-store-1 |
-| AC-6.4 | 点击历史条目将其原文填入 Composer，光标置于末尾，不自动执行 | E2E-14 |
-| AC-6.5 | 置顶操作把 `pinned` 置为 true 并分配 `pin_order`；置顶列表按 `pin_order` 排序 | UT-store-2, E2E-14 |
-| AC-6.6 | 快捷命令可设置 `label`、可拖动排序、可取消置顶；改动即时持久化 | E2E-14 |
-| AC-6.7 | 移动端底部快捷按钮条展示 `pinned` 列表，可横向滚动，点击填入 Composer | E2E-14 |
-| AC-6.9 | 可删除单条历史；可清空全部历史（需二次确认） | UT-store-3, E2E-14 |
-| AC-6.10 | 历史记录数超过上限（默认 50000）时按时间淘汰最旧的**非置顶**记录；置顶记录永不淘汰 | UT-store-4 |
-| AC-6.11 | 写态 sheet 的 chips：空输入 = 快捷命令 + 同目录历史；有输入 = 光标 token 的真实路径补全（`GET /api/fs`：目录在前、隐藏项按需、目录不存在即空列表、与 shell 同权限）+ 前缀历史；点路径 chip 只替换光标所在 token | UT-fs-1, IT-fs-1, UT-complete-1, E2E-19 |
-| ~~AC-6.8（[ADR-0022](../20-architecture/adr/0022-drop-command-palette.md) 移除）~~ | ~~命令面板（`Ctrl/Cmd+K`）可模糊搜索会话、快捷命令、历史，回车执行对应动作~~。面板已彻底删除，`Ctrl/Cmd+K` 归还终端（readline 的「删到行尾」） | — |
-
----
-
-## AC-7 shell 集成（US-6/US-7）
-
-| ID | 标准 | 验证 |
-|---|---|---|
-| AC-7.1 | 会话启动时通过临时 rcfile 注入集成，**用户无需修改任何 dotfile** | IT-shell-3 |
-| AC-7.2 | 集成脚本在用户配置**之后**安装钩子，不覆盖用户的 `PS1` / `PROMPT_COMMAND` / 已有 `DEBUG` trap | IT-shell-4 |
-| AC-7.3 | 登录模式下只加载 profile 链（`~/.bash_profile` → `~/.bash_login` → `~/.profile`，取第一个存在的）；非登录模式下只加载 `~/.bashrc`。不重复加载 | IT-shell-5 |
-| AC-7.4 | agent 剥离所有 webterm 相关 OSC 序列，client 收到的字节流中不含它们 | UT-osc-1 |
-| AC-7.5 | OSC 解析器正确处理跨读边界分片、`BEL` 与 `ST` 两种终止符、超长负载（截断保护）、畸形负载（忽略不崩溃）、无关 OSC 原样透传 | UT-osc-2..9 |
-| AC-7.6 | 集成握手（`OSC 1701;hello`）10 秒内未收到时，会话标记 `integration: inactive`，UI 显示降级提示 | IT-shell-6, E2E-13 |
-| AC-7.7 | 集成脚本执行失败或语法错误不导致 shell 启动失败（终端仍可用） | IT-shell-7 |
 | AC-7.8 | **会话环境注入**（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md)）：`--session-env KEY=VAL`（可重复）注入到会话 PTY；内置清单（把已知全屏 TUI 拉回主屏，目前只有 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`）默认生效、可用 `--no-altscreen-compat` 关掉；**用户已经设过的同名变量不被覆盖**，`--session-env` 优先于内置清单；`TERM` / `WEBTERM_SESSION` 由 webterm 定死，`--session-env` 给这两个键**在解析时就报错**（不静默忽略）；配置文件与命令行的 `session-env` 是**合并**，同名键后出现的胜出（于是命令行照样压过配置文件） | IT-sessionenv-1..3 |
 
 ---

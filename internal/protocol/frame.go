@@ -10,24 +10,21 @@ import (
 )
 
 // 版本号。二进制帧布局变更、已有字段语义变更、删除字段时必须递增（协议 §8）。
-const Version = 1
+// 2：ADR-0026 —— 新增 SNAPSHOT 帧，删除 ATTR_PREFIX 与 reset / redraw / shell 集成的消息。
+const Version = 2
 
 // 二进制帧常量（协议 §3）。
 const (
 	HeaderSize = 12
 	MaxPayload = 256 << 10 // 256 KiB
 
-	TypeOutput uint8 = 0x01 // agent → client
-	TypeInput  uint8 = 0x02 // client → agent
+	TypeOutput   uint8 = 0x01 // agent → client
+	TypeInput    uint8 = 0x02 // client → agent
+	TypeSnapshot uint8 = 0x03 // agent → client
 
-	// FlagAttrPrefix：payload 的前 4 字节是 AttrPrefix，属于渲染修正，不计入 seq。
-	// 只出现在 reset 回放的第一帧上（协议 §3 / §5.1）。
-	FlagAttrPrefix uint8 = 0x01
+	// FlagMore：同一份快照后面还有帧（仅 SNAPSHOT）。其余位保留：发送方填 0，接收方忽略。
+	FlagMore uint8 = 0x01
 )
-
-// AttrPrefix 是 reset 回放前置的 SGR reset，用于清除因裁剪而悬空的颜色/属性。
-// 这 4 个字节不计入 out_seq —— 记账错了两侧会永久错开 4 字节。
-var AttrPrefix = []byte{0x1b, '[', '0', 'm'}
 
 var (
 	ErrBadFrame      = errors.New("protocol: bad frame")
@@ -36,23 +33,32 @@ var (
 
 // Frame 是一个二进制数据帧。
 type Frame struct {
-	Type    uint8
-	Flags   uint8
-	SID     uint16
-	Seq     uint64 // 本帧【首个计入 seq 的字节】的 out_seq / in_seq
+	Type  uint8
+	Flags uint8
+	SID   uint16
+	// Seq：OUTPUT / INPUT 是本帧【首字节】的 out_seq / in_seq；
+	// SNAPSHOT 是这份快照对应的 out_seq（模拟器恰好吃完了前 Seq 个字节）。
+	Seq     uint64
 	Payload []byte
 }
 
-// DataLen 返回本帧计入 seq 的字节数。带 FlagAttrPrefix 时前 4 字节不算。
+// DataLen 返回本帧计入 seq 的字节数：OUTPUT / INPUT 是整个 payload，
+// SNAPSHOT 是 0 —— 快照是 agent 生成的渲染指令，不是流内容（协议 §3）。
 //
 // 连续的 OUTPUT 帧必须满足 seq(n+1) == seq(n) + DataLen(n)。
 func (f Frame) DataLen() int {
-	n := len(f.Payload)
-	if f.Flags&FlagAttrPrefix != 0 {
-		n -= len(AttrPrefix)
+	if f.Type == TypeSnapshot {
+		return 0
 	}
-	return n
+	return len(f.Payload)
 }
+
+// More 报告这是不是一份快照里的非最后一帧。
+func (f Frame) More() bool { return f.Type == TypeSnapshot && f.Flags&FlagMore != 0 }
+
+// FromClient 报告这个 type 是不是 client 可以发的。client 发来 OUTPUT /
+// SNAPSHOT → bad_frame（协议 §3）。
+func (f Frame) FromClient() bool { return f.Type == TypeInput }
 
 // AppendFrame 把 f 编码后追加到 dst，返回扩展后的切片。
 // 复用 dst 可以让发送路径零分配。
@@ -71,7 +77,31 @@ func EncodeFrame(f Frame) []byte {
 	return AppendFrame(make([]byte, 0, HeaderSize+len(f.Payload)), f)
 }
 
+// SnapshotFrames 把一份快照切成 payload 不超过 MaxPayload 的 SNAPSHOT 帧
+// （协议 §3）：所有帧 seq 相同，除最后一帧外都置 FlagMore。data 为空时返回
+// nil —— payload 长度为 0 的帧是非法的。
+//
+// 返回的帧 Payload 是 data 的子切片，不拷贝。
+func SnapshotFrames(sid uint16, seq uint64, data []byte) []Frame {
+	if len(data) == 0 {
+		return nil
+	}
+	out := make([]Frame, 0, (len(data)+MaxPayload-1)/MaxPayload)
+	for off := 0; off < len(data); off += MaxPayload {
+		end := min(off+MaxPayload, len(data))
+		f := Frame{Type: TypeSnapshot, SID: sid, Seq: seq, Payload: data[off:end]}
+		if end < len(data) {
+			f.Flags = FlagMore
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
 // DecodeFrame 解析一个二进制帧。Payload 是 b 的子切片，不拷贝。
+//
+// 只校验帧本身：长度、payload 非空、type 是已知值（未知 → ErrBadFrame）。
+// 方向对不对由接收方用 FromClient 判断。
 func DecodeFrame(b []byte) (Frame, error) {
 	if len(b) < HeaderSize+1 { // payload 长度为 0 的帧是非法的
 		return Frame{}, ErrBadFrame
@@ -87,16 +117,9 @@ func DecodeFrame(b []byte) (Frame, error) {
 		Payload: b[HeaderSize:],
 	}
 	switch f.Type {
-	case TypeOutput, TypeInput:
+	case TypeOutput, TypeInput, TypeSnapshot:
 	default:
 		return Frame{}, ErrBadFrame
-	}
-	// FlagAttrPrefix 只对 OUTPUT 有意义，且 payload 必须真的以 AttrPrefix 开头。
-	if f.Flags&FlagAttrPrefix != 0 {
-		if f.Type != TypeOutput || len(f.Payload) < len(AttrPrefix) ||
-			string(f.Payload[:len(AttrPrefix)]) != string(AttrPrefix) {
-			return Frame{}, ErrBadFrame
-		}
 	}
 	return f, nil
 }

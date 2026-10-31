@@ -22,14 +22,15 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/sunhaijun/webterm/internal/oscparse"
-	"github.com/sunhaijun/webterm/internal/termstate"
 )
 
 // Schema 是快照格式的版本。规则：只加字段不删字段，新进程对缺失字段取零值；
 // 不兼容的改动升这个号，旧进程的预检就会在 exec 之前失败。
-const Schema = 1
+//
+//	1  初版（ADR-0016）：粘性模式（termstate）、OSC 解析器、shell 集成状态
+//	2  ADR-0026：模拟器状态（VTerm）取代粘性模式；shell 集成的字段删除。
+//	   新进程照样读 1：缺 VTerm 时用环形缓冲尽力还原模拟器，不中止升级（§8）
+const Schema = 2
 
 // FlagName 是新进程接收快照 fd 的 flag 名（serve --handoff-fd=N）。
 const FlagName = "handoff-fd"
@@ -48,42 +49,33 @@ type PendingInput struct {
 
 // Session 是一个会话"不能丢"的全部状态。字段清单见
 // docs/50-backend/session-manager.md §热升级交接。
+//
+// schema 1 的那些字段（integration / prompt_state / osc / modes / 命令记录 …）
+// 已删除：解码时被忽略，旧版本交过来的会话照样接得回来。
 type Session struct {
 	SID       uint16    `json:"sid"`
 	PtmxFD    int       `json:"ptmx_fd"`   // -1 = 没有（会话已退出）
 	ShellPID  int       `json:"shell_pid"` // 0 = 没有
-	RCPath    string    `json:"rc_path,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 
-	Name        string    `json:"name,omitempty"`
-	NameManual  bool      `json:"name_manual,omitempty"`
-	CWD         string    `json:"cwd"`
-	Status      string    `json:"status"`
-	ExitCode    *int      `json:"exit_code,omitempty"`
-	Cols        uint16    `json:"cols"`
-	Rows        uint16    `json:"rows"`
-	Integration string    `json:"integration"`
-	PromptState string    `json:"prompt_state,omitempty"`
-	HelloSeen   bool      `json:"hello_seen,omitempty"`
-	LastMark    time.Time `json:"last_mark"`
-	LastInput   time.Time `json:"last_input"`
+	Name       string `json:"name,omitempty"`
+	NameManual bool   `json:"name_manual,omitempty"`
+	CWD        string `json:"cwd"`
+	Status     string `json:"status"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	Cols       uint16 `json:"cols"`
+	Rows       uint16 `json:"rows"`
 
 	RingBase uint64 `json:"ring_base"`
 	RingData []byte `json:"ring_data"`
 
+	// VTerm 是终端模拟器的完整状态（internal/vterm 的 Export，带满 2000 行历史；
+	// 对这一层是不透明的字节）。【必须交接】：屏幕、模式、历史推导不出来 ——
+	// 环形缓冲只有最近 256 KiB。schema 1 没有它。
+	VTerm []byte `json:"vterm,omitempty"`
+
 	InQueued map[string]uint64 `json:"in_queued,omitempty"`
 	InAck    map[string]uint64 `json:"in_ack,omitempty"`
-
-	OSC oscparse.State `json:"osc"`
-	// Modes 是粘性终端模式（ADR-0019）。【必须交接】：它推导不出来 —— 模式开关
-	// 只在会话开头出现一次，环形缓冲早把它裁掉了。丢了它，升级之后备用屏判定就没了。
-	Modes    termstate.State `json:"modes,omitempty"`
-	PendCmd  string          `json:"pend_cmd,omitempty"`
-	CurCmdID *int64          `json:"cur_cmd_id,omitempty"`
-	CurCmdAt time.Time       `json:"cur_cmd_at"`
-
-	UnmarkedRuns  int  `json:"unmarked_runs,omitempty"`
-	UnmarkedInput bool `json:"unmarked_input,omitempty"`
 
 	Pending []PendingInput `json:"pending,omitempty"`
 }
@@ -106,6 +98,7 @@ func (s *Snapshot) Meta() *Snapshot {
 	out.Sessions = make([]Session, len(s.Sessions))
 	for i, se := range s.Sessions {
 		se.RingData = nil
+		se.VTerm = nil
 		se.Pending = nil
 		out.Sessions[i] = se
 	}

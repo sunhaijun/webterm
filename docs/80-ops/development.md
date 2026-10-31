@@ -10,7 +10,7 @@
 |---|---|---|
 | Go | 1.27+ | agent 本体 |
 | Node | 22+ | 构建前端、跑 Vitest 与 Playwright |
-| bash | 4.4+ | shell 集成的集成测试要真 bash |
+| bash | 任意 | 会话的集成测试要一个真 shell |
 | Python 3 | 任意 | 文档链接检查脚本 |
 
 Node 只在**构建时**需要，产物是单个静态二进制。

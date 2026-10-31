@@ -1,0 +1,49 @@
+[?2004h[?1h=[?25l[1A
+[1;35m>>> [0m[4D[?12l[?25h[4C[?25l[4D[1;35m>>> [0mp[5D[?12l[?25h[5C[?25l[5D[1;35m>>> [0mpr[6D[?12l[?25h[6C[?25l[6D[1;35m>>> [0mpri[7D[?12l[?25h[7C[?25l[7D[1;35m>>> [0mprin[8D[?12l[?25h[8C[?25l[8D[1;35m>>> [0mprint[9D[?12l[?25h[9C[?25l[9D[1;35m>>> [0mprint([10D[?12l[?25h[10C[?25l[10D[1;35m>>> [0mprint('[11D[?12l[?25h[11C[?25l[11D[1;35m>>> [0mprint('中[13D[?12l[?25h[13C[?25l[13D[1;35m>>> [0mprint('中文[15D[?12l[?25h[15C[?25l[15D[1;35m>>> [0mprint('中文'[16D[?12l[?25h[16C[?25l[16D[1;35m>>> [0mprint('中文' [17D[?12l[?25h[17C[?25l[17D[1;35m>>> [0mprint('中文' *[18D[?12l[?25h[18C[?25l[18D[1;35m>>> [0mprint('中文' * [19D[?12l[?25h[19C[?25l[19D[1;35m>>> [0mprint('中文' * 6[20D[?12l[?25h[20C[?25l[20D[1;35m>>> [0mprint('中文' * 60[21D[?12l[?25h[21C[?25l[21D[1;35m>>> [0mprint('中文' * 60)[22D[?12l[?25h[22C[22D
+[?2004l[?1l>中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文
+[?2004h[?1h=[?25l[1A
+[1;35m>>> [0m[4D[?12l[?25h[4C[?25l[4D[1;35m>>> [0mf[5D[?12l[?25h[5C[?25l[5D[1;35m>>> [0mfo[6D[?12l[?25h[6C[?25l[6D[1;35m>>> [0mfor[7D[?12l[?25h[7C[?25l[7D[1;35m>>> [0mfor [8D[?12l[?25h[8C[?25l[8D[1;35m>>> [0mfor i[9D[?12l[?25h[9C[?25l[9D[1;35m>>> [0mfor i [10D[?12l[?25h[10C[?25l[10D[1;35m>>> [0mfor i i[11D[?12l[?25h[11C[?25l[11D[1;35m>>> [0mfor i in[12D[?12l[?25h[12C[?25l[12D[1;35m>>> [0mfor i in [13D[?12l[?25h[13C[?25l[13D[1;35m>>> [0mfor i in r[14D[?12l[?25h[14C[?25l[14D[1;35m>>> [0mfor i in ra[15D[?12l[?25h[15C[?25l[15D[1;35m>>> [0mfor i in ran[16D[?12l[?25h[16C[?25l[16D[1;35m>>> [0mfor i in rang[17D[?12l[?25h[17C[?25l[17D[1;35m>>> [0mfor i in range[18D[?12l[?25h[18C[?25l[18D[1;35m>>> [0mfor i in range([19D[?12l[?25h[19C[?25l[19D[1;35m>>> [0mfor i in range(4[20D[?12l[?25h[20C[?25l[20D[1;35m>>> [0mfor i in range(40[21D[?12l[?25h[21C[?25l[21D[1;35m>>> [0mfor i in range(40)[22D[?12l[?25h[22C[?25l[22D[1;35m>>> [0mfor i in range(40):[23D[?12l[?25h[23C[?25l[23D[1;35m>>> [0mfor i in range(40): [24D[?12l[?25h[24C[?25l[24D[1;35m>>> [0mfor i in range(40): p[25D[?12l[?25h[25C[?25l[25D[1;35m>>> [0mfor i in range(40): pr[26D[?12l[?25h[26C[?25l[26D[1;35m>>> [0mfor i in range(40): pri[27D[?12l[?25h[27C[?25l[27D[1;35m>>> [0mfor i in range(40): prin[28D[?12l[?25h[28C[?25l[28D[1;35m>>> [0mfor i in range(40): print[29D[?12l[?25h[29C[?25l[29D[1;35m>>> [0mfor i in range(40): print([30D[?12l[?25h[30C[?25l[30D[1;35m>>> [0mfor i in range(40): print(i[31D[?12l[?25h[31C[?25l[31D[1;35m>>> [0mfor i in range(40): print(i,[32D[?12l[?25h[32C[?25l[32D[1;35m>>> [0mfor i in range(40): print(i, [33D[?12l[?25h[33C[?25l[33D[1;35m>>> [0mfor i in range(40): print(i, '[34D[?12l[?25h[34C[?25l[34D[1;35m>>> [0mfor i in range(40): print(i, '\[35D[?12l[?25h[35C[?25l[35D[1;35m>>> [0mfor i in range(40): print(i, '\x[36D[?12l[?25h[36C[?25l[36D[1;35m>>> [0mfor i in range(40): print(i, '\x1[37D[?12l[?25h[37C[?25l[37D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[38D[?12l[?25h[38C[?25l[38D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[[39D[?12l[?25h[39C[?25l[39D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3[40D[?12l[?25h[40C[?25l[40D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%[41D[?12l[?25h[41C[?25l[41D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%d[42D[?12l[?25h[42C[?25l[42D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dm[43D[?12l[?25h[43C[?25l[43D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmc[44D[?12l[?25h[44C[?25l[44D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmco[45D[?12l[?25h[45C[?25l[45D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcol[46D[?12l[?25h[46C[?25l[46D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolo[47D[?12l[?25h[47C[?25l[47D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor[48D[?12l[?25h[48C[?25l[48D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\[49D[?12l[?25h[49C[?25l[49D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x[50D[?12l[?25h[50C[?25l[50D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1[51D[?12l[?25h[51C[?25l[51D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[52D[?12l[?25h[52C[?25l[52D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[[53D[?12l[?25h[53C[?25l[53D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0[54D[?12l[?25h[54C[?25l[54D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m[55D[?12l[?25h[55C[?25l[55D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m'[56D[?12l[?25h[56C[?25l[56D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' [57D[?12l[?25h[57C[?25l[57D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' %[58D[?12l[?25h[58C[?25l[58D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % [59D[?12l[?25h[59C[?25l[59D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % ([60D[?12l[?25h[60C[?25l[60D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i[61D[?12l[?25h[61C[?25l[61D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i [62D[?12l[?25h[62C[?25l[62D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i %[63D[?12l[?25h[63C[?25l[63D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % [64D[?12l[?25h[64C[?25l[64D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8[65D[?12l[?25h[65C[?25l[65D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8)[66D[?12l[?25h[66C[?25l[66D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8),[67D[?12l[?25h[67C[?25l[67D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), [68D[?12l[?25h[68C[?25l[68D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '[69D[?12l[?25h[69C[?25l[69D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀[71D[?12l[?25h[71C[?25l[71D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀'[72D[?12l[?25h[72C[?25l[72D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' [73D[?12l[?25h[73C[?25l[73D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' *[74D[?12l[?25h[74C[?25l[74D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' * [75D[?12l[?25h[75C[?25l[75D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' * ([76D[?12l[?25h[76C[?25l[76D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' * (i[77D[?12l[?25h[77C[?25l[77D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' * (i [78D[?12l[?25h[78C[?25l[78D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' * (i %[79D[?12l[?25h[79C[?25l[79D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' * (i % [80D[?12l[?25h[80C[?25l[80D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' * (i % 5[81D[?12l[?25h[81C[?25l[81D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' * (i % 5)[82D[?12l[?25h[82C[?25l[82D[1;35m>>> [0mfor i in range(40): print(i, '\x1b[3%dmcolor\x1b[0m' % (i % 8), '😀' * (i % 5))[83D[?12l[?25h[83C[?25l[83D
+[1;35m... [0m[4D[?12l[?25h[4C[4D
+[?2004l[?1l>0 [30mcolor[0m 
+1 [31mcolor[0m 😀
+2 [32mcolor[0m 😀😀
+3 [33mcolor[0m 😀😀😀
+4 [34mcolor[0m 😀😀😀😀
+5 [35mcolor[0m 
+6 [36mcolor[0m 😀
+7 [37mcolor[0m 😀😀
+8 [30mcolor[0m 😀😀😀
+9 [31mcolor[0m 😀😀😀😀
+10 [32mcolor[0m 
+11 [33mcolor[0m 😀
+12 [34mcolor[0m 😀😀
+13 [35mcolor[0m 😀😀😀
+14 [36mcolor[0m 😀😀😀😀
+15 [37mcolor[0m 
+16 [30mcolor[0m 😀
+17 [31mcolor[0m 😀😀
+18 [32mcolor[0m 😀😀😀
+19 [33mcolor[0m 😀😀😀😀
+20 [34mcolor[0m 
+21 [35mcolor[0m 😀
+22 [36mcolor[0m 😀😀
+23 [37mcolor[0m 😀😀😀
+24 [30mcolor[0m 😀😀😀😀
+25 [31mcolor[0m 
+26 [32mcolor[0m 😀
+27 [33mcolor[0m 😀😀
+28 [34mcolor[0m 😀😀😀
+29 [35mcolor[0m 😀😀😀😀
+30 [36mcolor[0m 
+31 [37mcolor[0m 😀
+32 [30mcolor[0m 😀😀
+33 [31mcolor[0m 😀😀😀
+34 [32mcolor[0m 😀😀😀😀
+35 [33mcolor[0m 
+36 [34mcolor[0m 😀
+37 [35mcolor[0m 😀😀
+38 [36mcolor[0m 😀😀😀
+39 [37mcolor[0m 😀😀😀😀
+[?2004h[?1h=[?25l[1A
+[1;35m>>> [0m[4D[?12l[?25h[4C[?25l[4D[1;35m>>> [0me[5D[?12l[?25h[5C[?25l[5D[1;35m>>> [0mex[6D[?12l[?25h[6C[?25l[6D[1;35m>>> [0mexi[7D[?12l[?25h[7C[?25l[7D[1;35m>>> [0mexit[8D[?12l[?25h[8C[?25l[8D[1;35m>>> [0mexit([9D[?12l[?25h[9C[?25l[9D[1;35m>>> [0mexit()[10D[?12l[?25h[10C[10D
+[?2004l[?1l>

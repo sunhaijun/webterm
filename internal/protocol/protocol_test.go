@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -160,10 +161,7 @@ func TestFrameRoundTrip(t *testing.T) {
 		{Type: protocol.TypeOutput, SID: 0, Seq: 0, Payload: []byte{0}},
 		{Type: protocol.TypeInput, SID: 65535, Seq: ^uint64(0), Payload: []byte{0xff}},
 		{Type: protocol.TypeOutput, SID: 1, Seq: 1, Payload: make([]byte, protocol.MaxPayload)},
-		{
-			Type: protocol.TypeOutput, Flags: protocol.FlagAttrPrefix, SID: 9, Seq: 42,
-			Payload: append(append([]byte{}, protocol.AttrPrefix...), "x"...),
-		},
+		{Type: protocol.TypeSnapshot, Flags: protocol.FlagMore, SID: 9, Seq: 42, Payload: []byte("\x1b[H")},
 	}
 	for i, want := range cases {
 		got, err := protocol.DecodeFrame(protocol.EncodeFrame(want))
@@ -186,34 +184,78 @@ func TestFrameTooLarge(t *testing.T) {
 	}
 }
 
-// AttrPrefix 的 4 个字节不计入 seq —— 算错了两侧会永久错开 4 字节。
-func TestAttrPrefixNotCountedInSeq(t *testing.T) {
-	data := []byte("hello")
-	f := protocol.Frame{
-		Type:    protocol.TypeOutput,
-		Flags:   protocol.FlagAttrPrefix,
-		SID:     1,
-		Seq:     1000,
-		Payload: append(append([]byte{}, protocol.AttrPrefix...), data...),
+// 快照字节不计入 seq（协议 §3）：OUTPUT 的 DataLen 是 payload 长度，SNAPSHOT 是 0。
+func TestSnapshotNotCountedInSeq(t *testing.T) {
+	out := protocol.Frame{Type: protocol.TypeOutput, SID: 1, Seq: 1000, Payload: []byte("hello")}
+	if out.DataLen() != 5 {
+		t.Fatalf("OUTPUT DataLen = %d, want 5", out.DataLen())
 	}
-	if f.DataLen() != len(data) {
-		t.Fatalf("DataLen = %d, want %d", f.DataLen(), len(data))
+	snap := protocol.Frame{Type: protocol.TypeSnapshot, SID: 1, Seq: 1000, Payload: []byte("\x1b[H\x1b[2Jxx")}
+	if snap.DataLen() != 0 {
+		t.Fatalf("SNAPSHOT DataLen = %d, want 0 —— 快照是渲染指令，不是流内容", snap.DataLen())
 	}
-	// 下一帧的 seq 必须接在 1000 + 5 上，而不是 1000 + 9
-	if next := f.Seq + uint64(f.DataLen()); next != 1005 {
-		t.Fatalf("next seq = %d, want 1005", next)
+}
+
+// 方向：client 只能发 INPUT（协议 §3）。
+func TestFrameDirection(t *testing.T) {
+	for typ, want := range map[uint8]bool{
+		protocol.TypeInput: true, protocol.TypeOutput: false, protocol.TypeSnapshot: false,
+	} {
+		if got := (protocol.Frame{Type: typ}).FromClient(); got != want {
+			t.Errorf("type %#x FromClient = %v, want %v", typ, got, want)
+		}
+	}
+}
+
+// 快照分帧（协议 §3）：超过单帧上限就拆，所有帧 seq 相同，除最后一帧外都带 MORE，
+// 拼起来就是原快照。
+func TestSnapshotFrames(t *testing.T) {
+	if fs := protocol.SnapshotFrames(1, 7, nil); fs != nil {
+		t.Fatalf("空快照应当不产生帧（payload 为 0 的帧非法），得到 %d 帧", len(fs))
+	}
+	for _, n := range []int{1, protocol.MaxPayload - 1, protocol.MaxPayload, protocol.MaxPayload + 1, 2*protocol.MaxPayload + 17} {
+		data := make([]byte, n)
+		for i := range data {
+			data[i] = byte(i * 7)
+		}
+		fs := protocol.SnapshotFrames(3, 99, data)
+		want := (n + protocol.MaxPayload - 1) / protocol.MaxPayload
+		if len(fs) != want {
+			t.Fatalf("n=%d：%d 帧，want %d", n, len(fs), want)
+		}
+		var joined []byte
+		for i, f := range fs {
+			if f.Type != protocol.TypeSnapshot || f.SID != 3 || f.Seq != 99 {
+				t.Fatalf("n=%d 帧 %d：头不对 %+v", n, i, f)
+			}
+			if len(f.Payload) == 0 || len(f.Payload) > protocol.MaxPayload {
+				t.Fatalf("n=%d 帧 %d：payload %d 字节", n, i, len(f.Payload))
+			}
+			last := i == len(fs)-1
+			if f.More() == last {
+				t.Fatalf("n=%d 帧 %d：MORE=%v，最后一帧才该清零", n, i, f.More())
+			}
+			// 编码后能被解出来
+			if _, err := protocol.DecodeFrame(protocol.EncodeFrame(f)); err != nil {
+				t.Fatalf("n=%d 帧 %d：%v", n, i, err)
+			}
+			joined = append(joined, f.Payload...)
+		}
+		if !bytes.Equal(joined, data) {
+			t.Fatalf("n=%d：拼起来不是原快照", n)
+		}
 	}
 }
 
 func TestEncodeFillsTypeTag(t *testing.T) {
-	b, err := protocol.Encode(&protocol.Prompt{SID: 1, State: protocol.PromptRunning})
+	b, err := protocol.Encode(&protocol.Ack{SID: 1, InAck: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var m map[string]any
 	_ = json.Unmarshal(b, &m)
-	if m["t"] != protocol.TPrompt {
-		t.Fatalf("t = %v, want %q", m["t"], protocol.TPrompt)
+	if m["t"] != protocol.TAck {
+		t.Fatalf("t = %v, want %q", m["t"], protocol.TAck)
 	}
 }
 
@@ -228,5 +270,30 @@ func TestSessionUpdatedOmitsUnchangedFields(t *testing.T) {
 	_ = json.Unmarshal(b, &m)
 	if len(m) != 3 { // t, sid, head_seq
 		t.Fatalf("字段数 = %d (%v), want 3", len(m), m)
+	}
+}
+
+// v2 删掉的消息（reset / redraw / cwd / prompt / command.*）收到时必须当未知类型
+// 忽略 —— 前向兼容的规则同样适用于"别人还在发、我已经不认了"的消息。
+func TestRemovedMessagesAreUnknown(t *testing.T) {
+	for _, typ := range []string{"reset", "redraw", "cwd", "prompt", "command.start", "command.end"} {
+		_, err := protocol.Decode([]byte(`{"t":"` + typ + `","sid":1}`))
+		var unknown *protocol.ErrUnknownType
+		if !asErr(err, &unknown) {
+			t.Errorf("%s: err = %v, want *ErrUnknownType", typ, err)
+		}
+	}
+}
+
+// 会话快照里不再有 shell 集成的字段（协议 v2）。
+func TestSessionInfoHasNoIntegrationFields(t *testing.T) {
+	b, err := json.Marshal(protocol.SessionInfo{SID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"integration", "prompt_state", "unmarked_input"} {
+		if bytes.Contains(b, []byte(`"`+k+`"`)) {
+			t.Errorf("SessionInfo 里还有 %s", k)
+		}
 	}
 }

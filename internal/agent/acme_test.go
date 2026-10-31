@@ -65,7 +65,7 @@ func newACMEFixture(t *testing.T, o fixtureOpts) *acmeFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	sessions := session.NewManager(session.Config{MaxSessions: 1, RingBytes: 1 << 16, Shell: "bash"}, st)
+	sessions := session.NewManager(session.Config{MaxSessions: 1, RingBytes: 1 << 16, Shell: "bash"})
 	t.Cleanup(sessions.Shutdown)
 
 	report := &lockedBuffer{}
