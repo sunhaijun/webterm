@@ -184,7 +184,9 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0020](adr/0020-input-never-silently-dropped.md) | 输入路径绝不静默丢弃 |
 | [0021](adr/0021-drag-preview-not-live-relayout.md) | 跟手的手势只做预览，布局改动推到松手（适用对象已随 0025 删除，原则保留） |
 | [0022](adr/0022-drop-command-palette.md) | 砍掉命令面板 |
-| [0023](adr/0023-terminal-font-list.md) | 终端字体给一份探测过的清单 |
+| [0023](adr/0023-terminal-font-list.md) | 终端字体给一份探测过的清单（面板说明被 0028 收回） |
 | [0024](adr/0024-scrollback-layered-model.md) | 回滚历史的分层模型：先把内容留在追加流里（§2–§4 已被 0026 取代，§1 保留） |
-| [0025](adr/0025-termux-style-ui.md) | Termux 式界面：全屏终端 + 两行附加键，会话按设备分两种切换 |
+| [0025](adr/0025-termux-style-ui.md) | Termux 式界面：全屏终端 + 两行附加键，会话按设备分两种切换（§3 回车被 0027 修订） |
 | [0026](adr/0026-agent-holds-terminal-state.md) | 输出链路：agent 持有终端状态，浏览器只负责显示 |
+| [0027](adr/0027-text-page-enter-submits.md) | 文本输入页：回车 = 发送并提交 |
+| [0028](adr/0028-settings-without-notes.md) | 设置面板不写说明文字 |

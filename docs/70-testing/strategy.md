@@ -158,7 +158,7 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 | `UT-seq-1` | `out_seq` 记账：连续帧、空洞检测、重复检测；SNAPSHOT 后 `out_seq` 跳到快照的 `seq` |
 | `UT-snapshot-1` | SNAPSHOT 帧：`MORE` 拼接、收齐才应用、应用时 `reset` 并换新的 UTF-8 解码器 |
 | `UT-utf8-1` | 输出按任意字节切开写入，中文标点（。…—“”）一个不丢（AC-2.23） |
-| `UT-input-1..3` | 文本输入页：回车语义（有内容不追加回车 / 空回车发 `\r` / 含换行走括号粘贴）、composition 期间不发送、输入框属性 |
+| `UT-input-1..3` | 文本输入页：回车语义（有内容 = 粘贴内容再回车 / 空回车发 `\r`）、composition 期间不发送、输入框属性 |
 | `UT-keymap-1` | 控制键映射表（对照 [`../40-frontend/keymap.md`](../40-frontend/keymap.md)） |
 | `UT-reconnect-1` | 指数退避序列、抖动范围、`online` 事件立即重试 |
 | `UT-hb-1` | 心跳间隔、pong 超时判死 |

@@ -68,7 +68,7 @@
 | AC-3.10 | 文本输入页的 `textarea` 禁用 `autocorrect` / `autocapitalize` / `spellcheck`，以 DOM attribute 的实际值为准（`autocorrect="off"`，不是被框架反射成的 `on`） | UT-input-3, E2E-40 |
 | AC-3.11 | 终端尺寸变化时向 agent 发 `resize`，agent 对 PTY 执行 `TIOCSWINSZ`；resize 消息做 100ms 防抖 | IT-resize-1, UT-resize-1 |
 | AC-3.18 | **附加键**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §2）：`compact` 恒显示、`wide` 在 `pointer: coarse` 时显示；两行共 14 个键，依次为 `ESC / - HOME ↑ END PGUP` 与 `TAB CTRL ALT ← ↓ → PGDN`，**不随前台程序、提示符状态变**；393px 宽下全部可见、不横向滚动；按键在 `pointerdown` 时 `preventDefault`，按下前后 `document.activeElement` 不变；字节走 `onData` 出口（计入 `inputStats`）；CTRL / ALT 点一下只对下一个键生效（含软键盘输入的下一个字符），长按锁定，再点解锁，激活与锁定有 `data-sticky` 与高亮 | UT-keys-1, E2E-10 |
-| AC-3.19 | **文本输入页**：点 ✎ 或在键区左右滑动切换，切换前后终端行列数不变、不发 `resize`；回车：组字中不处理，有内容 = 发内容**不追加回车**并清空，空 = 发 `\r`，回车不在框里插入换行；不含换行的内容等同键入（走 `onData`，计入 `inputStats`），含换行的走 `term.paste()`（对端开了括号粘贴就包裹）；发完留在文本页且焦点不变 | UT-textinput-1, E2E-40 |
+| AC-3.19 | **文本输入页**：点 ✎ 或在键区左右滑动切换，切换前后终端行列数不变、不发 `resize`；回车：组字中不处理，有内容 = 内容走 `term.paste()`（对端开了括号粘贴就包裹，换行转 `CR`）、**紧跟一个 `\r`**、清空，空 = 发 `\r`，回车不在框里插入换行；都走 `onData`（计入 `inputStats`）；发完留在文本页且焦点不变（[ADR-0027](../20-architecture/adr/0027-text-page-enter-submits.md)）；文本框四边都有边框，整个落在附加键槽内 | UT-textinput-1, E2E-40 |
 | AC-3.20 | **点按终端**：前台程序开了鼠标跟踪时点击交给 xterm 上报；没开时切换软键盘（终端有焦点则失焦，没有则聚焦），聚焦发生在这次触摸的处理函数里；位移 ≥ 10px 的是拖动，不算点 | E2E-10 |
 
 ---
@@ -81,7 +81,7 @@
 | AC-4.2 | 会话数达上限（默认 20，可配）时 `session.create` 返回 `session_limit` 错误，UI 显示提示 | IT-session-2, E2E-11 |
 | AC-4.3 | 未订阅会话产生输出时，agent 发 `session.updated{head_seq}`；client 按 `head_seq > out_seq` 显示未读标记。**节流吞掉的那条必须补发最新值**（协议 §6.3）—— 输出一阵一阵的时候，最后一条被吞掉就意味着未读永远不亮 | E2E-6, IT-unread-1 |
 | AC-4.4 | 会话默认名为其 CWD 的 basename；CWD 由 agent 每秒读一次 `/proc/<前台进程组>/cwd`，变了才发 `session.updated`，任何 shell 都适用；手动改名后停止自动更新，改成空字符串恢复 | IT-session-3, UT-name-1 |
-| AC-4.5 | shell 退出后会话状态变 `exited` 并携带退出码；缓冲内容保留可查看。终端末尾出现一行本地提示 `[进程已结束（退出码 N）· 按 Enter 关闭]`：它在最后一段输出**之后**、不改变 `outSeq`；在该会话里按 `Enter`（或文本输入页空回车）关闭会话；agent 的"已退出"消息排在最后一个 OUTPUT 之后并带 `head_seq`，client 在 `out_seq` 追到它之后才写提示行；刷新或重连拿到快照后（提示行不在 agent 的模拟器里）按会话状态再写一次，始终**只有一行** | IT-session-4, E2E-11 |
+| AC-4.5 | shell 退出后会话状态变 `exited` 并携带退出码；缓冲内容保留可查看。终端末尾出现一行本地提示 `[进程已结束（退出码 N）· 按 Enter 关闭]`：它在最后一段输出**之后**、不改变 `outSeq`；在该会话里按 `Enter`（或文本输入页回车）关闭会话；agent 的"已退出"消息排在最后一个 OUTPUT 之后并带 `head_seq`，client 在 `out_seq` 追到它之后才写提示行；刷新或重连拿到快照后（提示行不在 agent 的模拟器里）按会话状态再写一次，始终**只有一行** | IT-session-4, E2E-11 |
 | AC-4.6 | 关闭会话时先送 `SIGHUP`，2 秒后仍存活则 `SIGKILL`，并释放 PTY 与缓冲 | IT-session-5 |
 | AC-4.8 | **焦点跟着会话走**（ADR-0020）：切会话时 `activate()` 把上一个会话的 DOM 摘掉，焦点会落回 `body`；切换前（从抽屉切换时以**打开抽屉之前**为准）焦点在终端里的，切换后必须还给新会话的终端，**非触摸设备无条件还给终端**。少了这一步，用 `Ctrl+Shift+↑/↓`、标签栏或抽屉切过去之后打字彻底没反应，且没有任何提示 | E2E-34 |
 | AC-4.9 | **当前会话一眼可辨**：当前标签 / 抽屉里的当前行 = 强调色（下划线或左条）+ 强调色底色 + `aria-current="true"`，与 hover（中性灰）在同一屏上分得开。当前会话变化（点选、`Ctrl+Shift+↑/↓`、关掉当前会话后自动切）时把它**滚进可视区**，整个已可见则不动，不用 `smooth` | E2E-35 |
@@ -97,7 +97,7 @@
 | AC-5.3 | 字号可调，按形态各存一份（`webterm.fontSize.compact` / `.wide`，默认 14px，范围 8–32px）；**改完要重新 `fit()` 并补一条 `resize`** —— cell 尺寸变了而容器没变，`ResizeObserver` 不会响，漏发就是客户端与 PTY 的 cols/rows 分家 | UT-font-1, E2E-12 |
 | AC-5.4 | 选中文本后有新输出到达，选区不被破坏（xterm 的选区按缓冲区坐标记） | E2E-12 |
 | AC-5.11 | **浮层**（设置；`compact` 上的会话抽屉）共用一个 `Drawer`：`pointer: coarse` 贴底整宽（抓手 + 标题栏 + ✕），`pointer: fine` 居中浮窗；点遮罩 / `Esc` / ✕ /（触屏）下滑都能关；打开时焦点进浮层；浮层 `fixed` 覆盖，**不改终端几何、不发 resize** | E2E-28 |
-| AC-5.13 | **终端字体可选**（[ADR-0023](../20-architecture/adr/0023-terminal-font-list.md)）：一份硬编码的等宽优选清单，用 canvas `measureText` 与 `monospace` / `serif` / `sans-serif` 三条基线比宽度，**只列本机真的装了的**（三条都一样宽 = 没装）；每项是一整段 stack，尾巴恒为 CJK 等宽 + `monospace`；选择存 `webterm.font.family`（存 id、全局一份、**不按形态分**）；改字体后所有 xterm 实例一起换、重新 `fit()`、补一条 `resize`；探测不可用（拿不到 2d 上下文）时退化成只有「系统默认」，不报错；面板里写明连字不生效（没有加载连字插件） | UT-font-1, E2E-12 |
+| AC-5.13 | **终端字体可选**（[ADR-0023](../20-architecture/adr/0023-terminal-font-list.md)）：一份硬编码的等宽优选清单，用 canvas `measureText` 与 `monospace` / `serif` / `sans-serif` 三条基线比宽度，**只列本机真的装了的**（三条都一样宽 = 没装）；每项是一整段 stack，尾巴恒为 CJK 等宽 + `monospace`；选择存 `webterm.font.family`（存 id、全局一份、**不按形态分**）；改字体后所有 xterm 实例一起换、重新 `fit()`、补一条 `resize`；探测不可用（拿不到 2d 上下文）时退化成只有「系统默认」，不报错；面板里不写说明文字（[ADR-0028](../20-architecture/adr/0028-settings-without-notes.md)） | UT-font-1, E2E-12 |
 | AC-5.14 | **刷新之后仍能往回拖**：刷新页面后订阅走快照，能滚回刷新前缓冲的**最后 2000 行**（不足 2000 行则全部），内容与刷新前逐行一致且**只出现一份**；浏览器不存任何本地快照（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)） | IT-snapshot-1, E2E-36 |
 | AC-5.18 | **形态**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §1）：`.app[data-form]` 由屏幕短边决定，`< 600px` 为 `compact`，否则 `wide`；`compact` 没有标签栏、有 ☰，`wide` 有标签栏、没有 ☰；可视视口变化（软键盘弹出、旋转）不改变形态 | UT-form-1, E2E-39 |
 

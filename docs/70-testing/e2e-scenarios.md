@@ -255,7 +255,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 2. 在设置里调整字号（`font-size`）→ 生效并持久化到 `localStorage['webterm.fontSize.<形态>']`（刷新后保持），并且**补了 `resize`**（`__webterm.resizes()` 变大、列数跟着变）—— cell 尺寸变了而容器没变，`ResizeObserver` 不会响
 3. 选中一段文本，此时有新输出到达 → **选区不被破坏**（选中的仍是原来那几行的内容）
 4. 复制 → 剪贴板内容正确
-5. **换终端字体**（AC-5.13）：设置里的 `font-family` 下拉至少有「系统默认」，且列出的每一项都是**本机装得到**的（把列出来的名字拿回页面里用同一套判据再量一遍，一个都不该是「没装」；一台机器一个清单字体都没装时，换字体那半边 `test.skip`）；换成另一项 → xterm 的 `options.fontFamily` 换成对应 stack、`resizes()` 变大；挑一个与当前字宽不同的字体时 `__webterm.size().cols` 跟着变（装得到的字体都与系统默认同宽时只断言前两条，并在报告里留注 —— 系统默认的 `monospace` 往往就解析成清单里的某一项）；刷新后仍是它；把 `localStorage['webterm.font.family']` 写成不存在的 id 再刷新 → 回落「系统默认」，不报错
+5. **换终端字体**（AC-5.13）：设置里的 `font-family` 下拉至少有「系统默认」，且列出的每一项都是**本机装得到**的（把列出来的名字拿回页面里用同一套判据再量一遍，一个都不该是「没装」；一台机器一个清单字体都没装时，换字体那半边 `test.skip`）；换成另一项 → xterm 的 `options.fontFamily` 换成对应 stack、`resizes()` 变大；挑一个与当前字宽不同的字体时 `__webterm.size().cols` 跟着变（装得到的字体都与系统默认同宽时只断言前两条，并在报告里留注 —— 系统默认的 `monospace` 往往就解析成清单里的某一项）；刷新后仍是它；把 `localStorage['webterm.font.family']` 写成不存在的 id 再刷新 → 回落「系统默认」，不报错；设置面板里没有说明段落（`settings` 里没有 `p`，ADR-0028）
 
 ---
 
@@ -541,15 +541,15 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 ## E2E-40 文本输入页（AC-3.19, AC-3.10）
 
-> `web/e2e/textinput.spec.ts`，Pixel 5。hook `WebSocket.send` 记 INPUT 帧。
+> `web/e2e/textinput.spec.ts`，Pixel 5。hook `WebSocket.send` 记 INPUT 帧，断言时把这一步的帧拼起来比（粘贴与回车是两次 `onData`，分不分帧不重要）。E2E 的 bash 开了括号粘贴。
 
-1. **切换不动几何**：点 `toggle-text` → `textinput` 可见且有焦点；前后 `__webterm.size()` 与 `resizes()` 不变；再点 `toggle-text` → 回键位页
+1. **切换不动几何**：点 `toggle-text` → `textinput` 可见且有焦点；前后 `__webterm.size()` 与 `resizes()` 不变；**文本框四边的 `border-*-width` 都 ≥ 1px，整个框（含边框）落在 `extrakeys` 的矩形内、四边都留出空隙**；再点 `toggle-text` → 回键位页
 2. **滑动也能切**：在键区上横向拖 80px → 文本页；反向拖回 → 键位页
 3. **attribute**：`textinput` 的 `autocorrect` / `autocapitalize` / `spellcheck` 的 attribute 实际值分别是 `off` / `off` / `false`，`enterkeyhint` 是 `send`
-4. **有内容回车**：填 `echo TEXT-ONE` 回车 → INPUT 帧是 `echo TEXT-ONE`，**不带 `0d`**；命令行上出现 `echo TEXT-ONE` 但没执行；文本框已清空、焦点仍在文本框；`inputStats().data.n` 与 `sent.n` 都涨
-5. **空回车**：再回车 → INPUT 帧是 `0d`，命令执行、`TEXT-ONE` 出现
-6. **组字**：派发 `compositionstart` → `compositionupdate`（`ni`）→ 按 `Enter`（`isComposing: true`）→ **没有 INPUT 帧**；`compositionend`（`你好`）后回车 → INPUT 帧是 `你好`
-7. **换行走括号粘贴**：往文本框粘贴 `echo L1⏎echo L2` 后回车 → INPUT 帧以 `1b5b3230307e` 开头、以 `1b5b3230317e` 结尾；两行作为一整块出现在命令行上，没被逐条执行
+4. **有内容回车 = 发送并回车**：填 `echo TEXT-ONE` 回车 → 这一步的 INPUT 帧拼起来是 `ESC[200~echo TEXT-ONEESC[201~` + `0d`；命令执行、输出里出现 `TEXT-ONE` 一行；文本框已清空、焦点仍在文本框；`inputStats().data.n` 与 `sent.n` 都涨
+5. **空回车**：再回车 → INPUT 帧是 `0d`
+6. **组字**：派发 `compositionstart` → `compositionupdate`（`ni`）→ 按 `Enter`（`isComposing: true`）→ **没有 INPUT 帧**；`compositionend`（`你好`）后回车 → INPUT 帧拼起来是括号包好的 `你好` + `0d`
+7. **多行内容整块粘贴再回车**：往文本框粘贴 `echo L1⏎echo L2` 后回车 → INPUT 帧拼起来以 `1b5b3230307e` 开头、以 `1b5b3230317e0d` 结尾，中间的换行已转成 `0d`；两行都执行，输出里出现 `L1` 与 `L2`
 8. **回车不插换行**：以上每一步之后，`textinput.value` 里都没有 `\n`
 
 ---
