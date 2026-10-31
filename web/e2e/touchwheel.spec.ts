@@ -1,9 +1,9 @@
 /**
- * E2E-44 触屏纵向拖转滚轮 —— AC-3.21 / ADR-0029。
+ * E2E-44 触屏纵向拖转滚轮 —— AC-3.21 / ADR-0029 / ADR-0032。
  *
  * Pixel 5，CDP 发真实触摸。hook `WebSocket.send` 记 INPUT 帧。xterm 5.5 在程序开了
  * 鼠标跟踪时不处理触摸，这条路以前一个字节都不发。夹具 scroller.py 每次滚轮滚 N 行，
- * 断言「内容走的行数 ≈ 手指走的行数」—— 跟手，而不是每行一次滚轮（那样是 N 倍）。
+ * 断言「手指每移动一行高发一次滚轮」，内容走的行数 ≈ 手指走的行数 × N。
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 
@@ -62,7 +62,7 @@ async function settled(page: Page): Promise<number> {
 
 const active = (p: Page) => p.evaluate(() => (document.activeElement as HTMLElement | null)?.className ?? '')
 
-test('E2E-44 鼠标跟踪时纵向拖转滚轮并跟手；横向拖与没开鼠标跟踪时不发', async ({ page }) => {
+test('E2E-44 鼠标跟踪时纵向拖转滚轮，一行高一次；横向拖与没开鼠标跟踪时不发', async ({ page }) => {
   const rec = await recordSent(page)
   await agent.open(page)
 
@@ -76,30 +76,31 @@ test('E2E-44 鼠标跟踪时纵向拖转滚轮并跟手；横向拖与没开鼠�
   const y0 = screen.top + row * 3
   const focus = await active(page)
 
-  // ② 跟手：手指向下拖 10 行高 → 内容走 10 ± 5 行（每行一次的话是 50 行）
+  // ② 一行高一次：手指向下拖 10 行高 → 10 ± 1 次滚轮，步长 5 的程序走约 50 行
   let top = await settled(page)
   let n = (await rec.inputHex()).length
   await drag(page, { x, y: y0 }, { x, y: y0 + row * 10 })
   let s = await sentSince(rec, n)
   let now = await settled(page)
-  expect(Math.abs(top - now - 10), `向下拖 10 行，内容走了 ${top - now} 行`).toBeLessThanOrEqual(5)
   const up = wheelReports(s, 64)
-  expect(up.length, `都是滚轮向上：${JSON.stringify(s)}`).toBeGreaterThan(0)
+  expect(Math.abs(up.length - 10), `向下拖 10 行，发了 ${up.length} 次滚轮`).toBeLessThanOrEqual(1)
+  expect(Math.abs(top - now - 50), `向下拖 10 行，内容走了 ${top - now} 行`).toBeLessThanOrEqual(5)
   expect(wheelReports(s, 65)).toHaveLength(0)
   for (const m of up) expect(Number(m[2]) >= 1 && Number(m[2]) <= rows, `行号在 1…${rows} 之内：${m[2]}`).toBe(true)
   expect(await active(page), '拖动不是点，焦点不变').toBe(focus)
 
-  // ③ 手指向上拖 6 行高 → 内容往回走 6 ± 5 行，都是滚轮向下
+  // ③ 手指向上拖 6 行高 → 6 ± 1 次滚轮向下，内容往回走约 30 行
   top = now
   n = (await rec.inputHex()).length
   await drag(page, { x, y: y0 + row * 10 }, { x, y: y0 + row * 4 })
   s = await sentSince(rec, n)
   now = await settled(page)
-  expect(Math.abs(now - top - 6), `向上拖 6 行，内容走了 ${now - top} 行`).toBeLessThanOrEqual(5)
-  expect(wheelReports(s, 65).length).toBeGreaterThan(0)
+  const down = wheelReports(s, 65)
+  expect(Math.abs(down.length - 6), `向上拖 6 行，发了 ${down.length} 次滚轮`).toBeLessThanOrEqual(1)
+  expect(Math.abs(now - top - 30), `向上拖 6 行，内容走了 ${now - top} 行`).toBeLessThanOrEqual(5)
   expect(wheelReports(s, 64)).toHaveLength(0)
 
-  // ④ 步长 1：逐行跟手
+  // ④ 步长 1：逐行跟着手指
   await page.keyboard.press('q')
   await submit(page, `python3 -I ${FIXTURES}/scroller.py 1`)
   await waitText(page, /^L300/m, '步长 1 的夹具起来了')

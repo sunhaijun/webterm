@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { FONT_FAMILY, FONT_SIZE, SCROLLBACK, createTerminal, exitLine, themeFromCss } from '../src/term/terminal'
+import { FONT_FAMILY, FONT_SIZE, SCROLLBACK, createTerminal, exitLine, proposeSize, themeFromCss } from '../src/term/terminal'
 import { flush, lineText, lines } from './helpers'
 
 const bytes = (...xs: number[]) => new Uint8Array(xs)
@@ -165,6 +165,28 @@ describe('进程结束提示行（AC-4.5）', () => {
     await flush(h.term)
     expect(lines(h.term)).toEqual(['restored', '[END-2]'])
     h.dispose()
+  })
+})
+
+describe('UT-fit-1 行列 = 可用尺寸 ÷ 稳定的字符格尺寸（AC-3.11，ADR-0033）', () => {
+  it('向下取整', () => {
+    expect(proposeSize({ width: 800, height: 600 }, { width: 8, height: 17 })).toEqual({ cols: 100, rows: 35 })
+  })
+
+  it('900px 宽的实测数：字符宽 8.4287、可用 877px → 104 列，不管当前是几列', () => {
+    // FitAddon 用的 css.cell.width 是「整行宽取整 ÷ 当前列数」：104 列时 877 / 104，103 列时 868 / 103 ——
+    // 拿它们去除 877 分别得 103 和 104，每次 fit 都翻。字符本身的宽度（269.71875 / 32）与列数无关
+    const cell = { width: 269.71875 / 32, height: 17 }
+    expect(proposeSize({ width: 877, height: 676 }, cell)?.cols).toBe(104)
+    expect(Math.floor(877 / (877 / 104)), '旧算法在 104 列时提议 103（877 ÷ (877/104) = 103.99999999999999）').toBe(103)
+    expect(Math.floor(877 / (868 / 103)), '旧算法在 103 列时提议 104').toBe(104)
+  })
+
+  it('最少 2 列 1 行；格子尺寸量不到（还没渲染）时 null', () => {
+    expect(proposeSize({ width: 3, height: 3 }, { width: 8, height: 17 })).toEqual({ cols: 2, rows: 1 })
+    expect(proposeSize({ width: -20, height: 0 }, { width: 8, height: 17 })).toEqual({ cols: 2, rows: 1 })
+    expect(proposeSize({ width: 800, height: 600 }, { width: 0, height: 17 })).toBeNull()
+    expect(proposeSize({ width: 800, height: 600 }, { width: 8, height: NaN })).toBeNull()
   })
 })
 

@@ -193,7 +193,7 @@ export class SessionStore {
       e.term.term.open(e.host)
       e.opened = true
     }
-    e.term.fit.fit()
+    e.term.fit()
     this.activeSid = sid
     this.conn.subscribe(sid, e.term.term.cols, e.term.term.rows)
     this.h.onChange()

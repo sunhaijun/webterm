@@ -497,7 +497,7 @@ export class AppController {
     this.lastH = h
     const t = this.activeTerm()
     if (!t) return
-    t.fit.fit()
+    t.fit()
     this.sendResize()
   }
 

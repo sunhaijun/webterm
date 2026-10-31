@@ -11,15 +11,12 @@
  * 两次写入、且第 2 字节是 0x80、切在第 2 字节之后时会丢掉整个字符（`。` `…` `—`）。
  *
  * 渲染器用 xterm 默认的 DOM 渲染器；触屏滚动用 xterm 自带的（程序开了鼠标跟踪时
- * 纵向拖转成滚轮，标定步长在这里做，ADR-0029）。不做回看暂停、
+ * 纵向拖转成滚轮，ADR-0029 / 0032）。行列自己算，不用 FitAddon（ADR-0033）。不做回看暂停、
  * 按帧合并、写入预算 —— 都等量过 E2E-37 的基线再说。
  */
-import { Terminal, type IDisposable, type ITheme } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
+import { Terminal, type ITheme } from '@xterm/xterm'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
-
-import { detectShift } from './gestures'
 
 /** 终端字号：固定，不提供设置（AC-5.3，ADR-0030）。 */
 export const FONT_SIZE = 14
@@ -42,12 +39,34 @@ export const SCROLLBACK = 5000
  */
 export const RIS = '\x1bc'
 
-/** 标定最多等多久（ADR-0029）：程序这么久没重画出可认的位移，就沿用旧步长。 */
-export const CALIBRATE_MS = 300
+export interface Size {
+  width: number
+  height: number
+}
+
+/**
+ * 行列 = 可用尺寸 ÷ 字符格尺寸，向下取整，最少 2 列 1 行（同 FitAddon）。格子尺寸量不到时 null。
+ * 【格子尺寸必须与当前行列无关】—— 见 `fit()`（ADR-0033）。
+ */
+export function proposeSize(avail: Size, cell: Size): { cols: number; rows: number } | null {
+  if (!(cell.width > 0 && cell.height > 0)) return null
+  return {
+    cols: Math.max(2, Math.floor(Math.max(0, avail.width) / cell.width)),
+    rows: Math.max(1, Math.floor(Math.max(0, avail.height) / cell.height)),
+  }
+}
+
+/** xterm 内部用得上的那几个字段（FitAddon 读的也是它们）。 */
+interface XtermCore {
+  _renderService: { dimensions: { device: { cell: Size } }; clear(): void }
+  _coreBrowserService: { dpr: number }
+  viewport?: { scrollBarWidth: number }
+}
 
 export interface TermHandle {
   term: Terminal
-  fit: FitAddon
+  /** 按容器尺寸重算行列，变了才 resize（ADR-0033）。 */
+  fit(): void
   serialize: SerializeAddon
   /** 写一段 OUTPUT。replay=true：补课，写入期间 xterm 的自动应答要被回放门拦下。 */
   output(bytes: Uint8Array, replay: boolean): void
@@ -66,14 +85,8 @@ export interface TermHandle {
   mouseTracking(): boolean
   /** 一行的高度（px）。 */
   rowHeight(): number
-  /** 前台程序一次滚轮滚几行（ADR-0029 标定出来的；没量过按 3）。 */
-  wheelStep(): number
-  /** 正在等标定结果。 */
-  calibrating(): boolean
-  /** 最近一次标定认出了位移。 */
-  calibrated(): boolean
-  /** 在视口坐标 (x, y) 处发一次滚轮（ADR-0029）；up = 向上滚；calibrate = 顺便量程序滚了几行。 */
-  wheel(up: boolean, x: number, y: number, calibrate: boolean): void
+  /** 在视口坐标 (x, y) 处发一次滚轮（ADR-0029）；up = 向上滚。 */
+  wheel(up: boolean, x: number, y: number): void
   dispose(): void
 }
 
@@ -88,9 +101,7 @@ export function createTerminal(theme?: ITheme): TermHandle {
     theme,
   })
 
-  const fit = new FitAddon()
   const serialize = new SerializeAddon()
-  term.loadAddon(fit)
   term.loadAddon(serialize)
 
   // 正确计算 CJK 与 emoji 的宽度，否则中英混排会错位
@@ -101,21 +112,33 @@ export function createTerminal(theme?: ITheme): TermHandle {
   let replayDepth = 0
   /** 每来一份快照加一：快照之前排下的本地行作废。 */
   let generation = 0
-  /** 前台程序一次滚轮滚几行（ADR-0029）；没量过时按多数程序的默认值 3。 */
-  let wheelStep = 3
-  /** 正在进行的标定：等程序重画回来看屏幕挪了几行。 */
-  let probe: { sub: IDisposable; timer: ReturnType<typeof setTimeout> } | null = null
-  /** 最近一次标定认出了位移。 */
-  let probeOk = false
-  const endProbe = () => {
-    if (!probe) return
-    probe.sub.dispose()
-    clearTimeout(probe.timer)
-    probe = null
-  }
-  const visibleRows = () => {
-    const b = term.buffer.active
-    return Array.from({ length: term.rows }, (_, i) => b.getLine(b.viewportY + i)?.translateToString(true) ?? '')
+
+  /**
+   * 可用尺寸的算法照 FitAddon：父元素宽高 − `.xterm` 的内边距，宽度再减滚动条。
+   * 【格子尺寸取 device.cell / dpr，不取 css.cell】：DOM 渲染器的 css.cell.width 是
+   * 「整行宽取整 ÷ 当前列数」，随当前列数变 —— FitAddon 拿它去除，900px 宽上每次 fit
+   * 都在 104 / 103 之间翻，只改高度也改列数（ADR-0033）。
+   */
+  const fit = () => {
+    const el = term.element
+    const parent = el?.parentElement
+    if (!el || !parent) return
+    const core = (term as unknown as { _core: XtermCore })._core
+    const dpr = core._coreBrowserService.dpr
+    const cell = core._renderService.dimensions.device.cell
+    const ps = getComputedStyle(parent)
+    const es = getComputedStyle(el)
+    const px = (v: string) => parseInt(v) || 0
+    const size = proposeSize(
+      {
+        width: px(ps.width) - px(es.paddingLeft) - px(es.paddingRight) - (core.viewport?.scrollBarWidth ?? 0),
+        height: px(ps.height) - px(es.paddingTop) - px(es.paddingBottom),
+      },
+      { width: cell.width / dpr, height: cell.height / dpr },
+    )
+    if (!size || (size.cols === term.cols && size.rows === term.rows)) return
+    core._renderService.clear()
+    term.resize(size.cols, size.rows)
   }
 
   const writeReplay = (s: string) => {
@@ -161,24 +184,7 @@ export function createTerminal(theme?: ITheme): TermHandle {
       const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
       return Math.max((screen?.getBoundingClientRect().height ?? 0) / Math.max(term.rows, 1), 1)
     },
-    wheelStep: () => wheelStep,
-    calibrating: () => probe !== null,
-    calibrated: () => probeOk,
-    wheel(up, x, y, calibrate) {
-      if (calibrate && !probe) {
-        probeOk = false
-        // 发之前记下屏幕；之后每次写入解析完比一次，认出位移就是步长。量不到就沿用旧值
-        const before = visibleRows()
-        const sub = term.onWriteParsed(() => {
-          const k = detectShift(before, visibleRows(), up)
-          if (k > 0) {
-            wheelStep = k
-            probeOk = true
-            endProbe()
-          }
-        })
-        probe = { sub, timer: setTimeout(endProbe, CALIBRATE_MS) }
-      }
+    wheel(up, x, y) {
       // 交给 xterm 自己的鼠标跟踪路径：一个 DOM_DELTA_LINE 的滚轮就是一次上报，
       // 编码（X10 / SGR / URXVT）与行列都按程序要的协议算
       term.element?.dispatchEvent(
@@ -193,7 +199,6 @@ export function createTerminal(theme?: ITheme): TermHandle {
       )
     },
     dispose() {
-      endProbe()
       term.dispose()
     },
   }

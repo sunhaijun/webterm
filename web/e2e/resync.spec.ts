@@ -14,7 +14,7 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-test('E2E-42 窗口变窄（列数变）→ resize 之后收到快照、终端列数对、内容只有一份；只改高度 → 不发快照', async ({ page }) => {
+test('E2E-42 窗口变窄（列数变）→ resize 之后收到快照、终端列数对、内容只有一份；只改高度 → 不发快照、列数稳定', async ({ page }) => {
   const rec = await recordSent(page)
   await agent.open(page)
   const sid = (await hooks.sid(page))!
@@ -25,9 +25,7 @@ test('E2E-42 窗口变窄（列数变）→ resize 之后收到快照、终端�
   await page.waitForTimeout(300)
   const before = await hooks.size(page)
 
-  // ② 窗口 1280 → 1000 宽：列数变少。
-  // 【别用 900】：那个宽度上 xterm 的 DOM 渲染器按当前列数反算 cell 宽，fit() 在 104 / 103
-  // 之间来回翻，④ 只改高度也会改列数 —— 是 main 上就有的问题，另案处理
+  // ② 窗口 1280 → 1000 宽：列数变少
   await rec.clear()
   const read = await framesSince(page)
   const vp0 = page.viewportSize()!
@@ -57,4 +55,15 @@ test('E2E-42 窗口变窄（列数变）→ resize 之后收到快照、终端�
   expect(r2.rows, '行数变了').toBeLessThan(resize.rows)
   await page.waitForTimeout(1500)
   expect((await read2()).filter((f) => f.sid === sid && f.kind === 'SNAPSHOT'), '只改行数不该收到快照').toEqual([])
+
+  // ⑤ 列数稳定（ADR-0033）：FitAddon 时代 900px 宽上每次 fit 都在 104 / 103 之间翻，
+  // 只改高度也改列数。在一段宽度上逐个试，各只改一次高度
+  for (let w = 860; w <= 940; w += 4) {
+    await page.setViewportSize({ width: w, height: 720 })
+    await page.waitForTimeout(250)
+    const before = await hooks.size(page)
+    await page.setViewportSize({ width: w, height: 520 })
+    await waitFor(async () => (await hooks.size(page)).rows !== before.rows, `${w}px：行数跟着高度变`)
+    expect((await hooks.size(page)).cols, `${w}px 宽只改高度，列数不该变`).toBe(before.cols)
+  }
 })
