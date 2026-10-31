@@ -1,5 +1,5 @@
 /**
- * E2E-34 打字不该消失（AC-4.8 / AC-2.15 / AC-3.3，ADR-0020）。
+ * E2E-34 打字不该消失 —— AC-4.8 / AC-2.15 / AC-3.3 / AC-3.17（ADR-0020）。
  *
  * 三条互相独立、症状完全相同的路：敲下去没反应，屏幕毫无变化，也没有任何提示。
  *
@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
-import { Agent, terminalText, waitFor } from './harness'
+import { Agent, focusTerm, framesSince, hooks, terminalText, waitFor, waitSnapshot, type InputStats } from './harness'
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -20,8 +20,7 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-const sid = (page: Page) =>
-  page.evaluate(() => (window as unknown as { __webterm: { sid(): number | null } }).__webterm.sid())
+const sid = (page: Page) => hooks.sid(page)
 
 /** 当前焦点落在哪 —— 失败时把它打出来，比"没出现"好定位得多。 */
 const focused = (page: Page) =>
@@ -33,9 +32,7 @@ async function typeLine(page: Page, line: string): Promise<void> {
 }
 
 test('E2E-34 ① 切会话之后不点终端也能直接打字（AC-4.8）', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await agent.open(page)
 
   await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
   await typeLine(page, 'echo ONE')
@@ -64,33 +61,31 @@ test('E2E-34 ① 切会话之后不点终端也能直接打字（AC-4.8）', asy
 })
 
 test('E2E-34 ② 切回时的回放窗口里打字不丢（AC-2.15）', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await agent.open(page)
 
-  await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
+  await focusTerm(page)
   const sidA = await sid(page)
 
-  // A 在后台产 ~1.5 MiB：默认 ring 是 1 MiB，保证切回时走满窗口的 reset 回放。
-  // 回放越大，"回放期间打字"这个窗口越真实 —— 手机上它就是秒级的。
+  // A 在后台产 ~1 MiB：默认 ring 256 KiB，保证切回时走快照（回放门对快照同样开着）。
   // 先 sleep 2 秒，这几秒用来切到 B，保证整段输出都落在未订阅期间。
-  const dir = mkdtempSync(join(tmpdir(), 'webterm-e2e33-'))
+  const dir = mkdtempSync(join(tmpdir(), 'webterm-e2e34-'))
   const done = join(dir, 'flooded')
   const pad = 'x'.repeat(60)
   await typeLine(
     page,
-    `(sleep 2; for i in $(seq 1 22000); do printf 'pad %05d %s\\n' $i ${pad}; done; touch ${done}) &`,
+    `(sleep 2; for i in $(seq 1 15000); do printf 'pad %05d %s\\n' $i ${pad}; done; touch ${done}) &`,
   )
 
   await page.keyboard.press('Control+Shift+Enter')
   await waitFor(async () => (await sid(page)) !== sidA, '切到了 B')
   await waitFor(() => Promise.resolve(existsSync(done)), 'A 在后台把缓冲顶掉了', 120_000)
 
-  // 切回 A —— 【不等任何东西】，立刻打字。字要落在回放正在解析的那个窗口里
+  // 切回 A —— 【不等任何东西】，立刻打字。字要落在快照正在解析的那个窗口里
+  const read = await framesSince(page)
   await page.keyboard.press('Control+Shift+ArrowUp')
   await typeLine(page, 'echo REPLAYKEY')
 
-  await expect(page.getByTestId('truncated'), '这一轮确实走了 reset 回放').toBeVisible()
+  await waitSnapshot(read, sidA!, '这一轮确实走了快照')
   await waitFor(
     async () => (await terminalText(page)).includes('REPLAYKEY'),
     '回放窗口里敲的字被吞了 —— 命令被打断，什么都没执行',
@@ -99,9 +94,7 @@ test('E2E-34 ② 切回时的回放窗口里打字不丢（AC-2.15）', async ({
 })
 
 test('E2E-34 ③ compositionend 没来也不会把终端打死（AC-3.3）', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await agent.open(page)
   await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
 
   /** 开始组字但【不结束】—— 切输入法 / 切窗口时 compositionend 就是这么丢的。 */
@@ -147,18 +140,7 @@ test('E2E-34 ③ compositionend 没来也不会把终端打死（AC-3.3）', asy
   )
 })
 
-/** `__webterm.inputStats()` 的返回值（AC-3.17）。 */
-interface Stats {
-  keydown: { n: number; agoMs: number }
-  toTerm: { n: number; agoMs: number }
-  data: { n: number; agoMs: number }
-  sent: { n: number; agoMs: number }
-  gated: number
-  focus: string
-  verdict: string
-}
-const stats = (page: Page): Promise<Stats> =>
-  page.evaluate(() => (window as unknown as { __webterm: { inputStats(): Stats } }).__webterm.inputStats())
+const stats = (page: Page): Promise<InputStats> => hooks.inputStats(page)
 
 /**
  * E2E-34 ④ 输入路径可观测（AC-3.17）。
@@ -167,9 +149,7 @@ const stats = (page: Page): Promise<Stats> =>
  * ADR-0020 的原则本身需要可观测性，否则下次还是从猜开始。
  */
 test('E2E-34 ④ 打字没反应时，inputStats 指得出断在哪一段', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await agent.open(page)
 
   await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
   await typeLine(page, 'echo STATS')

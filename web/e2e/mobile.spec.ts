@@ -1,21 +1,32 @@
-import { devices, expect, test } from '@playwright/test'
-
-import { Agent, submit, terminalText, waitFor } from './harness'
-
 /**
- * 手机视口下的布局不变量。
+ * E2E-10 手机布局与附加键 —— AC-3.18 / AC-3.20（另含安全区与横屏的几何，layout.md §安全区）。
  *
- * 【这一档以前完全没有覆盖】：E2E 的 use 只有 devices['Desktop Chrome']，
- * 而 webterm 是个手机上用的产品。代价是一个结构性 bug 长期没人发现 ——
- * style.css 里遗留着 sidebar 重构【之前】的 `.app { grid-template-rows:
- * 28px auto 1fr auto auto auto }`。重构后 .app 的子元素变成 sidebar + main
- * 两个，那六行定义把 .main auto-place 进 28px 那行，于是 .main 只有 28px、
- * .term 8px、.xterm-viewport 0 —— 终端整个不渲染。
- *
- * 所以这里【断言尺寸，不只断言存在】。元素在、类名对、文本对，都不代表
- * 用户看得见东西。
+ * Pixel 5（触屏）。hook `WebSocket.send` 记 INPUT 帧，断言的是线上的字节。
+ * 【断言尺寸，不只断言存在】：元素在、类名对、文本对，都不代表用户看得见东西。
  */
-test.use({ ...devices['Pixel 5'] })
+import { devices, expect, test, type Page } from '@playwright/test'
+
+import { Agent, EMIT, focusTerm, hooks, recordSent, rectOf, submit, waitFor, waitText, type SentRecorder } from './harness'
+
+const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
+test.use(PIXEL)
+
+const KEY_IDS = [
+  'Escape',
+  'Slash',
+  'Minus',
+  'Home',
+  'ArrowUp',
+  'End',
+  'PageUp',
+  'Tab',
+  'Ctrl',
+  'Alt',
+  'ArrowLeft',
+  'ArrowDown',
+  'ArrowRight',
+  'PageDown',
+]
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -23,260 +34,265 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-test('手机视口：终端拿到真实高度，页面不滚动，命令能往返', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+/** 键区里键的 testid 序列（DOM 顺序）。 */
+const keyOrder = (p: Page) =>
+  p.evaluate(() => [...document.querySelectorAll('[data-testid=extrakeys] .ek-key')].map((e) => (e as HTMLElement).dataset.testid))
 
-  const geo = await page.evaluate(() => {
-    const h = (sel: string) => {
-      const el = document.querySelector(sel)
-      return el ? Math.round(el.getBoundingClientRect().height) : null
-    }
-    return {
-      viewportH: window.innerHeight,
-      appH: h('.app'),
-      mainH: h('.main'),
-      termH: h('.term'),
-      xtermViewportH: h('.xterm-viewport'),
-      scrollH: document.documentElement.scrollHeight,
-      scrollW: document.documentElement.scrollWidth,
-      viewportW: window.innerWidth,
-    }
-  })
-
-  // .main 必须铺满 app 外壳；被塞进 28px 那行就是这里先炸
-  expect(geo.mainH, `.main 应当铺满（app ${geo.appH}px）`).toBeGreaterThan(geo.appH! - 8)
-
-  // 终端是唯一显示面（ADR-0013）：占空间的主体就是 xterm，高度不能塌。
-  expect(geo.termH, `.term 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.6)
-  expect(geo.xtermViewportH, '.xterm-viewport 不能是 0').toBeGreaterThan(0)
-
-  // 【伸缩空间必须落在终端上，不能落到别的条上】。
-  // .main 曾经用固定行数的 grid（28px auto 1fr auto auto auto）按位置分配，
-  // 而 banner 是条件渲染的 —— 少一个子元素就整体错位，1fr 跑到 modebar 上，
-  // 模式条白占 153px。当时"终端 > 40% 视口"这条断言仍然是绿的，
-  // 所以这里改成【逐条卡住非终端的条不许变胖】。
-  const strips = await page.evaluate(() =>
-    [...document.querySelectorAll('.main > *')]
-      .filter((e) => !e.classList.contains('canvas'))
-      .map((e) => ({
-        cls: e.className || e.tagName.toLowerCase(),
-        h: Math.round(e.getBoundingClientRect().height),
-      })),
-  )
-  for (const s of strips) {
-    expect(s.h, `.main > .${s.cls} 是条状 chrome，不该占这么高`).toBeLessThanOrEqual(80)
-  }
-
-  // 【根容器不该滚动】。手机上 sidebar 是靠 translateY 收到视口下面的
-  // 底部 sheet，而 transform 不会把它从可滚动区域里去掉 —— 少了
-  // overflow:hidden 就能往下多滚出一个抽屉。
-  expect(geo.scrollH, '页面不该纵向滚动').toBeLessThanOrEqual(geo.viewportH + 1)
-  expect(geo.scrollW, '页面不该横向滚动').toBeLessThanOrEqual(geo.viewportW + 1)
-
-  // 布局对了还得真能用
-  await submit(page, 'printf "HELLO-%s\\n" MOBILE')
-  await waitFor(async () => (await terminalText(page)).includes('HELLO-MOBILE'), '终端出现输出')
-})
-
-test('更窄的手机（360×640）同样不塌', async ({ page }) => {
-  await page.setViewportSize({ width: 360, height: 640 })
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-
-  const geo = await page.evaluate(() => {
-    const h = (sel: string) => {
-      const el = document.querySelector(sel)
-      return el ? Math.round(el.getBoundingClientRect().height) : null
-    }
-    return {
-      viewportH: window.innerHeight,
-      termH: h('.term'),
-      xtermViewportH: h('.xterm-viewport'),
-      scrollH: document.documentElement.scrollHeight,
-    }
-  })
-  expect(geo.termH, `.term 高度（视口 ${geo.viewportH}px）`).toBeGreaterThan(geo.viewportH * 0.6)
-  expect(geo.xtermViewportH, '.xterm-viewport 不能是 0').toBeGreaterThan(0)
-  expect(geo.scrollH, '页面不该纵向滚动').toBeLessThanOrEqual(geo.viewportH + 1)
-
-  // 和上面一条同理：伸缩空间必须落在终端上。按比例卡不够 —— 换个屏幕尺寸
-  // 就可能碰巧还在阈值内，所以逐条卡住非终端的条。
-  const strips = await page.evaluate(() =>
-    [...document.querySelectorAll('.main > *')]
-      .filter((e) => !e.classList.contains('canvas'))
-      .map((e) => ({
-        cls: e.className || e.tagName.toLowerCase(),
-        h: Math.round(e.getBoundingClientRect().height),
-      })),
-  )
-  for (const s of strips) {
-    expect(s.h, `.main > .${s.cls} 是条状 chrome，不该占这么高`).toBeLessThanOrEqual(80)
-  }
-})
-
-/**
- * 功能键条【应当】横向溢出并自己滚 —— 键比一屏宽是设计如此，不是 bug。
- * 钉住它，免得有人为了"消掉溢出"把它改成换行或裁掉，那样后面几个键
- * （Home / End / PgUp / PgDn）就点不到了。
- */
-test('功能键条横向可滚，且不撑破页面', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  // 命令在跑时键区是通用键集（21 个键，比一屏宽）。滚的是键区 .keybar-scroll，
-  // 不是整条 .keybar —— 行首互切键与行尾 ⋯ 钉住不动（ADR-0015）
-  await submit(page, 'sleep 30')
-  await expect(page.getByTestId('key-Escape')).toBeVisible({ timeout: 10_000 })
-
-  const kb = await page.evaluate(() => {
-    const el = document.querySelector('.keybar .keybar-scroll')
-    if (!el) return null
-    return {
-      scrollW: el.scrollWidth,
-      clientW: el.clientWidth,
-      overflowX: getComputedStyle(el).overflowX,
-      docScrollW: document.documentElement.scrollWidth,
-      viewportW: window.innerWidth,
-    }
-  })
-  expect(kb, '.keybar-scroll 应当存在').not.toBeNull()
-  expect(kb!.overflowX, '功能键条要能自己横向滚').toBe('auto')
-  expect(kb!.scrollW, '键的总宽超过一屏才需要滚').toBeGreaterThan(kb!.clientW)
-  expect(kb!.docScrollW, '但它不该把页面撑宽').toBeLessThanOrEqual(kb!.viewportW + 1)
-})
-
-/**
- * E2E-10 ⑦ 安全区：PWA 全屏（viewport-fit=cover + black-translucent）时内容延伸到刘海
- * 与 Home 指示条底下，四边的 inset 必须由 .app 的 padding 吃掉。Chromium 里
- * env(safe-area-inset-*) 恒为 0，所以直接覆盖 .app 上的 --sa-* 自定义属性来验几何。
- *
- * 真机上出过：状态栏顶到刘海底下、键行压在 Home 指示条上 —— 因为没人吃 inset。
- */
-test('PWA 安全区：刘海与 Home 指示条的 inset 落在 .app 上，终端相应变矮，页面不溢出', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-  await page.waitForTimeout(300)
-
-  const geo = () =>
-    page.evaluate(() => {
-      const r = (sel: string) => {
-        const el = document.querySelector(sel)
-        if (!el) return null
-        const b = el.getBoundingClientRect()
-        return { top: Math.round(b.top), bottom: Math.round(b.bottom), height: Math.round(b.height), left: Math.round(b.left) }
-      }
+/** 14 个键全在视口内、键区不横向滚动。 */
+async function allKeysVisible(page: Page) {
+  const g = await page.evaluate(() => {
+    const keys = document.querySelector('.ek-keys') as HTMLElement
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const out = [...keys.querySelectorAll('.ek-key')].map((e) => {
+      const r = e.getBoundingClientRect()
       return {
-        app: r('.app')!, statusbar: r('.statusbar')!, term: r('.term')!, bottom: r('.bottom')!,
-        scrollH: document.documentElement.scrollHeight, vh: window.innerHeight,
+        id: (e as HTMLElement).dataset.testid,
+        ok: r.left >= 0 && r.right <= vw + 0.5 && r.top >= 0 && r.bottom <= vh + 0.5 && r.width > 0,
+        r: `${r.left},${r.top},${r.right},${r.bottom} / ${vw}x${vh}`,
       }
     })
-  const before = await geo()
-  expect(before.statusbar.top, '没有刘海时状态栏贴顶').toBe(0)
+    return { scrollW: keys.scrollWidth, clientW: keys.clientWidth, out }
+  })
+  expect(g.scrollW, '键区不横向滚动').toBeLessThanOrEqual(g.clientW + 1)
+  expect(g.out.length).toBe(14)
+  for (const k of g.out) expect(k.ok, `${k.id} 应当完整落在视口内（${k.r}）`).toBe(true)
+}
 
-  // 模拟 iPhone 竖屏：刘海 47px、Home 指示条 34px、横向 0
+/** 按一下附加键（触屏点按）并返回这一下发出的 INPUT 帧（十六进制，拼起来）。 */
+async function press(page: Page, rec: SentRecorder, id: string): Promise<string> {
+  const before = (await rec.inputHex()).length
+  const n0 = (await hooks.inputStats(page)).data.n
+  await page.getByTestId(`key-${id}`).tap()
+  await waitFor(async () => (await rec.inputHex()).length > before, `key-${id} 发出了字节`, 5_000)
+  await page.waitForTimeout(50)
+  expect((await hooks.inputStats(page)).data.n, `key-${id} 走 onData 出口（inputStats.data 涨）`).toBeGreaterThan(n0)
+  return (await rec.inputHex()).slice(before).join('')
+}
+
+const active = (p: Page) => p.evaluate(() => (document.activeElement as HTMLElement | null)?.className ?? '')
+
+/** CDP 发一次真实的触摸序列（start → move* → end）。 */
+async function touch(page: Page, points: { x: number; y: number }[], holdMs = 0) {
+  const cdp = await page.context().newCDPSession(page)
+  const [first, ...rest] = points
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [first!] })
+  for (const p of rest) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [p] })
+  if (holdMs) await page.waitForTimeout(holdMs)
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await cdp.detach()
+}
+
+test('E2E-10 ①② 结构：compact、无标签栏、附加键 80px 在终端下方、14 键全可见不横滑', async ({ page }) => {
+  await agent.open(page)
+
+  await expect(page.locator('.app')).toHaveAttribute('data-form', 'compact')
+  await expect(page.getByTestId('tabbar')).toHaveCount(0)
+
+  const term = (await rectOf(page, '[data-testid=terminal]'))!
+  const keys = (await rectOf(page, '[data-testid=extrakeys]'))!
+  expect(keys.height, '附加键区高 80px').toBe(80)
+  expect(keys.top, '附加键在终端下方').toBeGreaterThanOrEqual(term.bottom - 1)
+  expect(term.height, '终端拿到了剩余的高度').toBeGreaterThan(400)
+
+  // 左列：☰ 在上、✎ 在下
+  const side = await page.evaluate(() => [...document.querySelectorAll('.ek-side > *')].map((e) => (e as HTMLElement).dataset.testid))
+  expect(side).toEqual(['open-sessions', 'toggle-text'])
+  const sessions = (await rectOf(page, '[data-testid=open-sessions]'))!
+  const toggle = (await rectOf(page, '[data-testid=toggle-text]'))!
+  expect(sessions.top).toBeLessThan(toggle.top)
+  expect(sessions.right, '左列在键区左边').toBeLessThanOrEqual((await rectOf(page, '[data-testid=key-Escape]'))!.left + 1)
+
+  expect(await keyOrder(page)).toEqual(KEY_IDS.map((k) => `key-${k}`))
+  await allKeysVisible(page)
+
+  // 页面不滚
+  const doc = await page.evaluate(() => ({ h: document.documentElement.scrollHeight, w: document.documentElement.scrollWidth, vh: innerHeight, vw: innerWidth }))
+  expect(doc.h).toBeLessThanOrEqual(doc.vh + 1)
+  expect(doc.w).toBeLessThanOrEqual(doc.vw + 1)
+})
+
+test('E2E-10 ③ 静态：命令在跑、less 占屏、退出 less 之后键位都不变', async ({ page }) => {
+  await agent.open(page)
+  const want = KEY_IDS.map((k) => `key-${k}`)
+
+  await submit(page, 'sleep 30')
+  await page.waitForTimeout(500)
+  expect(await keyOrder(page), 'sleep 在跑').toEqual(want)
+  await page.keyboard.press('Control+c')
+
+  await submit(page, 'seq 1 500 | less')
+  await waitFor(async () => hooks.altScreen(page), 'less 占屏（备用屏）')
+  expect(await keyOrder(page), 'less 占屏').toEqual(want)
+
+  await page.keyboard.press('q')
+  await waitFor(async () => !(await hooks.altScreen(page)), '退出 less')
+  expect(await keyOrder(page), '退出 less 之后').toEqual(want)
+})
+
+test('E2E-10 ④⑤ 字节：ESC / ↑ / DECCKM 下的 ↑ 与 HOME；按键不抢焦点', async ({ page }) => {
+  const rec = await recordSent(page)
+  await agent.open(page)
+
+  // ⑤ 不抢焦点：先让终端有焦点，按 TAB 之后焦点还在原处
+  await focusTerm(page)
+  const before = await active(page)
+  expect(before).toContain('xterm-helper-textarea')
+  expect(await press(page, rec, 'Tab')).toBe('09')
+  expect(await active(page), '按附加键不该改变焦点').toBe(before)
+  await page.keyboard.press('Control+c') // 清掉 Tab 补全可能留下的东西
+
+  // ④ 字节
+  expect(await press(page, rec, 'Escape')).toBe('1b')
+  expect(await press(page, rec, 'ArrowUp')).toBe('1b5b41')
+
+  // DECCKM 打开：方向键与 HOME 跟着变（按键时现读，不缓存）
+  await page.keyboard.press('Control+c')
+  await submit(page, "printf '\\033[?1h'; printf 'CKM-%s\\n' ON")
+  await waitText(page, /^CKM-ON/m)
+  expect(await press(page, rec, 'ArrowUp'), 'DECCKM 下 ↑ = ESC O A').toBe('1b4f41')
+  expect(await press(page, rec, 'Home'), 'DECCKM 下 HOME = ESC O H').toBe('1b4f48')
+
+  await page.keyboard.press('Control+c')
+  await submit(page, "printf '\\033[?1l'; printf 'CKM-%s\\n' OFF")
+  await waitText(page, /^CKM-OFF/m)
+  expect(await press(page, rec, 'ArrowUp'), '复原之后 ↑ = ESC [ A').toBe('1b5b41')
+  expect(await press(page, rec, 'Home'), '复原之后 HOME = ESC [ H').toBe('1b5b48')
+})
+
+test('E2E-10 ⑥⑦ 粘滞 CTRL：点一下只管下一个键（含软键盘），长按锁定，再点解锁', async ({ page }) => {
+  const rec = await recordSent(page)
+  await agent.open(page)
+  await focusTerm(page)
+  const ctrl = page.getByTestId('key-Ctrl')
+
+  // ⑥ 点一下 → armed；软键盘打 c → 0x03，自动取消
+  await ctrl.tap()
+  await expect(ctrl).toHaveAttribute('data-sticky', 'armed')
+  let n = (await rec.inputHex()).length
+  await page.keyboard.type('c')
+  await waitFor(async () => (await rec.inputHex()).length > n, '发出了字节')
+  expect((await rec.inputHex()).slice(n).join('')).toBe('03')
+  await expect(ctrl).toHaveAttribute('data-sticky', 'off')
+
+  // 点 CTRL 再点 ← → ESC[1;5D
+  await ctrl.tap()
+  await expect(ctrl).toHaveAttribute('data-sticky', 'armed')
+  expect(await press(page, rec, 'ArrowLeft')).toBe('1b5b313b3544')
+  await expect(ctrl).toHaveAttribute('data-sticky', 'off')
+
+  // ⑦ 长按（> 500ms）→ locked；连续 c u → 03 15（不用 d：空提示符下 ^D 会让 bash 退出）
+  const box = (await ctrl.boundingBox())!
+  const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  await touch(page, [at], 700)
+  await expect(ctrl).toHaveAttribute('data-sticky', 'locked')
+  n = (await rec.inputHex()).length
+  await page.keyboard.type('c')
+  await page.keyboard.type('u')
+  await waitFor(async () => (await rec.inputHex()).length >= n + 2, '两下都发出了')
+  expect((await rec.inputHex()).slice(n)).toEqual(['03', '15'])
+  await expect(ctrl, '锁定态连续生效').toHaveAttribute('data-sticky', 'locked')
+
+  await ctrl.tap()
+  await expect(ctrl).toHaveAttribute('data-sticky', 'off')
+})
+
+test('E2E-10 ⑧ 点按终端：点一下聚焦、再点失焦、拖动不算点；开了鼠标跟踪就交给程序', async ({ page }) => {
+  const rec = await recordSent(page)
+  await agent.open(page)
+  const t = (await rectOf(page, '[data-testid=terminal]'))!
+  const mid = { x: t.left + t.width / 2, y: t.top + t.height / 2 }
+
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  expect(await active(page)).not.toContain('xterm-helper-textarea')
+
+  await touch(page, [mid])
+  await expect.poll(() => active(page), { message: '点一下 → 焦点进 xterm 的 helper textarea' }).toContain('xterm-helper-textarea')
+  await touch(page, [mid])
+  await expect.poll(() => active(page), { message: '再点一下 → 焦点离开' }).not.toContain('xterm-helper-textarea')
+
+  // 纵向拖 30px 是滚动，不改焦点
+  const off = await active(page)
+  await touch(page, [mid, { x: mid.x, y: mid.y + 10 }, { x: mid.x, y: mid.y + 20 }, { x: mid.x, y: mid.y + 30 }])
+  await page.waitForTimeout(200)
+  expect(await active(page), '拖动不算点').toBe(off)
+
+  // 开鼠标跟踪：点一下交给 xterm 上报，焦点不变
+  await focusTerm(page)
+  await submit(page, "printf '\\033[?1000h'; printf 'MOUSE-%s\\n' ON")
+  await waitText(page, /^MOUSE-ON/m)
+  const focusedBefore = await active(page)
+  const n = (await rec.inputHex()).length
+  await touch(page, [mid])
+  await waitFor(async () => (await rec.inputHex()).slice(n).some((h) => h.startsWith('1b5b4d')), 'INPUT 帧里出现鼠标上报（ESC [ M）', 5_000)
+  expect(await active(page), '鼠标跟踪下点终端不切换焦点').toBe(focusedBefore)
+
+  // 复原：先把上报留在命令行上的字节清掉
+  await page.keyboard.press('Control+c')
+  await submit(page, "printf '\\033[?1000l'")
+})
+
+test('E2E-10 ⑧ 续：纵向拖是 xterm 自带的触摸滚动 —— 拖多远滚多远，不只滚第一帧', async ({ page }) => {
+  await agent.open(page)
+  await submit(page, `${EMIT} 300 0`)
+  await waitText(page, 'EMIT-DONE')
+  const t = (await rectOf(page, '[data-testid=terminal]'))!
+  const x = t.left + t.width / 2
+  const y0 = t.top + 60
+  const before = (await hooks.viewport(page)).y
+  // 手指往下拖 160px（20 帧，每帧 8px）：内容往回滚。DOM 渲染器滚动时会换掉手指下面那一行的元素 ——
+  // touch 的 target 一脱离文档，后面的 touchmove 就到不了 xterm（修复前只滚第一帧）
+  const pts = Array.from({ length: 21 }, (_, i) => ({ x, y: y0 + i * 8 }))
+  await touch(page, pts)
+  await page.waitForTimeout(300)
+  const rowH = t.height / (await hooks.size(page)).rows
+  const moved = before - (await hooks.viewport(page)).y
+  expect(moved, `拖 160px（约 ${Math.round(160 / rowH)} 行）只滚了 ${moved} 行`).toBeGreaterThanOrEqual(Math.floor(160 / rowH) - 2)
+})
+
+test('E2E-10 ⑨ 安全区：--sa-top / --sa-bottom 落在 .app 上，终端正好矮 81px，页面不溢出', async ({ page }) => {
+  await agent.open(page)
+  const geo = () =>
+    page.evaluate(() => {
+      const r = (s: string) => (document.querySelector(s) as HTMLElement).getBoundingClientRect()
+      const app = r('.app')
+      const term = r('.term')
+      const keys = r('[data-testid=extrakeys]')
+      return {
+        appH: Math.round(app.height),
+        appBottom: Math.round(app.bottom),
+        termTop: Math.round(term.top),
+        termH: Math.round(term.height),
+        keysBottom: Math.round(keys.bottom),
+        scrollH: document.documentElement.scrollHeight,
+        vh: innerHeight,
+      }
+    })
+  const base = await geo()
+
   await page.evaluate(() => {
     const app = document.querySelector('.app') as HTMLElement
     app.style.setProperty('--sa-top', '47px')
     app.style.setProperty('--sa-bottom', '34px')
   })
-  await page.waitForTimeout(250)
-  const after = await geo()
-  expect(after.app.height, '.app 高度是 JS 写的可视视口高度，不该变').toBe(before.app.height)
-  expect(after.statusbar.top, '状态栏让出刘海').toBe(47)
-  expect(after.app.bottom - after.bottom.bottom, '键行让出 Home 指示条').toBe(34)
-  expect(after.term.height, '终端正好矮掉上下 inset').toBe(before.term.height - 81)
-  expect(after.scrollH, '页面不该因此溢出').toBeLessThanOrEqual(after.vh + 1)
+  await expect.poll(async () => (await geo()).termTop).toBe(47)
+  const inset = await geo()
+  expect(inset.appH, '.app 高度不变').toBe(base.appH)
+  expect(inset.appBottom - inset.keysBottom, '附加键底边离 .app 底边 34px').toBe(34)
+  expect(base.termH - inset.termH, '终端正好矮 47 + 34').toBe(81)
+  expect(inset.scrollH, '页面不溢出').toBeLessThanOrEqual(inset.vh + 1)
 
-  // 横屏刘海在侧边：左右 inset 也要让
-  await page.evaluate(() => {
-    const app = document.querySelector('.app') as HTMLElement
-    app.style.setProperty('--sa-left', '44px')
-  })
-  await page.waitForTimeout(250)
-  expect((await geo()).term.left, '终端让出侧边刘海').toBe(44)
-
-  // 复位
-  await page.evaluate(() => {
-    const app = document.querySelector('.app') as HTMLElement
-    for (const p of ['--sa-top', '--sa-bottom', '--sa-left']) app.style.removeProperty(p)
-  })
-  await page.waitForTimeout(250)
-  const reset = await geo()
-  expect(reset.statusbar.top).toBe(0)
-  expect(reset.term.height).toBe(before.term.height)
+  await page.evaluate(() => (document.querySelector('.app') as HTMLElement).style.removeProperty('--sa-bottom'))
+  await expect.poll(async () => (await geo()).keysBottom).toBe(base.keysBottom)
+  expect((await geo()).termH, '清掉 --sa-bottom：只剩顶部 47px').toBe(base.termH - 47)
 })
 
-/**
- * E2E-12 ⑥ 的手机版（AC-5.9 多端）：Pixel 5 上滚上去同样暂停跟随，提示条落在键行之上、
- * 点一下补齐。滚动仍走 xterm 视口钩子 —— 单指拖动在 1× 时就是交给 xterm 的。
- */
-test('手机：回看时暂停跟随，提示条在键行之上，点一下补齐', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-
-  const count = async () => ((await terminalText(page)).match(/MF-\d{3}/g) ?? []).length
-  await submit(page, 'for i in $(seq 1 150); do printf "MF-%03d\\n" $i; sleep 0.03; done; printf "MF-%s\\n" END')
-  // 等真有 scrollback 可滚（贴底时 viewport.y == baseY）：Pixel 5 的终端有 39 行，
-  // 只等 30 行输出时根本滚不动 —— CI 机器快，正好踩到
-  await waitFor(
-    async () => (await page.evaluate(() => (window as unknown as { __webterm: { viewport(): { y: number } } }).__webterm.viewport().y)) >= 15,
-    '有足够的 scrollback',
-  )
-  await page.evaluate(() => (window as unknown as { __webterm: { scrollLines(n: number): void } }).__webterm.scrollLines(-10))
-  const pill = page.getByTestId('follow-pill')
-  await expect(pill).toBeVisible()
-  const frozen = await count()
-  await page.waitForTimeout(600)
-  expect(await count()).toBe(frozen)
-
-  // 提示条在画布里、键行之上，不被底栏盖住
-  const geo = await page.evaluate(() => {
-    const r = (s: string) => document.querySelector(s)!.getBoundingClientRect()
-    return { pillBottom: Math.round(r('[data-testid=follow-pill]').bottom), barTop: Math.round(r('.bottom').top), canvasBottom: Math.round(r('.canvas').bottom) }
-  })
-  expect(geo.pillBottom).toBeLessThanOrEqual(geo.barTop)
-  expect(geo.pillBottom).toBeLessThanOrEqual(geo.canvasBottom)
-
-  await pill.click()
-  await expect(pill).toHaveCount(0)
-  await waitFor(async () => (await terminalText(page)).includes('MF-END'), '命令跑完', 20_000)
-  const lines = (await terminalText(page)).match(/MF-\d{3}/g) ?? []
-  expect(new Set(lines).size).toBe(150)
-  expect(lines.length).toBe(150)
-})
-
-/**
- * 手机空闲回滚（AC-5.9）：单指拖动在 1× 时是 pinch.ts 直接改 .xterm-viewport.scrollTop，
- * 这里就直接改它。没有新输出也要有「回到底部」提示条，点一下回底。
- */
-test('手机：空闲时单指回滚也有「回到底部」提示条', async ({ page }) => {
-  await agent.pair(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
-
-  await submit(page, 'for i in $(seq 1 120); do printf "MI-%03d\\n" $i; done; printf "MI-%s\\n" END')
-  await waitFor(async () => (await terminalText(page)).includes('MI-END'), '命令跑完')
-  await page.waitForTimeout(300)
-  const y = () => page.evaluate(() => (window as unknown as { __webterm: { viewport(): { y: number } } }).__webterm.viewport().y)
-  const bottomY = await y()
-  expect(bottomY).toBeGreaterThan(15)
-  const pill = page.getByTestId('follow-pill')
-  await expect(pill).toHaveCount(0)
-
-  await page.evaluate(() => {
-    const vp = document.querySelector<HTMLElement>('.xterm-viewport')!
-    vp.scrollTop -= 200
-  })
-  await expect(pill).toBeVisible()
-  await expect(pill).toHaveText(/回到底部/)
-  expect(await y()).toBeLessThan(bottomY)
-
-  await pill.click()
-  await expect(pill).toHaveCount(0)
-  expect(await y()).toBe(bottomY)
+test('E2E-10 ⑩ 横屏（viewport 与 screen 都是 851×393）：仍是 compact，附加键 80px、14 键全可见', async ({ browser }) => {
+  const ctx = await browser.newContext({ ...PIXEL, viewport: { width: 851, height: 393 }, screen: { width: 851, height: 393 } })
+  const page = await ctx.newPage()
+  await agent.open(page)
+  await expect(page.locator('.app')).toHaveAttribute('data-form', 'compact')
+  expect((await rectOf(page, '[data-testid=extrakeys]'))!.height).toBe(80)
+  await allKeysVisible(page)
+  await ctx.close()
 })

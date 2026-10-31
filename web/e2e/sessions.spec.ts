@@ -1,27 +1,96 @@
 /**
- * E2E-6 多会话与未读（AC-2.11 / AC-4.3）
- * E2E-11 会话生命周期（AC-4.2 / AC-4.5 / US-7.3）
+ * E2E-6 多会话与未读 —— AC-2.11 / AC-4.3
+ * E2E-11 会话生命周期 —— AC-4.2 / AC-4.5 / US-7.3
+ * E2E-18 agent 重启后不张冠李戴 —— AC-2.13
  */
-import { expect, test, type Page } from '@playwright/test'
+import { devices, expect, test, type Page } from '@playwright/test'
 
-import { Agent, submit, terminalText, waitFor } from './harness'
+import {
+  Agent,
+  EMIT,
+  copySelection,
+  count,
+  focusTerm,
+  hooks,
+  installWSControl,
+  lastWelcome,
+  newSession,
+  openDrawer,
+  outSeq,
+  selectLine,
+  submit,
+  switchTo,
+  terminalText,
+  waitFor,
+  waitOnline,
+  waitText,
+} from './harness'
 
-async function unread(page: Page, sid: number): Promise<boolean> {
-  return page.evaluate(
-    (s) => (window as unknown as { __webterm: { unread(n: number): boolean } }).__webterm.unread(s),
-    sid,
-  )
+const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
+const WIDE = { viewport: { width: 1440, height: 900 }, contextOptions: { screen: { width: 1440, height: 900 } } }
+
+const EXIT_LINE = '[进程已结束（退出码 1）· 按 Enter 关闭]'
+
+/** 视口是不是贴在缓冲底部（按缓冲算：DOM 的 scrollTop 要等下一帧才同步，量它会抖）。 */
+const atBottom = async (p: Page) => {
+  const lines = (await hooks.text(p)).split('\n').length
+  const { rows } = await hooks.size(p)
+  return (await hooks.viewport(p)).y >= lines - rows
 }
 
-async function activeSid(page: Page): Promise<number | null> {
-  return page.evaluate(() => (window as unknown as { __webterm: { sid(): number | null } }).__webterm.sid())
-}
+/** E2E-6 的主体：两种形态只有「未读标记长在哪」不同。 */
+async function unreadFlow(page: Page, agent: Agent, form: 'compact' | 'wide') {
+  await agent.open(page)
+  const a = (await hooks.sid(page))!
+  const b = await newSession(page)
+  await switchTo(page, a)
 
-/** 打开会话列表（phone/tablet 上它是抽屉/sheet）。 */
-async function openSessions(page: Page) {
-  const sidebar = page.getByTestId('sidebar')
-  if (!(await sidebar.isVisible())) await page.getByTestId('statusbar').click()
-  await expect(sidebar).toBeVisible()
+  // A 里持续输出 5 秒
+  await submit(page, `${EMIT} 100 50`)
+  await waitText(page, 'line 00005', 'A 开始产出')
+  await switchTo(page, b)
+
+  // A 出现未读标记（session.updated{head_seq} > 本地 out_seq；字节不过网络）
+  await waitFor(async () => hooks.unread(page, a), 'A 出现未读', 20_000)
+  if (form === 'compact') {
+    await expect(page.getByTestId('open-sessions'), '☰ 带红点').toHaveAttribute('data-unread', 'true')
+    await openDrawer(page)
+    await expect(page.getByTestId(`session-${a}`), '抽屉里 A 那行有未读点').toHaveAttribute('data-unread', 'true')
+    await expect(page.getByTestId(`session-${a}`).locator('.unread-dot')).toBeVisible()
+    await page.keyboard.press('Escape')
+  } else {
+    await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'true')
+    await expect(page.getByTestId(`tab-${a}-unread`), 'A 的标签有未读点').toBeVisible()
+  }
+
+  // B 正常工作
+  await submit(page, 'echo in-b')
+  await waitFor(async () => (await terminalText(page)).split('\n').some((l) => l.trimEnd() === 'in-b'), 'B 正常工作')
+
+  // 切回 A：切走期间的输出全在，未读清除
+  await switchTo(page, a)
+  await waitText(page, 'EMIT-DONE', 'A 的输出补齐了', 30_000)
+  const t = await terminalText(page)
+  for (const n of [1, 50, 100]) expect(count(t, `line ${String(n).padStart(5, '0')} `), `line ${n} 恰好一次`).toBe(1)
+  expect(await hooks.unread(page, a)).toBe(false)
+  if (form === 'compact') await expect(page.getByTestId('open-sessions')).toHaveAttribute('data-unread', 'false')
+  else await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'false')
+
+  // 切走前在底部 → 切回来跟到底部
+  expect(await atBottom(page), '切走前在底部，切回应当在底部').toBe(true)
+
+  // 切走前不在底部 → 切回来保持原位（期间 A 还有一小段输出）
+  await submit(page, `sleep 1; ${EMIT} 3 0`)
+  await page.waitForTimeout(300) // 回显先落定，再往回滚
+  await hooks.scrollLines(page, -20)
+  const top = await hooks.viewport(page)
+  expect(await atBottom(page)).toBe(false)
+  await switchTo(page, b)
+  await page.waitForTimeout(2500)
+  await switchTo(page, a)
+  await waitFor(async () => count(await terminalText(page), 'EMIT-DONE') === 2, '第二段输出补齐')
+  const back = await hooks.viewport(page)
+  expect(back.top, `切回后回看位置应当不动（之前 y=${top.y}，之后 y=${back.y}）`).toBe(top.top)
 }
 
 test.describe('E2E-6 多会话与未读', () => {
@@ -31,123 +100,183 @@ test.describe('E2E-6 多会话与未读', () => {
   })
   test.afterEach(() => agent.stop())
 
-  test('切走的会话继续跑，产生输出时显示未读；切回来内容完整', async ({ page }) => {
-    await agent.pair(page)
-    await page.goto(agent.baseURL)
-    await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  test.describe('Pixel 5', () => {
+    test.use(PIXEL)
+    test('切走的会话继续跑：☰ 红点 + 抽屉未读点；切回内容完整、未读清除、回看位置保持', async ({ page }) => {
+      await unreadFlow(page, agent, 'compact')
+    })
+  })
 
-    const sidA = await activeSid(page)
-    expect(sidA).not.toBeNull()
-
-    // A 里起一个持续产出的循环
-    await submit(page, 'for i in $(seq 1 100); do printf "tick %03d\\n" $i; sleep 0.05; done')
-    await waitFor(async () => (await terminalText(page)).includes('tick 001'), 'A 开始产出')
-
-    // 新建 B 并切过去
-    await openSessions(page)
-    await page.getByTestId('new-session').click()
-    await waitFor(async () => (await activeSid(page)) !== sidA, '切到了 B')
-    const sidB = await activeSid(page)
-
-    // B 能正常用
-    await submit(page, 'printf "IN-%s\\n" B')
-    await waitFor(async () => (await terminalText(page)).includes('IN-B'), 'B 正常工作')
-
-    // A 在后台继续跑，并且【字节不过网络】—— 靠 head_seq 推出未读
-    await waitFor(async () => unread(page, sidA!), 'A 出现未读标记', 20_000)
-    await openSessions(page)
-    await expect(page.getByTestId(`session-${sidA}-unread`)).toBeVisible()
-
-    // 切回 A：切走期间的输出全在（agent 侧照常缓冲，切回时补齐）
-    await page.getByTestId(`session-${sidA}`).click()
-    await waitFor(async () => (await activeSid(page)) === sidA, '切回 A')
-    await waitFor(async () => {
-      const t = await terminalText(page)
-      return t.includes('tick 001') && /tick 0[2-9]\d/.test(t)
-    }, 'A 切走期间的输出补齐了', 20_000)
-
-    // 切回去之后未读清除
-    expect(await unread(page, sidA!)).toBe(false)
-    // B 的内容也还在（xterm 实例没被销毁）
-    await openSessions(page)
-    await page.getByTestId(`session-${sidB}`).click()
-    await waitFor(async () => (await terminalText(page)).includes('IN-B'), 'B 的屏幕内容保持')
+  test.describe('1440×900', () => {
+    test.use(WIDE)
+    test('切走的会话继续跑：标签未读点；切回内容完整、未读清除、回看位置保持', async ({ page }) => {
+      await unreadFlow(page, agent, 'wide')
+    })
   })
 })
 
-test.describe('E2E-11 会话生命周期', () => {
+test.describe('E2E-11 会话生命周期（上限 5）', () => {
   let agent: Agent
   test.beforeEach(async () => {
-    agent = await Agent.start({ maxSessions: 3 })
+    agent = await Agent.start({ maxSessions: 5 })
   })
   test.afterEach(() => agent.stop())
+  test.use(WIDE)
 
-  test('达到上限时新建按钮禁用并说明原因', async ({ page }) => {
-    await agent.pair(page)
-    await page.goto(agent.baseURL)
-    await expect(page.getByTestId('conn-text')).toHaveText('在线')
-    await openSessions(page)
-
-    // 已有 1 个，再建 2 个到上限
-    for (let i = 0; i < 2; i++) {
-      await page.getByTestId('new-session').click()
-      await page.waitForTimeout(400)
-      await openSessions(page)
-    }
+  test('① 建到上限：+ 禁用并说明原因，快捷键给 toast', async ({ page }) => {
+    await agent.open(page)
+    for (let i = 1; i < 5; i++) await newSession(page)
+    await expect(page.locator('.tabbar .tab')).toHaveCount(5)
     // 点了没反应是最糟的行为（US-7.3）
-    await expect(page.getByTestId('new-session')).toBeDisabled()
-    await expect(page.getByTestId('new-session')).toContainText('会话数已达上限 3')
+    const plus = page.getByTestId('new-session')
+    await expect(plus).toBeDisabled()
+    await expect(plus).toHaveAttribute('title', '会话数已达上限 5')
+    await focusTerm(page)
+    await page.keyboard.press('Control+Shift+Enter')
+    await expect(page.getByTestId('toast')).toContainText('会话数已达上限 5')
   })
 
-  test('shell 退出后保留内容，可重开也可关闭', async ({ page }) => {
-    await agent.pair(page)
-    await page.goto(agent.baseURL)
-    await expect(page.getByTestId('conn-text')).toHaveText('在线')
-    const sid = await activeSid(page)
+  test('②–⑥ shell 退出：提示行在最后输出之后、不计入 seq、可回看可复制、刷新后只有一行、Enter 关闭', async ({ page }) => {
+    await agent.open(page)
+    const keep = (await hooks.sid(page))!
+    const sid = await newSession(page)
 
-    await submit(page, 'printf "BEFORE-%s\\n" EXIT')
-    await waitFor(async () => (await terminalText(page)).includes('BEFORE-EXIT'), '退出前的输出')
-    await submit(page, 'exit 3')
-
-    // 标签不该直接消失 —— "构建失败了要回看报错"是高频场景
-    await expect(page.getByTestId('exited-bar')).toBeVisible({ timeout: 20_000 })
-    await expect(page.getByTestId('exited-bar')).toContainText('exit 3')
-    await openSessions(page)
-    await expect(page.getByTestId(`session-${sid}-exit`)).toContainText('exit 3')
-
-    // 内容仍然可看
-    expect(await terminalText(page)).toContain('BEFORE-EXIT')
-
-    // exited 会话不接受输入 —— Composer 收起
-    await expect(page.getByTestId('composer')).toHaveCount(0)
-
-    // 重开 = 在同一个 cwd 新建会话
-    await page.getByTestId('reopen-session').click()
-    await waitFor(async () => (await activeSid(page)) !== sid, '重开建了新会话')
-    await submit(page, 'printf "AFTER-%s\\n" REOPEN')
-    await waitFor(async () => (await terminalText(page)).includes('AFTER-REOPEN'), '新会话可用')
-  })
-
-  test('关闭 running 会话需要二次确认，exited 不需要', async ({ page }) => {
-    await agent.pair(page)
-    await page.goto(agent.baseURL)
-    await expect(page.getByTestId('conn-text')).toHaveText('在线')
-    await openSessions(page)
-    await page.getByTestId('new-session').click()
+    await submit(page, "printf 'LAST-%s\\n' LINE")
+    await waitText(page, /^LAST-LINE$/m)
+    await submit(page, 'exit 1')
+    await waitText(page, EXIT_LINE)
+    // 提示行是本地写的、不计入 seq：写完之后 outSeq 不再变，且等于 agent 的 head_seq（刷新后的 welcome 里核对）
+    const seqAtLine = await outSeq(page)
     await page.waitForTimeout(500)
-    const sid = await activeSid(page)
+    expect(await outSeq(page), '提示行出现之后 outSeq 不再变').toBe(seqAtLine)
 
+    // 它在 LAST-LINE 之后，而且在缓冲的末尾
+    const lines = (await terminalText(page)).split('\n').map((l) => l.trimEnd())
+    const iLast = lines.findIndex((l) => l === 'LAST-LINE')
+    const iExit = lines.findIndex((l) => l.includes(EXIT_LINE))
+    expect(iExit, '提示行在 LAST-LINE 之后').toBeGreaterThan(iLast)
+    expect(lines.slice(iExit + 1).every((l) => l === ''), '提示行之后没有别的内容').toBe(true)
+
+    // ④ 标签标出已退出
+    await expect(page.getByTestId(`tab-${sid}`)).toHaveAttribute('data-exited', 'true')
+
+    // ③ 已退出会话的内容仍可滚动、可选择复制
+    await hooks.scrollLines(page, -3)
+    await hooks.scrollLines(page, 3)
+    await selectLine(page, 'LAST-LINE')
+    expect(await copySelection(page)).toContain('LAST-LINE')
+
+    // ⑤ 刷新：快照里没有提示行（它不在 agent 的模拟器里），按会话状态再写一次 —— 只有一行
+    await page.reload()
+    await waitOnline(page)
+    const head = (await lastWelcome(page))!.sessions.find((x) => x.sid === sid)!.head_seq
+    expect(seqAtLine, `提示行不计入 seq：刷新前 outSeq ${seqAtLine}，agent 的 head_seq ${head}`).toBe(head)
+    await switchTo(page, sid)
+    await waitText(page, EXIT_LINE)
+    await page.waitForTimeout(500)
+    expect(count(await terminalText(page), EXIT_LINE), '刷新之后提示行只有一行').toBe(1)
+    expect(await outSeq(page)).toBeGreaterThan(0)
+
+    // ⑥ 在该会话里按 Enter → 关闭（不需要确认），切到相邻会话
     let asked = false
     page.on('dialog', (d) => {
       asked = true
       void d.dismiss()
     })
-    await openSessions(page)
-    await page.getByTestId(`session-${sid}-close`).click()
-    await page.waitForTimeout(300)
-    expect(asked, '关闭 running 会话必须二次确认').toBe(true)
-    // 取消了就不该关掉
-    await openSessions(page)
-    await expect(page.getByTestId(`session-${sid}`)).toBeVisible()
+    await focusTerm(page)
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId(`tab-${sid}`)).toHaveCount(0)
+    expect(asked, 'exited 会话关闭不需要确认').toBe(false)
+    await waitFor(async () => (await hooks.sid(page)) === keep, '切到相邻会话')
+  })
+
+  test('⑦ 关闭 running 会话（会话菜单 → 关闭）需要二次确认，取消就不关', async ({ page }) => {
+    await agent.open(page)
+    const sid = await newSession(page)
+
+    const asked: string[] = []
+    page.on('dialog', (d) => {
+      asked.push(d.message())
+      void d.dismiss()
+    })
+    await page.getByTestId(`tab-${sid}`).click({ button: 'right' })
+    await page.getByTestId('session-close').click()
+    await expect.poll(() => asked.length, { message: '关闭 running 会话必须二次确认' }).toBe(1)
+    expect(asked[0]).toContain('会话内可能有正在跑的程序')
+    await expect(page.getByTestId(`tab-${sid}`), '取消了就不该关掉').toBeVisible()
+  })
+})
+
+test.describe('E2E-11 ④ compact：抽屉里已退出的会话显示 exit 1（警示色）', () => {
+  let agent: Agent
+  test.beforeEach(async () => {
+    agent = await Agent.start()
+  })
+  test.afterEach(() => agent.stop())
+  test.use(PIXEL)
+
+  test('exit 1 在抽屉列表里', async ({ page }) => {
+    await agent.open(page)
+    const sid = await newSession(page)
+    await submit(page, 'exit 1')
+    await waitText(page, EXIT_LINE)
+    await openDrawer(page)
+    const row = page.getByTestId(`session-${sid}`)
+    await expect(row).toHaveAttribute('data-exited', 'true')
+    await expect(row.locator('.sl-meta')).toHaveText('exit 1')
+    await expect(row.locator('.sl-meta')).toHaveAttribute('data-failed', 'true')
+  })
+})
+
+test.describe('E2E-18 agent 重启后不张冠李戴', () => {
+  let agent: Agent
+  test.beforeEach(async () => {
+    agent = await Agent.start()
+  })
+  test.afterEach(() => agent.stop())
+
+  test('B 带着旧 instance_id 与 resume{sid:1} 重连 → gone，屏幕不接 A 新会话的输出', async ({ page, context }) => {
+    // 标签页 A
+    await agent.open(page)
+    const sid = (await hooks.sid(page))!
+    expect(sid).toBe(1)
+
+    // 标签页 B（同一个 context：Cookie 共享，client_id 各自一个），也看着 sid 1，攒一大段输出
+    const pageB = await context.newPage()
+    const netB = await installWSControl(pageB)
+    await pageB.goto(agent.baseURL)
+    await waitOnline(pageB)
+    await waitFor(async () => (await hooks.sid(pageB)) === 1, 'B 看着 sid 1')
+    await submit(pageB, `${EMIT} 200 0; printf 'B-%s\\n' OLD`)
+    await waitText(pageB, /^B-OLD$/m)
+    const oldSeq = await outSeq(pageB)
+    expect(oldSeq).toBeGreaterThan(10_000)
+    const oldInstance = (await lastWelcome(pageB))!.instance_id
+
+    // B 先断着，让 A 先重连
+    await netB.goOffline()
+    await agent.restart()
+
+    // A 重连：会话全没了 → 新建一个，它拿到 sid 1
+    await waitOnline(page)
+    await expect(page.getByTestId('empty')).toBeVisible()
+    await page.getByTestId('empty-new-session').click()
+    await waitFor(async () => (await hooks.sid(page)) === 1, 'A 的新会话拿到 sid 1')
+    await submit(page, "printf 'A-%s\\n' NEW")
+    await waitText(page, /^A-NEW$/m)
+
+    // B 随后重连：hello 里带着旧 instance_id 与 resume{sid:1, out_seq:很大}
+    netB.goOnline()
+    await waitOnline(pageB)
+    const w = (await lastWelcome(pageB))!
+    expect(w.instance_id, 'agent 确实重启过').not.toBe(oldInstance)
+    expect(w.resumed.find((r) => r.sid === 1)?.status, `resumed=${JSON.stringify(w.resumed)}`).toBe('gone')
+    await expect(pageB.getByTestId('toast')).toContainText('会话已结束')
+
+    // 屏幕上没有把 A 的新会话接到 B 的旧内容后面：旧内容没了；若 B 显示 sid 1，那是从快照重建的新会话
+    await pageB.waitForTimeout(1000)
+    const text = await terminalText(pageB)
+    expect(text, 'B 的旧内容不该还在屏幕上').not.toContain('B-OLD')
+    if (text.includes('A-NEW')) expect(count(text, 'line 00001'), '新会话里没有旧输出').toBe(0)
   })
 })

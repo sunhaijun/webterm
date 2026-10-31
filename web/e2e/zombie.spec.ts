@@ -1,5 +1,5 @@
 /**
- * E2E-33 僵尸连接：回到前台立刻戳穿（AC-2.20，ADR-0020）。
+ * E2E-33 僵尸连接：回到前台立刻戳穿 —— AC-2.20 / AC-2.4（ADR-0020）。
  *
  * 僵尸连接 = 线路断了但【没有 onclose】。手机息屏、切 App、Wi-Fi 切蜂窝、
  * NAT / 反向代理静默回收 —— TCP 上都没有 FIN，浏览器那边 readyState 一直是
@@ -10,7 +10,7 @@
  */
 import { expect, test } from '@playwright/test'
 
-import { Agent, installWSControl, terminalText, waitFor } from './harness'
+import { Agent, focusTerm, installWSControl, terminalText, waitFor } from './harness'
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -21,13 +21,11 @@ test.afterEach(() => agent.stop())
 test('E2E-33 线断了却没有 onclose：回到前台 5 秒内判死重连，僵尸期间的输入不丢', async ({
   page,
 }) => {
-  await agent.pair(page)
   const net = await installWSControl(page)
-  await page.goto(agent.baseURL)
-  await expect(page.getByTestId('conn-text')).toHaveText('在线')
+  await agent.open(page)
 
   // 先确认这条路是通的 —— 后面"打字没反应"才有对照
-  await page.getByTestId('terminal').click({ position: { x: 60, y: 60 } })
+  await focusTerm(page)
   await page.keyboard.type('echo ALIVE')
   await page.keyboard.press('Enter')
   await waitFor(async () => (await terminalText(page)).includes('ALIVE'), 'ALIVE 回显')
