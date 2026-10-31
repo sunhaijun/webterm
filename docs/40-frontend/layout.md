@@ -179,9 +179,9 @@ xterm 的主题（前景 / 背景 / 16 色）从同一组 CSS 变量读取，并
 - **连字（ligature）不生效**：xterm 的连字要额外加载 `addon-ligatures`，我们不加载。所以清单优先收不带连字的变体（Cascadia Mono 而非 Cascadia Code），带连字的字体也能选，只是显示成普通字形 —— 设置面板里明说这一条。
 - 界面 chrome 的 `--font-ui` 不进这个设置。
 
-## 渲染（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §7）
+## 渲染（ADR-0026 §7）
 
-**先用原生，量了再优化。** 浏览器只做三件事：
+**先用原生，量了再优化**（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §7）。浏览器只做三件事：
 
 ```
 每个会话: 一个 TextDecoder('utf-8')（stream 模式）
