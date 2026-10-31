@@ -536,10 +536,20 @@ func TestBusyFollowsForegroundProcessGroup(t *testing.T) {
 	}
 	waitFor(t, "sleep 30 在前台算忙", func() bool { return m.Busy() == 1 })
 
-	if err := c.Send(s, "\x03"); err != nil { // Ctrl-C
-		t.Fatal(err)
-	}
-	waitFor(t, "回到提示符算闲", func() bool { return m.Busy() == 0 })
+	// Ctrl-C 要补发：前台进程组换成 bash fork 出的子进程时就已经算忙，但它可能还没 exec
+	// sleep。这个窗口里的 SIGINT 被子进程里 bash 自己的处理函数接走，exec 之后就没了，
+	// sleep 照睡 30 秒（CI 上 -race 加并行时撞到过，本地 6 份并行约 2.5%）。
+	// 多出来的 ^C 落在提示符上，无害。
+	var lastIntr time.Time
+	waitFor(t, "回到提示符算闲", func() bool {
+		if time.Since(lastIntr) > 300*time.Millisecond {
+			if err := c.Send(s, "\x03"); err != nil {
+				t.Fatal(err)
+			}
+			lastIntr = time.Now()
+		}
+		return m.Busy() == 0
+	})
 
 	// 已退出的会话算闲
 	if err := c.Send(s, "exit\r"); err != nil {
