@@ -1,10 +1,22 @@
 package session_test
 
 import (
+	"os"
 	"testing"
 
 	"github.com/sunhaijun/webterm/internal/session"
 )
+
+// unsetEnv 在本测试期间去掉一个环境变量，结束后恢复（t.Setenv 只能设、不能删）。
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	old, had := os.LookupEnv(key)
+	if !had {
+		return
+	}
+	os.Unsetenv(key)
+	t.Cleanup(func() { os.Setenv(key, old) })
+}
 
 // envHarness 起一个不读 dotfile 的会话：bash --norc --noprofile，
 // 环境里只有我们注入的那些，断言才有确定性。
@@ -54,6 +66,9 @@ func TestITSessionEnv2_AltScreenCompat(t *testing.T) {
 		waitScreen(t, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN[1]")
 	})
 	t.Run("--no-altscreen-compat 关掉", func(t *testing.T) {
+		// 会话继承 agent 的环境。在 webterm 会话里跑测试时，这个进程自己就带着
+		// 清单注入的这个变量 —— 先清掉，断言的才是「关掉之后不再注入」。
+		unsetEnv(t, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
 		s, c := envHarness(t, session.Config{NoAltScreenCompat: true})
 		showEnv(t, s, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
 		waitScreen(t, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN[]")
