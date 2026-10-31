@@ -243,7 +243,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 4. 抽屉列表里显示 `exit 1`（警示色）；标签只变灰（`data-exited`），不显示退出码
 5. **刷新页面** → 提示行在缓冲里**只出现一次**
 6. 在该会话里按 `Enter` → 会话关闭（不需要确认），切到相邻会话
-7. 关闭 `running` 会话（会话菜单 → 关闭）→ 二次确认
+7. 关闭 `running` 会话（会话菜单 → 关闭）→ 弹 `close-confirm`（不是浏览器对话框：整个过程没有 `dialog` 事件），标题里有会话名，焦点在 `close-ok` 上；点 `close-cancel` → 浮层消失、会话还在；再关一次，按 `Esc` → 同样不关；再关一次，按 `Enter` → 会话关闭（ADR-0038）
 
 ---
 
@@ -350,7 +350,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 > AC-4.10, AC-5.11, AC-4.8。`web/e2e/drawer.spec.ts`，Pixel 5。触屏抽屉有约 170ms 的 `sheet-up` 进场动画：量「贴底」或长按抽屉里的行之前先等动画结束（`animationend`，或等矩形两次读数相同），否则拿到的是半路的位置。
 
-1. **形态**：会话按钮 `open-sessions` 里的数字等于会话数（`1`）；点它 → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行是 `new-session` 与 `open-settings`，各有一个 SVG 图标；从抽屉新建一个会话后按钮里是 `2`，关掉它变回 `1`
+1. **形态**：会话按钮 `open-sessions` 里的数字等于会话数（`1`）；点它 → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行是 `new-session` 与 `open-settings`，各有一个 SVG 图标；从抽屉新建一个会话后按钮里是 `2`；在抽屉里长按它 →「关闭」→ `close-confirm` 是贴底 sheet、**叠在抽屉上**（两个 `.drawer`），按 `Esc` 只关掉确认、抽屉仍在；再关一次点 `close-ok` → 行消失、抽屉仍开着，按钮里变回 `1`（AC-4.11）
 2. **焦点进浮层**：每次打开，`document.activeElement.closest('.drawer')` 非空
 3. **关闭方式**（会话抽屉）：点遮罩、`Esc`、✕、选中一个会话、`page.goBack()`（系统返回键）各关一次；`goBack` 之后页面仍在 `/`；五次开关之后 `history.length` 至多比开始时多 1
 4. **不挤终端**：开关抽屉前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
@@ -564,7 +564,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 1. **结构**：顶栏在终端上方；`tabbar`（标签条）里只有一个标签，`new-session` 在顶栏里、**不在** `tabbar` 里，位于标签条右边、左边缘距标签条右边缘 12px（ADR-0035）；右侧钉住 `conn-dot` 与 `open-settings`，`open-settings` 在最右、`conn-dot` 紧挨在它左边；`new-session` 里的 SVG、`open-settings` 里的 SVG 与 `conn-dot` 三者的垂直中心两两相差 ≤ 0.5px，两个 SVG 一样大；没有 `open-sessions`，没有附加键
 2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
-3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹确认，确认后标签消失；中键点标签同样关闭
+3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹 `close-confirm`（居中浮窗，不是浏览器对话框），点 `close-ok` 后标签消失；中键点标签同样先确认；焦点在终端里时按 `Ctrl+Shift+W` → 确认浮层，按 `Enter` → 关闭，焦点回到新的当前会话的终端（AC-4.11）
 4. **改名**：双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
 5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现 `⇵`；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
 6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点；切回 A → 消失

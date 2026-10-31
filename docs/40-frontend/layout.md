@@ -106,7 +106,7 @@ iOS Safari（以及 Chrome ≥108 的 `resizes-visual`）弹键盘只缩【可�
 
 ## 浮层
 
-浮层有两个：手机上的会话抽屉，和设置。它们共用 `Drawer` 原语（`web/src/ui/drawer.tsx`，[ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)），**形态看 `compact` / `wide`**，不看 `pointer`（[ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §4）：
+浮层有三个：手机上的会话抽屉、设置、关闭确认（[ADR-0038](../20-architecture/adr/0038-close-confirm-sheet.md)）。它们共用 `Drawer` 原语（`web/src/ui/drawer.tsx`，[ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)），**形态看 `compact` / `wide`**，不看 `pointer`（[ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §4）：
 
 | | `compact`（手机） | `wide`（PC / Pad） |
 |---|---|---|
@@ -115,7 +115,7 @@ iOS Safari（以及 Chrome ≥108 的 `resizes-visual`）弹键盘只缩【可�
 | 进场 | `sheet-up` 约 170ms（`prefers-reduced-motion` 下无） | 无 |
 | 抓手 | 有（36×4） | 无 |
 | 下滑关闭 | 有（内部滚动到顶再下拉，> 90px 松手即关） | — |
-| 使用者 | 会话抽屉、设置 | 设置 |
+| 使用者 | 会话抽屉、设置、关闭确认 | 设置、关闭确认 |
 
 ```
 ┌─────────────── ═══ ───────────────┐  抓手（仅 sheet）
@@ -135,6 +135,7 @@ iOS Safari（以及 Chrome ≥108 的 `resizes-visual`）弹键盘只缩【可�
 - **底部留出呼吸空间**：底部一行的内边距是上 12px、左右 16px、下 `max(16px, env(safe-area-inset-bottom))`；没有底部一行的 sheet 在正文下面留同样的 `max(16px, 安全区)`。按钮不贴边铺满，是 `--surface` 底色、`--line` 细边、圆角 12px 的块。
 - **关闭方式**：点遮罩、`Esc`、✕、（sheet）下滑。会话抽屉另加两种：选中一个会话、系统返回键（[session-ux.md](session-ux.md)）。设置不接系统返回键（ADR-0037 §4）。
 - **打开时焦点进浮层**（模态）：键盘与读屏用户不会被留在背后那一层，`Esc` 也才有确定的接收者。
+- **可以叠**：关闭确认能叠在会话抽屉上。`Esc` 只关最上面一层（DOM 里最后一个 `.drawer`），点遮罩也只点得到最上面那层。
 - **浮层不改终端几何**：`position: fixed`，不发 `resize`。
 - **`position: fixed` 的浮层自己吃 `env(safe-area-inset-bottom)`**（`.app` 的 padding 管不到它），见上面的底部留白。
 
