@@ -1,14 +1,22 @@
 /**
- * xterm 封装：渲染、滚动、搜索。
+ * xterm 封装 + 浏览器的输出路径（ADR-0026 §7，layout.md §渲染）。
  *
- * 见 docs/40-frontend/layout-responsive.md 的「渲染」一节。
+ * 浏览器只做三件事：
+ *
+ *   每个会话: 一个 TextDecoder('utf-8')，stream 模式
+ *   OUTPUT 帧   → term.write(decoder.decode(payload, {stream: true}))
+ *   SNAPSHOT 帧 → reset; decoder = new TextDecoder(); term.write(decode(快照))
+ *
+ * 【先解码成字符串再写】。xterm.js 5.5 的 `write(Uint8Array)` 在一个三字节字符被切进
+ * 两次写入、且第 2 字节是 0x80、切在第 2 字节之后时会丢掉整个字符（`。` `…` `—`）。
+ *
+ * 渲染器用 xterm 默认的 DOM 渲染器；触屏滚动用 xterm 自带的。不做回看暂停、
+ * 按帧合并、写入预算 —— 都等量过 E2E-37 的基线再说。
  */
-import { Terminal } from '@xterm/xterm'
+import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { SearchAddon } from '@xterm/addon-search'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
-import { WebglAddon } from '@xterm/addon-webgl'
 
 /** 终端字体：字号 + 一整段 family stack（AC-5.3 / AC-5.13）。 */
 export interface TermFont {
@@ -19,96 +27,146 @@ export interface TermFont {
 /** scrollback 至少 5000 行（AC-5.1）。 */
 export const SCROLLBACK = 5000
 
+/**
+ * 硬复位（RIS）。收到快照时用它【在流内】清空终端，而不是直接调 `term.reset()`：
+ * 后者是同步的，不清 xterm 的写缓冲 —— 列数一变 agent 就重发快照，那一刻写缓冲里
+ * 可能还排着没解析完的旧输出，它们会被解析到 reset 之后、快照之前，画面就错了。
+ * RIS 走的是同一条写入队列，顺序天然正确，效果与 `term.reset()` 相同。
+ */
+export const RIS = '\x1bc'
+
 export interface TermHandle {
   term: Terminal
   fit: FitAddon
-  search: SearchAddon
   serialize: SerializeAddon
-  /** 挂 WebGL；失败时静默回退到 canvas（AC-5.5）。 */
-  attachWebgl(): void
-  /** 卸掉 WebGL —— 切走的会话必须放掉上下文，见下面的注释。 */
-  detachWebgl(): void
-  /** 当前渲染器。WebGL 加载失败会静默回退到 canvas（AC-5.5），设置里把它显示出来（AC-5.10）。 */
-  renderer(): 'webgl' | 'canvas'
+  /** 写一段 OUTPUT。replay=true：补课，写入期间 xterm 的自动应答要被回放门拦下。 */
+  output(bytes: Uint8Array, replay: boolean): void
+  /** 写一份快照：复位 → 换新解码器 → 当作回放写入。 */
+  snapshot(bytes: Uint8Array): void
   /**
-   * 备用屏幕缓冲是否激活（ADR-0011 分片 ②）。
-   *
-   * vim / top / less / htop 都会 DECSET 1049 切到备用缓冲，普通流式命令
-   * 不会 —— 这是"有程序占屏"的机械信号，比 prompt_state=running 精确：
-   * sleep 100 和 top 都是 running，只有 top 切了备用缓冲。
+   * 本地写一行（进程结束提示行）。排在已经写进去的输出之后；若这之前又来了快照
+   * （快照会清屏），这一次作废 —— 调用方会在快照之后再写一次。
    */
+  local(line: string): void
+  /** 回放门：有回放的字节还没被 xterm 解析完。 */
+  replaying(): boolean
+  /** 备用屏幕缓冲是否激活。 */
   altScreen(): boolean
+  /** 前台程序开了鼠标跟踪。 */
+  mouseTracking(): boolean
   dispose(): void
 }
 
-/** 字体来自设置（AC-5.13）：清单与探测在 `ui/fonts.ts`，默认是 `SYSTEM_STACK`。 */
-export function createTerminal(fontSize: number, fontFamily: string): TermHandle {
+export function createTerminal(font: TermFont, theme?: ITheme): TermHandle {
   const term = new Terminal({
-    fontSize,
-    fontFamily,
+    fontSize: font.size,
+    fontFamily: font.family,
     scrollback: SCROLLBACK,
     allowProposedApi: true,
     convertEol: false,
     cursorBlink: true,
-    // 【不开 smoothScrollDuration】。试过 80ms：xterm 5.5 的平滑滚动是用 DOM scrollTop
-    // 动画实现的，持续输出时和它自己的 syncScrollArea 打架 —— 程序化 scrollLines 会被吞掉
-    // 或只动一格，onScroll 报出来的位置和最终视口对不上，回看暂停跟随（AC-5.9）据此判定
-    // 就会卡死。按行跳的台阶感是小事，判定出错是大事。
-    smoothScrollDuration: 0,
-    theme: { background: '#111111', foreground: '#e6e6e6' },
+    theme,
   })
 
   const fit = new FitAddon()
-  const search = new SearchAddon()
   const serialize = new SerializeAddon()
   term.loadAddon(fit)
-  term.loadAddon(search)
   term.loadAddon(serialize)
 
   // 正确计算 CJK 与 emoji 的宽度，否则中英混排会错位
-  const uni = new Unicode11Addon()
-  term.loadAddon(uni)
+  term.loadAddon(new Unicode11Addon())
   term.unicode.activeVersion = '11'
 
-  let webgl: WebglAddon | null = null
+  let decoder = new TextDecoder('utf-8')
+  let replayDepth = 0
+  /** 每来一份快照加一：快照之前排下的本地行作废。 */
+  let generation = 0
 
-  const attachWebgl = () => {
-    if (webgl) return
-    try {
-      const addon = new WebglAddon()
-      // 上下文丢了就回退，不要留一个黑屏
-      addon.onContextLoss(() => {
-        addon.dispose()
-        webgl = null
-      })
-      term.loadAddon(addon)
-      webgl = addon
-    } catch {
-      // webgl2 创建失败或 addon 抛异常 → 静默回退到默认 canvas renderer
-      webgl = null
-    }
-  }
-
-  const detachWebgl = () => {
-    // 浏览器的 WebGL 上下文数有上限（Chrome 约 16 个），而会话上限是 20
-    // 且切走的 xterm 实例不销毁 —— 全挂上必然撞线，症状是别的终端莫名变黑。
-    // 所以只有当前可见的终端持有上下文。
-    webgl?.dispose()
-    webgl = null
+  const writeReplay = (s: string) => {
+    // 【窗口在入队时就开，解析完才关】：xterm 是分片异步解析的，同步关门会漏掉之后
+    // 才触发的自动应答
+    replayDepth++
+    term.write(s, () => {
+      replayDepth--
+    })
   }
 
   return {
     term,
     fit,
-    search,
     serialize,
-    attachWebgl,
-    detachWebgl,
-    renderer: () => (webgl ? 'webgl' : 'canvas'),
+    output(bytes, replay) {
+      const s = decoder.decode(bytes, { stream: true })
+      if (s === '') return // 整帧都是半个字符，留在解码器里等下一帧
+      if (replay) writeReplay(s)
+      else term.write(s)
+    },
+    snapshot(bytes) {
+      generation++
+      // 新的解码器：旧的里面可能还压着半个字符，那是快照之前的流
+      decoder = new TextDecoder('utf-8')
+      // 快照末尾可能是解析到一半的序列（含半个 UTF-8 字符），stream 模式把它留给下一帧
+      writeReplay(RIS + decoder.decode(bytes, { stream: true }))
+    },
+    local(line) {
+      // 进程已经结束：解码器里若还压着半个字符，冲出来（会是 U+FFFD），别让它排到提示行后面
+      const tail = decoder.decode()
+      const gen = generation
+      term.write(tail, () => {
+        if (gen !== generation) return
+        // 光标不在行首就先换行，免得接在提示符后面
+        term.write((term.buffer.active.cursorX > 0 ? '\r\n' : '') + line)
+      })
+    },
+    replaying: () => replayDepth > 0,
     altScreen: () => term.buffer.active.type === 'alternate',
+    mouseTracking: () => term.modes.mouseTrackingMode !== 'none',
     dispose() {
-      detachWebgl()
       term.dispose()
     },
   }
+}
+
+/**
+ * xterm 的主题从 CSS 自定义属性读（layout.md §主题）：`--term-bg` `--term-fg`
+ * `--term-cursor` `--term-sel` 与 16 色 `--ansi-0` … `--ansi-15`。没定义的项留给 xterm 默认。
+ */
+export function themeFromCss(get: (name: string) => string): ITheme {
+  const v = (name: string) => get(name).trim() || undefined
+  const ansi = [
+    'black',
+    'red',
+    'green',
+    'yellow',
+    'blue',
+    'magenta',
+    'cyan',
+    'white',
+    'brightBlack',
+    'brightRed',
+    'brightGreen',
+    'brightYellow',
+    'brightBlue',
+    'brightMagenta',
+    'brightCyan',
+    'brightWhite',
+  ] as const
+  const theme: Record<string, string | undefined> = {
+    background: v('--term-bg'),
+    foreground: v('--term-fg'),
+    cursor: v('--term-cursor'),
+    cursorAccent: v('--term-bg'),
+    selectionBackground: v('--term-sel'),
+  }
+  ansi.forEach((name, i) => {
+    theme[name] = v(`--ansi-${i}`)
+  })
+  for (const k of Object.keys(theme)) if (theme[k] === undefined) delete theme[k]
+  return theme as ITheme
+}
+
+/** 进程结束的本地提示行（AC-4.5）。暗色显示，与输出区分开。 */
+export function exitLine(code: number | null): string {
+  const text = code === null ? '[进程已结束 · 按 Enter 关闭]' : `[进程已结束（退出码 ${code}）· 按 Enter 关闭]`
+  return `\x1b[0;2m${text}\x1b[0m`
 }

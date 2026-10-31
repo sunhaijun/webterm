@@ -1,30 +1,49 @@
-/* 三态主题：跟随系统 / 强制浅色 / 强制深色。所有颜色都在 :root 上定义。 */
+/* webterm —— Termux 式界面（ADR-0025，docs/40-frontend/layout.md）。
+   三态主题：跟随系统 / 强制浅色 / 强制深色。所有颜色都是 :root 上的自定义属性，
+   xterm 的主题也从这里读（--term-* / --ansi-*，term/terminal.ts::themeFromCss）。 */
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
   --fg: #1a1a1a;
   --muted: #6b6b6b;
   --line: #e3e3e3;
-  --surface: #ffffff;
   --line-strong: #cfcfd4;
+  --surface: #f6f7f8;
   --ring: rgba(26, 26, 26, 0.35);
   --link: #2563eb;
-  /* 强调色 = 「选中的是这个」。写成 var(--link) 就不必在三处主题块里各抄一份，
-     自定义属性是在用的地方求值的，--link 换了它跟着换。 */
+  /* 强调色 = 「选中的是这个」：当前标签、抽屉里的当前会话、CTRL / ALT 的激活态。
+     写成 var(--link)，换主题时跟着变。hover 用中性灰，靠色相与选中分开。 */
   --accent: var(--link);
-  --term-bg: #111111;
+  --hover: color-mix(in srgb, var(--fg) 7%, transparent);
   --ok: #2ea043;
   --warn: #d29922;
   --err: #cf222e;
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas,
     'Liberation Mono', 'Noto Sans Mono CJK SC', 'Sarasa Mono SC', monospace;
-  /* 界面 chrome 用比例字体，命令 / 输出用等宽 —— 精致终端区分 chrome 与内容的做法 */
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
     Arial, 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  /* 命令输出的代码面板底色（两个主题都用深色 —— ANSI 配色是按深底校准的） */
-  --code-bg: #0e1116;
-  --code-fg: #e6e6e6;
-  --card-shadow: 0 1px 2px rgba(16, 18, 22, 0.04), 0 1px 3px rgba(16, 18, 22, 0.06);
+
+  /* 终端（浅色） */
+  --term-bg: #fbfbfc;
+  --term-fg: #1f2328;
+  --term-cursor: #1f2328;
+  --term-sel: rgba(9, 105, 218, 0.25);
+  --ansi-0: #24292f;
+  --ansi-1: #cf222e;
+  --ansi-2: #116329;
+  --ansi-3: #4d2d00;
+  --ansi-4: #0969da;
+  --ansi-5: #8250df;
+  --ansi-6: #1b7c83;
+  --ansi-7: #6e7781;
+  --ansi-8: #57606a;
+  --ansi-9: #a40e26;
+  --ansi-10: #1a7f37;
+  --ansi-11: #633c01;
+  --ansi-12: #218bff;
+  --ansi-13: #a475f9;
+  --ansi-14: #3192aa;
+  --ansi-15: #8c959f;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
@@ -32,11 +51,30 @@
     --fg: #e6edf3;
     --muted: #8b949e;
     --line: #21262d;
-    --surface: #161b22;
     --line-strong: #30363d;
+    --surface: #161b22;
     --ring: rgba(230, 237, 243, 0.35);
     --link: #6ea8fe;
-    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --term-bg: #0d1117;
+    --term-fg: #e6edf3;
+    --term-cursor: #e6edf3;
+    --term-sel: rgba(110, 168, 254, 0.3);
+    --ansi-0: #484f58;
+    --ansi-1: #ff7b72;
+    --ansi-2: #3fb950;
+    --ansi-3: #d29922;
+    --ansi-4: #58a6ff;
+    --ansi-5: #bc8cff;
+    --ansi-6: #39c5cf;
+    --ansi-7: #b1bac4;
+    --ansi-8: #6e7681;
+    --ansi-9: #ffa198;
+    --ansi-10: #56d364;
+    --ansi-11: #e3b341;
+    --ansi-12: #79c0ff;
+    --ansi-13: #d2a8ff;
+    --ansi-14: #56d4dd;
+    --ansi-15: #ffffff;
   }
 }
 :root[data-theme='dark'] {
@@ -44,379 +82,292 @@
   --fg: #e6edf3;
   --muted: #8b949e;
   --line: #21262d;
-  --surface: #161b22;
   --line-strong: #30363d;
+  --surface: #161b22;
   --ring: rgba(230, 237, 243, 0.35);
   --link: #6ea8fe;
-  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --term-bg: #0d1117;
+  --term-fg: #e6edf3;
+  --term-cursor: #e6edf3;
+  --term-sel: rgba(110, 168, 254, 0.3);
+  --ansi-0: #484f58;
+  --ansi-1: #ff7b72;
+  --ansi-2: #3fb950;
+  --ansi-3: #d29922;
+  --ansi-4: #58a6ff;
+  --ansi-5: #bc8cff;
+  --ansi-6: #39c5cf;
+  --ansi-7: #b1bac4;
+  --ansi-8: #6e7681;
+  --ansi-9: #ffa198;
+  --ansi-10: #56d364;
+  --ansi-11: #e3b341;
+  --ansi-12: #79c0ff;
+  --ansi-13: #d2a8ff;
+  --ansi-14: #56d4dd;
+  --ansi-15: #ffffff;
 }
 
 * { box-sizing: border-box; }
-/* 【hidden 属性必须真的隐藏】。给元素设了 display（如 .bar{display:flex}）会压过
-   hidden 的 UA 默认 display:none —— 终端底栏的直发提示行明明 hidden 却仍占 56px，
-   把终端最后几行盖住。用它兜住所有 hidden。 */
 [hidden] { display: none !important; }
-/* overscroll-behavior:none —— 掐掉 iOS 文档级橡皮筋；整个 app 是固定视口，页面本就不该滚。
-   内部滚动区（终端、底部 sheet、会话列表）各自 overscroll:contain，不受影响。 */
+/* 整个 app 是固定视口，页面本就不该滚；overscroll-behavior:none 掐掉 iOS 的文档级橡皮筋 */
 html, body, #app { height: 100%; margin: 0; overscroll-behavior: none; }
 body {
   background: var(--bg);
   color: var(--fg);
   font: 14px/1.5 var(--font-ui);
 }
+button { font: inherit; color: inherit; }
+
+/* 视觉隐藏，读屏仍然读得到（conn-text 在线时就是这样） */
+.sr-only {
+  position: absolute !important;
+  width: 1px; height: 1px; padding: 0 !important; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%);
+  white-space: nowrap; border: 0 !important;
+}
+
+/* ---------- 外壳（layout.md §几何） ---------- */
 
 .app {
-  /* 只是 JS 起来之前的兜底。真正的高度由 app.tsx 的 applyViewport()
-     直接写成 inline style —— 唯一真相来源是 visualViewport，不是 100vh
-     （iOS Safari 上 100vh 不随键盘变化）。 */
+  /* JS 起来之前的兜底。真正的高度由 ui/viewport.ts::installAppFit 写成 inline style ——
+     唯一真相来源是 visualViewport，不是 100vh（iOS Safari 上 100vh 不随键盘变化）。 */
   height: 100%;
-
-  /* 安全区（刘海 / Home 指示条 / 横屏两侧）。index.html 用了 viewport-fit=cover +
-     black-translucent，PWA 全屏时内容延伸到刘海底下 —— 四边的 inset 由这里的 padding
-     吃掉：box-sizing 是 border-box，JS 写的高度就是整个可视视口，内容区自然变小。
-     【盖在 .app 里的东西不要再自己加一次 env()】，否则双倍；position: fixed 的才自己加。
-     写成自定义属性：E2E 在没有真刘海的 Chromium 里覆盖它们验证几何（E2E-10 ⑦）；
-     软键盘弹起时 app.tsx 把 --sa-bottom 置 0 —— 键盘已经盖住 Home 指示条，再留 34px 是白扔输入区。 */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  /* 安全区由 .app 的 padding 吃掉；写成自定义属性，E2E 能在没有刘海的 Chromium 里覆盖，
+     软键盘弹起时 JS 把 --sa-bottom 置 0。盖在 .app 里的东西不要再自己加一次 env()。 */
   --sa-top: env(safe-area-inset-top, 0px);
   --sa-right: env(safe-area-inset-right, 0px);
   --sa-bottom: env(safe-area-inset-bottom, 0px);
   --sa-left: env(safe-area-inset-left, 0px);
   padding: var(--sa-top) var(--sa-right) var(--sa-bottom) var(--sa-left);
-
-  /* 【这里不能设 grid-template-rows】。
-     那六行（statusbar / banner / term / composer / modebar / keybar）属于
-     .main —— 见下面 data-bp 那几条规则。
-     .app 历史上确实是那六行的直接父级，sidebar 重构之后它的子元素变成
-     了 sidebar + main 两个，遗留的行定义会把 .main auto-place 进第一行，
-     也就是 28px 那行 —— 于是 .main 只有 28px、.term 8px、
-     .xterm-viewport 0，终端整个不渲染。桌面和手机一样中招。 */
-
-  /* 【根容器不该滚动】。手机上 sidebar 是底部 sheet，靠
-     translateY(100%) 收到视口下面 —— 而 transform 【不会】把元素从可滚动
-     区域里去掉，于是页面能往下多滚 91px（正好是那个 sheet 的高度），
-     露出本该藏起来的抽屉。它是个定高的 app 外壳，根本不该有滚动。 */
   overflow: hidden;
+  background: var(--term-bg);
 }
+/* 网格行：标签栏（wide）· 终端（剩余全部）· 附加键（80px，显示时） */
+.app[data-form='compact'] { grid-template-rows: minmax(0, 1fr) auto; }
+.app[data-form='wide'] { grid-template-rows: auto minmax(0, 1fr) auto; }
 
-.statusbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--line);
-  font-size: 12px;
-  white-space: nowrap;
+/* ---------- 终端与盖在上面的东西 ---------- */
+
+.stage { position: relative; min-height: 0; overflow: hidden; background: var(--term-bg); }
+/* 触摸手势：纵向拖是 xterm 自带的滚动（它在 JS 里改 scrollTop），点一下是 term/gestures.ts。
+   touch-action:none 让浏览器别抢（也挡住页面级的双指缩放），tap 不受影响。 */
+.term {
+  position: absolute; inset: 0;
+  padding: 4px;
   overflow: hidden;
+  overscroll-behavior: contain;
+  touch-action: none;
 }
-.statusbar .name { font-weight: 600; }
-.statusbar .cwd { color: var(--muted); overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: 12px; }
-.statusbar .conn { margin-left: auto; color: var(--muted); }
-
-.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted); }
-.dot[data-state='online'] { background: var(--ok); }
-.dot[data-state='connecting'],
-.dot[data-state='reconnecting'] { background: var(--warn); animation: pulse 1s infinite; }
-.dot[data-state='closed'] { background: var(--err); }
-@keyframes pulse { 50% { opacity: 0.3; } }
-@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
-
-.banner { padding: 4px 10px; font-size: 12px; display: flex; gap: 8px; align-items: center; }
-.banner.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); }
-.banner.error { background: color-mix(in srgb, var(--err) 18%, transparent); }
-.banner button { font: inherit; border: 0; background: transparent; cursor: pointer; color: inherit; text-decoration: underline; }
-
-/* 终端区的触摸手势全部由 pinch.ts 接管：单指纵向拖 = 滚回滚，双指 = 缩放。
-   触点落在 .xterm-screen 上，它和滚动容器 .xterm-viewport 是兄弟节点，原生
-   触摸滚不动 viewport、会漏给页面变成整页橡皮筋 —— 所以 touch-action:none 让
-   浏览器别抢，手势交给 JS + preventDefault。tap 不受 touch-action 影响，打字照常。 */
-.term { min-height: 0; background: var(--term-bg); padding: 4px; overflow: hidden; overscroll-behavior: contain; touch-action: none; }
-.term .xterm-viewport { overscroll-behavior: contain; }
+.term-host { height: 100%; }
 .term .xterm { height: 100%; }
+.term .xterm-viewport { overscroll-behavior: contain; background-color: transparent !important; }
+/* 【文字层不接指针】：xterm 的 DOM 渲染器每次刷新都换掉行里的元素。触摸事件的 target 在
+   touchstart 时就定死了 —— 手指按在一个字上，那个元素一被换掉，之后的 touchmove / touchend
+   全派发到一个已经脱离文档的节点上，冒泡不到 .xterm（它的触摸滚动）和 .term（点按切键盘）：
+   拖一下只滚第一帧的几个像素（E2E-37 实测 240px 的拖动只滚了 1 行）。让指针落在不会被换掉的
+   .xterm-screen 上；选区、链接、鼠标上报都按坐标算，不依赖 target。 */
+.term .xterm-rows { pointer-events: none; }
 
-.composer {
-  font: inherit;
-  border: 0;
-  border-top: 1px solid var(--line);
-  padding: 8px 10px;
-  background: var(--bg);
+/* 连接横幅：盖在终端顶部一行，不改几何（AC-2.10）。在线时整条视觉隐藏（.sr-only） */
+.conn-banner {
+  position: absolute; z-index: 6; top: 0; left: 0; right: 0;
+  display: flex; gap: 10px; align-items: center;
+  padding: 4px 10px; font-size: 12px; line-height: 18px;
   color: var(--fg);
-  resize: none;
-  max-height: 40vh;
-  outline-offset: -2px;
-  font-family: var(--font-mono);
+  background: color-mix(in srgb, var(--warn) 30%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 50%, transparent);
+  pointer-events: none;
 }
+.conn-banner[data-state='fatal'] { background: color-mix(in srgb, var(--err) 25%, var(--bg)); pointer-events: auto; }
+.conn-fatal { color: var(--err); font-weight: 600; }
 
 .toast {
-  position: fixed;
-  bottom: calc(64px + env(safe-area-inset-bottom, 0px)); /* fixed 定位不在 .app 的 padding 里，自己让 */
-  left: 50%;
+  position: absolute; z-index: 7; top: 32px; left: 50%;
   transform: translateX(-50%);
-  background: var(--fg);
-  color: var(--bg);
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 12px;
+  max-width: calc(100% - 24px);
+  padding: 6px 14px; border-radius: 999px;
+  background: var(--fg); color: var(--bg);
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
 }
-
-.gate, .pair { padding: 2rem; max-width: 32rem; margin: 0 auto; }
-.gate pre, .pair pre { background: var(--term-bg); color: #e6e6e6; padding: 8px 12px; border-radius: 6px; }
-/* 手输配对码（ADR-0017）：大号等宽、居中、4 位分组；手机上 16px 起免得 iOS 聚焦放大 */
-.pair-form { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
-.pair-form code { font-family: var(--font-mono); background: var(--surface); padding: 1px 5px; border-radius: 4px; }
-.pair-code {
-  width: 100%; padding: 12px 14px; text-align: center;
-  font: 22px var(--font-mono); letter-spacing: 0.08em;
-  border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg); color: var(--fg);
-}
-.pair-code:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
-.pair-form button {
-  min-height: 44px; font: inherit; font-size: 16px; font-weight: 600;
-  border: 1px solid var(--fg); border-radius: 10px; background: var(--fg); color: var(--bg); cursor: pointer;
-}
-.pair-form button:disabled { opacity: 0.4; cursor: default; }
-.error { color: var(--err); }
-
-.modebar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 10px;
-  border-top: 1px solid var(--line);
-  font-size: 11px;
-  color: var(--muted);
-}
-.modebar[data-mode='raw'] { color: var(--warn); }
-.modebar button {
-  font: inherit;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-  padding: 2px 0;
-}
-
-/* 键行（ADR-0015）：.keybar 本身不滚动 —— 行首互切键、行尾 ⋯ 钉住，中间 .keybar-scroll 横滚 */
-.keybar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border-top: 1px solid var(--line);
-}
-.keybar-scroll {
-  flex: 1 1 0; min-width: 0;
-  display: flex; align-items: center; gap: 4px;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-}
-.keybar-scroll::-webkit-scrollbar { display: none; }
-.keybar-key {
-  flex: none;
-  /* 触摸设备下命中区最小 44×44 */
-  min-width: 44px;
-  min-height: 44px;
-  font: inherit;
-  font-size: 13px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  cursor: pointer;
-}
-/* 激活态必须有明显反馈 —— 否则用户不知道下一次按键会变成什么 */
-.keybar-key[data-sticky='armed'] { background: var(--warn); color: #111; border-color: var(--warn); }
-.keybar-key[data-sticky='locked'] { background: var(--err); color: #fff; border-color: var(--err); }
+.toast[data-kind='error'] { background: var(--err); color: #fff; }
 
 /* 组字预览：绝对定位到终端光标处，让用户知道自己在打什么 */
 .ime-preview {
-  position: absolute;
-  z-index: 5;
+  position: absolute; z-index: 5;
   padding: 1px 4px;
-  background: var(--fg);
-  color: var(--bg);
+  background: var(--fg); color: var(--bg);
   border-bottom: 2px solid var(--warn);
-  font: inherit;
+  font-family: var(--font-mono);
   white-space: pre;
   pointer-events: none;
 }
-.term { position: relative; }
 
-/* 手机横屏：功能键条压矮，Composer 收起 */
-@media (max-height: 479px) {
-  .keybar { padding: 2px 6px; }
-  .keybar-key { min-height: 32px; }
+.empty {
+  position: absolute; inset: 0; z-index: 4;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  color: var(--muted); background: var(--term-bg);
+}
+.empty button {
+  min-height: 44px; padding: 0 20px; border-radius: 10px;
+  border: 1px solid var(--line-strong); background: var(--bg); cursor: pointer;
 }
 
-/* ---------- 会话列表 ---------- */
+/* ---------- wide：顶部标签栏（session-ux.md §wide） ---------- */
 
-.sessionlist { display: flex; flex-direction: column; gap: 2px; padding: 6px; }
-.session-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px 6px 11px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
-  min-height: 36px;
+.topbar {
+  position: relative; z-index: 1;
+  display: flex; align-items: stretch;
+  height: 36px;
+  background: var(--surface);
+  /* 分隔线画在外面（盖住终端顶上 1px 的内边距），标签条自己正好 36 / 40px */
+  box-shadow: 0 1px 0 var(--line);
+  color: var(--fg);
 }
-/* 【hover 是中性灰，选中是强调色】。原来两个都是 --fg 的低透明度混色（8% / 14%），
-   差六个百分点 —— 鼠标一放上去就分不清"我在看的是哪个"，而键盘切换时指针根本不在
-   列表上，等于没有反馈。选中必须靠色相分开，不能靠深浅（AC-4.9）。 */
-.session-item:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
-.session-item[data-active='true'] {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  /* 左侧强调条：不用伪元素，圆角天然裁好 */
-  box-shadow: inset 3px 0 0 var(--accent);
+.app[data-coarse='true'] .topbar { height: 40px; }
+/* 标签条自己横向滚动；状态点与 ⚙ 钉在右边不跟着滚 */
+.tabbar {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: stretch;
+  overflow-x: auto; overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  touch-action: pan-x;
 }
-.session-item[data-active='true']:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
-.session-item[data-active='true'] .session-name { color: var(--accent); font-weight: 700; }
-.session-item[data-status='exited'] .session-name { opacity: 0.6; }
-.session-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
-.session-dot[data-status='exited'] { background: var(--muted); }
-.session-name { font-weight: 600; white-space: nowrap; }
-.session-cwd, .session-exit {
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-.session-exit[data-failed='true'] { color: var(--err); }
-.session-unread { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); flex: none; }
-.session-pin, .session-rename, .session-close {
-  border: 0; background: transparent; color: var(--muted); cursor: pointer;
-  font: inherit; padding: 2px 4px; flex: none; opacity: 0.5;
-}
-.session-pin[data-on='true'] { color: var(--ok); opacity: 1; }
-.session-item:hover .session-pin, .session-item:hover .session-close { opacity: 1; }
-/* 字体预览：换字体时"到底长什么样"只能看出来，说不出来 */
-.font-sample { font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-.session-new {
-  margin-top: 4px; padding: 8px; border: 1px dashed var(--line); border-radius: 6px;
-  background: transparent; color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
-}
-.session-new:disabled { color: var(--muted); cursor: not-allowed; border-style: solid; }
-
-.banner.exited { background: color-mix(in srgb, var(--muted) 20%, transparent); }
-
-/* ---------- 三档布局 ---------- */
-
-.app { position: relative; }
-.app[data-bp='desktop'] { display: grid; grid-template-columns: var(--sidebar-w, 240px) 1fr; }
-.app[data-bp='desktop'][data-sidebar='closed'] { grid-template-columns: 0 1fr; }
-/* 收起就该一点不剩。0 宽的列压不掉 border-right（box-sizing:border-box 下边框不参与收缩），
-   会在终端左缘留一条 1px 的线 —— 分隔条自己那条把手才是这时候该看见的东西。 */
-.app[data-bp='desktop'][data-sidebar='closed'] .sidebar { border-right: 0; }
-/* 【列宽不要加 transition】。改侧栏宽度就是改终端几何，过渡期间每一帧都会让
-   ResizeObserver 响一次 → fit() → 给 PTY 发 resize，比拖动本身还糟。
-   要动效只动侧栏内容的 opacity，不动列宽（layout-responsive.md §desktop）。 */
-
-/* 分隔条：拖 = 改宽，点 = 收起 / 展开（AC-5.12）。
-   【绝对定位，不占栅格列】—— 占一列的话收起时还得单独处理它自己的宽度，
-   而且每次改宽要动两处。.app 是 position:relative，left 的参照是它的 padding 盒，
-   safe-area 已经让过了，这里不再加 env()。 */
-.sidebar-resizer {
-  position: absolute; top: 0; bottom: 0; left: var(--sidebar-w, 240px);
-  width: 11px; margin-left: -5px; z-index: 6;
-  padding: 0; border: 0; background: transparent;
-  cursor: col-resize; touch-action: none;
-}
-.app:not([data-bp='desktop']) .sidebar-resizer { display: none; }
-.app[data-bp='desktop'][data-sidebar='closed'] .sidebar-resizer { left: 0; margin-left: 0; }
-.sidebar-resizer::after {
-  content: ''; position: absolute; top: 50%; left: 50%;
-  width: 2px; height: 28px; transform: translate(-50%, -50%);
-  border-radius: 999px; background: var(--line-strong); opacity: 0;
-  transition: opacity 120ms;
-}
-/* 收起时它是唯一的拉出把手，得常显；展开时侧栏自己的 border-right 已经画了那条线，
-   只在 hover / 聚焦 / 拖动时亮起来。 */
-.app[data-sidebar='closed'] .sidebar-resizer::after { opacity: 0.55; }
-.sidebar-resizer:hover::after,
-.sidebar-resizer:focus-visible::after { opacity: 1; height: 44px; background: var(--link); }
-.sidebar-resizer:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
-/* 拖动时分隔条【就是预览线】：它自己 translateX 跟手，松手落在哪儿现在就画在哪儿
-   （ADR-0021）。整列高亮才读得出「这是新的列边界」，28px 的小握把读不出来。
-   will-change 把它提成独立合成层 —— 拖动期间主线程一次样式重算都不欠。 */
-.app[data-sidebar-drag='true'] .sidebar-resizer { will-change: transform; }
-.app[data-sidebar-drag='true'] .sidebar-resizer::after {
-  opacity: 1; top: 0; bottom: 0; height: auto;
-  border-radius: 0; background: var(--link); transform: translateX(-50%);
-}
-/* 拖动时全页统一光标 + 禁选：指针已被 capture，划过终端不该选中文本 */
-.app[data-sidebar-drag='true'] { cursor: col-resize; user-select: none; }
-@media (prefers-reduced-motion: reduce) { .sidebar-resizer::after { transition: none; } }
-@media (pointer: coarse) {
-  .sidebar-resizer { width: 24px; margin-left: -12px; }
-  /* 收起态下把手离屏幕左缘留 8px —— 贴边起手会被 Safari / PWA 当成返回手势 */
-  .app[data-bp='desktop'][data-sidebar='closed'] .sidebar-resizer { left: 8px; margin-left: 0; }
-  .sidebar-resizer::after { width: 3px; height: 36px; }
-}
-.app[data-bp='desktop'] .sidebar {
-  grid-row: 1 / -1;
+.tabbar::-webkit-scrollbar { display: none; }
+.tab {
+  flex: none;
+  display: flex; align-items: center; gap: 5px;
+  min-width: 72px; max-width: 200px;
+  padding: 0 4px 0 12px;
   border-right: 1px solid var(--line);
-  overflow: hidden auto;
+  font-size: 13px;
+  cursor: pointer; user-select: none; -webkit-user-select: none;
+  outline: none;
+}
+.tab:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
+.tab-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab:hover:not([aria-current='true']) { background: var(--hover); }
+/* 选中：强调色 2px 下划线 + 强调色底色 + 名字加粗（AC-4.9） */
+.tab[aria-current='true'] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  box-shadow: inset 0 -2px 0 var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.tab[data-exited='true'] .tab-name { opacity: 0.5; }
+.tab-close {
+  flex: none; width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--muted); font-size: 11px; cursor: pointer;
+  visibility: hidden;
+}
+.tab-close:hover { background: var(--hover); color: var(--fg); }
+/* ✕：鼠标设备上悬停或当前标签显示；触屏上只有当前标签显示（免得误点） */
+.tab[aria-current='true'] .tab-close { visibility: visible; }
+@media (hover: hover) and (pointer: fine) {
+  .tab:hover .tab-close { visibility: visible; }
+}
+.app[data-coarse='true'] .tab-close { width: 30px; height: 30px; }
+.tab .rename-input { flex: 1 1 auto; min-width: 60px; }
+.tab-new {
+  flex: none; width: 36px;
+  border: 0; background: transparent; color: var(--muted);
+  font-size: 18px; cursor: pointer;
+}
+.tab-new:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+.tab-new:disabled { opacity: 0.35; cursor: default; }
+.topbar-btn {
+  flex: none; width: 40px;
+  border: 0; background: transparent; color: var(--muted);
+  font-size: 16px; cursor: pointer;
+}
+.topbar-btn:hover { background: var(--hover); color: var(--fg); }
+
+.conn-dot {
+  flex: none; align-self: center;
+  width: 8px; height: 8px; margin: 0 10px;
+  border-radius: 50%; background: var(--muted);
+}
+.conn-dot[data-state='online'] { background: var(--ok); }
+.conn-dot[data-state='connecting'],
+.conn-dot[data-state='reconnecting'] { background: var(--warn); animation: pulse 1s infinite; }
+.conn-dot[data-state='closed'] { background: var(--err); }
+@keyframes pulse { 50% { opacity: 0.3; } }
+
+.pin-mark { flex: none; color: var(--muted); font-size: 11px; margin-right: 2px; }
+.unread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--err); }
+
+/* ---------- 附加键（input.md §附加键） ---------- */
+
+.extrakeys {
+  position: relative; z-index: 1;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  height: 80px;
+  background: var(--surface);
+  /* 分隔线画在外面（盖住终端底下 1px 的内边距），同标签栏。写成 border-top 的话
+     border-box 下槽里只剩 79px，两行 40px 的键区溢出 1px，第二行的底边被视口裁掉 */
+  box-shadow: 0 -1px 0 var(--line);
+  user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.ek-side { display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.ek-side-btn {
+  position: relative;
+  flex: 1 1 0; min-height: 0;
+  border: 0; background: transparent; color: var(--fg);
+  font-size: 18px; cursor: pointer;
+  touch-action: manipulation;
+}
+.ek-side-btn:active { background: var(--hover); }
+.ek-side-btn[aria-pressed='true'] { color: var(--accent); }
+/* ☰ 的未读小红点 */
+.ek-side-btn[data-unread='true']::after {
+  content: ''; position: absolute; top: 8px; right: 8px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--err);
+}
+.ek-main { position: relative; min-width: 0; }
+/* 7 列 × 2 行，等宽，任何宽度下都不横向滚动 */
+.ek-keys {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: repeat(2, 40px);
+  height: 80px;
+  overflow: hidden;
+  touch-action: none;
+}
+.ek-key {
   min-width: 0;
+  border: 0; border-radius: 0;
+  background: transparent; color: var(--fg);
+  font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.02em;
+  cursor: pointer; padding: 0;
+  white-space: nowrap; overflow: hidden;
 }
-/* .main 用 flex 而【不是】固定行数的 grid。
- *
- * 原来是 grid-template-rows: 28px auto 1fr auto auto auto —— 六行按位置
- * 对应 statusbar / banner / term / composer / modebar / keybar。
- * 可是 banner 是【条件渲染】的：没有 banner 时只有五个子元素，auto-place
- * 整体前移一格，1fr 就落到了 modebar 身上：
- *
- *     声明   28px   auto    1fr     auto      auto    auto
- *     实际   28px   392px   153px   38px      53px    0px
- *            statusbar term  modebar composer keybar  （空）
- *
- * 于是模式条在手机上白占 153px，而终端拿不到本该属于它的伸缩空间。
- * 这个布局只在"恰好显示一条 banner"时才是对的。
- *
- * 【按位置分配空间就会这样】。flex 只认 flex 属性，不数子元素，
- * 增删 banner 都不会错位。 */
-.app[data-bp='desktop'] .main { display: flex; flex-direction: column; min-width: 0; }
-.main { position: relative; }
-.app:not([data-bp='desktop']) .main { display: flex; flex-direction: column; height: 100%; }
-/* 除终端外都按内容高度，不许被压缩 */
-.main > * { flex: none; }
-.main > .statusbar { flex: 0 0 28px; }
-/* 终端吃掉剩下的全部空间。min-height:0 不能少，否则 flex 子元素
-   的最小尺寸是内容高度，终端就压不下去、反而把别人挤出去。 */
-/* 读与终端共用一个几何盒（ADR-0011）。.canvas 是 flex 里唯一伸缩的那个，
-   .term 与 .stream 都绝对铺满它 —— 两个视图下 xterm 尺寸完全一致，
-   切换不会给 PTY 发 resize。xterm 不可见时【保持真实尺寸】：FitAddon 据它算
-   cols/rows，shell 按它折行；用 display:none 尺寸归零，cols/rows 会算错。 */
-.main > .canvas { flex: 1 1 0; min-height: 0; position: relative; }
-.canvas > .term { position: absolute; inset: 0; min-height: 0; }
-/* 回看暂停跟随的提示条（AC-5.9）：画布右下角，落在底部键行之上；是 .term 的兄弟，
-   不受 .xterm-screen 的双指缩放 transform 影响。触屏给足 44px */
-.follow-pill {
-  position: absolute; right: 12px; bottom: 12px; z-index: 6;
-  min-height: 40px; padding: 0 14px; border: 0; border-radius: 999px;
-  background: var(--fg); color: var(--bg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+.ek-key:active { background: var(--hover); }
+/* CTRL / ALT：激活与锁定都用强调色，锁定再加一条底线 —— 一眼看得出下一个键会变成什么 */
+.ek-key[data-sticky='armed'] { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); font-weight: 700; }
+.ek-key[data-sticky='locked'] { background: var(--accent); color: var(--bg); font-weight: 700; box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--bg) 60%, transparent); }
+/* 文本输入页：两行高的 textarea，占满键区（左列除外）。字号 ≥ 16px：iOS 聚焦不放大页面 */
+.ek-text {
+  display: block; width: 100%; height: 80px; margin: 0;
+  padding: 8px 10px;
+  border: 0; outline: none; resize: none;
+  background: var(--bg); color: var(--fg);
+  font: 16px/1.5 var(--font-mono);
+  touch-action: pan-y;
 }
-.follow-pill:active { opacity: 0.85; }
-@media (pointer: coarse) { .follow-pill { min-height: 44px; font-size: 14px; } }
-.canvas > .term[data-hidden='true'] { visibility: hidden; pointer-events: none; }
-.canvas > .stream { position: absolute; inset: 0; }
+.extrakeys[data-page='keys'] .ek-text { display: none; }
+.extrakeys[data-page='text'] .ek-keys { display: none; }
 
-/* phone / tablet 的会话列表不在这儿 —— 它和历史 / 设置一样是 Drawer（ADR-0018）。
-   打开时终端【不重排】：浮层 fixed 覆盖，不进 .main 的 flex 列，不触发 resize。 */
+/* ---------- 浮层（ADR-0018，layout.md §浮层） ---------- */
 
-.term-host { height: 100%; }
-.statusbar { cursor: pointer; }
-
-/* short（手机横屏）省屏：连接正常时把状态细条也让给终端 —— 会话仍可从 ⋯ 菜单进。
-   一旦 connecting / reconnecting / closed，细条立刻显示出来报连接状态，
-   不让用户对着一个冻住的终端瞎猜。 */
-.app[data-short='true'] .statusbar[data-state='online'] { display: none; }
-
-/* ---------- 浮层：会话 / 历史 / 设置共用一个壳（ADR-0018） ---------- */
 .drawer-backdrop {
   position: fixed; inset: 0; z-index: 40;
   background: rgba(0, 0, 0, 0.45);
@@ -425,11 +376,11 @@ body {
 .drawer {
   width: min(620px, 92vw); max-height: min(80vh, 720px);
   display: flex; flex-direction: column; min-height: 0;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  outline: none;
 }
-/* 列表型（历史）：定高，免得条目一多一少整个浮层就换尺寸 */
-.drawer[data-size='wide'] { width: min(760px, 94vw); height: min(76vh, 640px); max-height: none; }
 .drawer-grab { display: none; }
 .drawer-head {
   flex: none; display: flex; align-items: center; gap: 8px;
@@ -437,55 +388,105 @@ body {
 }
 .drawer-title { flex: 1; margin: 0; font-size: 14px; font-weight: 600; }
 .drawer-close {
-  flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  flex: none; width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: 8px; background: transparent; color: var(--muted);
-  font: inherit; font-size: 15px; cursor: pointer;
+  font-size: 15px; cursor: pointer;
 }
 .drawer-close:hover, .drawer-close:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
-.drawer-tools {
-  flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px;
+.drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.drawer-foot { flex: none; border-top: 1px solid var(--line); }
+.drawer-actions { display: flex; }
+.drawer-actions button {
+  flex: 1 1 0; min-height: 52px;
+  border: 0; background: transparent; cursor: pointer; font-size: 15px;
 }
-/* 工具行里的搜索框 */
-.drawer-tools .panel-search {
-  flex: 1; min-width: 160px; font: inherit; font-size: 13px; padding: 7px 10px;
-  border: 1px solid var(--line); border-radius: 8px;
-  background: transparent; color: var(--fg); outline: none;
-}
-.drawer-tools .panel-search:focus { border-color: var(--line-strong); }
-.drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.drawer-foot { flex: none; padding: 6px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.drawer-actions button + button { border-left: 1px solid var(--line); }
+.drawer-actions button:hover:not(:disabled) { background: var(--hover); }
+.drawer-actions button:disabled { opacity: 0.4; cursor: default; }
 
-/* ---------- 历史面板 ---------- */
-.panel-empty { padding: 16px; color: var(--muted); font-size: 12px; }
-.drawer-tools button { font: inherit; font-size: 12px; border: 1px solid var(--line);
-  border-radius: 6px; background: transparent; color: var(--fg); padding: 5px 8px; cursor: pointer; }
-.panel-group { padding: 8px 12px 4px; font-size: 11px; color: var(--muted); position: sticky; top: 0;
-  background: var(--bg); }
-.cmd-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; cursor: pointer; font-size: 12px; }
-.cmd-row:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
-.cmd-star { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0; }
-.cmd-star[data-on='true'] { color: var(--warn); }
-.cmd-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
-.cmd-sub { color: var(--muted); }
-/* 退出码 0 用弱色不干扰，非零用警示色 —— "昨天那条失败的命令"极易定位 */
-.cmd-exit { color: var(--muted); width: 3ch; text-align: right; }
-.cmd-exit[data-failed='true'] { color: var(--err); font-weight: 600; }
-.cmd-dur { color: var(--muted); width: 6ch; text-align: right; }
-.cmd-more { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; padding: 0 2px; }
+/* 触屏：贴底整宽 sheet，抓手 + 下滑关闭。形态只看触摸能力，不看 compact / wide */
+.app[data-coarse='true'] .drawer-backdrop { align-items: flex-end; }
+.app[data-coarse='true'] .drawer {
+  width: 100%; max-width: none; max-height: 80vh;
+  border-radius: 16px 16px 0 0; border-bottom: 0;
+  /* fixed 定位不在 .app 的 padding 里，自己让出 Home 指示条 */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  animation: sheet-up 170ms ease;
+}
+.app[data-coarse='true'] .drawer-grab {
+  display: block; flex: none;
+  width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong);
+  margin: 8px auto 2px;
+}
+.app[data-coarse='true'] .drawer-head { padding: 6px 8px 8px 14px; }
+.app[data-coarse='true'] .drawer-title { font-size: 16px; }
+.app[data-coarse='true'] .drawer-close { width: 44px; height: 44px; font-size: 17px; }
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .drawer { animation: none !important; }
+  .conn-dot { animation: none; }
+}
 
-/* ---------- 移动端快捷命令条 ---------- */
-.quickbar {
-  display: flex; gap: 6px; padding: 4px 6px; overflow-x: auto;
-  border-top: 1px solid var(--line); scrollbar-width: none;
+/* ---------- 会话列表（compact 抽屉） ---------- */
+
+.session-list { list-style: none; margin: 0; padding: 4px 0; }
+.session-row {
+  display: flex; align-items: center; gap: 8px;
+  height: 52px; padding: 0 14px;
+  cursor: pointer; outline: none;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
-.quickbar::-webkit-scrollbar { display: none; }
-.quick-key {
-  flex: none; min-height: 32px; padding: 4px 10px; font-family: var(--font-mono); font-size: 12px;
-  border: 1px solid var(--line); border-radius: 999px; background: transparent;
-  color: var(--fg); cursor: pointer; white-space: nowrap;
+.session-row:hover:not([aria-current='true']) { background: var(--hover); }
+.session-row:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
+/* 当前：强调色 3px 左条 + 强调色底色 + 名字用 --accent 加粗（AC-4.9） */
+.session-row[aria-current='true'] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  box-shadow: inset 3px 0 0 var(--accent);
 }
-/* ---------- 设置浮层（ADR-0018：以前是挤在终端上方的一条 .banner） ---------- */
+.session-row[aria-current='true'] .sl-text { color: var(--accent); font-weight: 600; }
+.session-row[data-exited='true'] .sl-name { opacity: 0.55; }
+.sl-idx { flex: none; color: var(--muted); font-family: var(--font-mono); font-size: 13px; }
+.sl-name { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; overflow: hidden; font-size: 15px; }
+.sl-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-meta {
+  flex: 1 1 auto; min-width: 0; text-align: right;
+  color: var(--muted); font-family: var(--font-mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl;
+}
+.sl-meta[data-failed='true'] { color: var(--err); font-weight: 600; direction: ltr; }
+
+.rename-input {
+  min-width: 0; width: 100%;
+  font: inherit; font-size: 16px;
+  padding: 2px 6px;
+  border: 1px solid var(--accent); border-radius: 6px;
+  background: var(--bg); color: var(--fg); outline: none;
+}
+
+/* ---------- 会话菜单：锚在触发点旁边的小菜单，不是浮层 ---------- */
+
+.menu-scrim { position: fixed; inset: 0; z-index: 69; }
+.session-menu {
+  position: fixed; z-index: 70;
+  width: 184px; padding: 4px;
+  display: flex; flex-direction: column;
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+.session-menu button {
+  display: flex; align-items: center; justify-content: space-between;
+  min-height: 44px; padding: 0 12px;
+  border: 0; border-radius: 6px; background: transparent;
+  text-align: left; font-size: 14px; cursor: pointer;
+}
+.session-menu button:hover, .session-menu button:focus-visible { background: var(--hover); outline: none; }
+.session-menu .danger { color: var(--err); }
+.menu-check { color: var(--accent); font-weight: 700; }
+
+/* ---------- 设置 ---------- */
+
 .settings-row {
   display: flex; align-items: center; gap: 12px;
   padding: 8px 14px; min-height: 44px;
@@ -498,324 +499,27 @@ body {
 }
 .settings-row input[type='number'] { width: 84px; }
 .settings-value { color: var(--muted); }
-/* 用户不知道这条规则的话它等于不存在（privacy-history.md）—— 别缩成小字 */
-/* 面板里的小字说明（隐私规则、字体的连字限制…） */
-.privacy-note, .settings-note { margin: 0; padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
-@media (pointer: coarse) {
-  .settings-row { min-height: 52px; font-size: 15px; }
-  .settings-row select, .settings-row input { font-size: 16px; min-height: 40px; }
-  .privacy-note, .settings-note { font-size: 13px; }
-}
+.font-sample { font-family: var(--font-mono); color: var(--fg); }
+.settings-note { margin: 0; padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.app[data-coarse='true'] .settings-row { min-height: 52px; font-size: 15px; }
+.app[data-coarse='true'] .settings-row select, .app[data-coarse='true'] .settings-row input { font-size: 16px; min-height: 40px; }
 
-/* ---------- 命令块 ---------- */
+/* ---------- 配对 / 闸门 ---------- */
 
-.blocks-empty { padding: 24px 12px; color: var(--muted); font-size: 12px; text-align: center; }
-
-.block { border-bottom: 1px solid var(--line); }
-.block-head {
-  display: flex; align-items: center; gap: 8px;
-  padding: 9px 12px; cursor: pointer; font-size: 12px;
-  /* 触摸命中区。和功能键条一个标准 —— 同一屏里别两套。 */
-  min-height: 44px;
+.gate, .pair { padding: 2rem; max-width: 32rem; margin: 0 auto; }
+.gate pre, .pair pre { background: #111; color: #e6e6e6; padding: 8px 12px; border-radius: 6px; }
+/* 手输配对码（ADR-0017）：大号等宽、居中、4 位分组；16px 起免得 iOS 聚焦放大 */
+.pair-form { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+.pair-form code { font-family: var(--font-mono); background: var(--surface); padding: 1px 5px; border-radius: 4px; }
+.pair-code {
+  width: 100%; padding: 12px 14px; text-align: center;
+  font: 22px var(--font-mono); letter-spacing: 0.08em;
+  border: 1px solid var(--line-strong); border-radius: 10px; background: var(--bg); color: var(--fg);
 }
-.block-head:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
-.block-mark { flex: none; width: 1em; text-align: center; color: var(--ok); }
-.block-mark[data-failed='true'] { color: var(--err); }
-.block-mark[data-running='true'] { color: var(--warn); }
-/* 失败的块整条留一道红边 —— 折叠状态下也要一眼看见 */
-.block[data-failed='true'] { border-left: 3px solid var(--err); }
-.block-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
-.block-exit { flex: none; color: var(--err); font-size: 11px; font-variant-numeric: tabular-nums; }
-.block-dur, .block-lines { flex: none; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-
-.block-body { background: var(--surface); padding: 6px 8px 2px; }
-.block-truncated {
-  margin: 0 0 6px; padding: 6px 10px; font-size: 11px; border-radius: 6px;
-  color: var(--fg); background: color-mix(in srgb, var(--warn) 22%, transparent);
+.pair-code:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.pair-form button {
+  min-height: 44px; font-size: 16px; font-weight: 600;
+  border: 1px solid var(--fg); border-radius: 10px; background: var(--fg); color: var(--bg); cursor: pointer;
 }
-.block-out {
-  margin: 0; padding: 10px 12px; font-family: var(--font-mono); font-size: 12px; line-height: 1.45;
-  color: var(--code-fg); white-space: pre; background: var(--code-bg); border-radius: 8px;
-  /* 长行横向自己滚，别把面板撑宽；滚动条藏起来 */
-  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
-}
-.block-out::-webkit-scrollbar { display: none; }
-.block-pending { color: var(--muted); }
-
-/* serializeAsHTML 把 color / background-color / font-family / font-size
-   【硬编码】成白底黑字 courier 15px，完全不看终端主题（见它的实现）。
-   那是它唯一的输出形态，只能在这儿盖掉 —— 否则每个块里都是一条白底带。 */
-.block-out > pre { margin: 0; }
-.block-out > pre > div {
-  color: inherit !important;
-  background-color: transparent !important;
-  font-family: inherit !important;
-  font-size: inherit !important;
-  line-height: inherit !important;
-}
-/* 动作是文字链接，放在浅色页脚里（不再是黑底上挤成一排的白盒子），拉开间距 */
-.block-actions {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 20px;
-  padding: 2px 12px 8px; background: var(--surface);
-}
-.block-actions button {
-  font: inherit; font-size: 13px; min-height: 40px; padding: 0 2px;
-  border: 0; background: transparent; color: var(--muted); cursor: pointer;
-  transition: color 120ms ease;
-}
-.block-actions button:hover, .block-actions button:focus-visible { color: var(--fg); outline: none; text-decoration: underline; text-underline-offset: 3px; }
-.block-actions .block-action-primary { color: var(--link); font-weight: 500; margin-left: auto; }
-
-/* ---------- 读视图：块流 ---------- */
-
-.stream { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
-  padding: 10px 0 12px; display: flex; flex-direction: column; gap: 8px; background: var(--bg); }
-.stream .block { margin: 0 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: var(--card-shadow); }
-.stream .block[data-failed='true'] { border-left: 3px solid var(--err); }
-.stream .block-head { min-height: 48px; padding: 8px 12px; }
-.stream .block-body { border-top: 1px solid var(--line); }
-.stream-empty { margin: 40px 24px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6; }
-.block-mark[data-running='true'] { color: var(--warn); }
-.block[data-running='true'] .block-mark { display: inline-block; animation: block-spin 1.2s linear infinite; }
-@keyframes block-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .block[data-running='true'] .block-mark { animation: none; } }
-.block-live { max-height: 60vh; overflow: auto; }
-.block-body > .block-out + .block-out { margin-top: 6px; }
-.block-tail .block-cmd-muted { color: var(--muted); font-style: italic; }
-
-/* 直发输入行：命令在跑时替换 Composer（读视图） */
-
-/* 视图切换按钮：和模式条其它按钮同款，但 44px 命中区 */
-.modebar .view-toggle { min-height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; text-decoration: none; font-weight: 500; }
-
-/* 键条上下文标签：谁在占屏（ADR-0011 ②）*/
-.keybar-ctx { flex: none; align-self: center; padding: 0 6px 0 2px; font: 11px var(--font-mono); letter-spacing: .04em; color: var(--warn); font-weight: 600; }
-.keybar[data-context]:not([data-context='shell']) .keybar-key { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
-
-/* ── 写态：底栏 + sheet（ADR-0011 ③）──
- * .bottom 绝对定位在定高的 .bottom-slot 里：往上长只盖块流，不挤画布 ——
- * 画布几何不变，xterm 不 resize，PTY 收不到 SIGWINCH。块流按 --sheet-inset 让位。 */
-/* 槽位高度 = 键行高度（44px 键 + 6px×2）；short 布局 32px 键 + 4px×2（ADR-0015） */
-.app { --slot-h: 56px; }
-.app[data-short='true'] { --slot-h: 40px; }
-.bottom-slot { position: relative; flex: none; height: var(--slot-h); }
-.bottom {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 10;
-  display: flex; flex-direction: column;
-  background: var(--bg);
-  /* 顶边线画在内侧，不占高度 —— 终端态 .bottom 必须正好等于槽位，多 1px 也是盖终端 */
-  box-shadow: inset 0 1px 0 var(--line);
-  transition: height 180ms ease;
-}
-.bottom[data-dragging='true'] { transition: none; }
-.bottom[data-sheet]:not([data-sheet='closed']) {
-  border-top-left-radius: 12px; border-top-right-radius: 12px;
-  box-shadow: inset 0 1px 0 var(--line), 0 -8px 24px rgba(0, 0, 0, 0.08);
-}
-@media (prefers-reduced-motion: reduce) { .bottom { transition: none; } }
-/* 面板头只剩抓手：整条可拖，点一下半屏 ⇄ 全屏 */
-.sheet-head { flex: none; display: flex; align-items: center; height: 16px; }
-.handle { flex: 1; height: 16px; display: grid; place-items: center; touch-action: none; cursor: ns-resize; }
-.handle span { width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong); }
-.chips {
-  flex: none; display: flex; gap: 8px; padding: 2px 10px 6px;
-  overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain;
-}
-.chips::-webkit-scrollbar { display: none; }
-.chip {
-  flex: none; height: 34px; max-width: 72vw; padding: 0 12px;
-  border: 1px solid var(--line); border-radius: 999px;
-  background: var(--surface); color: var(--fg); font: 13px var(--font-mono);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
-}
-.chip[data-kind='path'] { color: var(--muted); border-style: dashed; }
-.chip[data-kind='pin']::before { content: '★ '; color: var(--warn); }
-.chip:active { background: var(--line); }
-.bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 10px; }
-.bottom[data-sheet]:not([data-sheet='closed']) .bar { flex: 1 1 0; min-height: 0; align-items: stretch; padding: 0 10px 6px; }
-/* 输入互切键（终端输入 ⇄ 编辑面板）：两种态都是键行的第一个键、同一尺寸（继承 .keybar-key），
-   主控件，淡填充 + 加粗，比普通键显眼（ADR-0015） */
-.input-toggle { font-weight: 600; white-space: nowrap; border-color: var(--line-strong); background: color-mix(in srgb, var(--fg) 9%, var(--bg)); }
-.keybar-more { padding: 0; font-size: 18px; line-height: 1; }
-/* 输入框吃掉 sheet 剩余高度，字号 16 免得 iOS 聚焦时放大页面。
-   【取消 40vh 上限】—— 那是桌面 Composer 的，在 sheet 里它让全屏面板下半截空着 */
-.bar .composer {
-  flex: 1 1 auto; min-width: 0; height: 42px !important; overflow: hidden;
-  padding: 10px 14px; border: 1px solid var(--line-strong); border-top: 1px solid var(--line-strong); border-radius: 21px;
-  background: var(--bg); line-height: 20px;
-}
-.bottom[data-sheet]:not([data-sheet='closed']) .bar .composer {
-  height: auto !important; max-height: none; flex: 1 1 0; min-height: 0; overflow: auto;
-  border-radius: 10px; font-size: 16px; line-height: 1.5;
-}
-.bar .composer:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
-/* 编辑面板的键行：与终端态键行同一副骨架 —— 行首互切键 · 程序键 · 编辑键（横滚）· 行尾发送，正好 56px */
-.editkeys { flex: none; display: flex; align-items: center; gap: 4px; padding: 6px; }
-.editkeys-scroll { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
-.editkeys-scroll::-webkit-scrollbar { display: none; }
-.keyrow-div { flex: none; width: 1px; height: 28px; background: var(--line); margin: 0 3px; }
-.editkey {
-  flex: none; min-width: 44px; min-height: 44px; padding: 0 10px;
-  border: 1px solid var(--line); border-radius: 6px;
-  background: var(--surface); color: var(--fg); font: 13px var(--font-mono); cursor: pointer;
-}
-.editkey:active { background: var(--line); }
-.editkey-send {
-  flex: none; min-width: 72px; min-height: 44px; margin-left: auto;
-  border: 1px solid var(--fg); border-radius: 6px;
-  background: var(--fg); color: var(--bg); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
-}
-.app[data-short='true'] .editkeys { padding: 4px 6px; }
-.app[data-short='true'] .editkey, .app[data-short='true'] .editkey-send { min-height: 32px; }
-/* ⋯ → 底部操作面板（原生 action sheet）：从底部滑起、整宽、大行 */
-.more-backdrop { position: absolute; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.4); }
-.action-sheet {
-  /* 在 .main 里绝对定位，.app 的 padding 已经让出了 Home 指示条，这里不再加 env() */
-  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 31;
-  display: flex; flex-direction: column;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 16px; overflow: hidden;
-  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.18);
-  animation: sheet-up 160ms ease;
-}
-@keyframes sheet-up { from { transform: translateY(12px); opacity: 0.6; } to { transform: none; opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .action-sheet { animation: none; } }
-.sheet-grabber { width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong); margin: 8px auto 4px; }
-.action-sheet button {
-  display: flex; align-items: center; gap: 14px;
-  font: inherit; font-size: 16px; text-align: left; border: 0; background: transparent; color: var(--fg);
-  padding: 0 16px; min-height: 56px; cursor: pointer;
-}
-.action-sheet button + button { border-top: 1px solid var(--line); }
-.action-sheet button:active { background: var(--surface); }
-.sheet-ico { flex: none; width: 24px; text-align: center; font-size: 18px; }
-.sheet-label { flex: 1; }
-.sheet-chevron { flex: none; color: var(--muted); font-size: 20px; }
-/* 平板 / 触屏桌面宽：⋯ 是锚在键行行尾上方的弹出菜单，不是整宽底部表单（ADR-0015 ⑦）。
-   遮罩仍在（点外面收起）但不变暗；没有抓手；行高 48 够手指点 */
-.app:not([data-bp='phone']) .more-backdrop { background: transparent; }
-.app:not([data-bp='phone']) .action-sheet {
-  left: auto; right: 8px; bottom: calc(var(--slot-h) + 8px); width: 280px;
-  border-radius: 12px; animation: none; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
-}
-.app:not([data-bp='phone']) .action-sheet .sheet-grabber { display: none; }
-.app:not([data-bp='phone']) .action-sheet button { min-height: 48px; font-size: 15px; }
-.app:not([data-bp='phone']) .action-sheet .sheet-ico { font-size: 16px; }
-
-/* 状态栏收薄；全屏程序占屏时自隐，把这条也让给终端（触屏） */
-.app:not([data-bp='desktop']) .main[data-occupied='true'] > .statusbar { display: none; }
-/* 块流让出被 sheet / 功能键条盖住的那段（.term 不动 —— 它是 PTY 尺寸的来源） */
-.canvas > .stream { bottom: var(--sheet-inset, 0px); }
-/* 槽里的键行：正好等于槽位（56 = 44 + 6×2；short 40 = 32 + 4×2），独占槽、不盖终端 */
-.bottom > .keybar { padding: 6px; border-top: 0; }
-.app[data-short='true'] .bottom > .keybar { padding: 4px 6px; }
-.keybar-lead { font-family: inherit; font-weight: 500; }
-.bar-hint { flex: 1; color: var(--muted); font-size: 12px; padding-left: 6px; }
-
-/* ── 块最大化 / 恢复（读视图 & 块面板）── */
-.block-max-btn {
-  flex: none; margin-left: 2px; padding: 0; width: 32px; height: 32px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 0; background: transparent; color: var(--muted);
-  cursor: pointer; border-radius: 8px;
-}
-.block-max-btn > svg { display: block; }
-.block-max-btn:hover, .block-max-btn:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
-/* 铺满整屏细看：盖在所有东西上（含底栏 / 键条），自己滚 */
-.block-maxwrap {
-  position: fixed; inset: 0; z-index: 40;
-  display: flex; flex-direction: column;
-  background: var(--code-bg);
-}
-.block-maxbar {
-  flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 0 10px; min-height: 44px;
-  background: var(--bg); color: var(--fg); border-bottom: 1px solid var(--line);
-  padding-top: env(safe-area-inset-top, 0);
-}
-.block-maxbar .block-cmd { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 13px var(--font-mono); }
-.block-max-spacer { flex: 1; }
-.block-max-restore {
-  flex: none; min-height: 32px; padding: 0 14px;
-  border: 1px solid var(--line-strong); border-radius: 999px;
-  background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
-}
-.block-max-restore:active { background: var(--line); }
-.block-body-max {
-  flex: 1 1 0; min-height: 0; overflow: auto; margin: 0;
-  padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0));
-  border-top: 0;
-}
-/* 最大化里正文不再受 60vh 限制 —— 就是要铺满 */
-.block-body-max .block-live { max-height: none; }
-
-/* 交互式程序（claude/codex/vim…）在读视图运行时的门：不拍扁，引去终端 */
-.block-interactive {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  margin: 0; padding: 12px 12px; border: 1px dashed var(--line-strong); border-radius: 8px;
-  background: var(--code-bg); color: var(--code-fg);
-  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
-}
-.block-interactive:active { background: color-mix(in srgb, var(--code-fg) 8%, var(--code-bg)); }
-.block-interactive-mark { flex: none; font-size: 15px; }
-
-/* 终端视图里的「打字」入口：点它聚焦终端、唤起软键盘，直接打字给程序 */
-.keybar-key.keybar-type {
-  flex: none; white-space: nowrap; font-weight: 600;
-  color: var(--link); border-color: color-mix(in srgb, var(--link) 45%, var(--line));
-  background: color-mix(in srgb, var(--link) 10%, transparent);
-}
-.bar-type { border: 0; background: transparent; color: var(--link); font: inherit; font-size: 12px; cursor: pointer; padding-left: 6px; }
-
-/* iOS Safari 对字号 <16px 的输入控件会在聚焦时【自动放大页面】（可视视口跟着缩、左右平移），
-   translateY 补偿管不了横向平移。触屏上把会拿焦点的控件都抬到 16px 起，免疫这一手。 */
-@media (pointer: coarse) {
-  .bar .composer { font-size: 16px; }
-  .xterm .xterm-helper-textarea { font-size: 16px; }
-
-  /* 触屏（手机 / 平板）：界面 chrome 字号偏小、图标靠 hover 才显 —— 都放大、常显、给足点击区。
-     终端字号不在这里，它由设置里的字号单独控制（只影响 xterm）。 */
-  .statusbar { font-size: 14px; }
-  .statusbar .name { font-size: 15px; }
-  .statusbar .cwd { font-size: 13px; }
-  .banner { font-size: 14px; }
-
-  .session-item { font-size: 15px; min-height: 52px; gap: 10px; padding: 10px 12px 10px 15px; }
-  .session-name { font-size: 16px; }
-  .session-cwd, .session-exit { font-size: 13px; }
-  .session-dot { width: 10px; height: 10px; }
-  /* 无 hover：三个图标常显、放大到易点 */
-  .session-pin, .session-rename, .session-close {
-    opacity: 0.9; font-size: 20px; min-width: 44px; min-height: 44px;
-    display: inline-flex; align-items: center; justify-content: center; padding: 0;
-  }
-  .session-new { font-size: 16px; min-height: 52px; padding: 14px; }
-  .sessionlist { gap: 4px; padding: 8px; }
-
-  .action-sheet button { font-size: 17px; min-height: 60px; }
-}
-
-/* 双指缩放读（ADR-0013）：放大只作用在 .xterm-screen 的 transform 上；.term 已 overflow:hidden 裁掉溢出。 */
-
-/* ---------- 触屏：浮层一律是贴底整宽 sheet（和 ⋯ 操作面板一套，ADR-0018） ---------- */
-@media (pointer: coarse) {
-  .drawer-backdrop { align-items: flex-end; }
-  .drawer {
-    width: 100%; max-width: none; max-height: 80vh;
-    border-radius: 16px 16px 0 0; border-bottom: 0;
-    /* fixed 定位不在 .app 的 padding 里，自己让出 Home 指示条 */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-    animation: sheet-up 180ms ease;
-  }
-  .drawer[data-size='wide'] { width: 100%; height: 86vh; }
-  .drawer-grab {
-    display: block; flex: none;
-    width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong);
-    margin: 8px auto 2px;
-  }
-  .drawer-head { padding: 6px 8px 8px 14px; }
-  .drawer-title { font-size: 16px; }
-  .drawer-close { width: 44px; height: 44px; font-size: 17px; }
-  .cmd-row { min-height: 48px; font-size: 14px; }
-  .panel-search { font-size: 16px; }
-}
-@media (prefers-reduced-motion: reduce) { .drawer { animation: none; } }
+.pair-form button:disabled { opacity: 0.4; cursor: default; }
+.error { color: var(--err); }

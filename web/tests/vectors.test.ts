@@ -1,21 +1,24 @@
 /**
- * 协议向量：与 Go 侧共用【同一份】fixture。
+ * 协议向量：与 Go 侧共用【同一份】fixture（协议 §9）。
  *
  * 两侧都跑它，是防止 internal/protocol 与 web/src/protocol 实现漂移的
- * 唯一机械化手段（协议 §9 / ADR-0009）。
+ * 唯一机械化手段（ADR-0009）。
  */
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import {
-  ATTR_PREFIX,
-  FLAG_ATTR_PREFIX,
+  FLAG_MORE,
   MAX_PAYLOAD,
+  PROTOCOL_VERSION,
+  TYPE_INPUT,
   TYPE_OUTPUT,
+  TYPE_SNAPSHOT,
   dataLen,
   decodeFrame,
   encodeFrame,
+  hasMore,
 } from '../src/protocol/frame'
 import { decodeMessage } from '../src/protocol/messages'
 
@@ -25,7 +28,7 @@ const vectors = JSON.parse(readFileSync(vectorsPath, 'utf8')) as {
   binary_frames: {
     name: string
     hex: string
-    decoded: { type: number; flags: number; sid: number; seq: number; payload_hex: string }
+    decoded: { type: number; flags: number; sid: number; seq: string | number; payload_hex: string }
     data_len: number
   }[]
   invalid_frames: { name: string; hex: string; expect_error: string }[]
@@ -50,20 +53,27 @@ describe('二进制帧向量', () => {
       expect(f.type).toBe(tc.decoded.type)
       expect(f.flags).toBe(tc.decoded.flags)
       expect(f.sid).toBe(tc.decoded.sid)
-      // seq 是 uint64，JSON 里超过 2^53 的值要按字符串比
-      expect(f.seq.toString()).toBe(BigInt(tc.decoded.seq).toString())
+      // seq 是 uint64，fixture 里是字符串，按 BigInt 比
+      expect(f.seq).toBe(BigInt(tc.decoded.seq))
       expect(toHex(f.payload)).toBe(tc.decoded.payload_hex)
+      // 计入 seq 的字节数：快照是 0
       expect(dataLen(f)).toBe(tc.data_len)
       // 往返：重新编码必须逐字节还原
       expect(toHex(encodeFrame(f))).toBe(tc.hex)
     })
   }
+
+  it('fixture 里有 v2 的 SNAPSHOT 帧（带 MORE 的一帧）', () => {
+    const snaps = vectors.binary_frames.filter((tc) => tc.decoded.type === TYPE_SNAPSHOT)
+    expect(snaps.length, 'vectors.json 还没按协议 §9 更新到 v2').toBeGreaterThan(0)
+    expect(snaps.some((tc) => (tc.decoded.flags & FLAG_MORE) !== 0)).toBe(true)
+  })
 })
 
 describe('非法帧向量', () => {
   for (const tc of vectors.invalid_frames) {
     it(tc.name, () => {
-      expect(() => decodeFrame(fromHex(tc.hex))).toThrow()
+      expect(() => decodeFrame(fromHex(tc.hex))).toThrow(tc.expect_error === 'frame_too_large' ? /too large/i : undefined)
     })
   }
 })
@@ -77,6 +87,12 @@ describe('控制消息向量', () => {
       expect(msg).toMatchObject(tc.json)
     })
   }
+
+  it('hello 里的 protocol 是当前版本 2', () => {
+    expect(PROTOCOL_VERSION).toBe(2)
+    const hellos = vectors.control_messages.filter((tc) => tc.json.t === 'hello')
+    for (const h of hellos) expect(h.json.protocol).toBe(PROTOCOL_VERSION)
+  })
 })
 
 describe('未知消息', () => {
@@ -86,28 +102,24 @@ describe('未知消息', () => {
       expect(decodeMessage(JSON.stringify(tc.json))).toBeNull()
     })
   }
-})
 
-describe('ATTR_PREFIX 的 seq 记账', () => {
-  it('前 4 字节不计入 seq —— 算错了两侧会永久错开', () => {
-    const data = new TextEncoder().encode('hello')
-    const payload = new Uint8Array(ATTR_PREFIX.length + data.length)
-    payload.set(ATTR_PREFIX)
-    payload.set(data, ATTR_PREFIX.length)
-
-    const f = {
-      type: TYPE_OUTPUT,
-      flags: FLAG_ATTR_PREFIX,
-      sid: 1,
-      seq: 1000n,
-      payload,
+  it('v2 删掉的消息也一律忽略（reset / redraw / cwd / prompt / command.*）', () => {
+    for (const t of ['reset', 'redraw', 'cwd', 'prompt', 'command.start', 'command.end']) {
+      expect(decodeMessage(JSON.stringify({ t, sid: 1 })), t).toBeNull()
     }
-    expect(dataLen(f)).toBe(data.length)
-    expect(f.seq + BigInt(dataLen(f))).toBe(1005n)
   })
 })
 
 describe('帧边界', () => {
+  it('三种类型都能解：OUTPUT / INPUT / SNAPSHOT（方向由收的一侧判）', () => {
+    for (const type of [TYPE_OUTPUT, TYPE_INPUT, TYPE_SNAPSHOT]) {
+      const f = decodeFrame(encodeFrame({ type, flags: 0, sid: 1, seq: 5n, payload: new Uint8Array([0x41]) }))
+      expect(f.type).toBe(type)
+    }
+  })
+  it('拒绝未知类型 0x04', () => {
+    expect(() => decodeFrame(fromHex('0400000100000000000000e86869'))).toThrow()
+  })
   it('拒绝空 payload', () => {
     expect(() => decodeFrame(fromHex('0100000100000000000000e8'))).toThrow()
   })
@@ -118,13 +130,14 @@ describe('帧边界', () => {
   })
   it('seq 走到 uint64 上界仍然正确', () => {
     const max = 18446744073709551615n
-    const f = {
-      type: TYPE_OUTPUT,
-      flags: 0,
-      sid: 65535,
-      seq: max,
-      payload: new Uint8Array([0x41]),
-    }
+    const f = { type: TYPE_OUTPUT, flags: 0, sid: 65535, seq: max, payload: new Uint8Array([0x41]) }
     expect(decodeFrame(encodeFrame(f)).seq).toBe(max)
+  })
+  it('MORE 只对 SNAPSHOT 有意义；OUTPUT 上的 bit0 是保留位，接收方忽略', () => {
+    const p = new Uint8Array([0x41])
+    expect(hasMore({ type: TYPE_SNAPSHOT, flags: FLAG_MORE, sid: 1, seq: 0n, payload: p })).toBe(true)
+    expect(hasMore({ type: TYPE_SNAPSHOT, flags: 0, sid: 1, seq: 0n, payload: p })).toBe(false)
+    expect(hasMore({ type: TYPE_OUTPUT, flags: FLAG_MORE, sid: 1, seq: 0n, payload: p })).toBe(false)
+    expect(() => decodeFrame(encodeFrame({ type: TYPE_OUTPUT, flags: 0xff, sid: 1, seq: 0n, payload: p }))).not.toThrow()
   })
 })

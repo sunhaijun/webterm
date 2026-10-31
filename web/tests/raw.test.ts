@@ -1,14 +1,14 @@
 /**
- * UT-raw-1：Raw 模式下【直接插入的文本】（AC-3.14）。
+ * UT-raw-1：终端直输时【直接插入的文本】（AC-3.14）。
  *
  * 软键盘不经过组字直接插字符 —— iOS 中文键盘的全角标点就走这条。
  * xterm 5.5 接不住它（keydown 发生过就忽略 input 事件，而 keyCode < 48 的键
  * 它自己又取不出字符），所以 RawIme 在 beforeinput 上自己接管。
- * 见 docs/40-frontend/input-modes.md §直接插入的文本。
+ * 见 docs/40-frontend/input.md §直接插入的文本。
  */
 import { describe, expect, it, vi } from 'vitest'
 
-import { RawIme } from '../src/input/raw'
+import { RawIme } from '../src/keys/raw'
 
 function makeTextarea(): HTMLTextAreaElement {
   const el = document.createElement('textarea')
@@ -25,7 +25,7 @@ function composition(type: string, data: string): CompositionEvent {
   return new CompositionEvent(type, { data })
 }
 
-describe('UT-raw-1 Raw 模式：直接插入的文本', () => {
+describe('UT-raw-1 终端直输：直接插入的文本', () => {
   it('非组字的 insertText 自己发出去，并 preventDefault（字符不落进 textarea）', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()

@@ -5,10 +5,10 @@
  *
  * 绝不缓存任何终端数据或 API 响应：
  *   · 终端输出不落盘是产品的铁律（不变式 3），缓存等于落盘
- *   · /api/* 的响应带着设备与命令历史，缓存它等于把隐私摊在磁盘上
+ *   · /api/* 的响应带着设备与认证信息，缓存它等于把隐私摊在磁盘上
  *   · /ws 根本不该经过这里
  *
- * 见 docs/40-frontend/layout-responsive.md §PWA。
+ * 见 docs/40-frontend/layout.md §PWA。
  */
 
 const CACHE = 'webterm-shell-v1'

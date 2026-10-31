@@ -4,7 +4,7 @@
  * 为什么不打包 webfont、不让用户自己填字体名，见
  * docs/20-architecture/adr/0023-terminal-font-list.md。
  */
-import { safeGet, safeSet } from './settings'
+import { safeGet, safeSet } from './prefs'
 
 export type FontGroup = 'default' | 'coding' | 'platform' | 'cjk'
 
@@ -19,7 +19,7 @@ export interface FontChoice {
 
 /**
  * 每段 stack 的尾巴。编程字体基本不带汉字，少了这条尾巴汉字会掉进比例字体，
- * 中英混排的列宽当场歪掉（layout-responsive.md §字体）。
+ * 中英混排的列宽当场歪掉（layout.md §字体）。
  */
 export const CJK_TAIL = '"Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace'
 
@@ -37,7 +37,7 @@ const pick = (id: string, label: string, group: FontGroup): FontChoice => ({
  * 清单。顺序就是设置里的顺序，**加字体就是加一行**。
  *
  * 带连字的字体（Fira Code / JetBrains Mono）也能选，只是连字不会生效 ——
- * xterm 的连字要 addon-ligatures + DOM 渲染器，我们用的是 WebGL（AC-5.5）。
+ * xterm 的连字要额外加载 addon-ligatures，我们不加载（layout.md §终端字体可选）。
  * 所以同一族里优先收不带连字的变体（Cascadia Mono 而不是 Cascadia Code）。
  */
 export const FONT_CHOICES: readonly FontChoice[] = [
@@ -131,8 +131,8 @@ export function fontStack(id: string): string {
 }
 
 /**
- * 存的是 id，**全局一份不按断点分** —— 字号跟"这块屏幕多大"有关，
- * 字体跟"这台设备装了什么"有关，换个窗口宽度不会换字体（ADR-0023）。
+ * 存的是 id，**全局一份不按形态分** —— 字号跟"这块屏幕多大"有关，
+ * 字体跟"这台设备装了什么"有关（ADR-0023）。
  */
 export function readFontFamily(): string {
   const v = safeGet(FAMILY_KEY)
