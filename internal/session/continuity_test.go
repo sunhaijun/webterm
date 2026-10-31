@@ -20,12 +20,17 @@ import (
 func TestByteLevelContinuity(t *testing.T) {
 	run := func(t *testing.T, interruptions int) string {
 		c := cfg()
-		c.RingBytes = 1 << 20 // 足够大，断线窗口内的输出不会溢出 → 不走 reset
+		c.RingBytes = 1 << 20 // 足够大，断线窗口内的输出不会溢出 → 一直走增量
 		m := newManager(t, c)
 		s := create(t, m)
 		conn := newConn(t, m, "tab")
-		s.Subscribe(conn, 0)
 		waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+		waitQuiet(t, s, 200*time.Millisecond)
+		// 从当前 head 起订阅（增量路径，没有要补的）：两轮比较的都是同一个
+		// 起点之后的原始字节流，与启动时 prompt 画得快慢无关
+		if st, _ := conn.SubscribeAt(s, s.HeadSeq()); st != protocol.ResumeOK {
+			t.Fatalf("status = %q, want ok", st)
+		}
 
 		if err := conn.Send(s, emitScript(400)); err != nil {
 			t.Fatal(err)
@@ -39,13 +44,16 @@ func TestByteLevelContinuity(t *testing.T) {
 
 			time.Sleep(2 * time.Millisecond)
 			conn.Attach()
-			s.Subscribe(conn, at) // 重连续传
+			// 重连续传：同一个判定（协议 §5.1），落在窗口内必须走增量
+			if st, from := s.Subscribe(conn, at, 0, 0); st != protocol.ResumeOK || from != at {
+				t.Fatalf("续传 = %s/%d, want ok/%d", st, from, at)
+			}
 		}
 		waitScreen(t, conn, "EMIT-DONE")
 		waitQuiet(t, s, 300*time.Millisecond) // 两轮用同一个截止点
 
-		if conn.Resets() != 0 {
-			t.Fatalf("走了 %d 次 reset —— 缓冲溢出了，这一轮的比较没有意义", conn.Resets())
+		if conn.Snapshots() != 0 {
+			t.Fatalf("走了 %d 次快照 —— 缓冲溢出了，这一轮的比较没有意义", conn.Snapshots())
 		}
 		if conn.gaps != 0 || conn.dups != 0 {
 			t.Fatalf("seq 记账出错: gaps=%d dups=%d", conn.gaps, conn.dups)
@@ -93,8 +101,8 @@ func TestITQueue1_InputStalledNeverBlocks(t *testing.T) {
 	other := create(t, m)
 
 	cs, co := newConn(t, m, "tab"), newConn(t, m, "tab")
-	stuck.Subscribe(cs, 0)
-	other.Subscribe(co, 0)
+	stuck.Subscribe(cs, 0, 0, 0)
+	other.Subscribe(co, 0, 0, 0)
 
 	// 让 stuck 会话的前台程序不读 stdin
 	if err := cs.Send(stuck, "sleep 60\r"); err != nil {
@@ -137,89 +145,38 @@ func TestITQueue1_InputStalledNeverBlocks(t *testing.T) {
 	waitScreen(t, co, "STILL-ALIVE")
 }
 
-// out_seq 必须在剥离 OSC【之后】计数（ADR-0006 / AC-2.5 / UT-osc-9）。
-//
-// 先计数再剥离的话，续传时按 out_seq 切片就会错位，屏幕会花。这条在没有
-// shell 集成的会话里测不出来（bash 根本不发那些序列），所以这里让 shell
-// 自己把序列打出来，走完整的 readLoop → Feed → Append 路径。
-func TestOutSeqCountsAfterStripping(t *testing.T) {
+// agent 不改写输出流（ADR-0026 §2 / 不变式 ④）：out_seq = PTY 输出的累计字节数，
+// 一个字节都不剥离。以前被剥掉的 OSC 133 / 7 / 1701 现在原样透传给浏览器，由
+// xterm 自己忽略。
+func TestOutSeqIsRawPTYBytes(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")
-	s.Subscribe(c, 0)
 	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+	waitQuiet(t, s, 200*time.Millisecond)
+	start := s.HeadSeq()
+	c.SubscribeAt(s, start)
 
-	// 让 shell 打出真正的 OSC 字节（回显里是字面量反斜杠，不会干扰断言）
+	// 让 shell 自己打出 OSC 字节（回显里是字面量反斜杠，不会干扰断言）
 	script := `printf 'A\033]133;B\007B\033]7;file://h/srv/demo\007C\033]1701;hello;1\007D\033]0;keep-me\007E\n'` +
-		"; printf 'STRIP-%s\\n' MARK\r"
+		"; printf 'RAW-%s\\n' MARK\r"
 	if err := c.Send(s, script); err != nil {
 		t.Fatal(err)
 	}
-	waitScreen(t, c, "STRIP-MARK")
-	// 【必须等静默】：标记出现之后 shell 还会吐下一个 prompt（含 OSC 133）。
-	// 下面的 head_seq 子测试拿 screen 快照和 s.HeadSeq() 比，而 HeadSeq 是
-	// 活的 —— 快照之后又来了字节就会 HeadSeq > len(screen)，随机失败。
+	waitScreen(t, c, "RAW-MARK")
 	waitQuiet(t, s, 300*time.Millisecond)
 
 	screen := c.Screen()
-
-	t.Run("webterm 的 OSC 一个都不许漏出去", func(t *testing.T) {
-		for _, bad := range []string{"\x1b]133", "\x1b]7;file", "\x1b]1701"} {
-			if strings.Contains(screen, bad) {
-				t.Errorf("客户端收到了本该被剥离的序列 %q", bad)
-			}
+	const want = "A\x1b]133;B\x07B\x1b]7;file://h/srv/demo\x07C\x1b]1701;hello;1\x07D\x1b]0;keep-me\x07E"
+	if !strings.Contains(screen, want) {
+		t.Errorf("输出被改写了，期望原样出现 %q", want)
+	}
+	if got, want := s.HeadSeq()-start, uint64(len(screen)); got != want {
+		t.Fatalf("head_seq 推进了 %d，客户端实收 %d 字节 —— out_seq 必须等于原始字节数", got, want)
+	}
+	for _, e := range c.Events() {
+		if u, ok := e.(*protocol.SessionUpdated); ok && u.CWD != nil && *u.CWD == "/srv/demo" {
+			t.Fatal("OSC 7 不再是 cwd 的来源 —— cwd 只读 /proc（ADR-0026 §6）")
 		}
-	})
-
-	t.Run("无关的 OSC 必须原样透传", func(t *testing.T) {
-		// OSC 0（窗口标题）不是我们的，剥了会破坏终端功能
-		if !strings.Contains(screen, "\x1b]0;keep-me\x07") {
-			t.Error("OSC 0 被吞掉了")
-		}
-	})
-
-	t.Run("剥离后的字节严丝合缝地连在一起", func(t *testing.T) {
-		// 三个 webterm 序列被抽走，中间那个 OSC 0 原样留下 —— 合起来必须
-		// 正好是这一串，多一个字节少一个字节都说明剥离有偏差
-		const want = "ABCD\x1b]0;keep-me\x07E"
-		if !strings.Contains(screen, want) {
-			t.Errorf("剥离留下了空隙或残渣，期望片段 %q", want)
-		}
-	})
-
-	t.Run("head_seq 严格等于客户端收到的字节数", func(t *testing.T) {
-		// 客户端从 seq 0 订阅、全程无空洞，所以两者必须完全相等。
-		// 若计数发生在剥离之前，head_seq 会比实际发出的字节多出被剥离的那些。
-		if got, want := s.HeadSeq(), uint64(len(screen)); got != want {
-			t.Fatalf("head_seq = %d，客户端实收 %d 字节，差 %d —— "+
-				"out_seq 必须在剥离之后计数", got, want, int64(got)-int64(want))
-		}
-	})
-
-	t.Run("结构化事件从同一条流里抽了出来", func(t *testing.T) {
-		var gotPrompt, gotCWD, gotIntegration bool
-		for _, e := range c.Events() {
-			switch v := e.(type) {
-			case *protocol.Prompt:
-				gotPrompt = true
-			case *protocol.CWD:
-				if v.Path == "/srv/demo" {
-					gotCWD = true
-				}
-			case *protocol.SessionUpdated:
-				if v.Integration != nil && *v.Integration == protocol.IntegrationActive {
-					gotIntegration = true
-				}
-			}
-		}
-		if !gotPrompt {
-			t.Error("没收到 prompt 事件")
-		}
-		if !gotCWD {
-			t.Error("没收到 cwd 事件（OSC 7 的 percent-decode / host 忽略可能有问题）")
-		}
-		if !gotIntegration {
-			t.Error("OSC 1701;hello 没把 integration 置成 active")
-		}
-	})
+	}
 }

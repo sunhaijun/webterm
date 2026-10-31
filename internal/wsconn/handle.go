@@ -3,7 +3,6 @@ package wsconn
 import (
 	"errors"
 
-	"github.com/coder/websocket"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/session"
 )
@@ -19,7 +18,8 @@ func (c *Conn) handleBinary(data []byte) {
 		c.sendError("", nil, code, "二进制帧非法", true)
 		return
 	}
-	if f.Type != protocol.TypeInput {
+	if !f.FromClient() {
+		// 方向不对：client 发来 OUTPUT / SNAPSHOT（协议 §3）
 		c.sendError("", nil, protocol.CodeBadFrame, "client 只能发 INPUT 帧", true)
 		return
 	}
@@ -80,10 +80,9 @@ func (c *Conn) handleControl(data []byte) {
 			c.sendError("", &m.SID, protocol.CodeUnknownSession, "会话不存在", false)
 			return
 		}
-		// 切回会话：缓冲被覆盖时要额外发一条 reset 通知 —— 客户端没有
-		// welcome.resumed[] 那条渠道可以知道历史被截断了。
-		// 尺寸跟着这条消息走，【不能单发 resize】，理由见协议 §4.1
-		c.subscribeNotifyReset(s, m.OutSeq, m.Cols, m.Rows)
+		// 增量还是快照由会话判定（协议 §5.1）。尺寸跟着这条消息走，【不能单发
+		// resize】：列数变了要先改模拟器再出快照，TIOCSWINSZ 排在入队之后（§4.1）
+		c.subscribe(s, m.OutSeq, m.Cols, m.Rows)
 
 	case *protocol.Unsubscribe:
 		if s, ok := c.deps.Sessions.Get(m.SID); ok {
@@ -99,6 +98,7 @@ func (c *Conn) handleControl(data []byte) {
 			c.sendError("", &m.SID, protocol.CodeUnknownSession, "会话不存在", false)
 			return
 		}
+		// 列数变了：会话给每个订阅者（包括本连接）重发一份快照（协议 §4.1）
 		if err := s.Resize(m.Cols, m.Rows); err != nil {
 			c.sendError("", &m.SID, protocol.CodeBadRequest, err.Error(), false)
 		}
@@ -122,10 +122,12 @@ func (c *Conn) handleSessionCreate(m *protocol.SessionCreate) {
 		c.sendError(m.ReqID, nil, code, err.Error(), false)
 		return
 	}
-	// 广播给该设备的所有连接；req_id 只出现在发起方的副本上
-	c.deps.Hub.Broadcast(&protocol.SessionCreated{Session: s.Snapshot()}, c,
-		&protocol.SessionCreated{ReqID: m.ReqID, Session: s.Snapshot()})
-	c.subscribe(s, 0)
+	// 广播给该设备的所有连接；req_id 只出现在发起方的副本上。
+	// 【不自动订阅】（协议 §4.1）：client 收到 session.created 后自己发
+	// subscribe{out_seq: 0}，走快照拿第一屏 —— 订阅只有这一条路。
+	info := s.Info()
+	c.deps.Hub.Broadcast(&protocol.SessionCreated{Session: info}, c,
+		&protocol.SessionCreated{ReqID: m.ReqID, Session: info})
 }
 
 func (c *Conn) handleSessionClose(m *protocol.SessionClose) {
@@ -137,5 +139,3 @@ func (c *Conn) handleSessionClose(m *protocol.SessionClose) {
 	c.deps.Hub.Broadcast(&protocol.SessionClosed{SID: m.SID, ExitCode: code}, c,
 		&protocol.SessionClosed{ReqID: m.ReqID, SID: m.SID, ExitCode: code})
 }
-
-var _ = websocket.StatusNormalClosure

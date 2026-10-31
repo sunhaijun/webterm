@@ -7,8 +7,6 @@ package wsconn
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -20,7 +18,7 @@ import (
 )
 
 const (
-	// writeQueueBytes 是每连接写队列上限（协议 §5.5）。
+	// writeQueueBytes 是每连接写队列上限（协议 §5.6）。
 	// 满了就关闭该连接 —— 阻塞写会反压到 PTY.Read()，一个慢客户端不能
 	// 拖慢服务器上真正在跑的活。
 	writeQueueBytes = 4 << 20
@@ -76,18 +74,30 @@ type Conn struct {
 
 	clientID string
 
-	mu        sync.Mutex
-	subs      map[uint16]bool      // 已订阅的会话
-	lastAck   map[uint16]time.Time // ack 节流
-	pendAck   map[uint16]uint64
-	lastHead  map[uint16]time.Time // head_seq 节流
-	pendHead  map[uint16]uint64
-	queued    int // 写队列已占字节数
+	mu       sync.Mutex
+	subs     map[uint16]bool      // 已订阅的会话
+	lastAck  map[uint16]time.Time // ack 节流
+	pendAck  map[uint16]uint64
+	lastHead map[uint16]time.Time // head_seq 节流
+	pendHead map[uint16]uint64
+
+	// 写队列：一个切片 + 一个唤醒信号。不用 channel —— 要能把一批帧原子地排进去
+	// （一份快照的各帧），也要能让 welcome 插到 hello 处理期间入队的帧前面。
+	q      []outFrame
+	queued int // 写队列（含 held）已占字节数
+	// holding：welcome 发出之前入队的一切都先挂在 held 里。
+	//
+	// hello.resume 的判定与补齐帧的入队必须是同一个动作（协议 §5.1，在会话锁内），
+	// 而 welcome.resumed[] 又要报出那个判定 —— 所以帧先于 welcome 生成。挂起写队列、
+	// welcome 生成之后插在最前面一起放行，客户端看到的就是 welcome 在先。
+	// 连接一建立就挂起：observer 在 hello 之前就登记了，期间的广播也不能跑到 welcome 前面。
+	holding   bool
+	held      []outFrame
+	wake      chan struct{} // cap 1
 	closed    bool
 	closeCode websocket.StatusCode
 	closeMsg  string
 
-	out      chan outFrame
 	done     chan struct{}
 	doneOnce sync.Once
 	// flushed 在写队列刷干净之后关闭。
@@ -117,7 +127,8 @@ func New(ws *websocket.Conn, deps Deps) *Conn {
 		pendAck:  make(map[uint16]uint64),
 		lastHead: make(map[uint16]time.Time),
 		pendHead: make(map[uint16]uint64),
-		out:      make(chan outFrame, 256),
+		holding:  true,
+		wake:     make(chan struct{}, 1),
 		done:     make(chan struct{}),
 		flushed:  make(chan struct{}),
 	}
@@ -129,30 +140,29 @@ func (c *Conn) ClientID() string { return c.clientID }
 // Push 实现 session.Subscriber：把一段输出编成 OUTPUT 帧排进写队列。
 //
 // 【必须非阻塞】。队列满就关闭连接，客户端会自动重连走续传。
-func (c *Conn) Push(sid uint16, seq uint64, data []byte, attrPrefix bool) {
-	payload := data
-	flags := uint8(0)
-	if attrPrefix {
-		// 前置的 4 个字节是渲染修正，不计入 seq —— 用 flags bit0 标出来，
-		// 让客户端把它从 seq 记账里排除（协议 §3）。
-		flags = protocol.FlagAttrPrefix
-		payload = make([]byte, 0, len(protocol.AttrPrefix)+len(data))
-		payload = append(payload, protocol.AttrPrefix...)
-		payload = append(payload, data...)
-	}
+func (c *Conn) Push(sid uint16, seq uint64, data []byte) {
+	frames := make([]outFrame, 0, 1)
 	// 大段输出要切成不超过 MaxPayload 的帧
-	for off := 0; off < len(payload); {
-		end := min(off+protocol.MaxPayload, len(payload))
-		chunk := payload[off:end]
-		f := protocol.Frame{Type: protocol.TypeOutput, Flags: flags, SID: sid, Seq: seq, Payload: chunk}
-		if off > 0 {
-			f.Flags = 0 // 属性前缀只在第一帧上
-		}
-		c.enqueue(outFrame{binary: true, data: protocol.EncodeFrame(f)})
-		seq += uint64(f.DataLen())
+	for off := 0; off < len(data); {
+		end := min(off+protocol.MaxPayload, len(data))
+		f := protocol.Frame{Type: protocol.TypeOutput, SID: sid, Seq: seq + uint64(off), Payload: data[off:end]}
+		frames = append(frames, outFrame{binary: true, data: protocol.EncodeFrame(f)})
 		off = end
-		flags = 0
 	}
+	c.enqueue(frames...)
+}
+
+// Snapshot 实现 session.Subscriber：把一份快照编成 SNAPSHOT 帧排进写队列。
+//
+// 超过单帧上限就拆：同一个 seq，除最后一帧外都带 MORE（协议 §3）。各帧一次性
+// 原子入队 —— 协议保证一份快照的各帧之间不夹杂同一 sid 的其它帧。
+func (c *Conn) Snapshot(sid uint16, seq uint64, data []byte) {
+	fs := protocol.SnapshotFrames(sid, seq, data)
+	frames := make([]outFrame, 0, len(fs))
+	for _, f := range fs {
+		frames = append(frames, outFrame{binary: true, data: protocol.EncodeFrame(f)})
+	}
+	c.enqueue(frames...)
 }
 
 // Event 实现 session.Subscriber：把控制消息排进写队列。
@@ -164,15 +174,22 @@ func (c *Conn) Event(msg any) {
 			return
 		}
 	case *protocol.SessionUpdated:
-		if m.HeadSeq != nil {
-			// 已订阅的会话不需要它 —— OUTPUT 帧本身就带着进度，
-			// 未读也永远是 false
+		if m.HeadSeq != nil && onlyHeadSeq(m) {
+			// 只带 head_seq 的那种（未读用）：已订阅的会话不需要它 —— OUTPUT 帧
+			// 本身就带着进度，未读也永远是 false；未订阅的做 1s 节流
 			c.mu.Lock()
 			subscribed := c.subs[m.SID]
 			c.mu.Unlock()
 			if subscribed || !c.allowHeadSeq(m.SID, *m.HeadSeq) {
 				return
 			}
+		} else if m.HeadSeq != nil {
+			// 带着别的字段（会话退出时的 status + head_seq）：必须原样发出去，
+			// 不节流。顺手作废被节流挂起的旧值 —— 否则补发会在它后面送来一个更小的 head_seq
+			c.mu.Lock()
+			c.lastHead[m.SID] = time.Now()
+			delete(c.pendHead, m.SID)
+			c.mu.Unlock()
 		}
 	}
 	b, err := protocol.Encode(msg)
@@ -188,7 +205,7 @@ func (c *Conn) allowAck(sid uint16, inAck uint64) bool {
 	defer c.mu.Unlock()
 	now := time.Now()
 	if now.Sub(c.lastAck[sid]) < ackThrottle {
-		c.pendAck[sid] = inAck // 记下最新值，由 flushLoop 补发
+		c.pendAck[sid] = inAck // 记下最新值，由 writeLoop 的 ticker 补发
 		return false
 	}
 	c.lastAck[sid] = now
@@ -209,32 +226,83 @@ func (c *Conn) allowHeadSeq(sid uint16, head uint64) bool {
 	return true
 }
 
-// enqueue 把一帧排进写队列。队列满 → 关闭连接（绝不阻塞）。
-func (c *Conn) enqueue(f outFrame) {
+// enqueue 把一批帧原子地排进写队列。队列满 → 关闭连接（绝不阻塞）。
+func (c *Conn) enqueue(frames ...outFrame) {
+	if len(frames) == 0 {
+		return
+	}
+	n := 0
+	for _, f := range frames {
+		n += len(f.data)
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
 		return
 	}
-	if c.queued+len(f.data) > c.deps.writeQueueBytes() {
+	if c.queued+n > c.deps.writeQueueBytes() {
 		c.mu.Unlock()
 		c.log.Warn("conn queue full，断开慢客户端", "client_id", c.clientID)
 		c.closeWith(websocket.StatusTryAgainLater, "写队列已满")
 		return
 	}
-	c.queued += len(f.data)
-	c.mu.Unlock()
-
-	select {
-	case c.out <- f:
-	case <-c.done:
-	default:
-		// channel 也满了（写 goroutine 卡住）→ 同样断开，不阻塞
-		c.mu.Lock()
-		c.queued -= len(f.data)
-		c.mu.Unlock()
-		c.closeWith(websocket.StatusTryAgainLater, "写队列已满")
+	c.queued += n
+	holding := c.holding
+	if holding {
+		c.held = append(c.held, frames...)
+	} else {
+		c.q = append(c.q, frames...)
 	}
+	c.mu.Unlock()
+	if !holding {
+		c.signal()
+	}
+}
+
+// releaseWith 结束挂起：first 排在最前面，随后是挂起期间入队的全部帧。
+// 不在挂起状态时等价于普通入队。
+func (c *Conn) releaseWith(first []byte) {
+	f := outFrame{data: first}
+	c.mu.Lock()
+	if !c.holding {
+		c.mu.Unlock()
+		c.enqueue(f)
+		return
+	}
+	c.holding = false
+	held := c.held
+	c.held = nil
+	if c.closed {
+		c.queued = 0
+		c.mu.Unlock()
+		return
+	}
+	c.queued += len(first) // welcome 可能超过一个慢客户端剩下的额度，但它必须发
+	c.q = append(c.q, f)
+	c.q = append(c.q, held...)
+	c.mu.Unlock()
+	c.signal()
+}
+
+func (c *Conn) signal() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
+
+// pop 取出写队列的队首。
+func (c *Conn) pop() (outFrame, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.q) == 0 {
+		return outFrame{}, false
+	}
+	f := c.q[0]
+	c.q[0] = outFrame{}
+	c.q = c.q[1:]
+	c.queued -= len(f.data)
+	return f, true
 }
 
 // closeWith 请求关闭连接。幂等，第一次调用的原因胜出。
@@ -267,20 +335,30 @@ func (c *Conn) closeWith(code websocket.StatusCode, msg string) {
 // 致命错误【必须先入队再关】，而且 Serve 要等写 goroutine 把队列刷完才
 // 真正关闭 socket —— 否则客户端只会看到一个裸的 close。"给出可读的错误
 // 消息而不是一个裸的握手失败"正是不在握手阶段做版本协商的理由（协议 §1）。
+//
+// welcome 之前的错误（expected_hello、protocol_unsupported）没有 welcome 可等，
+// 直接结束挂起、排在最前面。
 func (c *Conn) sendError(reqID string, sid *uint16, code, message string, fatal bool) {
-	c.Event(&protocol.Error{ReqID: reqID, SID: sid, Code: code, Message: message})
+	b, err := protocol.Encode(&protocol.Error{ReqID: reqID, SID: sid, Code: code, Message: message})
+	if err == nil {
+		c.mu.Lock()
+		holding := c.holding
+		c.mu.Unlock()
+		if holding {
+			c.releaseWith(b)
+		} else {
+			c.enqueue(outFrame{data: b})
+		}
+	}
 	if fatal {
 		c.closeWith(websocket.StatusPolicyViolation, code)
 	}
 }
 
-func encodeJSON(v any) []byte {
-	b, _ := json.Marshal(v)
-	return b
-}
-
-var errConnClosed = errors.New("wsconn: 连接已关闭")
-
 func (c *Conn) String() string { return fmt.Sprintf("conn(%s)", c.clientID) }
 
-var _ = context.Background
+// onlyHeadSeq 报告这条 session.updated 是不是只带了 head_seq（+ sid）。
+func onlyHeadSeq(m *protocol.SessionUpdated) bool {
+	return m.Name == nil && m.NameIsManual == nil && m.CWD == nil && m.Status == nil &&
+		m.ExitCode == nil && m.Cols == nil && m.Rows == nil
+}

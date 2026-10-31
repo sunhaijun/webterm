@@ -14,8 +14,8 @@ func newFS() (*flag.FlagSet, *string, *int, *bool) {
 	fs.SetOutput(os.NewFile(0, os.DevNull))
 	domain := fs.String("domain", "", "")
 	port := fs.Int("https-port", 443, "")
-	noHist := fs.Bool("no-history", false, "")
-	return fs, domain, port, noHist
+	noLogin := fs.Bool("no-login-shell", false, "")
+	return fs, domain, port, noLogin
 }
 
 func write(t *testing.T, body string) string {
@@ -33,9 +33,9 @@ func TestConfigFileFillsFlags(t *testing.T) {
 
 domain     = term.example.com
 https-port = 8443
-no-history = true
+no-login-shell = true
 `)
-	fs, domain, port, noHist := newFS()
+	fs, domain, port, noLogin := newFS()
 	if err := loadConfigInto(fs, path); err != nil {
 		t.Fatal(err)
 	}
@@ -48,8 +48,8 @@ no-history = true
 	if *port != 8443 {
 		t.Errorf("https-port = %d", *port)
 	}
-	if !*noHist {
-		t.Error("no-history 应当为 true")
+	if !*noLogin {
+		t.Error("no-login-shell 应当为 true")
 	}
 }
 
@@ -123,15 +123,15 @@ func TestMissingConfigFileIsFine(t *testing.T) {
 
 // 只写键名的布尔项算 true。
 func TestBareBooleanKey(t *testing.T) {
-	path := write(t, "no-history\n")
-	fs, _, _, noHist := newFS()
+	path := write(t, "no-login-shell\n")
+	fs, _, _, noLogin := newFS()
 	if err := loadConfigInto(fs, path); err != nil {
 		t.Fatal(err)
 	}
 	if err := fs.Parse(nil); err != nil {
 		t.Fatal(err)
 	}
-	if !*noHist {
+	if !*noLogin {
 		t.Error("只写键名的布尔项应当算 true")
 	}
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/sunhaijun/webterm/internal/agent"
 	"github.com/sunhaijun/webterm/internal/handoff"
 	"github.com/sunhaijun/webterm/internal/session"
-	"github.com/sunhaijun/webterm/internal/shellinit"
 	"github.com/sunhaijun/webterm/internal/store"
 )
 
@@ -27,24 +26,21 @@ import (
 // 复用（TestConfigKeysAllExistOnServe / TestServeFlagsAreConfigurable），
 // 而不需要维护第二份 flag 清单 —— 两份必然漂移。
 type serveOpts struct {
-	acmeStaging        bool
-	httpPort           int
-	httpsPort          int
-	bind               string
-	noTLS              bool
-	trustProxy         bool
-	maxSessions        int
-	maxConns           int
-	ringBytes          int
-	maxHistory         int
-	noHistory          bool
-	noShellIntegration bool
-	noLoginShell       bool
-	sessionEnv         envList
-	noAltScreenCompat  bool
-	shell              string
-	logLevel           string
-	handoffFD          int
+	acmeStaging       bool
+	httpPort          int
+	httpsPort         int
+	bind              string
+	noTLS             bool
+	trustProxy        bool
+	maxSessions       int
+	maxConns          int
+	ringBytes         int
+	noLoginShell      bool
+	sessionEnv        envList
+	noAltScreenCompat bool
+	shell             string
+	logLevel          string
+	handoffFD         int
 }
 
 func (o *serveOpts) register(fs *flag.FlagSet) {
@@ -56,14 +52,11 @@ func (o *serveOpts) register(fs *flag.FlagSet) {
 	fs.BoolVar(&o.trustProxy, "trust-proxy", false, "信任 X-Forwarded-For（仅在反代后启用，否则限速可被绕过）")
 	fs.IntVar(&o.maxSessions, "max-sessions", 20, "会话数上限")
 	fs.IntVar(&o.maxConns, "max-conns", 16, "并发 WebSocket 连接上限")
-	fs.IntVar(&o.ringBytes, "ring-bytes", 1<<20, "每会话输出缓冲（影响能容忍的断线时长）")
-	fs.IntVar(&o.maxHistory, "max-history", 50000, "命令历史条数上限")
-	fs.BoolVar(&o.noHistory, "no-history", false, "完全关闭命令历史记录")
-	fs.BoolVar(&o.noShellIntegration, "no-shell-integration", false, "不注入 shell 集成（排障用）")
-	fs.BoolVar(&o.noLoginShell, "no-login-shell", false, "用非登录交互 shell（只读 ~/.bashrc）")
+	fs.IntVar(&o.ringBytes, "ring-bytes", session.DefaultRingBytes, "每会话输出缓冲：断线或切走期间的输出在它之内就增量续传，超出就改发快照")
+	fs.BoolVar(&o.noLoginShell, "no-login-shell", false, "以 -i 启动非登录交互 shell（bash 只读 ~/.bashrc）。默认 -l -i")
 	fs.Var(&o.sessionEnv, "session-env", "注入会话 PTY 的环境变量，KEY=VAL，可重复")
 	fs.BoolVar(&o.noAltScreenCompat, "no-altscreen-compat", false, "关掉「把全屏 AI CLI 拉回主屏」的内置清单（ADR-0024）")
-	fs.StringVar(&o.shell, "shell", "bash", "shell（v0.1 只支持 bash）")
+	fs.StringVar(&o.shell, "shell", "bash", "会话里跑的 shell，任何支持 -l / -i 的 shell 都行")
 	fs.StringVar(&o.logLevel, "log-level", "info", "debug / info / warn / error")
 	fs.IntVar(&o.handoffFD, handoff.FlagName, -1, "内部：热升级交接的快照 fd（由旧进程在 exec 时传入，ADR-0016）")
 }
@@ -119,33 +112,22 @@ func runServe(args []string) error {
 	}
 	defer st.Close()
 
-	// 清理上次崩溃残留的 rcfile。【交接过来的不能清】—— 那些 rcfile 属于正在运行的会话
 	runDir := filepath.Join(c.dataDir, "run")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return fmt.Errorf("创建运行时目录失败: %w", err)
 	}
-	if snap == nil {
-		cleanupStaleRCFiles(runDir, log)
-	}
+	// 老版本注入 shell 集成时留在这里的临时 rcfile（ADR-0026 §6 删除了 shell 集成）。
+	// 交接过来也照清：bash 只在启动时读 rcfile，正在运行的会话早就不需要它了
+	cleanupLegacyRCFiles(runDir, log)
 
-	sessCfg := session.Config{
+	sessions := session.NewManager(session.Config{
 		MaxSessions:       o.maxSessions,
 		RingBytes:         o.ringBytes,
 		Shell:             o.shell,
-		History:           !o.noHistory,
+		NoLoginShell:      o.noLoginShell,
 		SessionEnv:        o.sessionEnv,
 		NoAltScreenCompat: o.noAltScreenCompat,
-	}
-	if !o.noShellIntegration {
-		// 用临时 rcfile 注入，用户不需要改任何 dotfile（ADR-0010）
-		sessCfg.RCFileFor = func(sid uint16) (string, error) {
-			return shellinit.Render(sid, shellinit.Options{
-				Login: !o.noLoginShell,
-				Dir:   runDir,
-			})
-		}
-	}
-	sessions := session.NewManager(sessCfg, st)
+	})
 	defer sessions.Shutdown()
 	if snap != nil {
 		if err := sessions.Restore(snap); err != nil {
@@ -161,11 +143,9 @@ func runServe(args []string) error {
 		Dev:        c.dev,
 		TrustProxy: o.trustProxy,
 		MaxConns:   o.maxConns,
-		MaxHistory: o.maxHistory,
 		Version:    version,
 		Logger:     log,
 	}, st, sessions)
-	a.LoadSettings()
 
 	servers, errCh, err := a.Listen(agent.ServeConfig{
 		Domain:      c.domain,
@@ -298,8 +278,8 @@ func newLogger(level string) *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lv}))
 }
 
-// cleanupStaleRCFiles 删掉上次崩溃残留的临时 rcfile。
-func cleanupStaleRCFiles(runDir string, log *slog.Logger) {
+// cleanupLegacyRCFiles 删掉老版本（shell 集成还在时）留在运行时目录里的临时 rcfile。
+func cleanupLegacyRCFiles(runDir string, log *slog.Logger) {
 	entries, err := os.ReadDir(runDir)
 	if err != nil {
 		return
@@ -313,7 +293,7 @@ func cleanupStaleRCFiles(runDir string, log *slog.Logger) {
 		}
 	}
 	if n > 0 {
-		log.Debug("清理了上次残留的 rcfile", "count", n)
+		log.Debug("清理了老版本残留的 rcfile", "count", n)
 	}
 }
 

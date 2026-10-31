@@ -1,0 +1,411 @@
+[?2004h[1;32mme@vt[0m:[34m/tmp/claude-1000/-home-usr-github-webterm/fdaf6aff-02bd-4675-864b-cf8dd553d4cc/scratchpad/vtspike/fx[0m$ ls --color=always -la /usr/lib | head -60
+[?2004ltotal 384
+drwxr-xr-x 53 root root  4096 Sep  5 20:51 [0m[01;34m.[0m
+drwxr-xr-x 12 root root  4096 Sep  6  2025 [01;34m..[0m
+drwxr-xr-x  2 root root  4096 Nov  7  2025 [01;34mX11[0m
+drwxr-xr-x  2 root root  4096 Sep  6  2025 [01;34mapparmor[0m
+drwxr-xr-x  5 root root  4096 Sep  6  2025 [01;34mapt[0m
+drwxr-xr-x  2 root root  4096 Sep  5 20:49 [01;34mbfd-plugins[0m
+drwxr-xr-x  2 root root  4096 Sep  5 18:56 [01;34mbinfmt.d[0m
+drwxr-xr-x  2 root root  4096 Sep  5 20:49 [01;34mcompat-ld[0m
+drwxr-xr-x  2 root root  4096 Sep  5 18:55 [01;34mconsole-setup[0m
+lrwxrwxrwx  1 root root    21 Oct 10  2024 [01;36mcpp[0m -> [01;32m/etc/alternatives/cpp[0m
+drwxr-xr-x  2 root root  4096 Sep  6  2025 [01;34mdbus-1.0[0m
+drwxr-xr-x  2 root root  4096 Apr 25  2025 [01;34mdepmod.d[0m
+drwxr-xr-x  3 root root  4096 Sep  5 18:56 [01;34mdhcpcd[0m
+drwxr-xr-x  3 root root  4096 Sep  6  2025 [01;34mdpkg[0m
+drwxr-xr-x  2 root root  4096 Sep  6  2025 [01;34mdracut[0m
+drwxr-xr-x  2 root root  4096 Sep  5 18:55 [01;34menvironment.d[0m
+drwxr-xr-x  2 root root  4096 Sep  6  2025 [01;34mfile[0m
+drwxr-xr-x  3 root root  4096 Aug 10 17:08 [01;34mfirmware[0m
+drwxr-xr-x  3 root root  4096 Sep  5 20:49 [01;34mgcc[0m
+drwxr-xr-x  3 root root 12288 Jun 21 00:01 [01;34mgit-core[0m
+drwxr-xr-x  3 root root  4096 Sep  6  2025 [01;34mgroff[0m
+drwxr-xr-x  3 root root  4096 Sep  5 18:56 [01;34mgrub[0m
+drwxr-xr-x  2 root root  4096 Jul  3  2025 [01;34mgrub-legacy[0m
+drwxr-xr-x  2 root root  4096 Sep  5 18:56 [01;34mifupdown[0m
+drwxr-xr-x  2 root root  4096 Sep  6  2025 [01;34minit[0m
+drwxr-xr-x  3 root root  4096 Sep  5 18:55 [01;34mkernel[0m
+drwxr-xr-x  3 root root  4096 Sep  6  2025 [01;34mklibc[0m
+-rwxr-xr-x  1 root root 74688 Mar  3  2025 [01;32mklibc-cbxFsLVJ9bt_YYfJZGrxjofFc_w.so[0m
+-rw-r--r--  1 root root 22976 Sep 18  2024 libsupp.a
+drwxr-xr-x  3 root root  4096 Sep  5 20:51 [01;34mlinux[0m
+drwxr-xr-x  3 root root  4096 Sep  6  2025 [01;34mlinux-boot-probes[0m
+drwxr-xr-x  3 root root  4096 Sep  5 18:56 [01;34mlocale[0m
+drwxr-xr-x  3 root root  4096 Sep  6  2025 [01;34mlsb[0m
+drwxr-xr-x  2 root root  4096 Sep  6  2025 [01;34mman-db[0m
+drwxr-xr-x  3 root root  4096 May  9  2025 [01;34mmime[0m
+drwxr-xr-x  2 root root  4096 Sep  5 18:55 [01;34mmodprobe.d[0m
+drwxr-xr-x  4 root root  4096 Sep  5 18:55 [01;34mmodules[0m
+drwxr-xr-x  2 root root  4096 Sep  5 18:56 [01;34mopenssh[0m
+drwxr-xr-x  2 root root  4096 Sep  6  2025 [01;34mos-prober[0m
+drwxr-xr-x  4 root root  4096 Sep  6  2025 [01;34mos-probes[0m
+-rw-r--r--  1 root root   286 Jul  4 02:05 os-release
+drwxr-xr-x  2 root root  4096 Sep  5 18:55 [01;34mpam.d[0m
+drwxr-xr-x  5 root root  4096 Sep  5 18:55 [01;34mpcrlock.d[0m
+drwxr-xr-x  3 root root  4096 Sep  5 19:11 [01;34mpostgresql[0m
+drwxr-xr-x  3 root root  4096 Sep  6  2025 [01;34mpython3[0m
+drwxr-xr-x 35 root root 20480 Sep  5 18:56 [01;34mpython3.13[0m
+drwxr-xr-x  2 root root  4096 Sep  6  2025 [01;34mrunit-helper[0m
+drwxr-xr-x  2 root root  4096 Feb 28  2025 [01;34msasl2[0m
+lrwxrwxrwx  1 root root    19 May  6 05:33 [01;36msftp-server[0m -> [01;32mopenssh/sftp-server[0m
+drwxr-xr-x  3 root root  4096 Sep  5 18:56 [01;34mssl[0m
+drwxr-xr-x  2 root root  4096 Sep  5 18:56 [01;34msysctl.d[0m
+drwxr-xr-x 18 root root 12288 Sep  5 19:11 [01;34msystemd[0m
+drwxr-xr-x  2 root root  4096 Sep  5 18:56 [01;34msysusers.d[0m
+drwxr-xr-x  4 root root  4096 Sep  6  2025 [01;34mtasksel[0m
+drwxr-xr-x  2 root root  4096 Sep  5 19:11 [01;34mtmpfiles.d[0m
+drwxr-xr-x  4 root root  4096 Sep  5 18:56 [01;34mudev[0m
+drwxr-xr-x  2 root root  4096 Sep  6  2025 [01;34mvalgrind[0m
+drwxr-xr-x 34 root root 36864 Sep  5 20:51 [01;34mx86_64-linux-gnu[0m
+[?2004h[1;32mme@vt[0m:[34m/tmp/claude-1000/-home-usr-github-webterm/fdaf6aff-02bd-4675-864b-cf8dd553d4cc/scratchpad/vtspike/fx[0m$ git -C /home/usr/github/webterm log --graph --color=always --oneline -40 [A[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[K0
+[?2004l[?1h=*   [33mdf1ebcb[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;32mfeat/[m [33m[m[33m[m[1;36m[m[33m[m[1;32m[m[33m[m[1;31m[m[33m[m[1;32m40-termux-shell[m[33m)[m Merge pull request #82 from [m [33m[m[33m[m[1;36m[m[33m[m[1;32m[m[33m[m[1;31m[m[33m[m[1;32m[m[33m[msomeowner/feat/40-input-stats[m
+[31m|[m[32m\[m  [m
+[31m|[m *   [33m96d2db5[m[33m ([m[1;31morigin/feat/40-input-stats[m[33m)[m Me[m [31m[m[33m[m[33m[m[1;31m[m[33m[mrge main into feat/40-input-stats[m
+[31m|[m [33m|[m[31m\[m  [m
+[31m|[m [33m|[m[31m/[m  [m
+[31m|[m[31m/[m[33m|[m   [m
+[K[7mWaiting for data... (^X or interrupt to abort)[27m[K* [33m|[m   [33me57d9bb[m Merge pull request #81 from usr[m [33m[m[33m[mhaijun/feat/20-scrollback-model[m
+[35m|[m[36m\[m [33m\[m  [m
+[35m|[m * [33m|[m [33mb6e4c2b[m[33m ([m[1;31morigin/feat/20-scrollback-mode[m [35m[m[33m[m[33m[m[33m[m[1;31ml[m[33m)[m docs(20): 滚轮上报会改变程序状态 —— 第 4 [m
+[35m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m步必须给一个看得见的出口[m
+* [36m|[m [33m|[m   [33ma1a016b[m Merge pull request #80 from s[m [36m[m[33m[m[33m[munhaijun/fix/40-input-dedup[m
+[36m|[m[1;32m\[m [36m\[m [33m\[m  [m
+[36m|[m [1;32m|[m[36m/[m [33m/[m  [m
+[36m|[m[36m/[m[1;32m|[m [33m|[m   [m
+[36m|[m * [33m|[m [33m29bea7c[m[33m ([m[1;31morigin/fix/40-input-dedup[m[33m)[m fix[m [36m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m(web): 连打两下同一个字符，第二下被去重静默吃[m [36m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m掉（AC-3.14 / ADR-0020）[m
+[36m|[m[36m/[m [33m/[m  [m
+[36m|[m * [33m47dbf49[m feat(web): 输入路径按段可观测 —— [m [36m[m[33m[m__webterm.inputStats()（AC-3.17 / ADR-0020 推[m [36m[m[33m[m论三）[m
+[36m|[m[36m/[m  [m
+*   [33mb108b31[m Merge pull request #79 from sunha[m [33m[mijun/feat/20-scrollback-model[m
+[1;33m|[m[1;34m\[m  [m
+[1;33m|[m * [33m1086c22[m perf(web): 拖动每帧落一次 + 大块[m
+[1;33m[m[33m[m写入有预算（ADR-0024 第 2 步）[m
+[1;33m|[m[1;33m/[m  [m
+*   [33m7ef0260[m Merge pull request #78 from sunha[m [33m[mijun/feat/20-scrollback-model[m
+[1;35m|[m[1;36m\[m  [m
+[1;35m|[m * [33m5023ab4[m docs(80): 拿不到 sudo 也能跑 E2E [m [1;35m[m[33m[m—— 把库解到自己目录的那条路[m
+:[K[K/[Ktt[Kmm[Kpp[K//[Kcc[Kll[Kaa[Kuu[Kdd[Kee[K--[K11[K00[K00[K00[K//[K--[Khh[Koo[Kmm[Kee[K--[Kss[Kuu[Knn[K--[Kgg[Kii[Ktt[Khh[Kuu[Kbb[K--[Kww[Kee[Kbb[Ktt[Kee[Krr[Kmm[K//[Kff[Kdd[K[Ksun-github-webterm/fdaa[Kff[K66[Kaa[Kff[Kff[K--[K00[K22[Kbb[Kdd[K--[K44[K66[K77[K55[K--[K88[K66[K44[Kbb[K--[K[Kf6aff-02bd-4675-864b-cc[Kff[K88[Kdd[Kdd[K55[K55[K33[Kdd[K44[Kcc[Kcc[K//[Kss[Kcc[Krr[Kaa[Ktt[Kcc[Khh[Kpp[Kaa[K[Kf8dd553d4cc/scratchpadd[K//[Kvv[Ktt[Kss[Kpp[Kii[Kkk[Kee[K//[Kff[Kxx[K//[Kss[Kgg[Krr[K..[Kss[Khh[K[1;1H[K*   [33mdf1ebcb[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;32mfeat/[m [2;1H[K[33m[m[33m[m[1;36m[m[33m[m[1;32m[m[33m[m[1;31m[m[33m[m[1;32m40-termux-shell[m[33m)[m Merge pull request #82 from [m [3;1H[K[33m[m[33m[m[1;36m[m[33m[m[1;32m[m[33m[m[1;31m[m[33m[m[1;32m[m[33m[msomeowner/feat/40-input-stats[m
+[4;1H[K[31m|[m[32m\[m  [m
+[5;1H[K[31m|[m *   [33m96d2db5[m[33m ([m[1;31morigin/feat/40-input-stats[m[33m)[m Me[m [6;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[mrge main into feat/40-input-stats[m
+[7;1H[K[31m|[m [33m|[m[31m\[m  [m
+[8;1H[K[31m|[m [33m|[m[31m/[m  [m
+[9;1H[K[31m|[m[31m/[m[33m|[m   [m
+[10;1H[K* [33m|[m   [33me57d9bb[m Merge pull request #81 from usr[m [11;1H[K[33m[m[33m[mhaijun/feat/20-scrollback-model[m
+[12;1H[K[35m|[m[36m\[m [33m\[m  [m
+[13;1H[K[35m|[m * [33m|[m [33mb6e4c2b[m[33m ([m[1;31morigin/feat/20-scrollback-mode[m [14;1H[K[35m[m[33m[m[33m[m[33m[m[1;31ml[m[33m)[m docs(20): 滚轮上报会改变程序状态 —— 第 4 [m
+[15;1H[K[35m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m步必须给一个看得见的出口[m
+[16;1H[K* [36m|[m [33m|[m   [33ma1a016b[m Merge pull request #80 from s[m [17;1H[K[36m[m[33m[m[33m[munhaijun/fix/40-input-dedup[m
+[18;1H[K[36m|[m[1;32m\[m [36m\[m [33m\[m  [m
+[19;1H[K[36m|[m [1;32m|[m[36m/[m [33m/[m  [m
+[20;1H[K[36m|[m[36m/[m[1;32m|[m [33m|[m   [m
+[21;1H[K[36m|[m * [33m|[m [33m29bea7c[m[33m ([m[1;31morigin/fix/40-input-dedup[m[33m)[m fix[m [22;1H[K[36m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m(web): 连打两下同一个字符，第二下被去重静默吃[m [23;1H[K[36m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m掉（AC-3.14 / ADR-0020）[m
+[24;1H[K[36m|[m[36m/[m [33m/[m  [m
+[25;1H[K[36m|[m * [33m47dbf49[m feat(web): 输入路径按段可观测 —— [m [26;1H[K[36m[m[33m[m__webterm.inputStats()（AC-3.17 / ADR-0020 推[m [27;1H[K[36m[m[33m[m论三）[m
+[28;1H[K[36m|[m[36m/[m  [m
+[29;1H[K*   [33mb108b31[m Merge pull request #79 from sunha[m [30;1H[K[33m[mijun/feat/20-scrollback-model[m
+[31;1H[K[1;33m|[m[1;34m\[m  [m
+[32;1H[K[1;33m|[m * [33m1086c22[m perf(web): 拖动每帧落一次 + 大块[m
+[33;1H[K[1;33m[m[33m[m写入有预算（ADR-0024 第 2 步）[m
+[34;1H[K[1;33m|[m[1;33m/[m  [m
+[35;1H[K*   [33m7ef0260[m Merge pull request #78 from sunha[m [36;1H[K[33m[mijun/feat/20-scrollback-model[m
+[37;1H[K[1;35m|[m[1;36m\[m  [m
+[38;1H[K[1;35m|[m * [33m5023ab4[m docs(80): 拿不到 sudo 也能跑 E2E [m [39;1H[K[1;35m[m[33m[m—— 把库解到自己目录的那条路[m
+[40;1H[1;1H[K*   [33mdf1ebcb[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;32mfeat/[m [2;1H[K[33m[m[33m[m[1;36m[m[33m[m[1;32m[m[33m[m[1;31m[m[33m[m[1;32m40-termux-shell[m[33m)[m Merge pull request #82 from [m [3;1H[K[33m[m[33m[m[1;36m[m[33m[m[1;32m[m[33m[m[1;31m[m[33m[m[1;32m[m[33m[msomeowner/feat/40-input-stats[m
+[4;1H[K[31m|[m[32m\[m  [m
+[5;1H[K[31m|[m *   [33m96d2db5[m[33m ([m[1;31morigin/feat/40-input-stats[m[33m)[m Me[m [6;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[mrge main into feat/40-input-stats[m
+[7;1H[K[31m|[m [33m|[m[31m\[m  [m
+[8;1H[K[31m|[m [33m|[m[31m/[m  [m
+[9;1H[K[31m|[m[31m/[m[33m|[m   [m
+[10;1H[K* [33m|[m   [33me57d9bb[m Merge pull request #81 from usr[m [11;1H[K[33m[m[33m[mhaijun/feat/20-scrollback-model[m
+[12;1H[K[35m|[m[36m\[m [33m\[m  [m
+[13;1H[K[35m|[m * [33m|[m [33mb6e4c2b[m[33m ([m[1;31morigin/feat/20-scrollback-mode[m [14;1H[K[35m[m[33m[m[33m[m[33m[m[1;31ml[m[33m)[m docs(20): 滚轮上报会改变程序状态 —— 第 4 [m
+[15;1H[K[35m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m步必须给一个看得见的出口[m
+[16;1H[K* [36m|[m [33m|[m   [33ma1a016b[m Merge pull request #80 from s[m [17;1H[K[36m[m[33m[m[33m[munhaijun/fix/40-input-dedup[m
+[18;1H[K[36m|[m[1;32m\[m [36m\[m [33m\[m  [m
+[19;1H[K[36m|[m [1;32m|[m[36m/[m [33m/[m  [m
+[20;1H[K[36m|[m[36m/[m[1;32m|[m [33m|[m   [m
+[21;1H[K[36m|[m * [33m|[m [33m29bea7c[m[33m ([m[1;31morigin/fix/40-input-dedup[m[33m)[m fix[m [22;1H[K[36m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m(web): 连打两下同一个字符，第二下被去重静默吃[m [23;1H[K[36m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m掉（AC-3.14 / ADR-0020）[m
+[24;1H[K[36m|[m[36m/[m [33m/[m  [m
+[25;1H[K[36m|[m * [33m47dbf49[m feat(web): 输入路径按段可观测 —— [m [26;1H[K[36m[m[33m[m__webterm.inputStats()（AC-3.17 / ADR-0020 推[m [27;1H[K[36m[m[33m[m论三）[m
+[28;1H[K[36m|[m[36m/[m  [m
+[29;1H[K*   [33mb108b31[m Merge pull request #79 from sunha[m [30;1H[K[33m[mijun/feat/20-scrollback-model[m
+[31;1H[K[1;33m|[m[1;34m\[m  [m
+[32;1H[K[1;33m|[m * [33m1086c22[m perf(web): 拖动每帧落一次 + 大块[m
+[33;1H[K[1;33m[m[33m[m写入有预算（ADR-0024 第 2 步）[m
+[34;1H[K[1;33m|[m[1;33m/[m  [m
+[35;1H[K*   [33m7ef0260[m Merge pull request #78 from sunha[m [36;1H[K[33m[mijun/feat/20-scrollback-model[m
+[37;1H[K[1;35m|[m[1;36m\[m  [m
+[38;1H[K[1;35m|[m * [33m5023ab4[m docs(80): 拿不到 sudo 也能跑 E2E [m [39;1H[K[1;35m[m[33m[m—— 把库解到自己目录的那条路[m
+[40;1H[K[7mPattern not found  (press RETURN)[27m[40;1H[K[K...skipping...
+*   [33mdf1ebcb[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;32mfeat/[m [33m[m[33m[m[1;36m[m[33m[m[1;32m[m[33m[m[1;31m[m[33m[m[1;32m40-termux-shell[m[33m)[m Merge pull request #82 from [m [33m[m[33m[m[1;36m[m[33m[m[1;32m[m[33m[m[1;31m[m[33m[m[1;32m[m[33m[msomeowner/feat/40-input-stats[m
+[31m|[m[32m\[m  [m
+[31m|[m *   [33m96d2db5[m[33m ([m[1;31morigin/feat/40-input-stats[m[33m)[m Me[m [31m[m[33m[m[33m[m[1;31m[m[33m[mrge main into feat/40-input-stats[m
+[31m|[m [33m|[m[31m\[m  [m
+[31m|[m [33m|[m[31m/[m  [m
+[31m|[m[31m/[m[33m|[m   [m
+* [33m|[m   [33me57d9bb[m Merge pull request #81 from usr[m [33m[m[33m[mhaijun/feat/20-scrollback-model[m
+[35m|[m[36m\[m [33m\[m  [m
+[35m|[m * [33m|[m [33mb6e4c2b[m[33m ([m[1;31morigin/feat/20-scrollback-mode[m [35m[m[33m[m[33m[m[33m[m[1;31ml[m[33m)[m docs(20): 滚轮上报会改变程序状态 —— 第 4 [m
+[35m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m步必须给一个看得见的出口[m
+* [36m|[m [33m|[m   [33ma1a016b[m Merge pull request #80 from s[m [36m[m[33m[m[33m[munhaijun/fix/40-input-dedup[m
+[36m|[m[1;32m\[m [36m\[m [33m\[m  [m
+[36m|[m [1;32m|[m[36m/[m [33m/[m  [m
+[36m|[m[36m/[m[1;32m|[m [33m|[m   [m
+[36m|[m * [33m|[m [33m29bea7c[m[33m ([m[1;31morigin/fix/40-input-dedup[m[33m)[m fix[m [36m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m(web): 连打两下同一个字符，第二下被去重静默吃[m [36m[m[33m[m[33m[m[33m[m[1;31m[m[33m[m掉（AC-3.14 / ADR-0020）[m
+[36m|[m[36m/[m [33m/[m  [m
+[36m|[m * [33m47dbf49[m feat(web): 输入路径按段可观测 —— [m [36m[m[33m[m__webterm.inputStats()（AC-3.17 / ADR-0020 推[m [36m[m[33m[m论三）[m
+[36m|[m[36m/[m  [m
+*   [33mb108b31[m Merge pull request #79 from sunha[m [33m[mijun/feat/20-scrollback-model[m
+[1;33m|[m[1;34m\[m  [m
+[1;33m|[m * [33m1086c22[m perf(web): 拖动每帧落一次 + 大块[m
+[1;33m[m[33m[m写入有预算（ADR-0024 第 2 步）[m
+[1;33m|[m[1;33m/[m  [m
+*   [33m7ef0260[m Merge pull request #78 from sunha[m [33m[mijun/feat/20-scrollback-model[m
+[1;35m|[m[1;36m\[m  [m
+[1;35m|[m * [33m5023ab4[m docs(80): 拿不到 sudo 也能跑 E2E [m [1;35m[m[33m[m—— 把库解到自己目录的那条路[m
+[K:[K[K:[K[K/[K[K[7mPattern not found  (press RETURN)[27m[40;1H[K[K[7mNo next tag  (press RETURN)[27m[40;1H[K[K[1;35m|[m * [33mbfac26f[m feat(agent): 会话环境注入 —— --se[m [1;35m[m[33m[mssion-env 与备用屏兼容清单（ADR-0024 第 1 步[m
+[1;35m[m[33m[m）[m
+[1;35m|[m * [33ma801951[m docs(20): ADR-0024 回滚历史的分层[m [1;35m[m[33m[m模型 —— 先把内容留在追加流里[m
+[1;35m|[m[1;35m/[m  [m
+*   [33m3fb3831[m[33m ([m[1;33mtag: [m[1;33mv0.1.0[m[33m)[m Merge pull request [m [33m[m[33m[m[1;33m[m[1;33m[m[33m[m#77 from someowner/docs/70-manual-checklist-v[m [33m[m[33m[m[1;33m[m[1;33m[m[33m[merified[m
+[31m|[m[32m\[m  [m
+[31m|[m * [33m26a3c2c[m[33m ([m[1;31morigin/docs/70-manual-checklist-[m [31m[m[33m[m[33m[m[1;31mverified[m[33m)[m docs: 真机手工清单 2026-09-14 过了[m
+[31m[m[33m[m[33m[m[1;31m[m[33m[m一轮，v0.1 出口标准满足[m
+[31m|[m[31m/[m  [m
+*   [33macfad33[m Merge pull request #76 from sunha[m [33m[mijun/fix/80-release-version-stamp[m
+[33m|[m[34m\[m  [m
+[33m|[m * [33ma42f101[m[33m ([m[1;31morigin/fix/80-release-version-st[m [33m[m[33m[m[33m[m[1;31mamp[m[33m)[m fix(release): v0.1.0 已撤回 —— 文档回到"[m [33m[m[33m[m[33m[m[1;31m[m[33m[m还没有正式 release"，版本号退成 dev-<sha>[m
+[33m|[m * [33m8814b17[m fix(release): 正式构建的版本号被[m
+[33m[m[33m[m滚动 dev tag 抢走 —— describe 只认 v*[m
+[33m|[m[33m/[m  [m
+*   [33m61259dc[m[33m ([m[1;33mtag: [m[1;33mdev[m[33m)[m Merge pull request #75[m [33m[m[33m[m[1;33m[m[1;33m[m[33m[m from someowner/feat/40-font-and-active[m
+[35m|[m[36m\[m  [m
+[35m|[m * [33m3e9a80d[m[33m ([m[1;31morigin/feat/40-font-and-active[m[33m)[m [m [35m[m[33m[m[33m[m[1;31m[m[33m[mfeat(web): 终端字体可选（AC-5.13）+ 会话选中[m
+[35m[m[33m[m[33m[m[1;31m[m[33m[m态一眼可辨（AC-4.9）[m
+[35m|[m * [33m27597ca[m docs: 终端字体可选（ADR-0023）+ [m
+[35m[m[33m[m会话选中态一眼可辨（AC-4.9）[m
+[35m|[m[35m/[m  [m
+*   [33mf4edae1[m Merge pull request #73 from sunha[m [33m[mijun/feat/40-drop-palette[m
+[1;31m|[m[1;32m\[m  [m
+[1;31m|[m *   [33m61d0943[m[33m ([m[1;32mfeat/40-drop-palette[m[33m)[m Merge ma[m [1;31m[m[33m[m[33m[m[1;32m[m[33m[min into feat/40-drop-palette[m
+[1;31m|[m [1;33m|[m[1;31m\[m  [m
+[1;31m|[m [1;33m|[m[1;31m/[m  [m
+:[K[K[1;31m|[m[1;31m/[m[1;33m|[m   [m
+* [1;33m|[m   [33md590f6f[m Merge pull request #74 from usr[m [1;33m[m[33m[mhaijun/feat/40-sidebar-drag-preview[m
+[1;35m|[m[1;36m\[m [1;33m\[m  [m
+[1;35m|[m * [1;33m|[m [33m8da73cd[m test: UT-sidebar-1 补预览位置；[m [1;35m[m[1;33m[m[33m[mE2E-32 改断言为「拖动中什么都没重排」[m
+[1;35m|[m * [1;33m|[m [33m720155a[m perf(web): 拖侧栏不再每帧重排 —[m [1;35m[m[1;33m[m[33m[m— 分隔条自己跟手，松手才落宽度[m
+[1;35m|[m * [1;33m|[m [33m5f98a08[m docs: 跟手的手势只做预览，布局[m
+[1;35m[m[1;33m[m[33m[m改动推到松手（ADR-0021）[m
+[1;35m|[m[1;35m/[m [1;33m/[m  [m
+[1;35m|[m * [33m5bd0e0e[m refactor(web): 彻底删除命令面板，[m [1;35m[m[33m[mCtrl/Cmd+K 归还终端（ADR-0021）[m
+[1;35m|[m * [33m5f19fa1[m docs: 去掉命令面板（ADR-0021）[m
+[1;35m|[m[1;35m/[m  [m
+*   [33m23ac447[m Merge pull request #72 from sunha[m [33m[mijun/fix/40-input-stuck[m
+[31m|[m[32m\[m  [m
+[31m|[m * [33m1a4e752[m[33m ([m[1;31morigin/fix/40-input-stuck[m[33m)[m test([m [31m[m[33m[m[33m[m[1;31m[m[33m[me2e): E2E-33 僵尸连接探活、E2E-34 打字不该消[m
+[31m[m[33m[m[33m[m[1;31m[m[33m[m失；WSControl 补 goZombie[m
+[31m|[m * [33m6fe31f9[m fix(web): 打字不再静默消失 —— 僵[m
+[31m[m[33m[m尸连接立刻探活、回放门只吞自动应答、焦点跟会[m
+[31m[m[33m[m话、组字兜底复位[m
+[31m|[m * [33mbd127bb[m docs: 输入路径绝不静默丢弃 —— 僵[m
+[31m[m[33m[m尸连接探活、回放门按来源判、焦点跟会话、组字[m
+[31m[m[33m[m兜底（ADR-0020）[m
+[31m|[m[31m/[m  [m
+*   [33m6039579[m Merge pull request #71 from sunha[m [33m[mijun/feat/40-sidebar-resize[m
+[33m|[m[34m\[m  [m
+[33m|[m * [33m66c13e4[m chore(ci): CI 合成一个 job、只在 [m [33m[m[33m[mPR 上跑 —— 省 Actions 额度[m
+[33m|[m * [33m4d0aaed[m fix(layout): 侧栏收起后别在终端左[m [33m[m[33m[m缘留一条 1px 的线[m
+[33m|[m * [33mcbc8f24[m feat(layout): 桌面侧栏宽度可拖、[m
+[33m[m[33m[m可收起（AC-5.12）[m
+[33m|[m[33m/[m  [m
+*   [33mc927201[m Merge pull request #70 from sunha[m :[K[Kgoto mark: [K[K[7mInvalid mark letter \  (press RETURN)[27m[40;1H[K[K:[K00[K33[K33[KBrackets: [K[[[K]][K[K[7mNo bracket in top line  (press RETURN)[27m[40;1H[K[K:[K00[Kset mark: ...skipping...
+[1;31m|[m[1;31m/[m[1;33m|[m   [m
+* [1;33m|[m   [33md590f6f[m Merge pull request #74 from usr[m [1;33m[m[33m[mhaijun/feat/40-sidebar-drag-preview[m
+[1;35m|[m[1;36m\[m [1;33m\[m  [m
+[1;35m|[m * [1;33m|[m [33m8da73cd[m test: UT-sidebar-1 补预览位置；[m [1;35m[m[1;33m[m[33m[mE2E-32 改断言为「拖动中什么都没重排」[m
+[1;35m|[m * [1;33m|[m [33m720155a[m perf(web): 拖侧栏不再每帧重排 —[m [1;35m[m[1;33m[m[33m[m— 分隔条自己跟手，松手才落宽度[m
+[1;35m|[m * [1;33m|[m [33m5f98a08[m docs: 跟手的手势只做预览，布局[m
+[1;35m[m[1;33m[m[33m[m改动推到松手（ADR-0021）[m
+[1;35m|[m[1;35m/[m [1;33m/[m  [m
+[1;35m|[m * [33m5bd0e0e[m refactor(web): 彻底删除命令面板，[m [1;35m[m[33m[mCtrl/Cmd+K 归还终端（ADR-0021）[m
+[1;35m|[m * [33m5f19fa1[m docs: 去掉命令面板（ADR-0021）[m
+[1;35m|[m[1;35m/[m  [m
+*   [33m23ac447[m Merge pull request #72 from sunha[m [33m[mijun/fix/40-input-stuck[m
+[31m|[m[32m\[m  [m
+[31m|[m * [33m1a4e752[m[33m ([m[1;31morigin/fix/40-input-stuck[m[33m)[m test([m [31m[m[33m[m[33m[m[1;31m[m[33m[me2e): E2E-33 僵尸连接探活、E2E-34 打字不该消[m
+[31m[m[33m[m[33m[m[1;31m[m[33m[m失；WSControl 补 goZombie[m
+[31m|[m * [33m6fe31f9[m fix(web): 打字不再静默消失 —— 僵[m
+[31m[m[33m[m尸连接立刻探活、回放门只吞自动应答、焦点跟会[m
+[31m[m[33m[m话、组字兜底复位[m
+[31m|[m * [33mbd127bb[m docs: 输入路径绝不静默丢弃 —— 僵[m
+[31m[m[33m[m尸连接探活、回放门按来源判、焦点跟会话、组字[m
+[31m[m[33m[m兜底（ADR-0020）[m
+[31m|[m[31m/[m  [m
+*   [33m6039579[m Merge pull request #71 from sunha[m [33m[mijun/feat/40-sidebar-resize[m
+[33m|[m[34m\[m  [m
+[33m|[m * [33m66c13e4[m chore(ci): CI 合成一个 job、只在 [m [33m[m[33m[mPR 上跑 —— 省 Actions 额度[m
+[33m|[m * [33m4d0aaed[m fix(layout): 侧栏收起后别在终端左[m [33m[m[33m[m缘留一条 1px 的线[m
+[33m|[m * [33mcbc8f24[m feat(layout): 桌面侧栏宽度可拖、[m
+[33m[m[33m[m可收起（AC-5.12）[m
+[33m|[m[33m/[m  [m
+*   [33mc927201[m Merge pull request #70 from sunha[m :[K[K[33m[mijun/feat/30-redraw-altscreen[m
+:[K[K/[Ktt[Kmm[Kpp[K//[Kcc[Kll[Kaa[Kuu[Kdd[Kee[K--[K11[K00[K00[K00[K//[K--[Khh[Koo[Kmm[Kee[K--[Kss[Kuu[Knn[K--[Kgg[Kii[Ktt[Khh[Kuu[Kbb[K--[Kww[Kee[Kbb[Ktt[Kee[Krr[Kmm[K//[Kff[Kdd[K[Ksun-github-webterm/fdaa[Kff[K66[Kaa[Kff[Kff[K--[K00[K22[Kbb[Kdd[K--[K44[K66[K77[K55[K--[K88[K66[K44[Kbb[K--[K[Kf6aff-02bd-4675-864b-cc[Kff[K88[Kdd[Kdd[K55[K55[K33[Kdd[K44[Kcc[Kcc[K//[Kss[Kcc[Krr[Kaa[Ktt[Kcc[Khh[Kpp[Kaa[K[Kf8dd553d4cc/scratchpadd[K//[Kvv[Ktt[Kss[Kpp[Kii[Kkk[Kee[K//[Kff[Kxx[K//[Kpp[Krr[Koo[Kgg[Krr[Kee[Kss[Kss[K..[K[K/vtspike/fx/progress.ss[Khh[K[1;1H[K* [1;33m|[m   [33md590f6f[m Merge pull request #74 from usr[m [2;1H[K[1;33m[m[33m[mhaijun/feat/40-sidebar-drag-preview[m
+[3;1H[K[1;35m|[m[1;36m\[m [1;33m\[m  [m
+[4;1H[K[1;35m|[m * [1;33m|[m [33m8da73cd[m test: UT-sidebar-1 补预览位置；[m [5;1H[K[1;35m[m[1;33m[m[33m[mE2E-32 改断言为「拖动中什么都没重排」[m
+[6;1H[K[1;35m|[m * [1;33m|[m [33m720155a[m perf(web): 拖侧栏不再每帧重排 —[m [7;1H[K[1;35m[m[1;33m[m[33m[m— 分隔条自己跟手，松手才落宽度[m
+[8;1H[K[1;35m|[m * [1;33m|[m [33m5f98a08[m docs: 跟手的手势只做预览，布局[m
+[9;1H[K[1;35m[m[1;33m[m[33m[m改动推到松手（ADR-0021）[m
+[10;1H[K[1;35m|[m[1;35m/[m [1;33m/[m  [m
+[11;1H[K[1;35m|[m * [33m5bd0e0e[m refactor(web): 彻底删除命令面板，[m [12;1H[K[1;35m[m[33m[mCtrl/Cmd+K 归还终端（ADR-0021）[m
+[13;1H[K[1;35m|[m * [33m5f19fa1[m docs: 去掉命令面板（ADR-0021）[m
+[14;1H[K[1;35m|[m[1;35m/[m  [m
+[15;1H[K*   [33m23ac447[m Merge pull request #72 from sunha[m [16;1H[K[33m[mijun/fix/40-input-stuck[m
+[17;1H[K[31m|[m[32m\[m  [m
+[18;1H[K[31m|[m * [33m1a4e752[m[33m ([m[1;31morigin/fix/40-input-stuck[m[33m)[m test([m [19;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[me2e): E2E-33 僵尸连接探活、E2E-34 打字不该消[m
+[20;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[m失；WSControl 补 goZombie[m
+[21;1H[K[31m|[m * [33m6fe31f9[m fix(web): 打字不再静默消失 —— 僵[m
+[22;1H[K[31m[m[33m[m尸连接立刻探活、回放门只吞自动应答、焦点跟会[m
+[23;1H[K[31m[m[33m[m话、组字兜底复位[m
+[24;1H[K[31m|[m * [33mbd127bb[m docs: 输入路径绝不静默丢弃 —— 僵[m
+[25;1H[K[31m[m[33m[m尸连接探活、回放门按来源判、焦点跟会话、组字[m
+[26;1H[K[31m[m[33m[m兜底（ADR-0020）[m
+[27;1H[K[31m|[m[31m/[m  [m
+[28;1H[K*   [33m6039579[m Merge pull request #71 from sunha[m [29;1H[K[33m[mijun/feat/40-sidebar-resize[m
+[30;1H[K[33m|[m[34m\[m  [m
+[31;1H[K[33m|[m * [33m66c13e4[m chore(ci): CI 合成一个 job、只在 [m [32;1H[K[33m[m[33m[mPR 上跑 —— 省 Actions 额度[m
+[33;1H[K[33m|[m * [33m4d0aaed[m fix(layout): 侧栏收起后别在终端左[m [34;1H[K[33m[m[33m[m缘留一条 1px 的线[m
+[35;1H[K[33m|[m * [33mcbc8f24[m feat(layout): 桌面侧栏宽度可拖、[m
+[36;1H[K[33m[m[33m[m可收起（AC-5.12）[m
+[37;1H[K[33m|[m[33m/[m  [m
+[38;1H[K*   [33mc927201[m Merge pull request #70 from sunha[m [39;1H[K[33m[mijun/feat/30-redraw-altscreen[m
+[40;1H[1;1H[K* [1;33m|[m   [33md590f6f[m Merge pull request #74 from usr[m [2;1H[K[1;33m[m[33m[mhaijun/feat/40-sidebar-drag-preview[m
+[3;1H[K[1;35m|[m[1;36m\[m [1;33m\[m  [m
+[4;1H[K[1;35m|[m * [1;33m|[m [33m8da73cd[m test: UT-sidebar-1 补预览位置；[m [5;1H[K[1;35m[m[1;33m[m[33m[mE2E-32 改断言为「拖动中什么都没重排」[m
+[6;1H[K[1;35m|[m * [1;33m|[m [33m720155a[m perf(web): 拖侧栏不再每帧重排 —[m [7;1H[K[1;35m[m[1;33m[m[33m[m— 分隔条自己跟手，松手才落宽度[m
+[8;1H[K[1;35m|[m * [1;33m|[m [33m5f98a08[m docs: 跟手的手势只做预览，布局[m
+[9;1H[K[1;35m[m[1;33m[m[33m[m改动推到松手（ADR-0021）[m
+[10;1H[K[1;35m|[m[1;35m/[m [1;33m/[m  [m
+[11;1H[K[1;35m|[m * [33m5bd0e0e[m refactor(web): 彻底删除命令面板，[m [12;1H[K[1;35m[m[33m[mCtrl/Cmd+K 归还终端（ADR-0021）[m
+[13;1H[K[1;35m|[m * [33m5f19fa1[m docs: 去掉命令面板（ADR-0021）[m
+[14;1H[K[1;35m|[m[1;35m/[m  [m
+[15;1H[K*   [33m23ac447[m Merge pull request #72 from sunha[m [16;1H[K[33m[mijun/fix/40-input-stuck[m
+[17;1H[K[31m|[m[32m\[m  [m
+[18;1H[K[31m|[m * [33m1a4e752[m[33m ([m[1;31morigin/fix/40-input-stuck[m[33m)[m test([m [19;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[me2e): E2E-33 僵尸连接探活、E2E-34 打字不该消[m
+[20;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[m失；WSControl 补 goZombie[m
+[21;1H[K[31m|[m * [33m6fe31f9[m fix(web): 打字不再静默消失 —— 僵[m
+[22;1H[K[31m[m[33m[m尸连接立刻探活、回放门只吞自动应答、焦点跟会[m
+[23;1H[K[31m[m[33m[m话、组字兜底复位[m
+[24;1H[K[31m|[m * [33mbd127bb[m docs: 输入路径绝不静默丢弃 —— 僵[m
+[25;1H[K[31m[m[33m[m尸连接探活、回放门按来源判、焦点跟会话、组字[m
+[26;1H[K[31m[m[33m[m兜底（ADR-0020）[m
+[27;1H[K[31m|[m[31m/[m  [m
+[28;1H[K*   [33m6039579[m Merge pull request #71 from sunha[m [29;1H[K[33m[mijun/feat/40-sidebar-resize[m
+[30;1H[K[33m|[m[34m\[m  [m
+[31;1H[K[33m|[m * [33m66c13e4[m chore(ci): CI 合成一个 job、只在 [m [32;1H[K[33m[m[33m[mPR 上跑 —— 省 Actions 额度[m
+[33;1H[K[33m|[m * [33m4d0aaed[m fix(layout): 侧栏收起后别在终端左[m [34;1H[K[33m[m[33m[m缘留一条 1px 的线[m
+[35;1H[K[33m|[m * [33mcbc8f24[m feat(layout): 桌面侧栏宽度可拖、[m
+[36;1H[K[33m[m[33m[m可收起（AC-5.12）[m
+[37;1H[K[33m|[m[33m/[m  [m
+[38;1H[K*   [33mc927201[m Merge pull request #70 from sunha[m [39;1H[K[33m[mijun/feat/30-redraw-altscreen[m
+[40;1H[K[7mPattern not found  (press RETURN)[27m[40;1H[K[K-[Klog file: [Kee[Kqq[K  [K11[K  [K22[K00[K00[K00[K  [K||[K  [Kpp[Kaa[Kss[Ktt[Kee[K  [K--[K  [K--[K  [K--[K  [K--[K  [K--[K  [K--[K  [K--[K[KWarning: "eq 1 2000^I^I^I^I^I^I" exists; Overwrite, Append, Don't log, or Quit? [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[KOverwrite, Append, Don't log, or Quit? (Type "O", "A", "D" or "Q") [40;1H[K:[K[K[35m|[m[36m\[m  [m
+[35m|[m * [33m9d4b7fe[m feat(redraw): 备用屏会话切回改为[m
+[35m[m[33m[m重画，不回放窗口（ADR-0019）[m
+[35m|[m * [33m915f569[m feat(termstate): 粘性终端模式的只[m [35m[m[33m[m读观察器[m
+[35m|[m[35m/[m  [m
+[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K...skipping...
+[1;35m[m[1;33m[m[33m[m— 分隔条自己跟手，松手才落宽度[m
+[1;35m|[m * [1;33m|[m [33m5f98a08[m docs: 跟手的手势只做预览，布局[m
+[1;35m[m[1;33m[m[33m[m改动推到松手（ADR-0021）[m
+[1;35m|[m[1;35m/[m [1;33m/[m  [m
+[1;35m|[m * [33m5bd0e0e[m refactor(web): 彻底删除命令面板，[m [1;35m[m[33m[mCtrl/Cmd+K 归还终端（ADR-0021）[m
+[1;35m|[m * [33m5f19fa1[m docs: 去掉命令面板（ADR-0021）[m
+[1;35m|[m[1;35m/[m  [m
+*   [33m23ac447[m Merge pull request #72 from sunha[m [33m[mijun/fix/40-input-stuck[m
+[31m|[m[32m\[m  [m
+[31m|[m * [33m1a4e752[m[33m ([m[1;31morigin/fix/40-input-stuck[m[33m)[m test([m [31m[m[33m[m[33m[m[1;31m[m[33m[me2e): E2E-33 僵尸连接探活、E2E-34 打字不该消[m
+[31m[m[33m[m[33m[m[1;31m[m[33m[m失；WSControl 补 goZombie[m
+[31m|[m * [33m6fe31f9[m fix(web): 打字不再静默消失 —— 僵[m
+[31m[m[33m[m尸连接立刻探活、回放门只吞自动应答、焦点跟会[m
+[31m[m[33m[m话、组字兜底复位[m
+[31m|[m * [33mbd127bb[m docs: 输入路径绝不静默丢弃 —— 僵[m
+[31m[m[33m[m尸连接探活、回放门按来源判、焦点跟会话、组字[m
+[31m[m[33m[m兜底（ADR-0020）[m
+[31m|[m[31m/[m  [m
+*   [33m6039579[m Merge pull request #71 from sunha[m [33m[mijun/feat/40-sidebar-resize[m
+[33m|[m[34m\[m  [m
+[33m|[m * [33m66c13e4[m chore(ci): CI 合成一个 job、只在 [m [33m[m[33m[mPR 上跑 —— 省 Actions 额度[m
+[33m|[m * [33m4d0aaed[m fix(layout): 侧栏收起后别在终端左[m [33m[m[33m[m缘留一条 1px 的线[m
+[33m|[m * [33mcbc8f24[m feat(layout): 桌面侧栏宽度可拖、[m
+[33m[m[33m[m可收起（AC-5.12）[m
+[33m|[m[33m/[m  [m
+*   [33mc927201[m Merge pull request #70 from sunha[m [33m[mijun/feat/30-redraw-altscreen[m
+[35m|[m[36m\[m  [m
+[35m|[m * [33m9d4b7fe[m feat(redraw): 备用屏会话切回改为[m
+[35m[m[33m[m重画，不回放窗口（ADR-0019）[m
+[35m|[m * [33m915f569[m feat(termstate): 粘性终端模式的只[m [35m[m[33m[m读观察器[m
+[35m|[m[35m/[m  [m
+[7m(END)[27m[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7mNo next tag  (press RETURN)[27m[40;1H[K[K[7m(END)[27m[K[K/[Ktt[Kmm[Kpp[K//[Kcc[Kll[Kaa[Kuu[Kdd[Kee[K--[K11[K00[K00[K00[K//[K--[Khh[Koo[Kmm[Kee[K--[Kss[Kuu[Knn[K--[Kgg[Kii[Ktt[Khh[Kuu[Kbb[K--[Kww[Kee[Kbb[Ktt[Kee[Krr[Kmm[K//[Kff[Kdd[K[Ksun-github-webterm/fdaa[Kff[K66[Kaa[Kff[Kff[K--[K00[K22[Kbb[Kdd[K--[K44[K66[K77[K55[K--[K88[K66[K44[Kbb[K--[K[Kf6aff-02bd-4675-864b-cc[Kff[K88[Kdd[Kdd[K55[K55[K33[Kdd[K44[Kcc[Kcc[K//[Kss[Kcc[Krr[Kaa[Ktt[Kcc[Khh[Kpp[Kaa[K[Kf8dd553d4cc/scratchpadd[K//[Kvv[Ktt[Kss[Kpp[Kii[Kkk[Kee[K//[Kff[Kxx[K//[Kss[Kaa[Kmm[Kpp[Kll[Kee[K..[Ktt[Kxx[K[K/vtspike/fx/sample.txtt[K  [K||[K  [Khh[Kee[Kaa[Kdd[K  [K--[K11[K22[K00[K[1;1H[K[1;35m[m[1;33m[m[33m[m— 分隔条自己跟手，松手才落宽度[m
+[2;1H[K[1;35m|[m * [1;33m|[m [33m5f98a08[m docs: 跟手的手势只做预览，布局[m
+[3;1H[K[1;35m[m[1;33m[m[33m[m改动推到松手（ADR-0021）[m
+[4;1H[K[1;35m|[m[1;35m/[m [1;33m/[m  [m
+[5;1H[K[1;35m|[m * [33m5bd0e0e[m refactor(web): 彻底删除命令面板，[m [6;1H[K[1;35m[m[33m[mCtrl/Cmd+K 归还终端（ADR-0021）[m
+[7;1H[K[1;35m|[m * [33m5f19fa1[m docs: 去掉命令面板（ADR-0021）[m
+[8;1H[K[1;35m|[m[1;35m/[m  [m
+[9;1H[K*   [33m23ac447[m Merge pull request #72 from sunha[m [10;1H[K[33m[mijun/fix/40-input-stuck[m
+[11;1H[K[31m|[m[32m\[m  [m
+[12;1H[K[31m|[m * [33m1a4e752[m[33m ([m[1;31morigin/fix/40-input-stuck[m[33m)[m test([m [13;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[me2e): E2E-33 僵尸连接探活、E2E-34 打字不该消[m
+[14;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[m失；WSControl 补 goZombie[m
+[15;1H[K[31m|[m * [33m6fe31f9[m fix(web): 打字不再静默消失 —— 僵[m
+[16;1H[K[31m[m[33m[m尸连接立刻探活、回放门只吞自动应答、焦点跟会[m
+[17;1H[K[31m[m[33m[m话、组字兜底复位[m
+[18;1H[K[31m|[m * [33mbd127bb[m docs: 输入路径绝不静默丢弃 —— 僵[m
+[19;1H[K[31m[m[33m[m尸连接探活、回放门按来源判、焦点跟会话、组字[m
+[20;1H[K[31m[m[33m[m兜底（ADR-0020）[m
+[21;1H[K[31m|[m[31m/[m  [m
+[22;1H[K*   [33m6039579[m Merge pull request #71 from sunha[m [23;1H[K[33m[mijun/feat/40-sidebar-resize[m
+[24;1H[K[33m|[m[34m\[m  [m
+[25;1H[K[33m|[m * [33m66c13e4[m chore(ci): CI 合成一个 job、只在 [m [26;1H[K[33m[m[33m[mPR 上跑 —— 省 Actions 额度[m
+[27;1H[K[33m|[m * [33m4d0aaed[m fix(layout): 侧栏收起后别在终端左[m [28;1H[K[33m[m[33m[m缘留一条 1px 的线[m
+[29;1H[K[33m|[m * [33mcbc8f24[m feat(layout): 桌面侧栏宽度可拖、[m
+[30;1H[K[33m[m[33m[m可收起（AC-5.12）[m
+[31;1H[K[33m|[m[33m/[m  [m
+[32;1H[K*   [33mc927201[m Merge pull request #70 from sunha[m [33;1H[K[33m[mijun/feat/30-redraw-altscreen[m
+[34;1H[K[35m|[m[36m\[m  [m
+[35;1H[K[35m|[m * [33m9d4b7fe[m feat(redraw): 备用屏会话切回改为[m
+[36;1H[K[35m[m[33m[m重画，不回放窗口（ADR-0019）[m
+[37;1H[K[35m|[m * [33m915f569[m feat(termstate): 粘性终端模式的只[m [38;1H[K[35m[m[33m[m读观察器[m
+[39;1H[K[35m|[m[35m/[m  [m
+[40;1H[1;1H[K[1;35m[m[1;33m[m[33m[m— 分隔条自己跟手，松手才落宽度[m
+[2;1H[K[1;35m|[m * [1;33m|[m [33m5f98a08[m docs: 跟手的手势只做预览，布局[m
+[3;1H[K[1;35m[m[1;33m[m[33m[m改动推到松手（ADR-0021）[m
+[4;1H[K[1;35m|[m[1;35m/[m [1;33m/[m  [m
+[5;1H[K[1;35m|[m * [33m5bd0e0e[m refactor(web): 彻底删除命令面板，[m [6;1H[K[1;35m[m[33m[mCtrl/Cmd+K 归还终端（ADR-0021）[m
+[7;1H[K[1;35m|[m * [33m5f19fa1[m docs: 去掉命令面板（ADR-0021）[m
+[8;1H[K[1;35m|[m[1;35m/[m  [m
+[9;1H[K*   [33m23ac447[m Merge pull request #72 from sunha[m [10;1H[K[33m[mijun/fix/40-input-stuck[m
+[11;1H[K[31m|[m[32m\[m  [m
+[12;1H[K[31m|[m * [33m1a4e752[m[33m ([m[1;31morigin/fix/40-input-stuck[m[33m)[m test([m [13;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[me2e): E2E-33 僵尸连接探活、E2E-34 打字不该消[m
+[14;1H[K[31m[m[33m[m[33m[m[1;31m[m[33m[m失；WSControl 补 goZombie[m
+[15;1H[K[31m|[m * [33m6fe31f9[m fix(web): 打字不再静默消失 —— 僵[m
+[16;1H[K[31m[m[33m[m尸连接立刻探活、回放门只吞自动应答、焦点跟会[m
+[17;1H[K[31m[m[33m[m话、组字兜底复位[m
+[18;1H[K[31m|[m * [33mbd127bb[m docs: 输入路径绝不静默丢弃 —— 僵[m
+[19;1H[K[31m[m[33m[m尸连接探活、回放门按来源判、焦点跟会话、组字[m
+[20;1H[K[31m[m[33m[m兜底（ADR-0020）[m
+[21;1H[K[31m|[m[31m/[m  [m
+[22;1H[K*   [33m6039579[m Merge pull request #71 from sunha[m [23;1H[K[33m[mijun/feat/40-sidebar-resize[m
+[24;1H[K[33m|[m[34m\[m  [m
+[25;1H[K[33m|[m * [33m66c13e4[m chore(ci): CI 合成一个 job、只在 [m [26;1H[K[33m[m[33m[mPR 上跑 —— 省 Actions 额度[m
+[27;1H[K[33m|[m * [33m4d0aaed[m fix(layout): 侧栏收起后别在终端左[m [28;1H[K[33m[m[33m[m缘留一条 1px 的线[m
+[29;1H[K[33m|[m * [33mcbc8f24[m feat(layout): 桌面侧栏宽度可拖、[m
+[30;1H[K[33m[m[33m[m可收起（AC-5.12）[m
+[31;1H[K[33m|[m[33m/[m  [m
+[32;1H[K*   [33mc927201[m Merge pull request #70 from sunha[m [33;1H[K[33m[mijun/feat/30-redraw-altscreen[m
+[34;1H[K[35m|[m[36m\[m  [m
+[35;1H[K[35m|[m * [33m9d4b7fe[m feat(redraw): 备用屏会话切回改为[m
+[36;1H[K[35m[m[33m[m重画，不回放窗口（ADR-0019）[m
+[37;1H[K[35m|[m * [33m915f569[m feat(termstate): 粘性终端模式的只[m [38;1H[K[35m[m[33m[m读观察器[m
+[39;1H[K[35m|[m[35m/[m  [m
+[40;1H[K[7mPattern not found  (press RETURN)[27m[40;1H[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7mNo next tag  (press RETURN)[27m[40;1H[K[K[7m(END)[27m[K

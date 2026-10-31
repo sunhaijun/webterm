@@ -77,7 +77,8 @@ func controlStatus(sock string) (*agent.ControlStatus, error) {
 	return resp.Status, nil
 }
 
-// waitUntilIdle 等到没有会话在跑前台命令。集成失效的会话看不出忙不忙，按空闲算。
+// waitUntilIdle 等到没有会话在跑前台命令：每个运行中的会话，PTY 的前台进程组
+// 都是 shell 自己。读不到前台进程组的会话按空闲算。
 func waitUntilIdle(sock string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	announced := false

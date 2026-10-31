@@ -6,15 +6,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/session"
+	"github.com/sunhaijun/webterm/internal/vterm"
 )
 
-// fakeConn 是一个测试用订阅者，模拟连接层：它按协议规则做 seq 记账，
-// 把收到的 OUTPUT 拼成"客户端屏幕"。
+// fakeConn 是一个测试用订阅者，模拟连接层 + 客户端：它按协议规则做 seq 记账，
+// 把收到的帧拼成"客户端终端吃到的字节"。
 //
-// 它【严格校验】seq 连续性 —— 任何重复、空洞、AttrPrefix 记账错误都会
-// 当场失败，而不是留到 E2E 才暴露。
+// 它【严格校验】seq 连续性 —— 任何重复、空洞都会当场失败，而不是留到 E2E 才暴露。
+// 收到快照就像真客户端那样：清屏（这里是清空字节）→ 写快照 → out_seq = seq。
 type fakeConn struct {
 	t        *testing.T
 	clientID string
@@ -23,19 +23,28 @@ type fakeConn struct {
 	// 重连后必须按 welcome.resumed[].in_ack 裁剪它，见 TrimTo。
 	inSeqNext uint64
 
-	mu       sync.Mutex
-	screen   bytes.Buffer // 收到的字节流（等价于 xterm 缓冲的输入）
-	expected uint64       // 下一帧应有的 seq
-	haveSeq  bool
-	events   []any
-	gaps     int
-	dups     int
-	resets   int
-	redraws  int
-	detached bool // 连接已断开：迟到的 Push 应当石沉大海
+	mu        sync.Mutex
+	screen    bytes.Buffer // 客户端终端吃到的字节（自最近一次快照起）
+	expected  uint64       // 下一帧应有的 seq
+	haveSeq   bool
+	events    []any
+	frames    []frameRec // 按到达顺序的帧记录
+	timeline  []any      // 帧（frameRec）与控制消息混在一起、按到达顺序 —— 同一条连接上的先后
+	gaps      int
+	dups      int
+	snapshots int
+	lastSnap  []byte
+	detached  bool // 连接已断开：迟到的帧应当石沉大海
 }
 
-// Detach 模拟连接断开。断开后到达的 Push 被丢弃 —— 真实的连接层此时
+// frameRec 记一帧：快照还是输出、seq、长度。顺序断言用（IT-resize-2）。
+type frameRec struct {
+	snapshot bool
+	seq      uint64
+	n        int
+}
+
+// Detach 模拟连接断开。断开后到达的帧被丢弃 —— 真实的连接层此时
 // socket 已经关了，字节根本发不出去。测试必须忠实模拟这一点，否则
 // "断点在哪"会被竞态污染。
 func (c *fakeConn) Detach() {
@@ -53,7 +62,7 @@ func (c *fakeConn) Attach() {
 
 // newConn 建一个测试连接，并把它登记为 manager 的 observer。
 //
-// 订阅与观察是两件事：Subscribe 只决定收不收 OUTPUT 字节，控制消息走
+// 订阅与观察是两件事：Subscribe 只决定收不收 OUTPUT / SNAPSHOT 帧，控制消息走
 // observer 列表 —— 未订阅的连接也要收 session.updated（未读靠它推导）。
 func newConn(t *testing.T, m *session.Manager, clientID string) *fakeConn {
 	c := &fakeConn{t: t, clientID: clientID}
@@ -82,25 +91,12 @@ func (c *fakeConn) Resend(s *session.Session, from uint64, data string) error {
 // TrimTo 按 welcome.resumed[].in_ack 裁剪重发队列。
 func (c *fakeConn) TrimTo(inAck uint64) { c.inSeqNext = inAck }
 
-func (c *fakeConn) Push(sid uint16, seq uint64, data []byte, attrPrefix bool) {
+func (c *fakeConn) Push(sid uint16, seq uint64, data []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.detached {
 		return
 	}
-
-	if attrPrefix {
-		// reset 回放：客户端清屏，然后从这里重新开始记账。
-		// 前置的 4 个字节是渲染修正，【不计入 seq】。
-		c.resets++
-		c.screen.Reset()
-		c.screen.Write(protocol.AttrPrefix)
-		c.screen.Write(data)
-		c.expected = seq + uint64(len(data))
-		c.haveSeq = true
-		return
-	}
-
 	if c.haveSeq {
 		switch {
 		case seq > c.expected:
@@ -113,8 +109,39 @@ func (c *fakeConn) Push(sid uint16, seq uint64, data []byte, attrPrefix bool) {
 			return
 		}
 	}
+	c.frames = append(c.frames, frameRec{seq: seq, n: len(data)})
+	c.timeline = append(c.timeline, frameRec{seq: seq, n: len(data)})
 	c.screen.Write(data)
 	c.expected = seq + uint64(len(data))
+	c.haveSeq = true
+}
+
+// SubscribeAt 模拟客户端带着自己手里的 out_seq 订阅。像真客户端一样，它的 out_seq
+// 从报上去的那个值算起 —— 增量路径下没有要补的字节时，下一帧就该从这里接。
+func (c *fakeConn) SubscribeAt(s *session.Session, outSeq uint64) (string, uint64) {
+	c.mu.Lock()
+	c.expected, c.haveSeq = outSeq, true
+	c.mu.Unlock()
+	return s.Subscribe(c, outSeq, 0, 0)
+}
+
+func (c *fakeConn) Snapshot(sid uint16, seq uint64, data []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.detached {
+		return
+	}
+	if len(data) == 0 {
+		c.t.Errorf("空快照（payload 为 0 的帧非法）")
+	}
+	// 客户端：terminal.reset() → 写快照 → out_seq = seq。快照字节不计入 seq。
+	c.snapshots++
+	c.lastSnap = append([]byte(nil), data...)
+	c.frames = append(c.frames, frameRec{snapshot: true, seq: seq, n: len(data)})
+	c.timeline = append(c.timeline, frameRec{snapshot: true, seq: seq, n: len(data)})
+	c.screen.Reset()
+	c.screen.Write(data)
+	c.expected = seq
 	c.haveSeq = true
 }
 
@@ -122,35 +149,14 @@ func (c *fakeConn) Event(msg any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.events = append(c.events, msg)
-	// 像真客户端那样处理 redraw（协议 §4.2）：清屏 → 写 modes → out_seq 跳到 seq。
-	// modes 不计入 seq，所以只写进"屏幕"，不动记账。
-	if r, ok := msg.(*protocol.Redraw); ok && !c.detached {
-		c.redraws++
-		c.screen.Reset()
-		c.screen.WriteString(r.Modes)
-		c.expected = r.Seq
-		c.haveSeq = true
-	}
+	c.timeline = append(c.timeline, msg)
 }
 
-// Redraws 返回收到过几条 redraw（备用屏的重建路径）。
-func (c *fakeConn) Redraws() int {
+// Timeline 返回帧与控制消息按到达顺序混排的记录。
+func (c *fakeConn) Timeline() []any {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.redraws
-}
-
-// LastRedraw 返回最后一条 redraw 消息。
-func (c *fakeConn) LastRedraw() *protocol.Redraw {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var last *protocol.Redraw
-	for _, e := range c.events {
-		if r, ok := e.(*protocol.Redraw); ok {
-			last = r
-		}
-	}
-	return last
+	return append([]any(nil), c.timeline...)
 }
 
 func (c *fakeConn) Screen() string {
@@ -165,25 +171,28 @@ func (c *fakeConn) OutSeq() uint64 {
 	return c.expected
 }
 
-func (c *fakeConn) Resets() int {
+// Snapshots 返回收到过几份快照。
+func (c *fakeConn) Snapshots() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.resets
+	return c.snapshots
 }
 
-// InAck 返回最近一条 ack 里的值。
-func (c *fakeConn) InAck() uint64 {
+// LastSnapshot 返回最近一份快照的字节。
+func (c *fakeConn) LastSnapshot() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var v uint64
-	for _, e := range c.events {
-		if a, ok := e.(*protocol.Ack); ok {
-			v = a.InAck
-		}
-	}
-	return v
+	return c.lastSnap
 }
 
+// Frames 返回按到达顺序的帧记录。
+func (c *fakeConn) Frames() []frameRec {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]frameRec(nil), c.frames...)
+}
+
+// Events 返回收到过的控制消息。
 func (c *fakeConn) Events() []any {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -234,7 +243,16 @@ func waitScreen(t *testing.T, c *fakeConn, sub string) {
 
 func newManager(t *testing.T, cfg session.Config) *session.Manager {
 	t.Helper()
-	m := session.NewManager(cfg, nil)
+	m := session.NewManager(cfg)
 	t.Cleanup(m.Shutdown)
 	return m
+}
+
+// render 把客户端吃到的字节交给一个模拟器，返回它的当前屏文字 —— 断言"屏幕上
+// 有什么"时用它，而不是在快照字节里找子串（快照是渲染指令，文字之间可能夹着
+// 样式序列）。
+func render(c *fakeConn, cols, rows int) string {
+	t := vterm.New(cols, rows)
+	t.Write([]byte(c.Screen()))
+	return t.String()
 }

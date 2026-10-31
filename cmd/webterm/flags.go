@@ -47,10 +47,10 @@ type envList []string
 func (e *envList) String() string { return strings.Join(*e, " ") }
 
 // fixedSessionEnv 是 webterm 自己定的口径，不接受用户覆盖：
-// TERM 决定 xterm.js 那侧的能力匹配，WEBTERM_SESSION 是 shell 集成的会话标识。
+// TERM 决定 xterm.js 那侧的能力匹配，WEBTERM_SESSION 是会话标识。
 var fixedSessionEnv = map[string]string{
 	"TERM":            "固定为 xterm-256color —— 它与 xterm.js 的能力集最匹配",
-	"WEBTERM_SESSION": "是 shell 集成用的会话标识，由 agent 分配",
+	"WEBTERM_SESSION": "是会话标识，由 agent 分配",
 }
 
 func (e *envList) Set(v string) error {

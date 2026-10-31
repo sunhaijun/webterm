@@ -1,0 +1,107 @@
+[?1049h[22;0;0t[?1h=[H[2J[?12l[?25h[?1000l[?1002l[?1003l[?1006l[?1005l[?2004h(B[m[?12l[?25h[?1006l[?1000l[?1002l[?1003l[1;1H[1;30r[c[>c[>q]10;?\]11;?\[1;1H[?25lbash-5.2$ [K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[30m[42m
+[0] 0:bash*                                                       "webterm-host-000" 21:11 30-Oct-26(B[m[?12l[?25h[1;11H[?7727h(B[m[?12l[?25h[?1006l[?1000l[?1002l[?1003l[1;1H[1;30r[?7727h(B[m[?12l[?25h[?1006l[?1000l[?1002l[?1003l[1;1H[1;30r[?7727h(B[m[?12l[?25h[?1006l[?1000l[?1002l[?1003l[1;1H[1;30r(B[m[?12l[?25h[?1006l[?1000l[?1002l[?1003l[1;1H[1;30r[1;11H[?25l[Hbash-5.2$ [K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[30m[42m
+[0] 0:bash*                                                       "webterm-host-000" 21:11 30-Oct-26(B[m[?12l[?25h[1;11Hls --color=always -la /usr/bin | head -40
+total 141428
+drwxr-xr-x  2 root root       24576 Sep 27 05:09 [34m[1m.
+(B[mdrwxr-xr-x 12 root root        4096 Sep  6  2025 [34m[1m..
+(B[mlrwxrwxrwx  1 root root           1 Nov  7  2025 [36m[1mX11(B[m -> [34m[1m.(B[m[1;29r[29;1H
+[5d-rwxr-xr-x  1 root root       55720 Jun  4  2025 [32m[1m[
+(B[m-rwxr-xr-x  1 root root       18672 Apr 10  2025 [32m[1maa-enabled
+(B[m-rwxr-xr-x  1 root root       18672 Apr 10  2025 [32m[1maa-exec
+(B[m-rwxr-xr-x  1 root root       18664 Apr 10  2025 [32m[1maa-features-abi
+(B[mlrwxrwxrwx  1 root root          26 Mar  3  2025 [36m[1maddr2line(B[m -> [32m[1mx86_64-linux-gnu-addr2line
+(B[mlrwxrwxrwx  1 root root           6 May  2  2025 [36m[1mapropos(B[m -> [32m[1mwhatis
+(B[m-rwxr-xr-x  1 root root       18752 Jun 24  2025 [32m[1mapt
+(B[m-rwxr-xr-x  1 root root       92552 Jun 24  2025 [32m[1mapt-cache
+(B[m-rwxr-xr-x  1 root root       27016 Jun 24  2025 [32m[1mapt-cdrom
+(B[m-rwxr-xr-x  1 root root       31040 Jun 24  2025 [32m[1mapt-config
+(B[mlrwxrwxrwx  1 root root          29 Jun 24  2025 [36m[1mapt-extracttemplates(B[m -> [32m[1m/lib/apt/apt-extracttemplates
+(B[m-rwxr-xr-x  1 root root      301456 Jun 24  2025 [32m[1mapt-ftparchive
+(B[m-rwxr-xr-x  1 root root       59784 Jun 24  2025 [32m[1mapt-get
+(B[m-rwxr-xr-x  1 root root         230 Oct  6  2024 [32m[1mapt-listchanges
+(B[m-rwxr-xr-x  1 root root       63880 Jun 24  2025 [32m[1mapt-mark
+(B[m-rwxr-xr-x  1 root root       39240 Jun 24  2025 [32m[1mapt-sortpkgs
+(B[mlrwxrwxrwx  1 root root          19 Mar  3  2025 [36m[1mar(B[m -> [32m[1mx86_64-linux-gnu-ar
+(B[m-rwxr-xr-x  1 root root       43464 Jun  4  2025 [32m[1march
+(B[mlrwxrwxrwx  1 root root          19 Mar  3  2025 [36m[1mas(B[m -> [32m[1mx86_64-linux-gnu-as
+(B[mlrwxrwxrwx  1 root root          21 Feb  4  2025 [36m[1mawk(B[m -> [32m[1m/etc/alternatives/awk
+(B[m-rwxr-xr-x  1 root root       63944 Jun  4  2025 [32m[1mb2sum
+(B[m-rwxr-xr-x  1 root root       47528 Jun  4  2025 [32m[1mbase32
+(B[m-rwxr-xr-x  1 root root       47528 Jun  4  2025 [32m[1mbase64
+(B[m-rwxr-xr-x  1 root root       43432 Jun  4  2025 [32m[1mbasename(B[m[K[1;30r[29;58H[1;29r[1;1H[18S[11B-rwxr-xr-x  1 root root       59816 Jun  4  2025 [32m[1mbasenc(B[m[K
+-rwxr-xr-x  1 root root     1298416 May  9 04:07 [32m[1mbash(B[m[K
+-rwxr-xr-x  1 root root        6944 May  9 04:07 [32m[1mbashbug(B[m[K
+-rwxr-xr-x  1 root root       43408 Jul 31 08:34 [32m[1mbits(B[m[K
+-rwxr-xr-x  1 root root      125248 Mar 29  2025 [32m[1mbroadwayd(B[m[K
+lrwxrwxrwx  1 root root           5 Aug 19  2024 [36m[1mbunzip2(B[m -> [32m[1mbzip2(B[m[K
+-rwxr-xr-x  1 root root      100888 Apr 13  2026 [32m[1mbusctl(B[m[K
+-rwxr-xr-x  1 root root      826128 May  9 04:15 [32m[1mbusybox(B[m[K
+lrwxrwxrwx  1 root root           5 Aug 19  2024 [36m[1mbzcat(B[m -> [32m[1mbzip2(B[m[K
+lrwxrwxrwx  1 root root           6 Aug 19  2024 [36m[1mbzcmp(B[m -> [32m[1mbzdiff(B[m[K
+-rwxr-xr-x  1 root root        2225 Aug 19  2024 [32m[1mbzdiff(B[m[K
+lrwxrwxrwx  1 root root           6 Aug 19  2024 [36m[1mbzegrep(B[m -> [32m[1mbzgrep(B[m[K
+bash-5.2$ %seq 1 300[K
+bash: fg: %seq: no such job[K
+bash-5.2$ "vim /tmp/claude-1000/-home-usr-github-webterm/fdaf6aff-02bd-4675-864b-cf8dd553d4cc/scratchpad/vtspike/fx/sample.txt[K
+> :q[K
+> printf '[K中文宽字符 😀[4S[25;24H\n'
+> exit[K
+> exit[K
+> exit[K
+> [K[1;30r[29;3H[1;30r(B[m[?1l>[H[2J[?12l[?25h[?1000l[?1002l[?1003l[?1006l[?1005l[?2004l[?7727l[?1004l[?1049l[23;0;0t

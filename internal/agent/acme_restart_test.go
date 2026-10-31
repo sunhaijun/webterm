@@ -41,7 +41,7 @@ func TestRestartReusesCachedCertificate(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer st.Close()
-		sessions := session.NewManager(session.Config{MaxSessions: 1, RingBytes: 1 << 16, Shell: "bash"}, st)
+		sessions := session.NewManager(session.Config{MaxSessions: 1, RingBytes: 1 << 16, Shell: "bash"})
 		defer sessions.Shutdown()
 
 		report := &lockedBuffer{}

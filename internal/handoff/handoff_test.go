@@ -3,24 +3,21 @@ package handoff
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/sunhaijun/webterm/internal/oscparse"
 )
 
 func sample() *Snapshot {
 	code := 3
-	id := int64(42)
 	return &Snapshot{
 		Schema: Schema, Generation: 2, FromVersion: "test", InstanceID: "abc", NextSID: 7,
 		Listeners: []Listener{{Name: "http", FD: 5}},
 		Sessions: []Session{
 			{SID: 1, PtmxFD: 9, ShellPID: 1234, CWD: "/tmp", Status: "running", Cols: 80, Rows: 24,
-				Integration: "active", PromptState: "running", RingBase: 100, RingData: []byte("hello\x1b[0m"),
+				RingBase: 100, RingData: []byte("hello\x1b[0m"), VTerm: []byte(`{"width":80}`),
 				InQueued: map[string]uint64{"tab": 12}, InAck: map[string]uint64{"tab": 10},
-				OSC:      oscparse.State{St: 3, ID: []byte("133"), Pay: []byte("C")},
-				CurCmdID: &id, Pending: []PendingInput{{ClientID: "tab", Data: []byte("ls\r")}}},
+				Pending: []PendingInput{{ClientID: "tab", Data: []byte("ls\r")}}},
 			{SID: 3, PtmxFD: -1, Status: "exited", ExitCode: &code, RingBase: 0, RingData: []byte("bye")},
 		},
 	}
@@ -43,8 +40,8 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	if len(got.Sessions) != 2 || string(got.Sessions[0].RingData) != "hello\x1b[0m" || got.Sessions[0].InAck["tab"] != 10 {
 		t.Fatalf("会话字段变了: %+v", got.Sessions)
 	}
-	if got.Sessions[0].OSC.St != 3 || string(got.Sessions[0].OSC.Pay) != "C" {
-		t.Fatalf("OSC 中间态变了: %+v", got.Sessions[0].OSC)
+	if string(got.Sessions[0].VTerm) != `{"width":80}` {
+		t.Fatalf("模拟器状态变了: %q", got.Sessions[0].VTerm)
 	}
 	if got.Sessions[1].ExitCode == nil || *got.Sessions[1].ExitCode != 3 || got.Sessions[1].PtmxFD != -1 {
 		t.Fatalf("已退出会话变了: %+v", got.Sessions[1])
@@ -57,8 +54,8 @@ func TestWriteReadRoundTrip(t *testing.T) {
 // Meta 不带缓冲与待写输入，其余照旧 —— 预检不用搬几十 MiB。
 func TestMetaDropsBulk(t *testing.T) {
 	m := sample().Meta()
-	if m.Sessions[0].RingData != nil || m.Sessions[0].Pending != nil {
-		t.Fatal("Meta 应当去掉 RingData 与 Pending")
+	if m.Sessions[0].RingData != nil || m.Sessions[0].Pending != nil || m.Sessions[0].VTerm != nil {
+		t.Fatal("Meta 应当去掉 RingData、VTerm 与 Pending")
 	}
 	if m.Sessions[0].RingBase != 100 || m.InstanceID != "abc" {
 		t.Fatal("Meta 不该动其它字段")
@@ -127,5 +124,23 @@ func TestStripFlag(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %v", got)
 		}
+	}
+}
+
+// 从旧版本（schema 1）升级上来：旧字段被忽略，会话照样解得出来，VTerm 为空 ——
+// session 那边据此改用环形缓冲尽力还原模拟器（ADR-0026 §8）。
+func TestDecodeSchema1(t *testing.T) {
+	const old = `{"schema":1,"generation":3,"from_version":"v0.1.0","instance_id":"abc","next_sid":4,
+	"listeners":[],"sessions":[{"sid":2,"ptmx_fd":9,"shell_pid":1234,"rc_path":"/x/rc-2.bash",
+	"created_at":"2026-10-01T00:00:00Z","cwd":"/tmp","status":"running","cols":80,"rows":24,
+	"integration":"active","prompt_state":"input","hello_seen":true,"last_mark":"2026-10-01T00:00:00Z",
+	"last_input":"2026-10-01T00:00:00Z","ring_base":5,"ring_data":"aGk=","osc":{"st":0},
+	"modes":{"alt":true},"cur_cmd_at":"0001-01-01T00:00:00Z","unmarked_runs":1}]}`
+	s, err := Decode(strings.NewReader(old))
+	if err != nil {
+		t.Fatalf("schema 1 必须读得出来（老版本升级上来的那一次）: %v", err)
+	}
+	if len(s.Sessions) != 1 || s.Sessions[0].SID != 2 || string(s.Sessions[0].RingData) != "hi" || s.Sessions[0].VTerm != nil {
+		t.Fatalf("解出来的不对: %+v", s.Sessions)
 	}
 }

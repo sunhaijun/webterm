@@ -6,18 +6,18 @@ import (
 	"github.com/sunhaijun/webterm/internal/session"
 )
 
-// envHarness 起一个【不带 shell 集成】的会话：bash --norc --noprofile，
+// envHarness 起一个不读 dotfile 的会话：bash --norc --noprofile，
 // 环境里只有我们注入的那些，断言才有确定性。
 func envHarness(t *testing.T, cfg session.Config) (*session.Session, *fakeConn) {
 	t.Helper()
-	cfg.MaxSessions, cfg.RingBytes, cfg.Shell = 5, 1<<20, "bash"
+	cfg.MaxSessions, cfg.RingBytes, cfg.Shell, cfg.ShellArgs = 5, 1<<20, "bash", testShellArgs
 	m := newManager(t, cfg)
 	s, err := m.Create(session.Spec{Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := newConn(t, m, "tab")
-	s.Subscribe(c, 0)
+	s.Subscribe(c, 0, 0, 0)
 	return s, c
 }
 

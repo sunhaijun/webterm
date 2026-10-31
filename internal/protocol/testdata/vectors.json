@@ -1,5 +1,5 @@
 {
-  "_comment": "前后端共用的 fixture。Go 侧 internal/protocol 与 TS 侧 web/src/protocol 都必须跑它，防止实现漂移。契约见 docs/30-protocol/websocket-protocol.md §9。注意 seq 是【字符串】：它是 uint64，超过 2^53 的值过不了 JS 的 JSON.parse。",
+  "_comment": "前后端共用的 fixture。Go 侧 internal/protocol 与 TS 侧 web/src/protocol 都必须跑它，防止实现漂移。契约见 docs/30-protocol/websocket-protocol.md §9（协议版本 2）。注意 seq 是【字符串】：它是 uint64，超过 2^53 的值过不了 JS 的 JSON.parse。data_len 是本帧计入 seq 的字节数：OUTPUT / INPUT 是 payload 长度，SNAPSHOT 是 0（快照字节不计入 out_seq）。",
   "binary_frames": [
     {
       "name": "output_basic",
@@ -14,17 +14,30 @@
       "data_len": 2
     },
     {
-      "name": "output_attr_prefix",
-      "hex": "0101000100000000000000e81b5b306d6869",
+      "name": "snapshot_more",
+      "hex": "0301000100000000000000e81b5b48",
       "decoded": {
-        "type": 1,
+        "type": 3,
         "flags": 1,
         "sid": 1,
         "seq": "232",
-        "payload_hex": "1b5b306d6869"
+        "payload_hex": "1b5b48"
       },
-      "data_len": 2,
-      "note": "flags bit0：前 4 字节 ESC[0m 是渲染修正，不计入 seq"
+      "data_len": 0,
+      "note": "flags bit0 = MORE：同一份快照后面还有帧。SNAPSHOT 的 seq 是快照对应的 out_seq，快照字节不计入 out_seq"
+    },
+    {
+      "name": "snapshot_last",
+      "hex": "0300000100000000000000e81b5b324a",
+      "decoded": {
+        "type": 3,
+        "flags": 0,
+        "sid": 1,
+        "seq": "232",
+        "payload_hex": "1b5b324a"
+      },
+      "data_len": 0,
+      "note": "一份快照的最后一帧（或唯一一帧）：MORE 位为 0。收齐后 terminal.reset() → 换解码器 → 写入 → out_seq = seq"
     },
     {
       "name": "input_basic",
@@ -76,6 +89,19 @@
       },
       "data_len": 10,
       "note": "payload 可以是任意字节序列，包括非法 UTF-8（ff 00 fe）"
+    },
+    {
+      "name": "output_reserved_flag_ignored",
+      "hex": "0101000100000000000000e86869",
+      "decoded": {
+        "type": 1,
+        "flags": 1,
+        "sid": 1,
+        "seq": "232",
+        "payload_hex": "6869"
+      },
+      "data_len": 2,
+      "note": "bit0 只对 SNAPSHOT 有意义；OUTPUT 上的保留位接收方忽略，不是错误"
     }
   ],
   "invalid_frames": [
@@ -96,17 +122,17 @@
     },
     {
       "name": "unknown_type",
-      "hex": "0900000100000000000000e841",
+      "hex": "0400000100000000000000e86869",
       "expect_error": "bad_frame"
     },
     {
-      "name": "attr_prefix_without_sgr",
-      "hex": "0101000100000000000000e84142434445",
+      "name": "unknown_type_ff",
+      "hex": "ff00000100000000000000e841",
       "expect_error": "bad_frame"
     },
     {
-      "name": "attr_prefix_on_input",
-      "hex": "0201000100000000000000e81b5b306d41",
+      "name": "snapshot_empty_payload",
+      "hex": "0301000100000000000000e8",
       "expect_error": "bad_frame"
     }
   ],
@@ -115,7 +141,7 @@
       "name": "hello_first_connect",
       "json": {
         "t": "hello",
-        "protocol": 1,
+        "protocol": 2,
         "client_id": "tab-7f3a",
         "resume": []
       }
@@ -124,7 +150,7 @@
       "name": "hello_resume",
       "json": {
         "t": "hello",
-        "protocol": 1,
+        "protocol": 2,
         "client_id": "tab-7f3a",
         "instance_id": "a91e5c",
         "resume": [
@@ -139,12 +165,13 @@
       "name": "welcome",
       "json": {
         "t": "welcome",
-        "protocol": 1,
-        "server_version": "0.1.0",
+        "protocol": 2,
+        "server_version": "0.2.0",
         "instance_id": "a91e5c",
+        "home": "/home/sun",
         "limits": {
           "max_sessions": 20,
-          "ring_bytes": 1048576,
+          "ring_bytes": 262144,
           "max_frame_bytes": 262144
         },
         "sessions": [
@@ -157,10 +184,7 @@
             "exit_code": null,
             "cols": 80,
             "rows": 24,
-            "integration": "active",
-            "unmarked_input": false,
-            "prompt_state": "input",
-            "base_seq": 0,
+            "base_seq": 221776,
             "head_seq": 483920,
             "created_at": 1757116000000
           }
@@ -176,15 +200,55 @@
       }
     },
     {
+      "name": "welcome_snapshot",
+      "json": {
+        "t": "welcome",
+        "protocol": 2,
+        "server_version": "0.2.0",
+        "instance_id": "a91e5c",
+        "home": "/home/sun",
+        "limits": {
+          "max_sessions": 20,
+          "ring_bytes": 262144,
+          "max_frame_bytes": 262144
+        },
+        "sessions": [
+          {
+            "sid": 1,
+            "name": "webterm",
+            "name_is_manual": false,
+            "cwd": "/home/sun/github/webterm",
+            "status": "running",
+            "exit_code": null,
+            "cols": 80,
+            "rows": 24,
+            "base_seq": 221776,
+            "head_seq": 483920,
+            "created_at": 1757116000000
+          }
+        ],
+        "resumed": [
+          {
+            "sid": 1,
+            "status": "snapshot",
+            "from_seq": 483920,
+            "in_ack": 1204
+          }
+        ]
+      },
+      "note": "out_seq 落出窗口 / 为 0 / 列数变了：等 SNAPSHOT 帧，from_seq = 快照的 seq"
+    },
+    {
       "name": "welcome_gone_after_restart",
       "json": {
         "t": "welcome",
-        "protocol": 1,
-        "server_version": "0.1.0",
+        "protocol": 2,
+        "server_version": "0.2.0",
         "instance_id": "b02f7d",
+        "home": "/home/sun",
         "limits": {
           "max_sessions": 20,
-          "ring_bytes": 1048576,
+          "ring_bytes": 262144,
           "max_frame_bytes": 262144
         },
         "sessions": [],
@@ -243,12 +307,14 @@
       }
     },
     {
-      "name": "session_updated_integration",
+      "name": "session_updated_cwd",
       "json": {
         "t": "session.updated",
         "sid": 2,
-        "integration": "inactive"
-      }
+        "name": "api",
+        "cwd": "/srv/api"
+      },
+      "note": "cwd 来自 /proc/<前台进程组>/cwd，每秒读一次，变了才发；name_is_manual == false 时 name 跟着变"
     },
     {
       "name": "subscribe",
@@ -291,74 +357,6 @@
         "t": "ack",
         "sid": 1,
         "in_ack": 1352
-      }
-    },
-    {
-      "name": "reset",
-      "json": {
-        "t": "reset",
-        "sid": 1,
-        "base_seq": 512000
-      }
-    },
-    {
-      "name": "redraw",
-      "json": {
-        "t": "redraw",
-        "sid": 1,
-        "seq": 991337,
-        "modes": "\u001b[0m\u001b(B\u001b[?1049h\u001b[?1h\u001b[?1000h\u001b[?1006h\u001b[?2004h"
-      },
-      "note": "备用屏会话的 reset 改走这条（ADR-0019）。modes 不计入 out_seq，客户端把 out_seq 跳到 seq"
-    },
-    {
-      "name": "cwd",
-      "json": {
-        "t": "cwd",
-        "sid": 1,
-        "path": "/home/sun/github/webterm"
-      }
-    },
-    {
-      "name": "prompt_input",
-      "json": {
-        "t": "prompt",
-        "sid": 1,
-        "state": "input"
-      }
-    },
-    {
-      "name": "command_start",
-      "json": {
-        "t": "command.start",
-        "sid": 1,
-        "cmd_id": 8842,
-        "text": "go test ./...",
-        "cwd": "/srv/x",
-        "at": 1757116800000,
-        "out_seq": 483920
-      }
-    },
-    {
-      "name": "command_end",
-      "json": {
-        "t": "command.end",
-        "sid": 1,
-        "cmd_id": 8842,
-        "exit_code": 0,
-        "duration_ms": 4210,
-        "out_seq": 491337
-      }
-    },
-    {
-      "name": "command_end_dangling",
-      "json": {
-        "t": "command.end",
-        "sid": 1,
-        "cmd_id": 8843,
-        "exit_code": null,
-        "duration_ms": 0,
-        "out_seq": 491400
       }
     },
     {

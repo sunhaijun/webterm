@@ -65,8 +65,8 @@ func runDoctor(args []string) error {
 	check("bash 可用", func() (string, error) {
 		out, err := exec.Command("bash", "--version").Output()
 		if err != nil {
-			return "", fmt.Errorf("找不到 bash。v0.1 的 shell 集成只支持 bash；\n" +
-				"终端本身仍然可用，但没有命令历史、CWD 显示和输入模式自动切换")
+			return "", fmt.Errorf("找不到 bash（会话默认的 shell）。\n" +
+				"装上 bash，或者用 --shell 指定别的 shell（任何支持 -l / -i 的都行）")
 		}
 		v := strings.SplitN(string(out), "\n", 2)[0]
 		return strings.TrimPrefix(v, "GNU bash, "), nil

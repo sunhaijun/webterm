@@ -42,11 +42,15 @@ func TestEndToEndPairAndRunCommand(t *testing.T) {
 	if w.Limits.MaxFrameBytes != protocol.MaxPayload {
 		t.Fatalf("limits.max_frame_bytes = %d", w.Limits.MaxFrameBytes)
 	}
+	// home：前端用来把 CWD 缩写成 ~（协议 §4.2）
+	if home, _ := os.UserHomeDir(); w.Home != home || w.Home == "" {
+		t.Fatalf("welcome.home = %q, want %q", w.Home, home)
+	}
 
 	sid := cl.createSession(t.TempDir())
 	cl.input(sid, "printf 'E2E-%s\\n' OK\r")
 	waitFor(t, "终端出现命令输出", func() bool {
-		return strings.Contains(cl.screenOf(sid), "E2E-OK")
+		return cl.screenHas(sid, "E2E-OK")
 	})
 
 	// ping / pong
@@ -87,6 +91,7 @@ func TestITAuth1_RouteMatrix(t *testing.T) {
 			{"GET", "/api/commands"},
 			{"GET", "/api/settings"},
 			{"GET", "/api/fs?cwd=/"},
+			{"GET", "/api/anything-else"},
 			{"POST", "/api/devices/revoke-all"},
 			{"DELETE", "/api/commands?pinned=false"},
 		} {
@@ -107,6 +112,20 @@ func TestITAuth1_RouteMatrix(t *testing.T) {
 		}
 		if resp == nil || resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("WS 升级 = %v, want 401", resp)
+		}
+	})
+
+	t.Run("删掉的接口：认证之后是 404，不是 SPA 页面", func(t *testing.T) {
+		// /api/commands*、/api/fs、/api/settings 随命令历史删除（ADR-0026 §6）。
+		// 不兜住的话它们会落进 GET / 的 SPA 回退，回 200 + index.html
+		c := h.client()
+		h.pair(c).Body.Close()
+		for _, p := range []string{"/api/commands", "/api/settings", "/api/fs?cwd=/"} {
+			resp := h.do(c, http.MethodGet, p, nil)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("GET %s = %d, want 404", p, resp.StatusCode)
+			}
 		}
 	})
 
@@ -373,10 +392,10 @@ func TestITPrivacy1_TerminalOutputNeverPersisted(t *testing.T) {
 
 	const canary = "WEBTERM_CANARY_9f3a2b"
 	// 用 printf 拼出来，让 canary 只出现在【输出】里而不在命令原文里 ——
-	// 命令原文是允许落盘的，输出不允许。
+	// 这条测的是输出；命令原文也不落盘，见 IT-privacy-3。
 	cl.input(sid, "printf 'WEBTERM_CANARY_%s\\n' 9f3a2b\r")
 	waitFor(t, "canary 出现在终端", func() bool {
-		return strings.Contains(cl.screenOf(sid), canary)
+		return cl.screenHas(sid, canary)
 	})
 	// 给落库一点时间
 	time.Sleep(300 * time.Millisecond)
@@ -385,6 +404,25 @@ func TestITPrivacy1_TerminalOutputNeverPersisted(t *testing.T) {
 	if strings.Contains(h.logs.String(), canary) {
 		t.Fatal("终端输出出现在日志里")
 	}
+}
+
+// IT-privacy-3：命令原文也不落盘（命令历史已删，ADR-0026 §6）。
+func TestITPrivacy3_CommandTextNeverPersisted(t *testing.T) {
+	h := newHarness(t)
+	c := h.client()
+	h.pair(c).Body.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	cl.welcome()
+	sid := cl.createSession(t.TempDir())
+
+	const secret = "SECRET_TYPED_COMMAND_7e1d"
+	cl.input(sid, "echo "+secret+"\r")
+	waitFor(t, "命令被执行", func() bool { return strings.Count(cl.screenOf(sid), secret) >= 2 })
+	time.Sleep(300 * time.Millisecond)
+	assertNotInDataDir(t, h.dataDir, secret)
 }
 
 // IT-privacy-2：命令原文不进日志（AC-8.5）。
@@ -402,7 +440,7 @@ func TestITPrivacy2_CommandTextNeverLogged(t *testing.T) {
 	const secret = "SUPER_SECRET_COMMAND_TEXT"
 	cl.input(sid, "echo "+secret+"\r")
 	waitFor(t, "命令被执行", func() bool {
-		return strings.Contains(cl.screenOf(sid), secret)
+		return cl.screenHas(sid, secret)
 	})
 	time.Sleep(200 * time.Millisecond)
 
@@ -424,7 +462,7 @@ func TestITSub1_UnsubscribedSessionKeepsBuffering(t *testing.T) {
 	sid := cl.createSession(t.TempDir())
 
 	cl.input(sid, "printf 'BEFORE-%s\\n' MARK\r")
-	waitFor(t, "第一段输出", func() bool { return strings.Contains(cl.screenOf(sid), "BEFORE-MARK") })
+	waitFor(t, "第一段输出", func() bool { return cl.screenHas(sid, "BEFORE-MARK") })
 
 	cl.send(&protocol.Unsubscribe{SID: sid})
 	time.Sleep(200 * time.Millisecond)
@@ -433,7 +471,7 @@ func TestITSub1_UnsubscribedSessionKeepsBuffering(t *testing.T) {
 	cl.input(sid, "printf 'AFTER-%s\\n' MARK\r")
 	// 未订阅期间字节不该过网络
 	time.Sleep(500 * time.Millisecond)
-	if strings.Contains(cl.screenOf(sid), "AFTER-MARK") {
+	if cl.screenHas(sid, "AFTER-MARK") {
 		t.Fatal("未订阅的会话仍在推送输出 —— 移动端的流量优化失效了")
 	}
 	// 但 agent 侧照常缓冲，切回去能补齐
@@ -442,19 +480,19 @@ func TestITSub1_UnsubscribedSessionKeepsBuffering(t *testing.T) {
 	cl.mu.Unlock()
 	cl.send(&protocol.Subscribe{SID: sid, OutSeq: at})
 	waitFor(t, "切回后补齐了断开期间的输出", func() bool {
-		return strings.Contains(cl.screenOf(sid), "AFTER-MARK")
+		return cl.screenHas(sid, "AFTER-MARK")
 	})
 	if len(cl.screenOf(sid)) <= before {
 		t.Fatal("补齐没有带来新内容")
 	}
 }
 
-// IT-sub-2：切回时积压超过 ring_bytes → agent 先发 reset 通知，再发带属性修正前缀的
-// 回放帧；客户端据此【清屏重建】，而不是把一段接不上的内容追加在旧屏幕后面（AC-2.6）。
+// IT-sub-2：切回时积压超过 ring_bytes → agent 发一份快照（SNAPSHOT 帧），客户端
+// 【清屏重建】，而不是把一段接不上的内容追加在旧屏幕后面（AC-2.6）。
 //
-// 这条走的是 subscribe 路径。重连那半边（welcome.resumed[].status）由 IT-resume-* 覆盖
-// —— 两条是不同的代码，之前只有重连那边有测试，于是切回这边漏掉了"清屏"。
-func TestITSub2_SubscribeOverflowRebuildsScreen(t *testing.T) {
+// 这条走的是 subscribe 路径。重连那半边（welcome.resumed[].status）由
+// TestResumeSnapshotOverRealSocket 覆盖 —— 两条是不同的代码。
+func TestITSub2_SubscribeOverflowSendsSnapshot(t *testing.T) {
 	const ring = 16 << 10
 	h := newHarnessWith(t, harnessOpts{ringBytes: ring})
 	c := h.client()
@@ -467,38 +505,48 @@ func TestITSub2_SubscribeOverflowRebuildsScreen(t *testing.T) {
 	sid := cl.createSession(t.TempDir())
 
 	cl.input(sid, "printf 'BEFORE-%s\\n' MARK\r")
-	waitFor(t, "切走前的标记出现", func() bool { return strings.Contains(cl.screenOf(sid), "BEFORE-MARK") })
+	waitFor(t, "切走前的标记出现", func() bool { return cl.screenHas(sid, "BEFORE-MARK") })
 
 	cl.send(&protocol.Unsubscribe{SID: sid})
 	time.Sleep(200 * time.Millisecond)
 	cl.mu.Lock()
 	at := cl.outSeq[sid]
 	cl.mu.Unlock()
+	before := cl.snapshotCount(sid)
 
 	// 切走期间产出远超 ring_bytes，把 BEFORE-MARK 挤出窗口
-	cl.input(sid, "for i in $(seq 1 600); do printf 'pad %04d %s\\n' $i "+strings.Repeat("x", 60)+"; done\r")
-	// 涨过 base_seq 把 BEFORE-MARK 挤出窗口就够了。未订阅期间字节不过网络，
-	// 进度只能靠 session.updated{head_seq}
+	cl.input(sid, "for i in $(seq 1 600); do printf 'pad %04d %s\\n' $i "+strings.Repeat("x", 60)+"; done; printf 'PAD-%s\\n' DONE\r")
 	waitFor(t, "积压把窗口顶掉一轮", func() bool { return cl.headSeqOf(sid) > at+ring+2048 })
+	s, _ := h.sessions.Get(sid)
+	waitFor(t, "输出停下", func() bool {
+		h1 := s.HeadSeq()
+		time.Sleep(300 * time.Millisecond)
+		return s.HeadSeq() == h1
+	})
 
 	cl.send(&protocol.Subscribe{SID: sid, OutSeq: at})
-	waitFor(t, "收到 reset 通知", func() bool {
-		for _, m := range cl.messages() {
-			if r, ok := m.(*protocol.Reset); ok && r.SID == sid {
-				return true
-			}
-		}
-		return false
-	})
-	waitFor(t, "收到带属性修正前缀的回放帧", func() bool { return cl.sawAttrPrefix(sid) })
+	waitFor(t, "收到快照", func() bool { return cl.snapshotCount(sid) == before+1 })
 
-	if s := cl.screenOf(sid); strings.Contains(s, "BEFORE-MARK") {
-		t.Fatal("reset 回放被接在了旧屏幕后面 —— 每切回一次就叠一份")
+	screen := cl.screenOf(sid)
+	if strings.Contains(screen, "BEFORE-MARK") && !strings.Contains(screen, "PAD-DONE") {
+		t.Fatal("快照没有清屏重建，内容接在了旧屏幕后面")
+	}
+	if !strings.Contains(screen, "PAD-DONE") {
+		t.Fatal("快照里没有当前屏")
+	}
+	cl.mu.Lock()
+	got := cl.outSeq[sid]
+	cl.mu.Unlock()
+	if got != s.HeadSeq() {
+		t.Fatalf("快照之后 out_seq = %d，want head %d", got, s.HeadSeq())
 	}
 
 	// 重建之后的实时输出照常正确
 	cl.input(sid, "printf 'AFTER-%s\\n' MARK\r")
-	waitFor(t, "重建后的新输出", func() bool { return strings.Contains(cl.screenOf(sid), "AFTER-MARK") })
+	waitFor(t, "重建后的新输出", func() bool { return cl.screenHas(sid, "AFTER-MARK") })
+	if errs := cl.seqErrors(); len(errs) != 0 {
+		t.Fatalf("seq 不连续: %v", errs)
+	}
 }
 
 // IT-unread-1：被节流吞掉的 head_seq 必须补发（AC-4.3）。
@@ -517,7 +565,7 @@ func TestHeadSeqThrottleFlushesLastValue(t *testing.T) {
 	cl.welcome()
 	sid := cl.createSession(t.TempDir())
 	cl.input(sid, "printf 'READY-%s\\n' MARK\r")
-	waitFor(t, "会话可用", func() bool { return strings.Contains(cl.screenOf(sid), "READY-MARK") })
+	waitFor(t, "会话可用", func() bool { return cl.screenHas(sid, "READY-MARK") })
 
 	cl.send(&protocol.Unsubscribe{SID: sid})
 	time.Sleep(1200 * time.Millisecond) // 让节流窗口过期，下一条必然放行
@@ -536,9 +584,9 @@ func TestHeadSeqThrottleFlushesLastValue(t *testing.T) {
 	}
 }
 
-// 重连那条路【不】重复发 reset 消息 —— welcome.resumed[].status 已经说过了，
-// 再发一条只会让客户端多清一次屏（协议 §4.2）。
-func TestResumeDoesNotSendRedundantResetMessage(t *testing.T) {
+// 重连落出窗口：welcome.resumed[].status = snapshot，from_seq = 快照的 seq；
+// welcome 排在 SNAPSHOT 帧前面（协议 §5.3 ⑥⑧）。
+func TestResumeSnapshotOverRealSocket(t *testing.T) {
 	const ring = 16 << 10
 	h := newHarnessWith(t, harnessOpts{ringBytes: ring})
 	c := h.client()
@@ -550,26 +598,33 @@ func TestResumeDoesNotSendRedundantResetMessage(t *testing.T) {
 	first := cl.welcome()
 	sid := cl.createSession(t.TempDir())
 	cl.input(sid, "printf 'BEFORE-%s\\n' MARK\r")
-	waitFor(t, "标记出现", func() bool { return strings.Contains(cl.screenOf(sid), "BEFORE-MARK") })
+	waitFor(t, "标记出现", func() bool { return cl.screenHas(sid, "BEFORE-MARK") })
 
 	cl.mu.Lock()
 	at := cl.outSeq[sid]
 	cl.mu.Unlock()
-	cl.stopReading()
+	cl.ws.CloseNow()
+	waitFor(t, "旧连接消失", func() bool { return cl.isClosed() })
 
-	cl.input(sid, "for i in $(seq 1 600); do printf 'pad %04d %s\\n' $i "+strings.Repeat("x", 60)+"; done\r")
-	time.Sleep(2 * time.Second)
+	// 断线期间（另一个标签页敲的）输出把窗口顶掉一轮
+	s, _ := h.sessions.Get(sid)
+	if err := s.Write("tab-other", 0, []byte("for i in $(seq 1 600); do printf 'pad %04d %s\\n' $i "+strings.Repeat("x", 60)+"; done\r")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "缓冲被覆盖", func() bool { return s.Info().BaseSeq > at })
 
 	again := h.connect(ctx, c, "tab-1", []protocol.ResumeReq{{SID: sid, OutSeq: at}}, first.InstanceID)
 	w := again.welcome()
-	if len(w.Resumed) != 1 || w.Resumed[0].Status != protocol.ResumeReset {
-		t.Fatalf("resumed = %+v, want status reset", w.Resumed)
+	if len(w.Resumed) != 1 || w.Resumed[0].Status != protocol.ResumeSnapshot {
+		t.Fatalf("resumed = %+v, want status snapshot", w.Resumed)
 	}
-	waitFor(t, "收到带属性修正前缀的回放帧", func() bool { return again.sawAttrPrefix(sid) })
-	for _, m := range again.messages() {
-		if _, ok := m.(*protocol.Reset); ok {
-			t.Fatal("重连路径多发了一条 reset 消息")
-		}
+	waitFor(t, "收到快照", func() bool { return again.snapshotCount(sid) == 1 })
+	frames := again.binaryFrames()
+	if frames[0].Type != protocol.TypeSnapshot || frames[0].Seq != w.Resumed[0].FromSeq {
+		t.Fatalf("第一帧 = %+v，want SNAPSHOT seq=%d（= from_seq）", frames[0], w.Resumed[0].FromSeq)
+	}
+	if order := again.arrival(); order[0] != protocol.TWelcome {
+		t.Fatalf("第一条到达的是 %q，welcome 必须在最前面", order[0])
 	}
 }
 
@@ -744,7 +799,7 @@ func TestITQueue2_SlowClientDisconnectedNotBlocking(t *testing.T) {
 
 	start := time.Now()
 	waitFor(t, "另一个会话仍然可用", func() bool {
-		return strings.Contains(cl2.screenOf(other), "ALIVE-OK")
+		return cl2.screenHas(other, "ALIVE-OK")
 	})
 	if d := time.Since(start); d > 5*time.Second {
 		t.Fatalf("另一个会话花了 %v 才响应 —— 被慢客户端拖慢了", d)
@@ -764,11 +819,11 @@ func TestResumeOverRealSocket(t *testing.T) {
 	sid := cl.createSession(t.TempDir())
 
 	cl.input(sid, "printf 'BEFORE-%s\\n' MARK\r")
-	waitFor(t, "第一段输出", func() bool { return strings.Contains(cl.screenOf(sid), "BEFORE-MARK") })
+	waitFor(t, "第一段输出", func() bool { return cl.screenHas(sid, "BEFORE-MARK") })
 
 	// 起一个持续产出的循环，好让"断线期间会话不暂停"这条真的可测
 	cl.input(sid, "for i in $(seq 1 400); do printf 'tick %03d\\n' $i; sleep 0.01; done\r")
-	waitFor(t, "循环开始产出", func() bool { return strings.Contains(cl.screenOf(sid), "tick 001") })
+	waitFor(t, "循环开始产出", func() bool { return cl.screenHas(sid, "tick 001") })
 
 	cl.mu.Lock()
 	at := cl.outSeq[sid]
@@ -805,7 +860,7 @@ func TestResumeOverRealSocket(t *testing.T) {
 	cl2.mu.Unlock()
 	cl2.input(sid, "printf 'AFTER-%s\\n' MARK\r")
 	waitFor(t, "重连后输入生效", func() bool {
-		return strings.Contains(cl2.screenOf(sid), "AFTER-MARK")
+		return cl2.screenHas(sid, "AFTER-MARK")
 	})
 	for _, e := range cl2.errors() {
 		if e.Code == protocol.CodeInputGap {
@@ -852,7 +907,7 @@ func TestSessionEventsBroadcastToAllTabs(t *testing.T) {
 		}
 		return false
 	})
-	if strings.Contains(tabB.screenOf(sid), "FOR-A") {
+	if tabB.screenHas(sid, "FOR-A") {
 		t.Fatal("B 没订阅却收到了输出字节")
 	}
 }
@@ -887,15 +942,10 @@ func TestSessionLimitReported(t *testing.T) {
 	}
 }
 
-// 缓冲被覆盖时，续传【必须】带上属性修正前缀并让客户端知道要清屏。
-//
-// 回归测试：agent 曾经拿钳过的 from_seq 去订阅，于是 ring 认为这是一次
-// 正常的增量续传 —— ESC[0m 不发、flags 不置位，客户端不知道该清屏，
-// 会把一段毫不相干的内容接到旧屏幕后面。钳位是 ring 自己的事。
-func TestResumeResetCarriesAttrPrefix(t *testing.T) {
-	// 很小的 ring，让 reset 路径可测
-	h := newHarnessWith(t, harnessOpts{ringBytes: 8 << 10})
-
+// 快照超过单帧上限（256 KiB）时拆成多帧：同一个 seq，除最后一帧外都带 MORE，
+// 各帧之间不夹同一 sid 的其它帧（协议 §3）。
+func TestSnapshotSplitIntoFrames(t *testing.T) {
+	h := newHarness(t)
 	c := h.client()
 	h.pair(c).Body.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -903,94 +953,84 @@ func TestResumeResetCarriesAttrPrefix(t *testing.T) {
 
 	cl := h.connect(ctx, c, "tab-1", nil, "")
 	w := cl.welcome()
-	sid := cl.createSession(t.TempDir())
-	cl.send(&protocol.Subscribe{SID: sid, OutSeq: 0})
-
-	cl.input(sid, "printf 'START-%s\\n' MARK\r")
-	waitFor(t, "第一段输出", func() bool { return strings.Contains(cl.screenOf(sid), "START-MARK") })
-
-	// 起一个持续产出的循环，好让断线期间真的把 8 KiB 的 ring 灌穿
-	cl.input(sid, "for i in $(seq 1 4000); do printf 'fill %04d %s\\n' $i xxxxxxxxxxxxxxxxxxxxxxxxxxxx; done\r")
-	waitFor(t, "循环开始产出", func() bool { return strings.Contains(cl.screenOf(sid), "fill 0001") })
-
-	cl.mu.Lock()
-	at := cl.outSeq[sid]
-	cl.mu.Unlock()
-
-	cl.ws.CloseNow()
-	waitFor(t, "旧连接消失", func() bool { return cl.isClosed() })
-
-	s, _ := h.sessions.Get(sid)
-	waitFor(t, "缓冲被覆盖", func() bool {
-		return s.Snapshot().BaseSeq > at
-	})
-
-	cl2 := h.connect(ctx, c, "tab-1", []protocol.ResumeReq{{SID: sid, OutSeq: at}}, w.InstanceID)
-	w2 := cl2.welcome()
-	if len(w2.Resumed) != 1 || w2.Resumed[0].Status != protocol.ResumeReset {
-		t.Fatalf("resumed = %+v, want status=reset", w2.Resumed)
-	}
-	waitFor(t, "回放帧带上了属性修正前缀", func() bool { return cl2.sawAttrPrefix(sid) })
-}
-
-// 断线跨过命令边界时，重连后客户端必须能重新对齐 prompt 状态。
-//
-// prompt 消息只在状态变化时发一次，离线期间的那些【发给了零个订阅者，
-// 就此丢掉】。没有 welcome.sessions[].prompt_state 的话，客户端会停在
-// 断线前的状态 —— 命令早跑完了它却以为还在跑，于是停在 Raw 模式、
-// Composer 收起，用户连字都打不了，要等下一条命令才自愈。
-func TestPromptStateResyncsOnReconnect(t *testing.T) {
-	h := newHarnessWith(t, harnessOpts{shellIntegration: true})
-	c := h.client()
-	h.pair(c).Body.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	cl := h.connect(ctx, c, "tab-1", nil, "")
-	w := cl.welcome()
-	sid := cl.createSession(t.TempDir())
-	cl.send(&protocol.Subscribe{SID: sid, OutSeq: 0})
-
-	waitFor(t, "集成就绪", func() bool {
-		s, ok := h.sessions.Get(sid)
-		return ok && s.Snapshot().Integration == protocol.IntegrationActive
-	})
-
-	cl.input(sid, "sleep 2; printf 'DONE-%s\\n' X\r")
-	waitFor(t, "命令开始跑", func() bool {
+	cwd := t.TempDir()
+	cl.send(&protocol.SessionCreate{ReqID: "wide", CWD: &cwd, Cols: 400, Rows: 50})
+	var sid uint16
+	waitFor(t, "建会话", func() bool {
 		for _, m := range cl.messages() {
-			if p, ok := m.(*protocol.Prompt); ok && p.State == protocol.PromptRunning {
+			if v, ok := m.(*protocol.SessionCreated); ok && v.ReqID == "wide" {
+				sid = v.Session.SID
 				return true
 			}
 		}
 		return false
 	})
+	cl.send(&protocol.Subscribe{SID: sid, OutSeq: 0}) // 建会话不自动订阅
+	// 2000 行、每行 400 列、每格换一次颜色：快照远超 256 KiB
+	cl.input(sid, `for i in $(seq 1 2100); do for j in 0 1 2 3 4 5 6 7; do printf '\033[3%d;4%dm%049d' $j $((7-j)) $i; done; printf '\033[0m\n'; done; printf 'WIDE-%s\n' DONE`+"\r")
+	s, _ := h.sessions.Get(sid)
+	waitFor(t, "输出完", func() bool { return cl.screenHas(sid, "WIDE-DONE") })
+	_, snap := s.TermSnapshot()
+	if len(snap) <= protocol.MaxPayload {
+		t.Fatalf("快照只有 %d 字节，测不到分帧", len(snap))
+	}
 
-	cl.mu.Lock()
-	at := cl.outSeq[sid]
-	cl.mu.Unlock()
-
-	// 断线，让命令在断线期间跑完
-	cl.ws.CloseNow()
-	waitFor(t, "连接断开", func() bool { return cl.isClosed() })
-	waitFor(t, "命令在断线期间跑完", func() bool {
-		s, ok := h.sessions.Get(sid)
-		return ok && s.Snapshot().PromptState != nil &&
-			*s.Snapshot().PromptState != protocol.PromptRunning
-	})
-
-	cl2 := h.connect(ctx, c, "tab-1", []protocol.ResumeReq{{SID: sid, OutSeq: at}}, w.InstanceID)
+	// 刷新页面：新连接 out_seq = 0 → 快照
+	cl2 := h.connect(ctx, h.reuse(c), "tab-2", []protocol.ResumeReq{{SID: sid, OutSeq: 0}}, w.InstanceID)
 	w2 := cl2.welcome()
+	if w2.Resumed[0].Status != protocol.ResumeSnapshot {
+		t.Fatalf("status = %q", w2.Resumed[0].Status)
+	}
+	waitFor(t, "快照收齐", func() bool { return cl2.snapshotCount(sid) == 1 })
+	var snapFrames []protocol.Frame
+	for _, f := range cl2.binaryFrames() {
+		if f.Type == protocol.TypeSnapshot && f.SID == sid {
+			snapFrames = append(snapFrames, f)
+		}
+	}
+	want := (len(snap) + protocol.MaxPayload - 1) / protocol.MaxPayload
+	if len(snapFrames) < 2 || len(snapFrames) != want {
+		t.Fatalf("快照 %d 字节拆成了 %d 帧，want %d", len(snap), len(snapFrames), want)
+	}
+	for i, f := range snapFrames {
+		if f.Seq != w2.Resumed[0].FromSeq {
+			t.Fatalf("帧 %d 的 seq = %d，want %d（同一份快照的帧 seq 相同）", i, f.Seq, w2.Resumed[0].FromSeq)
+		}
+		if last := i == len(snapFrames)-1; f.More() == last {
+			t.Fatalf("帧 %d MORE=%v —— 除最后一帧外都要带 MORE", i, f.More())
+		}
+		if len(f.Payload) > protocol.MaxPayload {
+			t.Fatalf("帧 %d payload %d 字节超过上限", i, len(f.Payload))
+		}
+	}
+	if errs := cl2.seqErrors(); len(errs) != 0 {
+		t.Fatalf("seq / 分帧出错: %v", errs)
+	}
+}
 
-	if len(w2.Sessions) == 0 {
-		t.Fatal("welcome 里没有会话")
-	}
-	got := w2.Sessions[0].PromptState
-	if got == nil {
-		t.Fatal("welcome.sessions[].prompt_state 是 null —— 客户端无从得知命令已经跑完，会一直停在 Raw")
-	}
-	if *got == protocol.PromptRunning {
-		t.Fatalf("prompt_state = %q，但命令早就跑完了", *got)
+// client 发来方向不对的帧（OUTPUT / SNAPSHOT）→ bad_frame 并关闭（协议 §3）。
+func TestClientCannotSendServerFrames(t *testing.T) {
+	for _, typ := range []uint8{protocol.TypeOutput, protocol.TypeSnapshot} {
+		h := newHarness(t)
+		c := h.client()
+		h.pair(c).Body.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		cl := h.connect(ctx, c, "tab-1", nil, "")
+		cl.welcome()
+		f := protocol.EncodeFrame(protocol.Frame{Type: typ, SID: 1, Payload: []byte("x")})
+		if err := cl.ws.Write(ctx, 2 /* binary */, f); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "收到 bad_frame", func() bool {
+			for _, e := range cl.errors() {
+				if e.Code == protocol.CodeBadFrame {
+					return true
+				}
+			}
+			return false
+		})
+		waitFor(t, "随后关闭连接", func() bool { return cl.isClosed() })
+		cancel()
 	}
 }
 
@@ -1003,7 +1043,7 @@ func TestEmptyCollectionsSerializeAsArrays(t *testing.T) {
 	c := h.client()
 	h.pair(c).Body.Close()
 
-	for _, path := range []string{"/api/commands", "/api/commands?pinned=true", "/api/devices"} {
+	for _, path := range []string{"/api/devices"} {
 		t.Run(path, func(t *testing.T) {
 			resp := h.do(c, http.MethodGet, path, nil)
 			defer resp.Body.Close()
@@ -1011,25 +1051,113 @@ func TestEmptyCollectionsSerializeAsArrays(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// next_before 为 null 是契约的一部分（表示没有下一页），
-			// 这里只管【集合】不能是 null
 			var probe any
 			if err := json.Unmarshal(body, &probe); err != nil {
 				t.Fatal(err)
 			}
-			switch v := probe.(type) {
-			case []any: // /api/devices
-			case map[string]any: // /api/commands
-				items, ok := v["items"]
-				if !ok {
-					t.Fatal("响应里没有 items")
-				}
-				if _, ok := items.([]any); !ok {
-					t.Fatalf("items = %#v，必须是数组而不是 null —— 客户端一个 .length 就崩了", items)
-				}
-			default:
-				t.Fatalf("响应类型意外: %T", probe)
+			if _, ok := probe.([]any); !ok {
+				t.Fatalf("响应 = %#v，必须是数组而不是 null —— 客户端一个 .length 就崩了", probe)
 			}
 		})
+	}
+}
+
+// 建会话不自动订阅（协议 §4.1）：发起方收到 session.created 之后，在它自己发
+// subscribe 之前，这个会话的帧一个都不该过来；subscribe{out_seq:0} 走快照拿第一屏。
+func TestSessionCreateDoesNotAutoSubscribe(t *testing.T) {
+	h := newHarness(t)
+	c := h.client()
+	h.pair(c).Body.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	cl.welcome()
+	cwd := t.TempDir()
+	cl.send(&protocol.SessionCreate{ReqID: "r", CWD: &cwd, Cols: 80, Rows: 24})
+	var sid uint16
+	waitFor(t, "收到 session.created", func() bool {
+		for _, m := range cl.messages() {
+			if v, ok := m.(*protocol.SessionCreated); ok && v.ReqID == "r" {
+				sid = v.Session.SID
+				return true
+			}
+		}
+		return false
+	})
+	cl.input(sid, "printf 'NOSUB-%s\\n' MARK\r")
+	s, _ := h.sessions.Get(sid)
+	waitFor(t, "命令执行了", func() bool { return s.HeadSeq() > 0 })
+	time.Sleep(300 * time.Millisecond)
+	for _, f := range cl.binaryFrames() {
+		if f.SID == sid {
+			t.Fatalf("没订阅却收到了帧 %+v —— 建会话不该自动订阅", f)
+		}
+	}
+
+	cl.send(&protocol.Subscribe{SID: sid, OutSeq: 0})
+	waitFor(t, "订阅之后收到快照", func() bool { return cl.snapshotCount(sid) == 1 })
+	if f := cl.binaryFrames()[0]; f.Type != protocol.TypeSnapshot || f.SID != sid {
+		t.Fatalf("第一帧 = %+v，want 这个会话的 SNAPSHOT", f)
+	}
+}
+
+// 退出消息排在最后一段输出之后（同一条连接上）：最后一个 OUTPUT 帧先到，
+// session.updated{status:"exited"} 后到，里面的 head_seq 等于最后一帧的末尾。
+// 连接层不能把这条带 head_seq 的消息当成"只报未读"的那种吞掉。
+func TestExitedAfterLastOutputOverSocket(t *testing.T) {
+	h := newHarness(t)
+	c := h.client()
+	h.pair(c).Body.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	cl.welcome()
+	sid := cl.createSession(t.TempDir())
+
+	cl.input(sid, "for i in $(seq 1 3000); do printf 'tail-%05d xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n' $i; done; exit 3\r")
+	var upd *protocol.SessionUpdated
+	waitFor(t, "收到 exited", func() bool {
+		for _, m := range cl.messages() {
+			if u, ok := m.(*protocol.SessionUpdated); ok && u.SID == sid && u.Status != nil && *u.Status == protocol.StatusExited {
+				upd = u
+				return true
+			}
+		}
+		return false
+	})
+	time.Sleep(300 * time.Millisecond) // 给可能迟到的帧一点时间暴露出来
+
+	// arrival 里非 binary 的条目与 messages 一一对应，按此找到 exited 的位置
+	order, msgs := cl.arrival(), cl.messages()
+	k, at := 0, -1
+	for i, typ := range order {
+		if typ == "binary" {
+			continue
+		}
+		if msgs[k] == any(upd) {
+			at = i
+		}
+		k++
+	}
+	if at < 0 {
+		t.Fatal("没在到达顺序里找到 exited")
+	}
+	for _, typ := range order[at+1:] {
+		if typ == "binary" {
+			t.Fatal("exited 之后还有二进制帧 —— 输出没读完就宣布退出了")
+		}
+	}
+	cl.mu.Lock()
+	got := cl.outSeq[sid]
+	cl.mu.Unlock()
+	if upd.HeadSeq == nil || *upd.HeadSeq != got {
+		t.Fatalf("exited 里的 head_seq = %v，客户端最后一帧的末尾 = %d", upd.HeadSeq, got)
+	}
+	if upd.ExitCode == nil || *upd.ExitCode != 3 {
+		t.Fatalf("exit_code = %v", upd.ExitCode)
+	}
+	if !cl.screenHas(sid, "tail-03000") {
+		t.Fatal("最后一行输出没到")
 	}
 }

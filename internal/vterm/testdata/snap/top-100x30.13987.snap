@@ -1,0 +1,30 @@
+[0m[?7h[H[0mtop - 21:10:14 up 14 days,  3:25,  4 users,  load average: 3.00, 2.54, 2.21[0m
+[0mTasks:[0;1m 186 [0mtotal,[0;1m   3 [0mrunning,[0;1m 182 [0msleeping,[0;1m   0 [0mstopped,[0;1m   1 [0mzombie[0m
+[0m%Cpu(s):[0;1m 32.9 [0mus,[0;1m 11.6 [0msy,[0;1m  0.6 [0mni,[0;1m 52.3 [0mid,[0;1m  0.6 [0mwa,[0;1m  0.0 [0mhi,[0;1m  1.9 [0msi,[0;1m  0.0 [0mst[0m
+[0mMiB Mem :[0;1m   3921.6 [0mtotal,[0;1m    332.2 [0mfree,[0;1m   2122.8 [0mused,[0;1m   1864.9 [0mbuff/cache[0m
+[0mMiB Swap:[0;1m   2048.0 [0mtotal,[0;1m   1274.2 [0mfree,[0;1m    773.8 [0mused.[0;1m   1798.8 [0mavail Mem[0m
+
+[0;7m    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND                     [0m
+[0;1m3031194 usr       20   0   25.2g 193056  48276 R  58.8   4.8   0:01.04 workerd                     [0m
+[0m3029138 usr       20   0   68.2g 726060  73396 S  39.2  18.1   0:50.63 MainThread[0m
+[0m2963522 usr       30  10 1804044  25516  10432 S   7.8   0.6   1:15.00 awtto-node[0m
+[0;1m3031206 usr       20   0   10868   5540   3368 R   3.9   0.1   0:00.05 top                         [0m
+[0m2507990 root      20   0 1364372  42816   5180 S   2.0   1.1   5:47.89 xray[0m
+[0;1m2884980 usr       20   0 5641020 334464  74848 R   2.0   8.3   6:06.65 claude                      [0m
+[0m      1 root      20   0   23460   4556   3000 S   0.0   0.1  10:14.24 systemd[0m
+[0m      2 root      20   0       0      0      0 S   0.0   0.0   0:01.85 kthreadd[0m
+[0m      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release[0m
+[0m      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-kvfree_rcu_reclaim[0m
+[0m      5 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_gp[0m
+[0m      6 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-sync_wq[0m
+[0m      7 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-slub_flushwq[0m
+[0m      8 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-netns[0m
+[0m     10 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/0:0H-events_highpri[0m
+[0m     12 root      20   0       0      0      0 I   0.0   0.0   0:06.05 kworker/u12:0-ipv6_addrconf[0m
+[0m     13 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-netns[0m
+[0m     10 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/0:0H-events_highpri[0m
+[0m     12 root      20   0       0      0      0 I   0.0   0.0   0:06.05 kworker/u12:0-ipv6_addrconf[0m
+[0m     13 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-mm_percpu_wq[0m
+[0m     14 root      20   0       0      0      0 I   0.0   0.0   0:00.00 rcu_tasks_kthread[0m
+[0m     15 root      20   0       0      0      0 I   0.0   0.0   0:00.00 rcu_tasks_rude_kthread[0m
+[0m     16 root      20   0       0      0      0 I   0.0   0.0   0:00.00 rcu_tasks_trace_kthread[0m[3g[1;1HH[1;9HH[1;17HH[1;25HH[1;33HH[1;41HH[1;49HH[1;57HH[1;65HH[1;73HH[1;81HH[1;89HH[1;97HH[24;47H[?25l[?9l[?1000l[?1002l[?1003l[?1004l[?1005l[?1006l[?1015l[?1016l[?2004l[?1h[?7h=[=0;1u[2 q[0m]2;\[4l[20l

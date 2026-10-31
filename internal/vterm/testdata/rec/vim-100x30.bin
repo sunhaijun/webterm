@@ -1,0 +1,143 @@
+[?1006;1000h[?1002h[?1049h[22;0;0t[>4;2m[?1h=[?2004h[?1004h[1;30r[?12h[?12l[22;2t[22;1t[27m[23m[29m[m[H[2J[?25l[30;1H<daf6aff-02bd-4675-864b-cf8dd553d4cc/scratchpad/vtspike/fx/sample.txt"<-4675-864b-cf8dd553d4cc/scratchpad/vtspike/fx/sample.txt" 399L, 32697B[2;1H▽[6n[2;1H  [3;1HPzz\[0%m[6n[3;1H           [1;1H[>c]10;?]11;?[1;1H第1行 hello 世界 abc
+第2行 hello 世界 abc abc [2;26H[K[3;1H第3行 hello 世界 abc abc abc [3;30H[K[4;1H第4行 hello 世界 abc abc abc abc
+第5行 hello 世界 abc abc abc abc abc
+第6行 hello 世界 abc abc abc abc abc abc
+第7行 hello 世界 abc abc abc abc abc abc abc
+第8行 hello 世界 abc abc abc abc abc abc abc abc
+第9行 hello 世界 abc abc abc abc abc abc abc abc abc
+第10行 hello 世界 emoji 😀[10;28Habc abc abc abc abc abc abc abc abc abc
+第11行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc
+第12行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc
+第13行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc
+第14行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第15行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第16行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第17行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第18行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第19行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第20行 hello 世界 emoji 😀[20;28Habc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[21;1Hbc abc
+第21行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[23;1Hc
+第22行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[25;1Hc abc
+第23行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[27;1Hc abc abc
+第24行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[29;1Hc abc abc abc[30;83H1,1[11CTop[1;1H[?25h[?4m[?12$p[27m[23m[29m[m[H[2J[?25l[1;1H第1行 hello 世界 abc
+第2行 hello 世界 abc abc
+第3行 hello 世界 abc abc abc
+第4行 hello 世界 abc abc abc abc
+第5行 hello 世界 abc abc abc abc abc
+第6行 hello 世界 abc abc abc abc abc abc
+第7行 hello 世界 abc abc abc abc abc abc abc
+第8行 hello 世界 abc abc abc abc abc abc abc abc
+第9行 hello 世界 abc abc abc abc abc abc abc abc abc
+第10行 hello 世界 emoji 😀[10;28Habc abc abc abc abc abc abc abc abc abc
+第11行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc
+第12行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc
+第13行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc
+第14行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第15行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第16行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第17行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第18行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第19行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+第20行 hello 世界 emoji 😀[20;28Habc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[21;1Hbc abc
+第21行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[23;1Hc
+第22行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[25;1Hc abc
+第23行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[27;1Hc abc abc
+第24行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[29;1Hc abc abc abc[30;83H1,1[11CTop<-4675-864b-cf8dd553d4cc/scratchpad/vtspike/fx/sample.txt" 399L, 32697B[1;1H[?25h[?25l[30;1H[K[30;1H:set nu[1;1H[93m  1 [m第1行 hello 世界 abc
+[93m  2 [m第2行 hello 世界 abc abc
+[93m  3 [m第3行 hello 世界[9Cabc
+[93m  4 [m第4行 hello 世界[13Cabc
+[93m  5 [m第5行 hello 世界[17Cabc
+[93m  6 [m第6行 hello 世界[21Cabc
+[93m  7 [m第7行 hello 世界[25Cabc
+[93m  8 [m第8行 hello 世界[29Cabc
+[93m  9 [m第9行 hello 世界[33Cabc
+[93m 10 [m第10行 hello 世界 emoji 😀[10;68Habc
+[93m 11 [m第11行 hello 世界[41Cabc
+[93m 12 [m第12行 hello 世界[45Cabc
+[93m 13 [m第13行 hello 世界[49Cabc
+[93m 14 [m第14行 hello 世界[53Cabc
+[93m 15 [m第15行 hello 世界[57Cabc
+[93m 16 [m第16行 hello 世界[61Cabc
+[93m 17 [m第17行 hello 世界[65Cabc
+[93m 18 [m第18行 hello 世界[69Cabc
+[93m 19 [m第19行 hello 世界[73Cabc
+[93m 20 [m第20行 hello 世界 emoji 😀[20;100Haa[21;1H[93m    [mbc abc abc
+[93m 21 [m第21行 hello 世界[78Cbb[23;1H[93m    [mc abc
+[93m 22 [m第22行 hello 世界[78Cbb[25;1H[93m    [mc abc abc
+[93m 23 [m第23行 hello 世界[78Cbb[27;1H[93m    [mc abc abc abc
+[93m 24 [m第24行 hello 世界[78Cbb[29;1H[93m    [m[10Cabc abc[30;83H1,1[11CTop[1;5H[?25h[?25l[93m38[m[4C381行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[2;1H[93m   [m[1Cbc abc [2;12H[K[3;1H[93m382[m[4C82行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[4;1H[93m   [m[1Cbc abc abc [4;17H[K[5;1H[93m383[m[3C383行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[6;1H[93m   [m[1Cbc abc abc abc  [6;22H[K[7;1H[93m384[m[3C384行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[8;1H[93m   [m[1Cbc abc abc abc abc [8;24H[K[9;1H[93m385[m[3C385行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[10;1H[93m   [m[1Cbc abc abc abc abc abc [10;29H[K[11;1H[93m386[m[3C386行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[12;1H[93m   [m[1Cbc abc abc abc abc abc abc [12;32H[K[13;1H[93m387[m[3C387行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[14;1H[93m   [m[1Cbc abc abc abc abc abc abc abc [14;36H[K[15;1H[93m388[m[3C388行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[16;1H[93m   [m[1Cbc abc abc abc abc abc abc abc abc [16;40H[K[17;1H[93m389[m[3C389行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[18;1H[93m   [m[1Cbc abc abc abc abc abc abc abc abc abc [18;44H[K[19;1H[93m390[m[3C390行 hello 世界 emoji 😀[19;32H [19;33H[K[20;1H[93m391[m[3C391行 hello 世界 abc [20;29H[K[21;1H[93m392[m[1C第392行 hello 世界 abc abc
+[93m393[m[3C393行 hello 世界 abc abc abc [22;36H[K[23;1H[93m394[m[1C第394行 hello 世界 abc abc abc abc
+[93m395[m[3C395行 hello 世界 abc abc abc abc abc [24;44H[K[25;1H[93m396[m[1C第396行 hello 世界 abc abc abc abc abc abc
+[93m397[m[3C397行 hello 世界 abc abc abc abc abc abc abc [26;52H[K[27;1H[93m398[m[1C第398行 hello 世界 abc abc abc abc abc abc abc abc
+[93m399[m[3C399行 hello 世界 abc abc abc abc abc abc abc abc abc [28;60H[K[29;1H[94m~                                                                                                   [m[30;83H399,1[9CBot[28;5H[?25h[?25l[1;1H[93m  [m[4C1行 hello 世界 abc [1;26H[K[2;3H[93m2[m[1C第2行 hello 世界 abc abc
+[93m  3[m[4C行 hello 世界 abc abc abc [3;34H[K[4;3H[93m4[m[1C第4行 hello 世界 abc abc abc abc
+[93m  5[m[3C5行 hello 世界 abc abc abc abc abc [5;42H[K[6;3H[93m6[m[1C第6行 hello 世界 abc abc abc abc abc abc
+[93m  7[m[3C7行 hello 世界 abc abc abc abc abc abc abc [7;50H[K[8;3H[93m8[m[1C第8行 hello 世界 abc abc abc abc abc abc abc abc
+[93m  9[m[3C9行 hello 世界 abc abc abc abc abc abc abc abc abc [9;58H[K[10;2H[93m10[m[1C第10行 hello 世界 emoji 😀[10;32Habc abc abc abc abc abc abc abc abc abc
+[93m 11[m[3C11行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc [11;68H[K[12;2H[93m12[m[1C第12行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 13[m[3C13行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc [13;76H[K[14;2H[93m14[m[1C第14行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 15[m[3C15行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc [15;84H[K[16;2H[93m16[m[1C第16行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 17[m[3C17行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc [17;92H[K[18;2H[93m18[m[1C第18行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 19[m[3C19行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 20[m[3C20行 hello 世界 emoji 😀[20;32Habc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[21;1H[93m   [m[1Cbc abc abc [21;16H[K[22;1H[93m 21[m[3C21行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[23;1H[93m   [m[1Cc abc  [23;13H[K[24;1H[93m 22[m[3C22行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[25;1H[93m   [m[1Cc abc abc [25;15H[K[26;1H[93m 23[m[3C23行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[27;1H[93m   [m[1Cc abc abc abc[27;19H[K[28;1H[93m 24[m[3C24行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[29;1H[93m    [mc abc abc abc abc [29;23H[K[30;83H1,1  [9CTop[1;5H[?25h[?25l[27m[23m[29m[m[H[2J[1;1H[93m 24 [m第24行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[2;1H[93m    [mc abc abc abc abc
+[93m 25 [m第25行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[4;1H[93m    [mc abc abc abc abc abc
+[93m 26 [m第26行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[6;1H[93m    [mc abc abc abc abc abc abc
+[93m 27 [m第27行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[8;1H[93m    [mc abc abc abc abc abc abc abc
+[93m 28 [m第28行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[10;1H[93m    [mc abc abc abc abc abc abc abc abc
+[93m 29 [m第29行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[12;1H[93m    [mc abc abc abc abc abc abc abc abc abc
+[93m 30 [m第30行 hello 世界 emoji 😀[14;1H[93m 31 [m第31行 hello 世界 abc
+[93m 32 [m第32行 hello 世界 abc abc
+[93m 33 [m第33行 hello 世界 abc abc abc
+[93m 34 [m第34行 hello 世界 abc abc abc abc
+[93m 35 [m第35行 hello 世界 abc abc abc abc abc
+[93m 36 [m第36行 hello 世界 abc abc abc abc abc abc
+[93m 37 [m第37行 hello 世界 abc abc abc abc abc abc abc
+[93m 38 [m第38行 hello 世界 abc abc abc abc abc abc abc abc
+[93m 39 [m第39行 hello 世界 abc abc abc abc abc abc abc abc abc
+[93m 40 [m第40行 hello 世界 emoji 😀[23;32Habc abc abc abc abc abc abc abc abc abc
+[93m 41 [m第41行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc
+[93m 42 [m第42行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 43 [m第43行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 44 [m第44行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 45 [m第45行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 46 [m第46行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc[30;83H27,1[11C6%[7;5H[?25h[?25l[27m[23m[29m[m[H[2J[1;1H[93m 45 [m第45行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 46 [m第46行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 47 [m第47行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 48 [m第48行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 49 [m第49行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc
+[93m 50 [m第50行 hello 世界 emoji 😀[6;32Habc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[7;1H[93m    [mbc abc abc
+[93m 51 [m第51行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[9;1H[93m    [mc abc
+[93m 52 [m第52行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[11;1H[93m    [mc abc abc
+[93m 53 [m第53行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[13;1H[93m    [mc abc abc abc
+[93m 54 [m第54行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[15;1H[93m    [mc abc abc abc abc
+[93m 55 [m第55行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[17;1H[93m    [mc abc abc abc abc abc
+[93m 56 [m第56行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[19;1H[93m    [mc abc abc abc abc abc abc
+[93m 57 [m第57行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[21;1H[93m    [mc abc abc abc abc abc abc abc
+[93m 58 [m第58行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[23;1H[93m    [mc abc abc abc abc abc abc abc abc
+[93m 59 [m第59行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[25;1H[93m    [mc abc abc abc abc abc abc abc abc abc
+[93m 60 [m第60行 hello 世界 emoji 😀[27;1H[93m 61 [m第61行 hello 世界 abc
+[93m 62 [m第62行 hello 世界 abc abc
+[93m 63 [m第63行 hello 世界 abc abc abc[30;83H50,1[10C11%[6;5H[?25h[?25l[30;1H[1m-- INSERT --[m[30;83H[K[30;83H50,1[10C11%[30;1H[K[6;29r[6;1H[L[1;30r[6;1H[93m 50 [minserted 中文 😀[6;22Hline[7;3H[93m1
+
+ 52
+
+ 53
+
+ 54
+
+ 55
+
+ 56
+
+ 57
+
+ 58
+
+ 59
+
+ 60
+
+ 61
+ 62
+ 63[m[30;83H50,25-21      11%[6;25H[?25h[?25l[30;83H[K[30;1H:vsplit[1;51H[7m|[m[2;2H[93m  [m[1Cabc abc abc abc abc abc abc abc               [7m|[m[3;3H[93m6[m[4C6[42C[7m|[m[4;2H[93m  [m[1Cabc abc abc abc abc abc abc abc abc           [7m|[m[5;3H[93m7[m[4C7[42C[7m|[m[6;2H[93m  [m[1Cabc abc abc abc abc abc abc abc abc abc[7C[7m|[m[7;2H[93m48[m[3C48[14Cabc abc abc abc abc abc abc [7m|[m[8;5Habc abc abc abc abc abc abc abc abc abc abc   [7m|[m[9;2H[93m49[m[3C49[42C[7m|[m[10;5Habc abc abc abc abc abc abc abc abc abc abc ab[7m|[m[11;2H[93m  [m[1Cc                                             [7m|[m[12;2H[93m50[m[1Cinserted 中文 😀[12;22Hline[25C[7m|[m[13;3H[93m1[m[4C0[14Cemoji 😀[13;31H abc abc abc abc abc[7m|[m[14;5H abc abc abc abc abc abc abc abc abc abc abc a[7m|[m[15;2H[93m  [m[1Cbc abc abc abc                                [7m|[m[16;2H[93m52[m[1C第51行 hello 世界 abc abc abc abc abc abc abc [7m|[m[17;2H[93m  [m[1Cabc abc abc abc abc abc abc abc abc abc abc ab[7m|[m[18;15H           [25C[7m|[m[19;3H[93m3[m[4C2[42C[7m|[m[20;5Habc abc abc abc abc abc abc abc abc abc abc ab[7m|[m[21;2H[93m  [m[1Cc abc abc abc                                 [7m|[m[22;2H[93m54[m[1C第53行 hello 世界[13Cabc abc abc abc [7m|[m[23;2H[93m  [m[1Cabc abc abc abc abc abc abc abc abc abc abc ab[7m|[m[24;23H               [13C[7m|[m[25;2H[93m55[m[4C4[42C[7m|[m[26;5Habc abc abc abc abc abc abc abc abc abc abc ab[7m|[m[27;2H[93m  [m[1Cc abc abc abc abc abc     [20C[7m|[m[28;2H[93m56[m[3C55[18Cabc abc abc abc abc abc [7m|[m[94m@@@                                               [m
+[1m[7mfx/sample.txt [+]               50,25-21       11% [m[1;52H[93m 45 [m第45行 hello 世界 abc abc abc abc abc abc abc[2;52H[93m    [m abc abc abc abc abc abc abc abc[3;52H[93m 46 [m第46行 hello 世界 abc abc abc abc abc abc abc[4;52H[93m    [m abc abc abc abc abc abc abc abc abc [4;93H[K[5;52H[93m 47 [m第47行 hello 世界 abc abc abc abc abc abc abc[6;52H[93m    [m abc abc abc abc abc abc abc abc abc abc[7;52H[93m 48 [m第48行 hello 世界 abc abc abc abc abc abc abc[8;52H[93m    [m abc abc abc abc abc abc abc abc abc abc abc[9;52H[93m 49 [m第49行 hello 世界 abc abc abc abc abc abc abc[10;52H[93m    [m abc abc abc abc abc abc abc abc abc abc abc[11;52H[93m    [mabc [11;60H[K[12;52H[93m 50 [minserted 中文 😀[12;73Hline[13;52H[93m 51 [m第50行 hello 世界 emoji 😀[14;52H[93m    [mc abc abc abc abc abc abc abc abc abc abc abc[15;52H[93m    [m abc abc abc abc [15;73H[K[16;52H[93m 52 [m第51行 hello 世界 abc abc abc abc abc abc abc[17;52H[93m    [m abc abc abc abc abc abc abc abc abc abc abc [18;52H[93m    [mabc abc abc[19;52H[93m 53 [m第52行 hello 世界 abc abc abc abc abc abc abc[20;52H[93m    [m abc abc abc abc abc abc abc abc abc abc abc[21;52H[93m    [mabc abc abc abc [21;72H[K[22;52H[93m 54 [m第53行 hello 世界 abc abc abc abc abc abc abc[23;52H[93m    [m abc abc abc abc abc abc abc abc abc abc abc [24;52H[93m    [mabc abc abc abc abc[25;52H[93m 55 [m第54行 hello 世界 abc abc abc abc abc abc abc[26;52H[93m    [m abc abc abc abc abc abc abc abc abc abc abc[27;52H[93m    [mabc abc abc abc abc abc[28;52H[93m 56 [m第55行 hello 世界 abc abc abc abc abc abc abc[28;52H[94m@@@                                              [m[29;52H[7mfx/sample.txt [+]              50,25-21       11%[12;25H[?25h[29;1Hfx/sample.txt [+][m[1m[7m [m[7m               [?25l50,25-21       11%[m[1m[7m [m[7m [m[1m[7mfx/sample.txt [+]              50,25-21       11%[12;76H[?25h[?25l[29;86H1     [12;56H[?25h[?25l[m[30;1H[K[30;1H:q![1;51Habc abc abc abc abc abc abc abc [1;83H[K[2;2H[93m46[m[1C第46行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc [2;87H[K[3;3H[93m7[m[4C7[42Cabc abc abc abc abc abc abc abc abc abc [3;91H[K[4;2H[93m48[m[1C第48行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc[5;3H[93m9[m[4C9[42Cabc abc abc abc abc abc abc abc abc abc abc abc [5;99H[K[6;2H[93m50[m[1Cinserted 中文 😀[6;21H line[6;26H[K[7;2H[93m51[m[3C50[14Cemoji 😀[7;31H abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc aa[8;1H[93m [m[3Cbc abc abc [8;17H[K[9;2H[93m52[m[3C51[42Cabc abc abc abc abc abc abc abc abc abc abc abc abb[10;1H[93m [m[3Cc abc [10;11H[K[11;2H[93m53[m[1C第52行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[12;1H[93m   [m[1Cc abc abc  [12;16H[K[13;3H[93m4[m[4C3[14Cabc abc abc abc abc abc abc abc abc abc abc abc abc abc abc[18Cbb[14;1H[93m [m[3Cc abc abc abc [14;19H[K[15;2H[93m55[m[1C第54行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[16;1H[93m   [m[1Cc abc abc abc abc[16;23H[K[17;2H[93m56[m[1C第55行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[18;1H[93m [m[13Cabc abc abc[18;51H[K[19;3H[93m7[m[4C6[42Cabc abc abc abc abc abc abc abc abc abc abc abc abb[20;1H[93m [m[3Cc abc abc abc abc abc abc [20;31H[K[21;2H[93m58[m[1C第57行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[22;1H[93m   [m[1Cc abc abc abc abc[22;35H[K[23;2H[93m59[m[1C第58行 hello 世界 abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abc abb[24;1H[93m [m[21Cabc abc abc abc[24;51H[K[25;2H[93m60[m[4C9[42Cabc abc abc abc abc abc abc abc abc abc abc abc abb[26;1H[93m [m[3Cc abc abc abc abc abc abc abc abc abc [26;43H[K[27;2H[93m61[m[1C第60行 hello 世界 emoji 😀[27;51H[K[28;1H[93m 62 [m第61行 hello 世界 abc [28;27H[K[29;1H[93m 63 [m第62行 hello 世界 abc abc [29;31H[K[30;83H50,25-21      11%[6;25H[?25h[?25l[30;1H[K[30;1H:q![?1006;1000l[?1002l[?2004l[>4;m[23;2t[23;1t[30;1H[K[30;1H[?1004l[?2004l[?1l>[?1049l[23;0;0t[?25h[>4;m
