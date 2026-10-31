@@ -397,6 +397,7 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 
 - agent 为每个 `(client_id, sid)` 维护 `in_ack`，**保留到会话销毁为止**。刷新一次就多一个 `client_id`，条目数随刷新次数增长；每条是一个 id 加两个 `uint64`，长期运行的会话上也只是 KB 量级，所以不回收 —— 回收之后，那个页面带着 `pending` 重连会被判 `input_gap`
 - 该 `client_id` 从未对这个会话发过输入时 `in_ack = 0`，此时 client 侧的 `in_seq_next` 也必然是 0，两侧天然对齐。这一条成立的前提是 `client_id` 每次页面加载都是新的（§4.1）
+- 反过来，`seq == 0` 而这个 `(client_id, sid)` 已有记账，说明 client 把计数器重置了却沿用了旧 `client_id`。正常的重连不会出现这个形状：断开时 `accepted` 已回退到 `in_ack`，client 按 `in_ack` 裁剪后从 `seq = in_ack` 重发。agent 仍按重发处理（丢掉重复的部分），但**记一条 Warn**（`sid`、`client`、`accepted`、`len`）—— 这类丢弃在浏览器一侧看不出任何迹象（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 第 5 条）
 - 若按连接记账，重连后 `in_ack` 归零而 client 的 `pending` 仍从旧 `seq` 起，agent 会判 `seq > in_ack` → `input_gap` → 关连接 → 无限重连。**断线期间的输入不丢**（US-2.2）整条就废了
 
 **连接断开时，agent 必须丢弃该 `client_id` 已入队但尚未写入 PTY 的输入**，并把
