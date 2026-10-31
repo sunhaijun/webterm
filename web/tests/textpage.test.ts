@@ -5,14 +5,18 @@ import { PAGE_SWIPE_PX, isPageSwipe, textEnter } from '../src/keys/textpage'
 
 const key = (isComposing = false, keyCode = 13) => ({ isComposing, keyCode })
 
-describe('UT-textinput-1 回车（照 Termux）', () => {
-  it('有内容：把内容发出去，不追加回车', () => {
-    expect(textEnter('echo TEXT-ONE', key())).toEqual({ kind: 'input', data: 'echo TEXT-ONE' })
-    expect(textEnter('你好', key())).toEqual({ kind: 'input', data: '你好' })
+describe('UT-textinput-1 回车 = 发送并提交（ADR-0027）', () => {
+  it('有内容：发内容并回车', () => {
+    expect(textEnter('echo TEXT-ONE', key())).toEqual({ kind: 'submit', text: 'echo TEXT-ONE' })
+    expect(textEnter('你好', key())).toEqual({ kind: 'submit', text: '你好' })
   })
 
-  it('没有内容：发一个 \\r', () => {
-    expect(textEnter('', key())).toEqual({ kind: 'input', data: '\r' })
+  it('多行（只可能来自粘贴）也一样：整块交出去，由调用方走 term.paste', () => {
+    expect(textEnter('echo L1\necho L2', key())).toEqual({ kind: 'submit', text: 'echo L1\necho L2' })
+  })
+
+  it('没有内容：只回车', () => {
+    expect(textEnter('', key())).toEqual({ kind: 'submit', text: '' })
   })
 
   it('正在组字：不处理，交给输入法选词（isComposing 或 keyCode 229）', () => {
@@ -21,12 +25,8 @@ describe('UT-textinput-1 回车（照 Termux）', () => {
     expect(textEnter('', key(true)), '空框组字也不发 \\r').toEqual({ kind: 'none' })
   })
 
-  it('含换行（只可能来自粘贴）：走 term.paste，括号粘贴由 xterm 按对端模式包', () => {
-    expect(textEnter('echo L1\necho L2', key())).toEqual({ kind: 'paste', data: 'echo L1\necho L2' })
-  })
-
   it('只有空白也算有内容（原样发出去）', () => {
-    expect(textEnter('  ', key())).toEqual({ kind: 'input', data: '  ' })
+    expect(textEnter('  ', key())).toEqual({ kind: 'submit', text: '  ' })
   })
 })
 

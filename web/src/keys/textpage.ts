@@ -6,10 +6,11 @@
 export type TextSend =
   /** 不处理：交给输入法选词。 */
   | { kind: 'none' }
-  /** 等同逐字键入：`term.input(data, true)`，走 onData。 */
-  | { kind: 'input'; data: string }
-  /** 含换行（只可能来自粘贴）：`term.paste(data)`，括号粘贴由 xterm 按对端模式包裹。 */
-  | { kind: 'paste'; data: string }
+  /**
+   * 发出去并回车（ADR-0027）：`text` 非空就先 `term.paste(text)`（对端开了括号粘贴就包裹，
+   * 换行转 CR），再单独 `term.input('\r', true)`。空的就只有回车。
+   */
+  | { kind: 'submit'; text: string }
 
 export interface EnterEventLike {
   isComposing: boolean
@@ -17,17 +18,14 @@ export interface EnterEventLike {
 }
 
 /**
- * 回车（照 Termux）：
+ * 回车：
  *   正在组字 → 不处理；
- *   有内容   → 把内容发出去，**不追加回车**；
- *   没内容   → 发一个 `\r`。
+ *   其余     → 把内容（可能是空的）发出去并回车。
  * 回车永远不在文本框里插入换行（调用方在非 none 时 preventDefault）。
  */
 export function textEnter(value: string, ev: EnterEventLike): TextSend {
   if (ev.isComposing || ev.keyCode === 229) return { kind: 'none' }
-  if (value === '') return { kind: 'input', data: '\r' }
-  if (value.includes('\n')) return { kind: 'paste', data: value }
-  return { kind: 'input', data: value }
+  return { kind: 'submit', text: value }
 }
 
 /** 键区上的横向滑动切页：横向位移 > 40px 且横向占优（加速路径，✎ 才是可见入口）。 */

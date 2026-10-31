@@ -121,6 +121,9 @@ function inside(type: string, fn: () => void) {
 }
 
 const term = () => (window as unknown as { __webterm: { sid(): number | null } }).__webterm
+/** 会话的 xterm 实例：模拟软键盘 / 实体键盘的输入（`term.input(data, true)`，走 onData）。 */
+const xterm = (sid: number) =>
+  (ctl as unknown as { store: { termOf(sid: number): { term: { input(data: string, wasUserInput: boolean): void } } | undefined } }).store.termOf(sid)!.term
 
 beforeEach(() => {
   localStorage.clear()
@@ -197,21 +200,45 @@ describe('输入出口', () => {
     inside('pointerup', () => ctl.pressKey('ArrowLeft'))
     ctl.sticky.hold('ctrl')
     inside('pointerup', () => ctl.pressKey('Escape'))
-    inside('keydown', () => ctl.sendText({ kind: 'input', data: 'c' }))
+    inside('keydown', () => xterm(1).input('c', true)) // 软键盘打出来的 c
     expect(sock.inputs()).toEqual(['\x1b[1;5D', '\x1b', '\x03'])
   })
 
-  it('文本页：有内容只发内容，空回车发 \\r', () => {
-    inside('keydown', () => ctl.sendText({ kind: 'input', data: 'echo TEXT-ONE' }))
-    inside('keydown', () => ctl.sendText({ kind: 'input', data: '\r' }))
-    expect(sock.inputs()).toEqual(['echo TEXT-ONE', '\r'])
+  it('文本页：有内容 = 内容再单独一个 \\r；空回车只发 \\r（ADR-0027）', () => {
+    inside('keydown', () => ctl.sendText({ kind: 'submit', text: 'echo TEXT-ONE' }))
+    inside('keydown', () => ctl.sendText({ kind: 'submit', text: '' }))
+    expect(sock.inputs()).toEqual(['echo TEXT-ONE', '\r', '\r'])
+  })
+
+  it('文本页：对端开了括号粘贴就整块包起来，回车落在结束标记之后', async () => {
+    sock.frame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: new TextEncoder().encode('\x1b[?2004h') })
+    await new Promise((r) => setTimeout(r, 30))
+    inside('keydown', () => ctl.sendText({ kind: 'submit', text: '长段 prompt\n第二行' }))
+    expect(sock.inputs().join('')).toBe('\x1b[200~长段 prompt\r第二行\x1b[201~\r')
+  })
+
+  it('文本页不吃粘滞修饰：ALT 激活时回车仍是 \\r（ESC \\r 在 claude 里是换行），激活也不消耗', () => {
+    ctl.sticky.tap('alt')
+    ctl.sticky.hold('ctrl')
+    inside('keydown', () => ctl.sendText({ kind: 'submit', text: 'y' }))
+    expect(sock.inputs()).toEqual(['y', '\r'])
+    expect(ctl.sticky.state('alt')).toBe('armed')
+    expect(ctl.sticky.state('ctrl')).toBe('locked')
   })
 
   it('已退出的会话：Enter 直接关闭（不确认），其余输入丢弃', () => {
     sock.text({ t: 'session.updated', sid: 1, status: 'exited', exit_code: 1 })
-    inside('keydown', () => ctl.sendText({ kind: 'input', data: 'ls' }))
+    inside('keydown', () => xterm(1).input('ls', true))
     expect(sock.inputs()).toEqual([])
-    inside('keydown', () => ctl.sendText({ kind: 'input', data: '\r' }))
+    expect(sock.msgs('session.close')).toEqual([])
+    inside('keydown', () => xterm(1).input('\r', true))
+    expect(sock.msgs('session.close')).toMatchObject([{ sid: 1 }])
+  })
+
+  it('已退出的会话：文本页回车 = 内容丢弃、跟着的 \\r 关闭会话', () => {
+    sock.text({ t: 'session.updated', sid: 1, status: 'exited', exit_code: 1 })
+    inside('keydown', () => ctl.sendText({ kind: 'submit', text: 'ls' }))
+    expect(sock.inputs()).toEqual([])
     expect(sock.msgs('session.close')).toMatchObject([{ sid: 1 }])
   })
 })

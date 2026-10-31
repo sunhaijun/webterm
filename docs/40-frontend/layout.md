@@ -176,7 +176,7 @@ xterm 的主题（前景 / 背景 / 16 色）从同一组 CSS 变量读取，并
 - **探测**：canvas `measureText` 量同一段探针文本，把 `"X", <基线>` 和 `<基线>` 比宽度，三条基线（`monospace` / `serif` / `sans-serif`）里有一条不同就算装了。结果按页面缓存一次。拿不到 2d 上下文时清单退化成只有「系统默认」。
 - **持久化**：`webterm.font.family`，存 id，**全局一份不按形态分**（字号才按形态分）。
 - **改字体后**同改字号：所有实例一起换 → `fit()` → 补一条 `resize`。
-- **连字（ligature）不生效**：xterm 的连字要额外加载 `addon-ligatures`，我们不加载。所以清单优先收不带连字的变体（Cascadia Mono 而非 Cascadia Code），带连字的字体也能选，只是显示成普通字形 —— 设置面板里明说这一条。
+- **连字（ligature）不生效**：xterm 的连字要额外加载 `addon-ligatures`，我们不加载。所以清单优先收不带连字的变体（Cascadia Mono 而非 Cascadia Code），带连字的字体也能选，只是显示成普通字形。设置面板里不写这条说明（[ADR-0028](../20-architecture/adr/0028-settings-without-notes.md)），预览一行已经看得出来。
 - 界面 chrome 的 `--font-ui` 不进这个设置。
 
 ## 渲染（ADR-0026 §7）

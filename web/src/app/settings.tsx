@@ -73,10 +73,6 @@ export function Settings(p: SettingsProps) {
           il1 O0 -&gt;= 中文对齐
         </span>
       </div>
-      {/* 不写出来的话，装了 Fira Code 的人会把"连字没了"当成 bug（ADR-0023） */}
-      <p class="settings-note" data-testid="font-note">
-        只列出这台设备装了的等宽字体。连字不会生效 —— 没有加载连字插件。字号按设备形态（手机 / 平板与电脑）分别记住。
-      </p>
     </Drawer>
   )
 }

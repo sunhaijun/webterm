@@ -1,11 +1,12 @@
 /**
  * E2E-40 文本输入页 —— AC-3.19 / AC-3.10。
  *
- * Pixel 5。hook `WebSocket.send` 记 INPUT 帧：断言的是线上的字节。
+ * Pixel 5。hook `WebSocket.send` 记 INPUT 帧：断言的是线上的字节。粘贴与回车是两次 onData，
+ * 分不分帧不重要，所以这一步的帧拼起来比。E2E 的 bash 开了括号粘贴。
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 
-import { Agent, hooks, recordSent, terminalText, waitFor, waitText, type SentRecorder } from './harness'
+import { Agent, hooks, recordSent, terminalText, waitFor, type SentRecorder } from './harness'
 
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 test.use(PIXEL)
@@ -33,9 +34,14 @@ async function newFrames(rec: SentRecorder, from: number, what: string): Promise
 }
 
 const hex = (s: string) => [...new TextEncoder().encode(s)].map((b) => b.toString(16).padStart(2, '0')).join('')
+/** 括号粘贴好的内容再加一个回车 —— 文本页有内容回车时线上的样子（ADR-0027）。 */
+const submitted = (s: string) => hex(`\x1b[200~${s}\x1b[201~\r`)
+const hasLine = async (page: Page, line: string) => (await terminalText(page)).split('\n').some((l) => l.trimEnd() === line)
+/** 等 bash 回到提示符：readline 出提示符时才开括号粘贴（?2004h），之前发的不会被包裹。 */
+const atPrompt = (page: Page) => waitFor(async () => (await terminalText(page)).trimEnd().endsWith('$'), 'shell 回到提示符')
 const noNewline = async (page: Page) => expect(await page.getByTestId('textinput').inputValue(), '回车不在框里插换行').not.toContain('\n')
 
-test('E2E-40 ①② 切换不动几何：点 ✎ 与横滑都能切，切过去就聚焦', async ({ page }) => {
+test('E2E-40 ①② 切换不动几何：点 ✎ 与横滑都能切，切过去就聚焦；文本框四边有框', async ({ page }) => {
   await agent.open(page)
   await page.waitForTimeout(300)
   const size = await hooks.size(page)
@@ -52,6 +58,20 @@ test('E2E-40 ①② 切换不动几何：点 ✎ 与横滑都能切，切过去�
   await page.waitForTimeout(300)
   expect(await hooks.size(page), '切到文本页不改终端行列').toEqual(size)
   expect(await hooks.resizes(page), '不发 resize').toBe(resizes)
+  // 文本框四边都有边框，整个框落在附加键槽里、四边留空 —— 下边框不贴视口底边
+  const geo = await page.evaluate(() => {
+    const ta = document.querySelector('[data-testid=textinput]')!
+    const slot = document.querySelector('[data-testid=extrakeys]')!
+    const cs = getComputedStyle(ta)
+    const a = ta.getBoundingClientRect()
+    const b = slot.getBoundingClientRect()
+    return {
+      widths: [cs.borderTopWidth, cs.borderRightWidth, cs.borderBottomWidth, cs.borderLeftWidth].map(parseFloat),
+      gaps: [a.top - b.top, b.right - a.right, b.bottom - a.bottom, a.left - b.left],
+    }
+  })
+  for (const w of geo.widths) expect(w, `四边都有边框：${geo.widths}`).toBeGreaterThanOrEqual(1)
+  for (const g of geo.gaps) expect(g, `整个框落在槽内、四边留空：${geo.gaps}`).toBeGreaterThan(0)
   await page.getByTestId('toggle-text').tap()
   await expect(ek).toHaveAttribute('data-page', 'keys')
 
@@ -79,15 +99,14 @@ test('E2E-40 ③–⑧ attribute、回车语义、组字、括号粘贴、回车
   await expect(text).toHaveAttribute('spellcheck', 'false')
   await expect(text).toHaveAttribute('enterkeyhint', 'send')
 
-  // ④ 有内容回车：发内容、不带 0d；命令上了命令行但没执行；框清空、焦点不动；计数都涨
+  // ④ 有内容回车 = 发送并回车：括号包好的内容 + 0d，命令执行；框清空、焦点不动；计数都涨
+  await atPrompt(page)
   const s0 = await hooks.inputStats(page)
   let n = (await rec.inputHex()).length
   await text.fill('echo TEXT-ONE')
   await text.press('Enter')
-  expect(await newFrames(rec, n, '有内容回车发出了 INPUT'), '内容原样发出，不追加回车').toEqual([hex('echo TEXT-ONE')])
-  await waitText(page, 'echo TEXT-ONE', '命令行上出现了这段')
-  await page.waitForTimeout(300)
-  expect((await terminalText(page)).split('\n').some((l) => l.trimEnd() === 'TEXT-ONE'), '没有回车，不该执行').toBe(false)
+  expect((await newFrames(rec, n, '有内容回车发出了 INPUT')).join(''), '括号粘贴的内容，跟一个回车').toBe(submitted('echo TEXT-ONE'))
+  await waitFor(() => hasLine(page, 'TEXT-ONE'), '一次回车就执行了命令')
   await expect(text).toHaveValue('')
   await expect(text, '发完焦点留在文本框').toBeFocused()
   const s1 = await hooks.inputStats(page)
@@ -95,14 +114,14 @@ test('E2E-40 ③–⑧ attribute、回车语义、组字、括号粘贴、回车
   expect(s1.sent.n, 'inputStats.sent 涨').toBeGreaterThan(s0.sent.n)
   await noNewline(page)
 
-  // ⑤ 空回车：发 0d，命令执行
+  // ⑤ 空回车：只发 0d
   n = (await rec.inputHex()).length
   await text.press('Enter')
   expect(await newFrames(rec, n, '空回车')).toEqual(['0d'])
-  await waitFor(async () => (await terminalText(page)).split('\n').some((l) => l.trimEnd() === 'TEXT-ONE'), '空回车执行了命令')
   await noNewline(page)
 
   // ⑥ 组字中回车：不发；组字结束后回车：一次发出组字结果
+  await atPrompt(page)
   n = (await rec.inputHex()).length
   await page.evaluate(() => {
     const el = document.querySelector('[data-testid=textinput]') as HTMLTextAreaElement
@@ -120,28 +139,19 @@ test('E2E-40 ③–⑧ attribute、回车语义、组字、括号粘贴、回车
     el.dispatchEvent(new CompositionEvent('compositionend', { data: '你好', bubbles: true }))
   })
   await text.press('Enter')
-  expect(await newFrames(rec, n, '组字结束后回车')).toEqual([hex('你好')])
+  expect((await newFrames(rec, n, '组字结束后回车')).join('')).toBe(submitted('你好'))
   await noNewline(page)
-  // 把命令行上的「你好」清掉
-  n = (await rec.inputHex()).length
-  await page.getByTestId('toggle-text').tap()
-  await page.getByTestId('key-Ctrl').tap()
-  await page.keyboard.type('c')
-  await newFrames(rec, n, '^C')
-  await page.getByTestId('toggle-text').tap()
-  await expect(text).toBeFocused()
 
-  // ⑦ 含换行（粘贴来的）走括号粘贴：整块上命令行，不逐条执行
+  // ⑦ 多行（粘贴来的）整块粘贴再回车：换行转 CR、包在一对标记里，回车在结束标记之后；两行都执行
+  await atPrompt(page)
   n = (await rec.inputHex()).length
   await text.fill('echo L1\necho L2')
   await text.press('Enter')
   const f = (await newFrames(rec, n, '粘贴的多行')).join('')
   expect(f.startsWith('1b5b3230307e'), `以 ESC[200~ 开头：${f}`).toBe(true)
-  expect(f.endsWith('1b5b3230317e'), `以 ESC[201~ 结尾：${f}`).toBe(true)
-  await page.waitForTimeout(500)
-  const lines = (await terminalText(page)).split('\n').map((l) => l.trimEnd())
-  expect(lines.includes('L1') || lines.includes('L2'), '两行被逐条执行了').toBe(false)
-  expect(lines.some((l) => l.endsWith('echo L2')), '第二行作为同一块出现在命令行上').toBe(true)
+  expect(f.endsWith('1b5b3230317e0d'), `以 ESC[201~ 加回车结尾：${f}`).toBe(true)
+  expect(f, '换行已转成 CR').toBe(submitted('echo L1\recho L2'))
+  await waitFor(async () => (await hasLine(page, 'L1')) && (await hasLine(page, 'L2')), '两行都执行了')
   await expect(text).toHaveValue('')
   await noNewline(page)
 })

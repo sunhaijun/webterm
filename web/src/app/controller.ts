@@ -79,7 +79,7 @@ export class AppController {
   /** 自己发起的 session.create → 建好之后要不要把焦点给它。 */
   private readonly pendingCreate = new Map<string, boolean>()
   private drawerFocus: FocusPlace = null
-  /** 附加键正在往终端里送它自己算好的字节：onData 出口别再套一次粘滞修饰。 */
+  /** 附加键 / 文本页正在往终端里送字节：onData 出口别再套一次粘滞修饰。 */
   private keyBypass = false
   private lastW = 0
   private lastH = 0
@@ -404,12 +404,21 @@ export class AppController {
     }
   }
 
-  /** 文本输入页的回车（在 keydown 的派发里调用）。 */
+  /**
+   * 文本输入页的回车（在 keydown 的派发里调用，ADR-0027）。内容走 paste、回车单独键入：
+   * 「长内容 + \r」一次写进去，claude 会当成整块粘贴把 \r 吞掉。粘滞修饰不碰这两样 ——
+   * ALT 激活时回车会变成 ESC \r，claude 把它当换行。
+   */
   sendText(send: TextSend): void {
     const t = this.activeTerm()
-    if (!t) return
-    if (send.kind === 'input') t.term.input(send.data, true)
-    else if (send.kind === 'paste') t.term.paste(send.data)
+    if (!t || send.kind !== 'submit') return
+    this.keyBypass = true
+    try {
+      if (send.text !== '') t.term.paste(send.text)
+      t.term.input('\r', true)
+    } finally {
+      this.keyBypass = false
+    }
   }
 
   focusTerm(): void {
