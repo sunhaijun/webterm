@@ -15,7 +15,8 @@
 #     -H 'Accept: application/vnd.github.raw' | bash -s -- --domain term.example.com
 #
 # 脚本会：下载对应架构的二进制 → 校验 SHA256 → 装到 /usr/local/bin →
-# setcap 让普通用户能绑 443 → 生成 systemd user service → 启动并打出配对二维码。
+# setcap 让普通用户能绑 443 → 生成以你的用户运行的 systemd 系统服务（ADR-0034）→
+# 启动并打出配对二维码。
 #
 # 部署前置条件见 docs/80-ops/install.md。
 
@@ -31,6 +32,7 @@ DO_SETCAP=1
 IF_NEWER=0
 WHEN_IDLE=0
 FORCE_RESTART=0
+PRINT_UNIT=0
 DRY_RUN=0
 FORCE=0
 BASE_URL=""
@@ -84,7 +86,9 @@ usage() {
   --no-setcap        不做 setcap（你自己解决特权端口的绑定权限）
   --if-newer         版本和已装的一样就什么都不做（webterm update 用）
   --when-idle        等所有会话都停在提示符再切换（升级不杀正在跑的东西）
-  --force-restart    不热升级，走 systemctl restart（会关闭所有会话）
+  --force-restart    不热升级，走 systemctl restart（会关闭所有会话）；
+                     还是用户服务的机器顺带迁移成系统服务（ADR-0034）
+  --print-unit       只打印将要写入的 systemd 单元，什么都不装
   --force            前置自检不通过也继续装
   --dry-run          只打印将要执行的命令
   -h, --help         这段说明
@@ -113,6 +117,7 @@ while [ $# -gt 0 ]; do
         --force) FORCE=1; shift ;;
         --when-idle) WHEN_IDLE=1; shift ;;
         --force-restart) FORCE_RESTART=1; shift ;;
+        --print-unit) PRINT_UNIT=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "未知选项 $1（--help 看用法）" ;;
@@ -122,6 +127,109 @@ done
 check_port --https-port "$HTTPS_PORT"
 check_port --http-port "$HTTP_PORT"
 [ "$HTTPS_PORT" != "$HTTP_PORT" ] || die "--https-port 和 --http-port 不能相同（都是 $HTTPS_PORT）"
+
+# PORT_ARGS 只在非默认端口时出现 —— 单元文件里写一串默认值是噪音
+PORT_ARGS=""
+[ "$HTTP_PORT" = 80 ] || PORT_ARGS="$PORT_ARGS --http-port $HTTP_PORT"
+[ "$HTTPS_PORT" = 443 ] || PORT_ARGS="$PORT_ARGS --https-port $HTTPS_PORT"
+
+# ---------- systemd 单元（ADR-0034）----------
+#
+# 【系统服务，但以你自己运行】。不用用户服务是为了 OOM 优先级：用户管理器的下限
+# 是 PID 1 写的 100，用户服务默认 200，内存一紧就比登录会话先被杀 —— agent 一死，
+# 所有会话陪葬。系统服务由 PID 1 以 root 设 oom_score_adj，能到 -900。
+RUN_USER="$(id -un)"
+RUN_GROUP="$(id -gn)"
+RUN_UID="$(id -u)"
+SYSTEM_UNIT="/etc/systemd/system/webterm.service"
+USER_UNIT="$HOME/.config/systemd/user/webterm.service"
+
+render_unit() {
+    cat <<EOF
+# 由 scripts/install.sh 生成。完整说明见 docs/80-ops/systemd.md。
+#
+# 系统服务，但以 $RUN_USER 运行（ADR-0034）：agent 和会话都是普通用户，root 只用来装。
+# 用系统服务是为了 OOM 优先级：用户服务的 oom_score_adj 最低 100，内存一紧就比
+# 登录会话先被杀，所有会话跟着没了。
+#
+# 刻意【不】启用 ProtectHome / ProtectSystem / NoNewPrivileges / PrivateTmp：
+# 它们会连会话里的 shell 一起限制，而用户开 webterm 就是为了操作自己的文件；
+# NoNewPrivileges 还会让 sudo 失效。沙箱化 shell 是自欺欺人 —— 用户本来就有
+# 这台机器的 shell 权限。唯一有效的加固是以普通用户运行。
+[Unit]
+Description=webterm — browser terminal agent
+Documentation=https://github.com/$REPO
+After=network-online.target user@$RUN_UID.service
+Wants=network-online.target user@$RUN_UID.service
+
+[Service]
+Type=simple
+User=$RUN_USER
+Group=$RUN_GROUP
+ExecStart=$PREFIX/webterm serve --domain $DOMAIN$PORT_ARGS
+Restart=on-failure
+RestartSec=3
+
+# 会话里的 systemctl --user / journalctl --user / 走 D-Bus 的工具要用。
+# uid 写字面值：系统单元里的 %U 是 PID 1 的 UID（0），不随 User= 变。
+Environment=XDG_RUNTIME_DIR=/run/user/$RUN_UID
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$RUN_UID/bus
+
+# OOM（ADR-0034）：agent 最后才被挑，起 shell 时它把会话设回 0。
+# continue：会话里某个进程被 OOM 杀掉只死它自己，不会停掉整个 unit。
+OOMScoreAdjust=-900
+OOMPolicy=continue
+
+# 热升级（ADR-0016）：reload = 原地 exec 新二进制，会话保留
+ExecReload=/bin/kill -USR2 \$MAINPID
+
+# 优雅关闭：给 agent 时间广播"即将重启"并关闭会话
+KillSignal=SIGTERM
+TimeoutStopSec=15
+KillMode=mixed
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=webterm
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+if [ "$PRINT_UNIT" = 1 ]; then
+    [ "$(id -u)" != 0 ] || die "不要用 root 跑这个脚本 —— 单元里的 User= 就是运行脚本的用户。"
+    [ -n "$DOMAIN" ] || die "--print-unit 需要 --domain"
+    render_unit
+    exit 0
+fi
+
+# do_reload 让运行中的 agent 热升级；dry-run 只打印。
+do_reload() {
+    if [ "$DRY_RUN" = 1 ]; then printf '    $ %s\n' "$PREFIX/webterm reload $*"; return 0; fi
+    "$PREFIX/webterm" reload "$@"
+}
+
+# 服务状态。【只读、不需要特权】：is-active 对普通用户也能用。
+system_unit_active() { systemctl is-active --quiet webterm 2>/dev/null; }
+user_unit_active() { systemctl --user is-active --quiet webterm 2>/dev/null; }
+service_active() { system_unit_active || user_unit_active; }
+# inside_webterm_unit：这个脚本是不是跑在 webterm 服务的 cgroup 里（也就是某个
+# webterm 会话里）。迁移要停掉用户服务，会连这个会话、连同脚本自己一起杀掉。
+# 看 cgroup 而不是 $WEBTERM_SESSION：tmux 的 pane 会被搬进自己的 scope，
+# 环境变量却可能是从 webterm 会话里带过去的。
+inside_webterm_unit() { grep -q '/webterm\.service$' /proc/self/cgroup 2>/dev/null; }
+migrate_hint() {
+    cat <<EOF
+
+  ⚠  这台还是 systemd 用户服务：内存吃紧时 agent 会比登录会话先被杀，
+     所有会话一起没（ADR-0034）。迁移成系统服务会关闭当前所有会话一次：
+
+       webterm update --force-restart
+
+     从 SSH 跑，别在 webterm 的会话里跑 —— 停用户服务会连那个会话一起杀掉。
+EOF
+}
 
 # ---------- 1. 前置检查 ----------
 
@@ -146,6 +254,16 @@ if [ "$(id -u)" = 0 ] && [ "$DEV" = 0 ]; then
     die "不要用 root 跑这个脚本。用普通用户运行，脚本会在需要时调 sudo。"
 fi
 
+# 系统服务要 sudo 写单元、跑 systemctl。【一开始就查】：下载、校验之后才发现
+# 装不了，白等一轮。
+SVC_SUDO=""
+if [ "$SETUP_SERVICE" = 1 ] && [ "$DEV" = 0 ]; then
+    command -v sudo >/dev/null 2>&1 || die "装 systemd 系统服务需要 sudo（ADR-0034）。
+      没有 sudo：加 --no-service 只装二进制，服务按 docs/80-ops/systemd.md 的
+      「没有 sudo 时：用户服务」手写。"
+    SVC_SUDO="sudo"
+fi
+
 if [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ] && [ -z "$DOMAIN" ]; then
     die "生产部署必须指定 --domain（ACME 与 Origin 校验都要用它）。
       本地试用请加 --dev。"
@@ -162,11 +280,6 @@ fi
 # ---------- 2. 下载 ----------
 
 step "2/6 下载"
-
-# PORT_ARGS 只在非默认端口时出现 —— 单元文件里写一串默认值是噪音
-PORT_ARGS=""
-[ "$HTTP_PORT" = 80 ] || PORT_ARGS="$PORT_ARGS --http-port $HTTP_PORT"
-[ "$HTTPS_PORT" = 443 ] || PORT_ARGS="$PORT_ARGS --https-port $HTTPS_PORT"
 
 # EXT_URL 是用户实际要访问的地址。443 是默认端口，写出来是噪音；
 # 不是 443 就必须带上，否则给出去的地址打不开。
@@ -264,13 +377,21 @@ if [ "$IF_NEWER" = 1 ] && [ "$DRY_RUN" != 1 ] && [ -x "$PREFIX/webterm" ]; then
     NEW_VER="$("$TMP/$BIN" version 2>/dev/null || echo unknown-new)"
     OLD_VER="$("$PREFIX/webterm" version 2>/dev/null || echo unknown-old)"
     if [ "$NEW_VER" = "$OLD_VER" ] && [ "$NEW_VER" != unknown-new ]; then
-        step "已经是最新"
-        info "$OLD_VER —— 什么都没动，服务没有重启"
-        exit 0
+        if [ "$SETUP_SERVICE" = 1 ] && [ -f "$USER_UNIT" ] && [ "$FORCE_RESTART" = 1 ]; then
+            # 版本没变，但这台还是用户服务、又明确接受丢会话 —— 迁移就是要做的事
+            step "已经是最新，但要迁移成系统服务（--force-restart）"
+            info "$OLD_VER"
+        else
+            step "已经是最新"
+            info "$OLD_VER —— 什么都没动，服务没有重启"
+            [ "$SETUP_SERVICE" = 1 ] && [ -f "$USER_UNIT" ] && migrate_hint
+            exit 0
+        fi
+    else
+        step "有新版本"
+        info "当前  $OLD_VER"
+        info "最新  $NEW_VER"
     fi
-    step "有新版本"
-    info "当前  $OLD_VER"
-    info "最新  $NEW_VER"
 fi
 
 # ---------- 4. 前置自检 ----------
@@ -284,7 +405,7 @@ if [ "$DRY_RUN" = 1 ]; then
     info "(dry-run，跳过)"
 elif [ "$DEV" = 1 ] || [ -z "$DOMAIN" ]; then
     info "本地模式，无需检查域名与端口"
-elif systemctl --user is-active --quiet webterm 2>/dev/null; then
+elif service_active; then
     # 升级路径：端口正被运行中的自己占着，doctor 的端口检查必然误报
     info "webterm 已在运行（这是一次升级），跳过 —— 端口正被它自己占着"
 elif chmod +x "$TMP/$BIN" && "$TMP/$BIN" doctor --domain "$DOMAIN" $PORT_ARGS; then
@@ -304,13 +425,49 @@ fi
 # 运行中的 agent 支持交接（有控制 socket）就走 webterm reload：原地 exec 新二进制，
 # 会话保留。不支持（升级前的老版本）或 --force-restart 才 restart。
 # 用【刚下载的新二进制】当客户端探测 —— 它一定认识 reload 子命令。
+# dry-run 没下载新二进制，就用已装的那个问一句 —— probe 只读，不触发任何东西。
+# 这样 dry-run 显示的「热升级 / 迁移」和真跑时一致。
+if [ "$DRY_RUN" = 1 ]; then
+    PROBE_BIN="$PREFIX/webterm"
+else
+    PROBE_BIN="$TMP/$BIN"
+    chmod +x "$PROBE_BIN"
+fi
 SWITCH=restart
-if [ "$SETUP_SERVICE" = 1 ] && [ "$DRY_RUN" != 1 ] && [ "$FORCE_RESTART" != 1 ] \
-    && systemctl --user is-active --quiet webterm 2>/dev/null \
-    && chmod +x "$TMP/$BIN" && "$TMP/$BIN" reload --probe >/dev/null 2>&1; then
+if [ "$SETUP_SERVICE" = 1 ] && [ "$FORCE_RESTART" != 1 ] && service_active \
+    && [ -x "$PROBE_BIN" ] && "$PROBE_BIN" reload --probe >/dev/null 2>&1; then
     SWITCH=reload
 fi
-if [ "$WHEN_IDLE" = 1 ] && [ "$DRY_RUN" != 1 ] && systemctl --user is-active --quiet webterm 2>/dev/null; then
+
+# ---------- 用户服务 → 系统服务（ADR-0034）----------
+#
+# 热交接跨不过 systemd 管理器（从用户管理器搬到 PID 1 等于换一个进程），所以
+# 迁移必丢会话。按 ADR-0016 §3「不静默退化成重启」：
+#   用户服务在跑、能热升级、没带 --force-restart → 只热升级它，单元不动，提示迁移
+#   其余（带了 --force-restart / 用户服务没在跑 / 老版本反正要 restart）→ 迁移
+KEEP_USER_UNIT=0
+MIGRATE=0
+if [ "$SETUP_SERVICE" = 1 ] && [ -f "$USER_UNIT" ]; then
+    if [ "$SWITCH" = reload ] && user_unit_active; then
+        KEEP_USER_UNIT=1
+    else
+        MIGRATE=1
+    fi
+fi
+if [ "$MIGRATE" = 1 ] && user_unit_active && inside_webterm_unit; then
+    MSG="这一步要把用户服务迁移成系统服务，会停掉 webterm 的所有会话 ——
+      包括正在跑这个脚本的这个会话，迁移会断在半路。
+      从 SSH（或不在 webterm 里的 tmux）重跑同一条命令。"
+    [ "$DRY_RUN" = 1 ] || die "$MSG"
+    info "注意（真跑时会被拒绝）：$MSG"
+fi
+if [ "$KEEP_USER_UNIT" = 1 ]; then
+    JCTL="journalctl --user -u webterm"
+else
+    JCTL="journalctl -u webterm"
+fi
+
+if [ "$WHEN_IDLE" = 1 ] && [ "$DRY_RUN" != 1 ] && service_active; then
     if [ "$SWITCH" = reload ]; then
         : # 交给下面的 webterm reload --when-idle
     elif "$TMP/$BIN" reload --wait-idle >/dev/null 2>&1; then
@@ -439,63 +596,51 @@ EOF
     exit 0
 fi
 
-step "6/6 配置 systemd user service"
+if [ "$KEEP_USER_UNIT" = 1 ]; then
+    # ---------- 还是用户服务：只热升级它（ADR-0034 §5）----------
+    step "6/6 热升级（用户服务，单元不动）"
+    IDLE_ARG=""
+    [ "$WHEN_IDLE" = 1 ] && IDLE_ARG="--when-idle"
+    if do_reload $IDLE_ARG; then
+        done_msg "热升级完成，会话保留：$("$PREFIX/webterm" version)"
+    else
+        die "热升级没有完成，运行中的仍是旧版本、会话照常。
+      看原因：  $JCTL -n 50 --no-pager
+      接受丢会话（顺带迁移成系统服务）：  webterm update --force-restart"
+    fi
+    migrate_hint
+else
 
-UNIT_DIR="${WEBTERM_UNIT_DIR:-$HOME/.config/systemd/user}"
-run mkdir -p "$UNIT_DIR"
+step "6/6 配置 systemd 系统服务（以 $RUN_USER 运行）"
+
+if [ "$MIGRATE" = 1 ]; then
+    # 【先停用户服务，再起系统服务】：两边抢同一个端口。
+    info "从用户服务迁移：停用并删除 $USER_UNIT（会关闭它的所有会话）"
+    run systemctl --user disable --now webterm || true
+    run rm -f "$USER_UNIT"
+    run systemctl --user daemon-reload || true
+fi
 
 if [ "$DRY_RUN" = 1 ]; then
-    info "将写入 $UNIT_DIR/webterm.service，其中："
+    info "将写入 $SYSTEM_UNIT（--print-unit 可以看全文），其中："
+    info "  User=$RUN_USER  OOMScoreAdjust=-900  OOMPolicy=continue"
     info "  ExecStart=$PREFIX/webterm serve --domain $DOMAIN$PORT_ARGS"
 else
-    cat > "$UNIT_DIR/webterm.service" <<EOF
-# 由 scripts/install.sh 生成。完整说明见 docs/80-ops/systemd.md。
-#
-# 刻意【不】启用 ProtectHome / ProtectSystem / NoNewPrivileges / PrivateTmp：
-# 它们会连会话里的 shell 一起限制，而用户开 webterm 就是为了操作自己的文件；
-# NoNewPrivileges 还会让 sudo 失效。沙箱化 shell 是自欺欺人 —— 用户本来就有
-# 这台机器的 shell 权限。唯一有效的加固是以普通用户运行。
-[Unit]
-Description=webterm — browser terminal agent
-Documentation=https://github.com/$REPO
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=$PREFIX/webterm serve --domain $DOMAIN$PORT_ARGS
-Restart=on-failure
-RestartSec=3
-
-# 热升级（ADR-0016）：reload = 原地 exec 新二进制，会话保留
-ExecReload=/bin/kill -USR2 \$MAINPID
-
-# 优雅关闭：给 agent 时间广播"即将重启"并关闭会话
-KillSignal=SIGTERM
-TimeoutStopSec=15
-KillMode=mixed
-
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=webterm
-
-[Install]
-WantedBy=default.target
-EOF
-    info "已写入 $UNIT_DIR/webterm.service"
+    render_unit | $SVC_SUDO tee "$SYSTEM_UNIT" >/dev/null
+    info "已写入 $SYSTEM_UNIT"
 fi
 
-# 没有 linger，user service 会在最后一个登录会话结束时被杀掉 ——
-# 而"不用登录就能访问"正是 webterm 的核心价值。
+# linger：系统服务本身不靠它，但用户管理器要靠它常驻 —— 没有它，最后一个登录会话
+# 一结束，会话里的 systemctl --user 和用户总线就都没了。
 if command -v loginctl >/dev/null 2>&1; then
-    run $SUDO loginctl enable-linger "$USER"
-    done_msg "已 enable-linger（退出登录后服务继续运行）"
+    run $SVC_SUDO loginctl enable-linger "$RUN_USER"
+    done_msg "已 enable-linger（用户管理器常驻，会话里的 systemctl --user 可用）"
 else
-    info "没有 loginctl，跳过 linger。注意退出登录后服务可能被杀"
+    info "没有 loginctl，跳过 linger。会话里的 systemctl --user 在你退出登录后可能失效"
 fi
 
-run systemctl --user daemon-reload
-run systemctl --user enable webterm
+run $SVC_SUDO systemctl daemon-reload
+run $SVC_SUDO systemctl enable webterm
 
 if [ "$SWITCH" = reload ]; then
     # ---------- 热升级（ADR-0016）----------
@@ -505,11 +650,11 @@ if [ "$SWITCH" = reload ]; then
     # 回来发现全没了，比明确的失败更糟。要接受丢会话请显式 --force-restart。
     IDLE_ARG=""
     [ "$WHEN_IDLE" = 1 ] && IDLE_ARG="--when-idle"
-    if "$PREFIX/webterm" reload $IDLE_ARG; then
+    if do_reload $IDLE_ARG; then
         done_msg "热升级完成，会话保留：$("$PREFIX/webterm" version)"
     else
         die "热升级没有完成，运行中的仍是旧版本、会话照常。
-      看原因：  journalctl --user -u webterm -n 50 --no-pager
+      看原因：  $JCTL -n 50 --no-pager
       接受丢会话就：  webterm update --force-restart"
     fi
 else
@@ -522,7 +667,7 @@ else
 # 客户端继续连不上，日志里连新加的诊断都没有（那也在新二进制里）。
 #
 # restart 对没在跑的服务等于 start，所以首装和升级共用这一条。
-run systemctl --user restart webterm
+run $SVC_SUDO systemctl restart webterm
 
 # 【确认真的起来了】。新二进制可能根本起不来 —— 比如 capability 丢了
 # 绑不上 80，systemd 就会每 3 秒重启一次。那种情况下脚本不该报成功：
@@ -530,14 +675,15 @@ run systemctl --user restart webterm
 if [ "$DRY_RUN" != 1 ]; then
     ok=0
     for _ in 1 2 3 4 5 6 7 8 9 10; do
-        if systemctl --user is-active --quiet webterm; then ok=1; break; fi
+        if system_unit_active; then ok=1; break; fi
         sleep 0.5
     done
-    [ "$ok" = 1 ] || die "服务重启后没起来（5 秒内没到 active）。看日志：
-      journalctl --user -u webterm -n 30 --no-pager"
+    [ "$ok" = 1 ] || die "服务重启后没起来（5 秒内没到 active）。看日志（systemd 的记录要 sudo）：
+      sudo journalctl -u webterm -n 30 --no-pager"
     done_msg "服务已重启：$("$PREFIX/webterm" version)"
 fi
 fi # SWITCH
+fi # KEEP_USER_UNIT
 
 if [ "$DRY_RUN" = 1 ]; then
     step "完成（dry-run）"
@@ -568,7 +714,7 @@ cat <<EOF
   webterm doctor     再查一遍前置条件
 
   参数已写进 $CONFIG_DIR/config，上面的命令都不用带 --domain。
-  看日志： journalctl --user -u webterm -f
+  看日志： $JCTL -f
 
 $SETCAP_NOTE
 EOF

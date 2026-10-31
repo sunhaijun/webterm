@@ -325,7 +325,12 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 		},
 	)
 
-	raw, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
+	// agent 是 -900 时，shell 要从第一条用户代码起就是 0（ADR-0034 §3）
+	var raw *os.File
+	err := withChildOOMAdj(func() (err error) {
+		raw, err = pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("session: 启动 PTY: %w", err)
 	}

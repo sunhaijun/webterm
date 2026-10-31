@@ -108,6 +108,14 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 - `UT-pair-1..4`：一次性、过期、熵、常数时间比较
 - `UT-auth-1`：DB 存的是哈希不是原文
 
+### `internal/session`：起 shell 时的 OOM 优先级（[ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md) §3）
+
+- `UT-oom-1`：注入 `oom_score_adj` 的读写。self < 0 时顺序是「写 0 → 起 shell → 写回 self」，而且起 shell 时读到的是 0；self ≥ 0 时一次都不写；写 0 失败照样起 shell；写回失败只记日志，不报错
+
+### `scripts/install.sh`
+
+- `UT-install-unit`：`install.sh --print-unit` 打印的系统单元里有 `User=` / `Group=`（当前用户）、`OOMScoreAdjust=-900`、`OOMPolicy=continue`、`XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS` 里的**字面 UID**（不是 `%U`）、`Wants=` / `After=user@<uid>.service`，`ExecStart` 带着端口参数；不联网、不需要 sudo
+
 ## Go 集成测试清单
 
 用真 PTY + 真 SQLite + 进程内 HTTP server。
@@ -128,6 +136,7 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 | `IT-queue-2` | 连接写队列满 → 关闭该连接而不是阻塞 Session（m2，需要连接层） |
 | `IT-sub-1` | 未订阅会话继续缓冲、继续喂给模拟器，`subscribe{out_seq}` 按增量或快照补齐 |
 | `IT-handoff-1` | 热升级前后：增量路径字节级连续、同一会话的快照逐字节相等（`TestHandoffByteLevelContinuity`） |
+| `IT-oom-1` | 真 `/proc`、真 PTY、不需要 root：把子进程目标值调成「self + 100」（调高不需要特权，调回 self 不低于下限），并发起多个会话，每个 shell 的 `oom_score_adj` 都是目标值，agent 最后回到 self（ADR-0034 §3） |
 
 ### 为什么不用 pebble
 

@@ -48,7 +48,7 @@ func runUpdate(args []string) error {
 	local := fs.String("script", "", "用本地的 install.sh（默认从仓库取最新的）")
 	// 两个一次性开关（ADR-0016）：都不记进 install-state
 	whenIdle := fs.Bool("when-idle", false, "等所有会话都停在提示符再动")
-	forceRestart := fs.Bool("force-restart", false, "不热升级，走 systemctl restart（会关闭所有会话）")
+	forceRestart := fs.Bool("force-restart", false, "不热升级，走 systemctl restart（会关闭所有会话）；还是用户服务的机器顺带迁移成系统服务（ADR-0034）")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

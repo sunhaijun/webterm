@@ -25,9 +25,9 @@ ss -lntp | grep -E ':(80|443)\b'   # 必须为空（除了 webterm 自己）
 |---|---|---|
 | `bind: address already in use` | 80 或 443 被占（nginx/apache/caddy） | 停掉它，或改用反代模式（[`install.md`](install.md#反向代理--隧道场景)） |
 | `bind: permission denied` | 没有绑特权端口的权限 | `sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm` |
-| 升级完行为没变，像是没装上 | 磁盘上是新的，跑着的还是旧进程。`webterm version` 看磁盘，`systemctl --user show webterm -p ExecMainStartTimestamp` 看进程什么时候起的 | `systemctl --user restart webterm`。（`install.sh` 现在会自动重启并确认起来了；这条留给手工替换二进制的情况） |
-| `webterm update` / `reload` 说「热升级中止」 | 新二进制的预检没过（`journalctl --user -u webterm -n 50` 里有 `热升级中止` 与原因：schema 不认、二进制不可执行、冻结超时）。此时**运行的仍是旧版本、会话照常** | 修好原因后重跑 `webterm reload`；或接受丢会话 `webterm update --force-restart`（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)） |
-| `webterm reload` 说「不支持热升级或没在跑」 | 运行中的是升级前的老版本，没有控制 socket（`<data-dir>/run/agent.sock`）；老版本不认 `SIGUSR2`（默认动作是终止，别手动发） | 这一次只能 `systemctl --user restart webterm`（会关闭会话）；之后的升级就能热升了 |
+| 升级完行为没变，像是没装上 | 磁盘上是新的，跑着的还是旧进程。`webterm version` 看磁盘，`systemctl show webterm -p ExecMainStartTimestamp` 看进程什么时候起的 | `webterm reload`（会话保留），或 `sudo systemctl restart webterm`。（`install.sh` 现在会自动重启并确认起来了；这条留给手工替换二进制的情况） |
+| `webterm update` / `reload` 说「热升级中止」 | 新二进制的预检没过（`journalctl -u webterm -n 50` 里有 `热升级中止` 与原因：schema 不认、二进制不可执行、冻结超时）。此时**运行的仍是旧版本、会话照常** | 修好原因后重跑 `webterm reload`；或接受丢会话 `webterm update --force-restart`（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)） |
+| `webterm reload` 说「不支持热升级或没在跑」 | 运行中的是升级前的老版本，没有控制 socket（`<data-dir>/run/agent.sock`）；老版本不认 `SIGUSR2`（默认动作是终止，别手动发） | 这一次只能重启（会关闭会话）：从 SSH 跑 `webterm update --force-restart`，顺带迁移成系统服务。之后的升级就能热升了 |
 | 配对成功但客户端【一直重试连接】 | `/ws` 被 Origin 校验 403。日志里搜 `WebSocket 被拒`，它会打出实际收到的 Origin 和期望值 | 二者不符时确认 `--https-port` 与对外访问用的端口一致 —— 浏览器在非默认端口上发的 Origin 带端口号 |
 | `install.sh` 说「找不到 setcap」 | 没装 libcap（`setcap` 在 `/usr/sbin`，普通用户 PATH 里没有 sbin，但脚本会去那儿找） | `sudo apt install libcap2-bin`，或换成 1024 以上的端口 |
 | `no viable challenge type found`（最常见）或 `Invalid response from http://...` | CA 连不上本机 —— 80 和 443 上的挑战都没过 | **先查云安全组**（最常漏的一步）：在别的机器上 `curl -sI http://<域名>/`，超时就是没放行。再查本机 `ufw status` |
@@ -61,9 +61,9 @@ echo | openssl s_client -connect <域名>:<端口> -servername <域名> 2>/dev/n
 用的是同一个缓存 key。必须手工删掉：
 
 ```bash
-systemctl --user stop webterm
+sudo systemctl stop webterm
 rm -f <data-dir>/certs/<域名>*
-systemctl --user start webterm
+sudo systemctl start webterm
 ```
 
 ### 证书没自动续期
@@ -78,7 +78,7 @@ autocert 在到期前 `min(30 天, 有效期/3)` 自动续期（LE 的 90 天证
 完整的前提与验证办法见 [install.md 的「证书续期」](install.md#证书续期)。检查：
 
 ```bash
-journalctl --user -u webterm | grep -i acme
+journalctl -u webterm | grep -i acme
 ss -lntp | grep -E ':(80|443)\b'   # webterm 应该在监听
 dig +short <域名>                   # 应当等于 curl -s ifconfig.me
 ```
@@ -113,21 +113,26 @@ webterm serve --domain term.example.com --https-port 8443
 ### 浏览器打不开
 
 ```bash
-systemctl --user status webterm         # 服务在跑吗
+systemctl status webterm                # 服务在跑吗
 curl -I https://term.example.com/healthz  # 从外部能到吗
-journalctl --user -u webterm -n 50
+journalctl -u webterm -n 50
 ```
 
 ### 服务退出登录后就停了
 
-没做 linger：
+还是迁移前的**用户服务**，而且没做 linger。系统服务不会这样（[ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md)）。
+从 SSH 迁移一次就好：
 
 ```bash
-sudo loginctl enable-linger $USER
-systemctl --user enable --now webterm
+webterm update --force-restart     # 会关闭所有会话，见 systemd.md「从用户服务迁移」
 ```
 
-这是 user service 最常见的坑。
+### 会话里 `systemctl --user` 报 `Failed to connect to bus`
+
+| 原因 | 处理 |
+|---|---|
+| 没做 linger：最后一个登录会话一结束，logind 就停掉了用户管理器，`/run/user/<uid>/bus` 跟着没了 | `sudo loginctl enable-linger $USER`，然后 `sudo systemctl start user@$(id -u).service` |
+| 手写的系统单元漏了 `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS`（会话里 `echo $XDG_RUNTIME_DIR` 是空的） | 照 [`systemd.md`](systemd.md#etcsystemdsystemwebtermservice) 补上，uid 写字面值，不能写 `%U`；`sudo systemctl restart webterm` |
 
 ### WebSocket 连不上（页面能开，终端一直"重连中"）
 
@@ -201,9 +206,22 @@ __webterm.altScreen()      // false = 在主屏（生效）；true = 还在备�
 
 ## 会话
 
-### 升级/重启后会话全没了
+### 会话全没了
 
-**预期行为**（[ADR-0003](../20-architecture/adr/0003-no-tmux.md)）。agent 持有 PTY，进程重启则 shell 收到 `SIGHUP`。
+agent 持有 PTY，进程一死 shell 就收到 `SIGHUP`（[ADR-0003](../20-architecture/adr/0003-no-tmux.md)）。热升级不会这样（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)），所以全没了一定是进程真的死过。先看是哪一种：
+
+```bash
+systemctl show webterm -p NRestarts -p ExecMainStartTimestamp   # 自动重启过几次、这次什么时候起的
+sudo journalctl -u webterm | grep -iE 'oom|Main process exited|Stopping'
+```
+
+| 记录 | 是什么 | 处理 |
+|---|---|---|
+| `Stopping webterm.service` | 有人 `systemctl restart/stop`，或者 `webterm update --force-restart` | 预期行为。升级用 `webterm update`，会话保留 |
+| `killed by the OOM killer` / `Failed with result 'oom-kill'` | 内存耗尽，内核杀了 agent | 看单元是不是 ADR-0034 的系统服务（`systemctl cat webterm` 里有 `OOMScoreAdjust=-900`）。**还是用户服务的话**，agent 的优先级是 200，内存一紧就先被杀 —— 从 SSH 跑 `webterm update --force-restart` 迁移。已经是系统服务还被杀，说明机器内存确实不够 |
+| `Main process exited, code=killed`（不带 oom） | 崩溃或者被 `kill -9` | 提 bug，附上前后 200 行日志 |
+
+systemd 的这些记录在系统日志里，所以要 `sudo`。`journalctl -u webterm` 不加 sudo 只能看到 agent 自己写的那部分。
 
 ### "会话数已达上限"
 
@@ -263,7 +281,7 @@ sqlite3 ~/.local/share/webterm/webterm.db 'SELECT id, name, last_seen_at, revoke
 webterm version
 webterm doctor --domain <你的域名>
 bash --version
-journalctl --user -u webterm -n 200 --no-pager
+journalctl -u webterm -n 200 --no-pager
 ```
 
 外加浏览器控制台的报错、机型/OS/浏览器版本。**如果是"打字没反应"这类**，再附一份控制台里的 `__webterm.inputStats()`（**卡住的当下**取，不要事后补）—— 它按段说明输入断在哪一层，见下面的《打字没反应：先看输入断在哪一段》。

@@ -53,6 +53,7 @@
 | AC-2.13 | `hello.instance_id` 与 agent 当前值不符时，所有 `resume` 项判 `gone`（防止 agent 重启后 sid 复用导致张冠李戴） | IT-resume-4 |
 | AC-2.14 | **热升级不丢会话**（ADR-0016）：agent 收到 `SIGUSR2` / `reexec` 后原地 exec 新二进制，PID 不变；所有会话的 shell 仍在跑、`instance_id` 不变、环形缓冲、**模拟器状态**与 `in_ack` 原样交接，**交接前后同一会话生成的快照逐字节相等**；跨交接的增量续传与 AC-2.1 同标准，未写完的输入不丢不重；预检失败时中止并照常服务，**不自动退化成重启** | IT-handoff-1, UT-vterm-handoff, E2E-26 |
 | AC-2.15 | **回放不得回声**：写入 `SNAPSHOT`，以及增量补课（client 侧 `catchup_to` 之前）的字节，都标记为回放；回放期间终端对历史查询（DSR / DA / `CSI ?u` …）的自动应答**不得写进 PTY**，用户输入照常放行。订阅时**尺寸随 `subscribe` 一起发**，不单发 `resize` | E2E-30, E2E-31, E2E-34, UT-replay-1, UT-replay-2 |
+| AC-2.24 | **agent 不先于会话被 OOM 杀掉**（ADR-0034）：`install.sh` 装出的是以安装者身份运行的系统服务，agent 进程 `oom_score_adj = -900`、`OOMPolicy=continue`；会话 shell 从第一条用户代码起就是 0（登录 shell 读 profile 期间起的进程也是 0），agent 起完 shell 回到原值；会话里的进程被 OOM 杀掉时 unit 不停、其它会话不受影响；还是用户服务的机器默认热升级、不迁移，`--force-restart` 才迁移，且在 webterm 会话里运行时拒绝迁移 | UT-oom-1, IT-oom-1, UT-install-unit, 手工清单「部署」 |
 
 ---
 

@@ -82,7 +82,8 @@ gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
 
 用**普通用户**跑，不要 sudo —— 脚本会在需要的地方自己调 sudo。
 （agent 跑在哪个用户下，攻破它就等于拿到哪个用户的权限。以 root 跑等于把
-root shell 挂到公网。）
+root shell 挂到公网。）装出来的是**以你的用户运行的系统服务**：sudo 只用来写单元，
+agent 和会话都是你自己（[ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md)）。
 
 ### 5. 自检 + 先用 staging 试证书
 
@@ -94,7 +95,7 @@ webterm doctor --domain term.example.com
 失败的项会告诉你怎么修。**全绿了再往下走。**
 
 ```bash
-systemctl --user stop webterm
+sudo systemctl stop webterm
 webterm serve --domain term.example.com --acme-staging
 ```
 
@@ -106,7 +107,7 @@ webterm serve --domain term.example.com --acme-staging
 ### 6. 正式启动 + 配对
 
 ```bash
-systemctl --user start webterm
+sudo systemctl start webterm
 webterm pair
 ```
 
@@ -130,8 +131,8 @@ stdout 会打出一个配对 URL 和终端二维码：
 
 ```bash
 curl -sI https://term.example.com/healthz | head -1   # HTTP/2 200
-systemctl --user status webterm                        # active (running)
-journalctl --user -u webterm -n 20                     # 有"证书已就绪"
+systemctl status webterm                               # active (running)
+journalctl -u webterm -n 20                            # 有"证书已就绪"
 ```
 
 浏览器打开 `https://term.example.com`，应当看到终端、能敲命令。
@@ -231,8 +232,8 @@ curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/inst
 ```
 
 脚本会：认架构 → 下载二进制 → **校验 SHA256** → 装到 `/usr/local/bin` →
-`setcap` 让普通用户能绑 443 → 生成 systemd user service → `enable-linger` →
-启动服务。然后跑一次 `webterm pair` 就能扫码开工。
+`setcap` 让普通用户能绑 443 → 生成以你的用户运行的 systemd 系统服务
+（[`systemd.md`](systemd.md)）→ `enable-linger` → 启动服务。然后跑一次 `webterm pair` 就能扫码开工。
 
 先看它要做什么：加 `--dry-run`。全部选项：`--help`。
 
@@ -316,7 +317,8 @@ webterm serve --domain X --http-port 8080 --https-port 8443
 # 再用 nftables/iptables 把 80→8080、443→8443
 ```
 
-**强烈建议 agent 以普通用户运行**（方案 ②）。webterm 不试图沙箱化自己（[`../60-security/threat-model.md`](../60-security/threat-model.md#信任边界)），所以 agent 跑在哪个用户下，攻破它就等于拿到哪个用户的权限。以 root 跑等于把 root shell 挂到公网。
+**强烈建议 agent 以普通用户运行**（方案 ②）。`install.sh` 装出的系统服务就是这样：
+单元里 `User=` 是你，sudo 只用来写单元和 setcap（[`systemd.md`](systemd.md)）。webterm 不试图沙箱化自己（[`../60-security/threat-model.md`](../60-security/threat-model.md#信任边界)），所以 agent 跑在哪个用户下，攻破它就等于拿到哪个用户的权限。以 root 跑等于把 root shell 挂到公网。
 
 需要 root 时用会话里的 `sudo`。
 
@@ -446,7 +448,7 @@ echo | openssl s_client -connect term.example.com:443 -servername term.example.c
   | openssl x509 -noout -dates
 
 # 启动时那行「证书已就绪」
-journalctl --user -u webterm | grep -i '证书\|acme'
+journalctl -u webterm | grep -i '证书\|acme'
 
 # 80 / 443 还在监听吗（续期要过域名验证）
 ss -lntp | grep -E ':(80|443)\b'
@@ -479,10 +481,10 @@ $XDG_DATA_HOME/webterm/     （默认 ~/.local/share/webterm/）
 sudo install -m755 webterm-new /usr/local/bin/webterm
 sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm
 # 2. 让运行中的 agent 原地换成新二进制
-webterm reload              # 或 systemctl --user reload webterm
+webterm reload              # 不需要 sudo；或 sudo systemctl reload webterm
 ```
 
-`webterm reload` 先让新二进制预检快照能不能读，读不了就**中止、服务照常**，不会自动退化成重启。要接受丢会话就走老路：`systemctl --user restart webterm`。`webterm reload --when-idle` 等所有会话都空闲再动：空闲 = PTY 的前台进程组就是 shell 自己，也就是没有命令在跑。
+`webterm reload` 先让新二进制预检快照能不能读，读不了就**中止、服务照常**，不会自动退化成重启。要接受丢会话就走老路：`sudo systemctl restart webterm`。`webterm reload --when-idle` 等所有会话都空闲再动：空闲 = PTY 的前台进程组就是 shell 自己，也就是没有命令在跑。
 
 真正的重启（`systemctl restart`、`SIGTERM`）仍会关闭所有会话；agent 会先向所有客户端广播"agent 即将重启，所有会话将结束"再退出。设备授权存在 SQLite 里，跨重启存活，不用重新配对。
 
@@ -511,7 +513,7 @@ webterm v0.1.0
 证书剩不到 10 天会标黄，过期会标红 —— 那是唯一会**静默**变成事故的东西。
 没有授权设备时会在 `webterm pair` 后面标出「← 下一步」。
 
-「服务在不在跑」先问 systemd，没有 user service 时退化成探 `/healthz`
+「服务在不在跑」先问 systemd：先看系统单元，没有再看迁移前的用户单元，都没有时退化成探 `/healthz`
 （**不是**看端口有没有人听 —— 443 上很可能是别的服务）。
 
 ## 升级
@@ -528,8 +530,14 @@ webterm update --force-restart # 接受丢会话，走 systemctl restart（老�
 
 装完二进制、重做 setcap 之后，`install.sh` 先问运行中的 agent 支不支持交接
 （`webterm reload --probe`）：支持就 `webterm reload`，会话保留；不支持（升级前的老版本）
-或指定了 `--force-restart` 才 `systemctl --user restart`，并保留原来的"将关闭会话"提示。
+或指定了 `--force-restart` 才 `sudo systemctl restart`，并保留原来的"将关闭会话"提示。
 热升级预检失败会**中止并报错**，不静默重启。
+
+**还是用户服务的机器**（[ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md) 之前装的）：
+默认只换二进制并热升级那个用户服务，会话保留，单元文件不动，最后提示迁移。
+`webterm update --force-restart` 才迁移成系统服务 —— 那一次会关闭所有会话，
+版本没变也照样迁移。**要从 SSH 跑**：在 webterm 的会话里跑会被拒绝，因为停用户服务
+会连这个会话一起杀掉。详见 [`systemd.md` 的「从用户服务迁移」](systemd.md#从用户服务迁移)。
 
 ```
 webterm dev-2-g8cb0cdf
@@ -677,10 +685,11 @@ webterm serve --domain term.example.com --bind 127.0.0.1 --no-tls --http-port 80
 ## 卸载
 
 ```bash
-systemctl --user disable --now webterm
-rm /usr/local/bin/webterm
+sudo systemctl disable --now webterm
+sudo rm /etc/systemd/system/webterm.service
+sudo systemctl daemon-reload
+sudo rm /usr/local/bin/webterm
 rm -rf ~/.local/share/webterm       # 含设备授权，删了要重新配对
-rm ~/.config/systemd/user/webterm.service
 ```
 
 **不需要清理 dotfiles** —— webterm 从不修改 `~/.bashrc`，也不往 shell 里注入任何东西，卸载即干净。

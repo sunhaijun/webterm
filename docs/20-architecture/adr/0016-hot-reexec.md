@@ -73,7 +73,7 @@ webterm update / webterm reload / systemctl --user reload webterm（SIGUSR2）
 
 - **不拆成前台 + 会话宿主两个进程（路线 B）**。B 多解决一个"前台崩溃不丢会话"，代价是所有终端字节多一次跨进程拷贝、两个进程的生命周期、续传逻辑搬家。当前痛点是升级不是崩溃；B 留作 v0.3+ 的候选，且宿主自己升级时仍要用本 ADR 的机制。
 - **不承诺机器重启后会话存活**。shell 是操作系统进程，机器一重启谁也救不了。
-- **agent 自身崩溃仍丢会话**。
+- **agent 自身崩溃仍丢会话**。被 OOM 杀掉的概率由 [ADR-0034](0034-system-service-oom-priority.md) 压低（agent -900、会话 0、`OOMPolicy=continue`）。
 
 ## 代价与取舍
 
