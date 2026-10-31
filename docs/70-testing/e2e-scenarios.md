@@ -252,7 +252,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 > AC-5.1, AC-5.3, AC-5.4
 
 1. 跑 `emit.sh 3000` → 向上滚动能看到早期输出（无需进入任何模式）
-2. **外观跟随系统、没有设置**（AC-5.3）：`page.emulateMedia({ colorScheme: 'light' })` 下 `body` 与 xterm 视口（`.xterm-viewport`）的背景是浅色（`--bg` / `--term-bg`）；切到 `dark`，**不刷新**，两者都换成深色；终端行的字号是 14px；页面上没有 `open-settings`；按 `Ctrl+Shift+,` 不出现任何浮层（`.drawer` 为 0 个）
+2. **外观跟随系统、没有设置**（AC-5.3）：`page.emulateMedia({ colorScheme: 'light' })` 下 `body` 与终端区（`.stage`）的背景是浅色（`--bg` / `--term-bg`），xterm 的主题背景（`.xterm-viewport` 的内联样式；CSS 把它的计算值压成透明）也是 `--term-bg`；切到 `dark`，**不刷新**，三者都换成深色；终端行的字号是 14px；页面上没有 `open-settings`；按 `Ctrl+Shift+,` 不出现任何浮层（`.drawer` 为 0 个）
 3. 选中一段文本，此时有新输出到达 → **选区不被破坏**（选中的仍是原来那几行的内容）
 4. 复制 → 剪贴板内容正确
 
@@ -491,7 +491,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 3. **当前 ≠ hover ≠ 普通**：鼠标悬到某个非当前标签上，取三处 `backgroundColor` —— 当前、hover、两者都不是的标签，**两两不相等**；当前标签有强调色下划线
 4. **跟着切换搬家**：`Ctrl+Shift+↓` → `aria-current` 落到相邻标签，原来那个不再有
 5. **已经可见时不滚**：标签都看得见时来回切两次，`tabbar` 的 `scrollLeft` 始终是 0
-6. **滚进可视区**：`screen` 1440×900、`viewport` 600×900，先 `cd` 进一个名字很长的目录（新会话继承它，标签名都撑到最大宽度；5 个名为 `~` 的标签在 600px 里放得下），建到 5 个会话，`Ctrl+Shift+↓` 切到最后一个 → 该标签的矩形**完全落在** `tabbar` 的矩形内且 `scrollLeft > 0`；再切回第一个 → 同样完全可见
+6. **滚进可视区**：`screen` 1440×900、`viewport` 600×900，建到 5 个会话（标签最窄 120px，5 个放不下），`Ctrl+Shift+↓` 切到最后一个 → 该标签的矩形**完全落在** `tabbar` 的矩形内且 `scrollLeft > 0`；再切回第一个 → 同样完全可见
 7. **抽屉里同一套**（Pixel 5）：打开抽屉，当前行 `aria-current="true"` 恰好一条，且有强调色左条（`box-shadow` 含 inset）
 
 ---
@@ -554,15 +554,16 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 ## E2E-41 宽屏标签栏（AC-4.10）
 
-> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述。
+> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述，第 8 步中途把窗口改窄。
 
-1. **结构**：顶栏在终端上方；`tabbar`（可横滚的标签条）里有一个标签和 `new-session`，右侧钉住 `conn-dot`，它在最右；没有 `open-settings`、没有 `open-sessions`，没有附加键
+1. **结构**：顶栏在终端上方；`tabbar`（标签条）里有一个标签和 `new-session`，右侧钉住 `conn-dot`，它在最右；没有 `open-settings`、没有 `open-sessions`，没有附加键
 2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
 3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹确认，确认后标签消失；中键点标签同样关闭
 4. **改名**：双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
 5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现 `⇵`；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
 6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点；切回 A → 消失
 7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签 → `session-menu`；附加键在，左列只有 `toggle-text`
+8. **等宽与滚动**（ADR-0031）：建到 3 个会话 → 三个标签等宽（差 ≤ 1px）、都是 240px，`new-session` 紧跟最后一个标签，`tabbar` 不横向滚动（`scrollWidth` = `clientWidth`）；把窗口改成 600×900（`screen` 不变，仍是 `wide`）、建到 5 个 → 每个标签 120px（差 ≤ 1px），`tabbar` 放不下（`scrollWidth > clientWidth`），当前（最后建的）整个可见；鼠标悬在标签条上纵向滚轮向上 → `scrollLeft` 变小；窗口改回 1440 → 5 个都是 240px，不再横向滚动
 
 ---
 
@@ -571,7 +572,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 > `web/e2e/resync.spec.ts`。hook `WebSocket` 的 message 与 send。
 
 1. 起会话，`emit.sh 300 0`，等完成
-2. 把窗口从 1280 宽改到 900 宽（列数变少）→ 客户端发出 `resize`，随后收到一份 SNAPSHOT
+2. 把窗口从 1280 宽改到 1000 宽（列数变少）→ 客户端发出 `resize`，随后收到一份 SNAPSHOT
 3. 断言：快照之后终端的列数等于新的 `cols`；`line 00300` 仍在且只出现一次
 4. 只改高度（`page.setViewportSize` 只改 height，模拟软键盘）→ 发出 `resize`，**不**收到 SNAPSHOT
 
