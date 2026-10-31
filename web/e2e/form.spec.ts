@@ -21,7 +21,7 @@ const side = (p: Page) => p.evaluate(() => [...document.querySelectorAll('.ek-si
 
 test.describe('Pixel 5', () => {
   test.use(PIXEL)
-  test('E2E-39 ① 手机竖屏（screen 393×851）→ compact：有 ☰、没有标签栏', async ({ page }) => {
+  test('E2E-39 ① 手机竖屏（screen 393×851）→ compact：有会话按钮、没有标签栏', async ({ page }) => {
     await agent.open(page)
     expect(await form(page)).toBe('compact')
     expect(await hooks.form(page)).toBe('compact')
@@ -42,7 +42,7 @@ test.describe('Pixel 5 横屏', () => {
 
 test.describe('iPad Mini', () => {
   test.use({ ...IPAD, contextOptions: { screen: { width: 768, height: 1024 } } })
-  test('E2E-39 ③⑤⑥ 平板 → wide：标签栏 40px、无 ☰、附加键左列只有 ✎；弹键盘、旋转都不改形态', async ({ page }) => {
+  test('E2E-39 ③⑤⑥ 平板 → wide：标签栏 40px、无会话按钮、附加键左列只有 ✎；弹键盘、旋转都不改形态', async ({ page }) => {
     await agent.open(page)
     expect(await form(page)).toBe('wide')
     await expect(page.getByTestId('tabbar')).toBeVisible()

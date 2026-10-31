@@ -29,7 +29,7 @@ test.describe('1440×900 鼠标', () => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
 
-    // ① 顶栏在终端上方；标签条里一个标签 + `+`；右侧钉住状态点与 ⚙；没有 ☰、没有附加键
+    // ① 顶栏在终端上方；标签条里一个标签 + `+`；右侧钉住状态点（在最右）；没有设置、没有会话按钮、没有附加键
     await expect(page.locator('.app')).toHaveAttribute('data-form', 'wide')
     const bar = (await rectOf(page, '.topbar'))!
     const term = (await rectOf(page, '[data-testid=terminal]'))!
@@ -39,14 +39,12 @@ test.describe('1440×900 鼠标', () => {
     await expect(tabbar.locator('.tab')).toHaveCount(1)
     await expect(tabbar.getByTestId('new-session')).toBeVisible()
     await expect(tabbar.getByTestId('conn-dot'), '状态点不在可滚动的标签条里').toHaveCount(0)
-    await expect(tabbar.getByTestId('open-settings')).toHaveCount(0)
     await expect(page.locator('.topbar').getByTestId('conn-dot')).toHaveAttribute('data-state', 'online')
-    await expect(page.locator('.topbar').getByTestId('open-settings')).toBeVisible()
+    await expect(page.getByTestId('open-settings'), '没有设置（ADR-0030）').toHaveCount(0)
     const dot = (await rectOf(page, '[data-testid=conn-dot]'))!
-    const gear = (await rectOf(page, '.topbar [data-testid=open-settings]'))!
     const strip = (await rectOf(page, '[data-testid=tabbar]'))!
     expect(dot.left, '状态点在标签条右边').toBeGreaterThanOrEqual(strip.right - 1)
-    expect(gear.right, '⚙ 在最右').toBeGreaterThanOrEqual(bar.right - 1)
+    expect(bar.right - dot.right, '状态点在最右（只隔它自己的外边距）').toBeLessThanOrEqual(12)
     await expect(page.getByTestId('open-sessions')).toHaveCount(0)
     await expect(page.getByTestId('extrakeys')).toHaveCount(0)
 
@@ -158,6 +156,50 @@ test.describe('1440×900 鼠标', () => {
     await switchTo(page, a)
     await expect(page.getByTestId(`tab-${a}-unread`)).toHaveCount(0)
     await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'false')
+  })
+
+  test('E2E-41 ⑧ 等宽与滚动：等分 240px 封顶；窄窗口里停在 120px、横向滚动、滚轮横着滚；放宽恢复', async ({ page }) => {
+    await agent.open(page)
+    await newSession(page)
+    await newSession(page)
+    const tabs = page.locator('.tabbar .tab')
+    await expect(tabs).toHaveCount(3)
+    const widths = () => tabs.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().width))
+    const strip = page.getByTestId('tabbar')
+    const scroll = () => strip.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth, left: el.scrollLeft }))
+
+    // 3 个：等宽，都封顶 240px；`+` 紧跟最后一个；不滚动
+    for (const w of await widths()) expect(Math.abs(w - 240), `标签宽 ${w}`).toBeLessThanOrEqual(1)
+    const last = (await tabs.last().boundingBox())!
+    const plus = (await strip.getByTestId('new-session').boundingBox())!
+    expect(Math.abs(plus.x - (last.x + last.width)), '`+` 紧跟最后一个标签').toBeLessThanOrEqual(1)
+    let s = await scroll()
+    expect(s.sw, '放得下时不滚动').toBe(s.cw)
+
+    // 窗口改窄、建到 5 个：每个停在 120px，标签条放不下，当前（最后建的）整个可见
+    await page.setViewportSize({ width: 600, height: 900 })
+    await newSession(page)
+    const cur = await newSession(page)
+    await expect(tabs).toHaveCount(5)
+    for (const w of await widths()) expect(Math.abs(w - 120), `标签宽 ${w}`).toBeLessThanOrEqual(1)
+    s = await scroll()
+    expect(s.sw, '放不下').toBeGreaterThan(s.cw)
+    const box = (await strip.boundingBox())!
+    const curBox = (await page.getByTestId(`tab-${cur}`).boundingBox())!
+    expect(curBox.x >= box.x - 1 && curBox.x + curBox.width <= box.x + box.width + 1, '当前标签整个可见').toBe(true)
+
+    // 鼠标滚轮纵向滚 = 横着滚标签条
+    const before = s.left
+    expect(before, '当前在最后，标签条已经滚到右边').toBeGreaterThan(0)
+    await page.mouse.move(box.x + 60, box.y + box.height / 2)
+    await page.mouse.wheel(0, -200)
+    await expect.poll(async () => (await scroll()).left, { message: '滚轮向上 → 往左滚' }).toBeLessThan(before)
+
+    // 放宽：5 个都回到 240px，不再滚动
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await expect.poll(async () => (await widths()).every((w) => Math.abs(w - 240) <= 1)).toBe(true)
+    s = await scroll()
+    expect(s.sw, '放宽后不滚动').toBe(s.cw)
   })
 })
 

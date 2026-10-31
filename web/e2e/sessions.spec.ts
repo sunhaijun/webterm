@@ -53,7 +53,7 @@ async function unreadFlow(page: Page, agent: Agent, form: 'compact' | 'wide') {
   // A 出现未读标记（session.updated{head_seq} > 本地 out_seq；字节不过网络）
   await waitFor(async () => hooks.unread(page, a), 'A 出现未读', 20_000)
   if (form === 'compact') {
-    await expect(page.getByTestId('open-sessions'), '☰ 带红点').toHaveAttribute('data-unread', 'true')
+    await expect(page.getByTestId('open-sessions'), '会话按钮带红点').toHaveAttribute('data-unread', 'true')
     await openDrawer(page)
     await expect(page.getByTestId(`session-${a}`), '抽屉里 A 那行有未读点').toHaveAttribute('data-unread', 'true')
     await expect(page.getByTestId(`session-${a}`).locator('.unread-dot')).toBeVisible()
@@ -102,7 +102,7 @@ test.describe('E2E-6 多会话与未读', () => {
 
   test.describe('Pixel 5', () => {
     test.use(PIXEL)
-    test('切走的会话继续跑：☰ 红点 + 抽屉未读点；切回内容完整、未读清除、回看位置保持', async ({ page }) => {
+    test('切走的会话继续跑：会话按钮红点 + 抽屉未读点；切回内容完整、未读清除、回看位置保持', async ({ page }) => {
       await unreadFlow(page, agent, 'compact')
     })
   })

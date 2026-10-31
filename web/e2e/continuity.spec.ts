@@ -283,10 +283,10 @@ test.describe('E2E-3 断线期间的输入不丢', () => {
     await net.goOffline()
     await expect(page.getByTestId('conn-text')).toContainText('重连中', { timeout: 20_000 })
 
-    // 断线期间直接在终端里连打三条
-    await submit(page, 'printf "A%s\\n" 1')
-    await submit(page, 'printf "A%s\\n" 2')
-    await submit(page, 'printf "A%s\\n" 3')
+    // 断线期间直接在终端里连打三条。输出是 `A1-OK`：命令回显里只有 `A%s-OK`，不会被误认成输出
+    await submit(page, 'printf "A%s-OK\\n" 1')
+    await submit(page, 'printf "A%s-OK\\n" 2')
+    await submit(page, 'printf "A%s-OK\\n" 3')
 
     // 它们处于「待发送」：横幅还在、字节记在未 ack 里，而不是被静默吞掉
     await expect(page.getByTestId('conn-banner')).toBeVisible()
@@ -301,19 +301,18 @@ test.describe('E2E-3 断线期间的输入不丢', () => {
     expect(r, '重连应当续传当前会话').toBeTruthy()
     expect(r!.in_ack, 'in_ack 必须是断开前的累计值，不能归零（否则 input_gap）').toBeGreaterThan(0)
 
-    await waitFor(async () => {
-      const lines = (await terminalText(page)).split('\n').map((l) => l.trimEnd())
-      return lines.includes('A3')
-    }, '三条都执行了', 30_000)
-    const out = (await terminalText(page)).split('\n').map((l) => l.trimEnd())
+    await waitFor(async () => (await terminalText(page)).includes('A3-OK'), '三条都执行了', 30_000)
+    // 【按子串找，不按整行比】：三条在重连后一批到达，bash 跑第一条时内核把后两条的预输入
+    // 回显出来，readline 重画后输出行上会留下回显的零头（`A1p`、`inA1`），整行比就误报
+    const out = await terminalText(page)
     const at = (s: string) => out.indexOf(s)
     // 顺序正确
-    expect(at('A1')).toBeGreaterThan(-1)
-    expect(at('A1')).toBeLessThan(at('A2'))
-    expect(at('A2')).toBeLessThan(at('A3'))
-    // 不重复：每个标记作为输出行只出现一次
-    for (const m of ['A1', 'A2', 'A3']) {
-      expect(out.filter((l) => l === m).length, `${m} 输出了不止一次 —— 输入被重复写入了`).toBe(1)
+    expect(at('A1-OK')).toBeGreaterThan(-1)
+    expect(at('A1-OK')).toBeLessThan(at('A2-OK'))
+    expect(at('A2-OK')).toBeLessThan(at('A3-OK'))
+    // 不重复：每个标记只出现一次
+    for (const m of ['A1-OK', 'A2-OK', 'A3-OK']) {
+      expect(count(out, m), `${m} 输出了不止一次 —— 输入被重复写入了`).toBe(1)
     }
     await expect.poll(async () => (await hooks.inputStats(page)).unackedBytes, { message: '重发之后全部被 ack' }).toBe(0)
   })

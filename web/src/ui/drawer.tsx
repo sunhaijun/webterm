@@ -1,8 +1,8 @@
 /**
- * 浮层原语 —— 设置与手机上的会话抽屉共用这一个壳（ADR-0018，layout.md §浮层）。
+ * 浮层原语 —— 手机上的会话抽屉（ADR-0018，layout.md §浮层）。
  *
- * 触屏：贴底整宽 sheet（抓手 + 下滑关闭）；鼠标：居中浮窗。关法一致：
- * 点遮罩 · `Esc` · ✕ ·（触屏）下滑。`backButton` 时另加系统返回键。
+ * 只有一种形态：贴底整宽 sheet（抓手 + 下滑关闭，ADR-0030 §2）。关法：
+ * 点遮罩 · `Esc` · ✕ · 下滑。`backButton` 时另加系统返回键。
  *
  * 【`position: fixed`，不参与 `.app` 的网格】—— 开关浮层不改终端几何、不发 resize。
  */
@@ -26,7 +26,7 @@ export interface DrawerProps {
    * 否则 Android 的 PWA 里按返回键会直接退出应用。
    */
   backButton?: boolean
-  /** 底部固定的一行（会话抽屉的「+ 新会话 · ⚙ 设置」）。 */
+  /** 底部固定的一行（会话抽屉的「+ 新会话」）。 */
   foot?: ComponentChildren
   children: ComponentChildren
 }

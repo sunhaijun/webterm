@@ -6,12 +6,12 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { SCROLLBACK, createTerminal, exitLine, themeFromCss } from '../src/term/terminal'
+import { FONT_FAMILY, FONT_SIZE, SCROLLBACK, createTerminal, exitLine, proposeSize, themeFromCss } from '../src/term/terminal'
 import { flush, lineText, lines } from './helpers'
 
 const bytes = (...xs: number[]) => new Uint8Array(xs)
 const enc = (s: string) => new TextEncoder().encode(s)
-const mk = () => createTerminal({ size: 14, family: 'monospace' })
+const mk = () => createTerminal()
 
 describe('UT-decode-1 切开的 UTF-8 不丢字', () => {
   it('。…— 各被切在第 2 字节之后、落在不同的 OUTPUT 帧里（E2E-43 的切法）', async () => {
@@ -168,12 +168,43 @@ describe('进程结束提示行（AC-4.5）', () => {
   })
 })
 
+describe('UT-fit-1 行列 = 可用尺寸 ÷ 稳定的字符格尺寸（AC-3.11，ADR-0033）', () => {
+  it('向下取整', () => {
+    expect(proposeSize({ width: 800, height: 600 }, { width: 8, height: 17 })).toEqual({ cols: 100, rows: 35 })
+  })
+
+  it('900px 宽的实测数：字符宽 8.4287、可用 877px → 104 列，不管当前是几列', () => {
+    // FitAddon 用的 css.cell.width 是「整行宽取整 ÷ 当前列数」：104 列时 877 / 104，103 列时 868 / 103 ——
+    // 拿它们去除 877 分别得 103 和 104，每次 fit 都翻。字符本身的宽度（269.71875 / 32）与列数无关
+    const cell = { width: 269.71875 / 32, height: 17 }
+    expect(proposeSize({ width: 877, height: 676 }, cell)?.cols).toBe(104)
+    expect(Math.floor(877 / (877 / 104)), '旧算法在 104 列时提议 103（877 ÷ (877/104) = 103.99999999999999）').toBe(103)
+    expect(Math.floor(877 / (868 / 103)), '旧算法在 103 列时提议 104').toBe(104)
+  })
+
+  it('最少 2 列 1 行；格子尺寸量不到（还没渲染）时 null', () => {
+    expect(proposeSize({ width: 3, height: 3 }, { width: 8, height: 17 })).toEqual({ cols: 2, rows: 1 })
+    expect(proposeSize({ width: -20, height: 0 }, { width: 8, height: 17 })).toEqual({ cols: 2, rows: 1 })
+    expect(proposeSize({ width: 800, height: 600 }, { width: 0, height: 17 })).toBeNull()
+    expect(proposeSize({ width: 800, height: 600 }, { width: 8, height: NaN })).toBeNull()
+  })
+})
+
 describe('xterm 配置', () => {
-  it('scrollback 至少 5000 行（AC-5.1）；字体是传进来的那一段（AC-5.13）', () => {
-    const h = createTerminal({ size: 14, family: '"JetBrains Mono", monospace' })
+  it('scrollback 至少 5000 行（AC-5.1）', () => {
+    const h = mk()
     expect(SCROLLBACK).toBeGreaterThanOrEqual(5000)
     expect(h.term.options.scrollback).toBe(SCROLLBACK)
-    expect(h.term.options.fontFamily).toBe('"JetBrains Mono", monospace')
+    h.dispose()
+  })
+
+  it('UT-look-1 字号 14px、字体是系统等宽栈，带 CJK 等宽回退（AC-5.3）', () => {
+    const h = mk()
+    expect(FONT_SIZE).toBe(14)
+    expect(h.term.options.fontSize).toBe(14)
+    expect(h.term.options.fontFamily).toBe(FONT_FAMILY)
+    expect(FONT_FAMILY).toMatch(/^ui-monospace, /)
+    expect(FONT_FAMILY).toMatch(/"Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace$/)
     h.dispose()
   })
 

@@ -61,7 +61,6 @@ function make() {
     onChange: () => changes++,
     onData() {},
     allowKey: () => true,
-    font: () => ({ size: 14, family: 'monospace' }),
     theme: () => undefined,
   })
   const area = document.createElement('div')

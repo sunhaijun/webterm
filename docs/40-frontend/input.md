@@ -29,7 +29,7 @@
 ```
 左列   键区（7 列 × 2 行，等宽，不横滑）
 ┌────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┐
-│ ☰  │ ESC  │  /   │  -   │ HOME │  ↑   │ END  │ PGUP │
+│ [3]│ ESC  │  /   │  -   │ HOME │  ↑   │ END  │ PGUP │
 ├────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
 │ ✎  │ TAB  │ CTRL │ ALT  │  ←   │  ↓   │  →   │ PGDN │
 └────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┘
@@ -37,7 +37,7 @@
 
 | 位置 | testid | 动作 |
 |---|---|---|
-| ☰（仅 `compact`） | `open-sessions` | 打开会话抽屉；有未读时带小红点（[session-ux.md](session-ux.md)） |
+| 会话按钮 `[3]`（仅 `compact`） | `open-sessions` | 圆角方框里写会话数；打开会话抽屉；有未读时带小红点（[session-ux.md](session-ux.md)） |
 | ✎ | `toggle-text` | 键位页 ⇄ 文本输入页 |
 | ESC / | - | `key-Escape` `key-Slash` `key-Minus` | 发对应字节 |
 | HOME ↑ END PGUP | `key-Home` `key-ArrowUp` `key-End` `key-PageUp` | 同上 |
@@ -124,13 +124,13 @@
 
 | 条件 | 纵向拖 |
 |---|---|
-| 前台程序开了鼠标跟踪 | **转成滚轮，跟手**：每次拖动先发一次滚轮，看屏幕挪了几行，量出程序一次滚几行（步长）；之后手指每移动「步长 × 行高」发一次。滚轮是给 xterm 派发的合成 `WheelEvent`（`deltaMode = DOM_DELTA_LINE`、`deltaY = ±1`、坐标取手指位置），xterm 按程序要的协议上报。手指向下 = 滚轮向上（看更早的） |
+| 前台程序开了鼠标跟踪 | **转成滚轮**：手指每移动一行高发一次（[ADR-0032](../20-architecture/adr/0032-drag-wheel-per-row.md)）。滚轮是给 xterm 派发的合成 `WheelEvent`（`deltaMode = DOM_DELTA_LINE`、`deltaY = ±1`、坐标取手指位置），xterm 按程序要的协议上报。手指向下 = 滚轮向上（看更早的） |
 | 没开，主屏 | xterm 自带的触摸滚动，翻 scrollback |
 | 没开，备用屏 | 不动，**不**发方向键（[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §4） |
 
-- **标定**：发第一次滚轮前记下屏幕各行；之后每次写入解析完，统计「发之前只出现过一次的非空行」各挪了几行，票数最多且至少 2 行对得上的位移就是步长。量到之前手指位移先攒着（最多 300ms）。量不到的那一下当作没挪（tmux 的第一下只是进 copy-mode），下一下再量；一次拖动最多量 2 次，还量不到就按已知步长走（从没量到过按 3 行）。步长记在会话的终端上。
+- 程序一次滚几行由程序自己定：tmux 的 copy-mode 一次 5 行，手指拖一行内容走 5 行；想逐行动就把 copy-mode 的滚轮改成 `-N 1`（[ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md) §3）。
 - 一次 `touchmove` 最多发 3 次滚轮，超出的丢掉、不攒到下一帧（快速一甩不往 PTY 灌，ADR-0029）。
-- 全屏程序最细一行一跳，内容比手指晚一个网络往返。tmux 默认一次滚 5 行，想逐行动就把 copy-mode 的滚轮改成 `-N 1`（ADR-0029 §3）。
+- 全屏程序最细一行一跳，内容比手指晚一个网络往返。
 - 位移满 10px（「点一下」的门槛）且纵向占优才算拖；从起点开始累计，前 10px 不丢。横向拖什么都不做。
 - 转换期间 `touchmove` 调 `preventDefault`，浏览器不再原生滚一次。
 - xterm 5.5 自己不做这件事：程序开了鼠标跟踪时它的触摸处理直接返回，浏览器也不会把拖动合成成滚轮（[ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md)）。

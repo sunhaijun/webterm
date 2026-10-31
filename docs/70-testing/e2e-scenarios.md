@@ -116,7 +116,7 @@ await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 3. 在终端里敲三条命令：`echo A1`、`echo A2`、`echo A3`，各自回车
 4. 输入没被静默吞掉：连接横幅显示「重连中」，且 `__webterm.inputStats().unackedBytes > 0`（这些字节在重发队列里）
 5. 恢复连接
-6. 终端依次出现 `A1`、`A2`、`A3`，**顺序正确、无重复、无丢失**
+6. 终端依次出现 `A1`、`A2`、`A3`，**顺序正确、无重复、无丢失**。**按子串找，不按整行比**：三条命令在重连后一批到达，bash 跑第一条时内核会把后两条的预输入回显出来，readline 重画后输出行上可能留下回显的零头（实测 `A1p`、`inA1`、`A2r`，main 上 12 次 4 次）。所以输出标记要选命令回显里不会出现的串（命令写成 `printf "A%s-OK\n" 1`，输出 `A1-OK`，回显里只有 `A%s-OK`），在整段终端文本里数它出现几次、比位置
 7. 断言重连过程中**没有出现 `input_gap`**：`welcome.resumed[].in_ack` 必须是断开前的累计值而不是 0（AC-2.12）
 
 变体：断开期间提交超过 64 KiB 的输入 → UI 明确提示"离线输入已满"，不静默丢弃。
@@ -249,13 +249,12 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 ## E2E-12 阅读输出
 
-> AC-5.1, AC-5.3, AC-5.4, AC-5.13
+> AC-5.1, AC-5.3, AC-5.4
 
 1. 跑 `emit.sh 3000` → 向上滚动能看到早期输出（无需进入任何模式）
-2. 在设置里调整字号（`font-size`）→ 生效并持久化到 `localStorage['webterm.fontSize.<形态>']`（刷新后保持），并且**补了 `resize`**（`__webterm.resizes()` 变大、列数跟着变）—— cell 尺寸变了而容器没变，`ResizeObserver` 不会响
+2. **外观跟随系统、没有设置**（AC-5.3）：`page.emulateMedia({ colorScheme: 'light' })` 下 `body` 与终端区（`.stage`）的背景是浅色（`--bg` / `--term-bg`），xterm 的主题背景（`.xterm-viewport` 的内联样式；CSS 把它的计算值压成透明）也是 `--term-bg`；切到 `dark`，**不刷新**，三者都换成深色；终端行的字号是 14px；页面上没有 `open-settings`；按 `Ctrl+Shift+,` 不出现任何浮层（`.drawer` 为 0 个）
 3. 选中一段文本，此时有新输出到达 → **选区不被破坏**（选中的仍是原来那几行的内容）
 4. 复制 → 剪贴板内容正确
-5. **换终端字体**（AC-5.13）：设置里的 `font-family` 下拉至少有「系统默认」，且列出的每一项都是**本机装得到**的（把列出来的名字拿回页面里用同一套判据再量一遍，一个都不该是「没装」；一台机器一个清单字体都没装时，换字体那半边 `test.skip`）；换成另一项 → xterm 的 `options.fontFamily` 换成对应 stack、`resizes()` 变大；挑一个与当前字宽不同的字体时 `__webterm.size().cols` 跟着变（装得到的字体都与系统默认同宽时只断言前两条，并在报告里留注 —— 系统默认的 `monospace` 往往就解析成清单里的某一项）；刷新后仍是它；把 `localStorage['webterm.font.family']` 写成不存在的 id 再刷新 → 回落「系统默认」，不报错；设置面板里没有说明段落（`settings` 里没有 `p`，ADR-0028）
 
 ---
 
@@ -346,15 +345,14 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 ## E2E-28 浮层与手机会话抽屉
 
-> AC-4.10, AC-5.11, AC-4.8。`web/e2e/drawer.spec.ts`，Pixel 5 与 1440×900。触屏抽屉有约 170ms 的 `sheet-up` 进场动画：量「贴底」或长按抽屉里的行之前先等动画结束（`animationend`，或等矩形两次读数相同），否则拿到的是半路的位置。
+> AC-4.10, AC-5.11, AC-4.8。`web/e2e/drawer.spec.ts`，Pixel 5。触屏抽屉有约 170ms 的 `sheet-up` 进场动画：量「贴底」或长按抽屉里的行之前先等动画结束（`animationend`，或等矩形两次读数相同），否则拿到的是半路的位置。
 
-1. **形态**（Pixel 5）：点 `open-sessions` → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行有 `new-session` 与 `open-settings`。1440×900 上打开设置（`Ctrl+Shift+,`）是居中浮窗、没有抓手
+1. **形态**：会话按钮 `open-sessions` 里的数字等于会话数（`1`）；点它 → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行只有 `new-session`，没有 `open-settings`；从抽屉新建一个会话后按钮里是 `2`，关掉它变回 `1`
 2. **焦点进浮层**：每次打开，`document.activeElement.closest('.drawer')` 非空
 3. **关闭方式**（会话抽屉）：点遮罩、`Esc`、✕、选中一个会话、`page.goBack()`（系统返回键）各关一次；`goBack` 之后页面仍在 `/`；五次开关之后 `history.length` 至多比开始时多 1
-4. **不挤终端**：开关抽屉与设置前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
+4. **不挤终端**：开关抽屉前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
 5. **焦点恢复**（AC-4.8）：先点终端让它有焦点 → 开抽屉 → 选另一个会话 → 焦点在新会话的 helper textarea 上；先让终端失焦 → 开抽屉 → 选会话 → 焦点**不**在终端
 6. **会话菜单**：长按抽屉里的一行 → `session-menu` 出现，有 `session-rename` `session-pin` `session-close`；改名后列表里的名字跟着变；点外面关闭菜单
-7. **设置内容完整**：`theme-select` / `font-size` / `font-family` 都在；把字号改成 18 后 `__webterm.fontSize()` 为 18
 
 ---
 
@@ -493,7 +491,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 3. **当前 ≠ hover ≠ 普通**：鼠标悬到某个非当前标签上，取三处 `backgroundColor` —— 当前、hover、两者都不是的标签，**两两不相等**；当前标签有强调色下划线
 4. **跟着切换搬家**：`Ctrl+Shift+↓` → `aria-current` 落到相邻标签，原来那个不再有
 5. **已经可见时不滚**：标签都看得见时来回切两次，`tabbar` 的 `scrollLeft` 始终是 0
-6. **滚进可视区**：`screen` 1440×900、`viewport` 600×900，先 `cd` 进一个名字很长的目录（新会话继承它，标签名都撑到最大宽度；5 个名为 `~` 的标签在 600px 里放得下），建到 5 个会话，`Ctrl+Shift+↓` 切到最后一个 → 该标签的矩形**完全落在** `tabbar` 的矩形内且 `scrollLeft > 0`；再切回第一个 → 同样完全可见
+6. **滚进可视区**：`screen` 1440×900、`viewport` 600×900，建到 5 个会话（标签最窄 120px，5 个放不下），`Ctrl+Shift+↓` 切到最后一个 → 该标签的矩形**完全落在** `tabbar` 的矩形内且 `scrollLeft > 0`；再切回第一个 → 同样完全可见
 7. **抽屉里同一套**（Pixel 5）：打开抽屉，当前行 `aria-current="true"` 恰好一条，且有强调色左条（`box-shadow` 含 inset）
 
 ---
@@ -556,15 +554,16 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 ## E2E-41 宽屏标签栏（AC-4.10）
 
-> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述。
+> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述，第 8 步中途把窗口改窄。
 
-1. **结构**：顶栏在终端上方；`tabbar`（可横滚的标签条）里有一个标签和 `new-session`，右侧钉住 `conn-dot` 与 `open-settings`；没有 `open-sessions`，没有附加键
+1. **结构**：顶栏在终端上方；`tabbar`（标签条）里有一个标签和 `new-session`，右侧钉住 `conn-dot`，它在最右；没有 `open-settings`、没有 `open-sessions`，没有附加键
 2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
 3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹确认，确认后标签消失；中键点标签同样关闭
 4. **改名**：双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
 5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现 `⇵`；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
 6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点；切回 A → 消失
 7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签 → `session-menu`；附加键在，左列只有 `toggle-text`
+8. **等宽与滚动**（ADR-0031）：建到 3 个会话 → 三个标签等宽（差 ≤ 1px）、都是 240px，`new-session` 紧跟最后一个标签，`tabbar` 不横向滚动（`scrollWidth` = `clientWidth`）；把窗口改成 600×900（`screen` 不变，仍是 `wide`）、建到 5 个 → 每个标签 120px（差 ≤ 1px），`tabbar` 放不下（`scrollWidth > clientWidth`），当前（最后建的）整个可见；鼠标悬在标签条上纵向滚轮向上 → `scrollLeft` 变小；窗口改回 1440 → 5 个都是 240px，不再横向滚动
 
 ---
 
@@ -573,9 +572,10 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 > `web/e2e/resync.spec.ts`。hook `WebSocket` 的 message 与 send。
 
 1. 起会话，`emit.sh 300 0`，等完成
-2. 在设置里把字号从 14 改到 18（列数变少）→ 客户端发出 `resize`，随后收到一份 SNAPSHOT
+2. 把窗口从 1280 宽改到 1000 宽（列数变少）→ 客户端发出 `resize`，随后收到一份 SNAPSHOT
 3. 断言：快照之后终端的列数等于新的 `cols`；`line 00300` 仍在且只出现一次
 4. 只改高度（`page.setViewportSize` 只改 height，模拟软键盘）→ 发出 `resize`，**不**收到 SNAPSHOT
+5. **列数稳定**（AC-3.11，[ADR-0033](../20-architecture/adr/0033-own-fit.md)）：窗口宽度从 860 到 940 每次加 4px；每个宽度上等行列落定，再只把高度减 200 → 每一次 `__webterm.size().cols` 都和改高度之前相同（FitAddon 时代在 900px 上会 104 → 103）
 
 ## E2E-43 切开的 UTF-8 不丢字（AC-2.23）
 
@@ -585,14 +585,14 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 2. 断言终端那一行是 `。…—END`
 3. 刷新页面（走快照）后同一行仍是 `。…—END`
 
-## E2E-44 触屏纵向拖转滚轮，跟手（AC-3.21）
+## E2E-44 触屏纵向拖转滚轮（AC-3.21）
 
 > `web/e2e/touchwheel.spec.ts`，Pixel 5，CDP 发真实触摸（每步隔 30ms，像人手）。hook `WebSocket.send` 记 INPUT 帧。夹具 `e2e/fixtures/scroller.py N`：备用屏 + 鼠标跟踪（SGR），显示 `L001`…`L300` 里的一屏，每收到一次滚轮按 N 行滚动。
 
 1. 跑 `scroller.py 5`（tmux copy-mode 的步长），等底部出现 `L300`
-2. **跟手**：手指向下拖 10 行高 → 屏幕顶行的编号减少 10 ± 5（不是每行一次时的 50）；发出的都是 SGR 滚轮向上（`ESC[<64;列;行M`），行号在 1…`rows` 之内；焦点不变（不是点）
-3. 手指向上拖 6 行高 → 顶行编号增加 6 ± 5，发出的都是滚轮向下（`ESC[<65;…M`）
-4. 退出，换 `scroller.py 1` 再向下拖 10 行高 → 顶行编号减少 10 ± 2（步长 1 时逐行跟手）
+2. **一行高一次**：手指向下拖 10 行高 → 发出 10 ± 1 个滚轮，屏幕顶行的编号减少约 50（10 × 5，±5）；发出的都是 SGR 滚轮向上（`ESC[<64;列;行M`），行号在 1…`rows` 之内；焦点不变（不是点）
+3. 手指向上拖 6 行高 → 发出 6 ± 1 个滚轮，都是滚轮向下（`ESC[<65;…M`），顶行编号增加约 30（±5）
+4. 退出，换 `scroller.py 1` 再向下拖 10 行高 → 顶行编号减少 10 ± 2（步长 1 时逐行跟着手指）
 5. **横向拖 120px** → 没有 INPUT 帧
 6. 退出，跑 `printf '\033[?1049h\033[?1000h\033[?1006h'; sleep 60` 再 `Ctrl+C`、`printf '\033[?1000l'` 关掉鼠标跟踪（仍在备用屏）→ 向下拖 → 没有 INPUT 帧（不发方向键，ADR-0024 §4）
 

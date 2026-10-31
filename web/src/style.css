@@ -1,5 +1,5 @@
 /* webterm —— Termux 式界面（ADR-0025，docs/40-frontend/layout.md）。
-   三态主题：跟随系统 / 强制浅色 / 强制深色。所有颜色都是 :root 上的自定义属性，
+   主题只跟随系统（ADR-0030）。所有颜色都是 :root 上的自定义属性，
    xterm 的主题也从这里读（--term-* / --ansi-*，term/terminal.ts::themeFromCss）。 */
 :root {
   color-scheme: light dark;
@@ -12,7 +12,7 @@
   --ring: rgba(26, 26, 26, 0.35);
   --link: #2563eb;
   /* 强调色 = 「选中的是这个」：当前标签、抽屉里的当前会话、CTRL / ALT 的激活态。
-     写成 var(--link)，换主题时跟着变。hover 用中性灰，靠色相与选中分开。 */
+     写成 var(--link)，深浅色切换时跟着变。hover 用中性灰，靠色相与选中分开。 */
   --accent: var(--link);
   --hover: color-mix(in srgb, var(--fg) 7%, transparent);
   --ok: #2ea043;
@@ -46,7 +46,7 @@
   --ansi-15: #8c959f;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
+  :root {
     --bg: #0d1117;
     --fg: #e6edf3;
     --muted: #8b949e;
@@ -77,37 +77,6 @@
     --ansi-15: #ffffff;
   }
 }
-:root[data-theme='dark'] {
-  --bg: #0d1117;
-  --fg: #e6edf3;
-  --muted: #8b949e;
-  --line: #21262d;
-  --line-strong: #30363d;
-  --surface: #161b22;
-  --ring: rgba(230, 237, 243, 0.35);
-  --link: #6ea8fe;
-  --term-bg: #0d1117;
-  --term-fg: #e6edf3;
-  --term-cursor: #e6edf3;
-  --term-sel: rgba(110, 168, 254, 0.3);
-  --ansi-0: #484f58;
-  --ansi-1: #ff7b72;
-  --ansi-2: #3fb950;
-  --ansi-3: #d29922;
-  --ansi-4: #58a6ff;
-  --ansi-5: #bc8cff;
-  --ansi-6: #39c5cf;
-  --ansi-7: #b1bac4;
-  --ansi-8: #6e7681;
-  --ansi-9: #ffa198;
-  --ansi-10: #56d364;
-  --ansi-11: #e3b341;
-  --ansi-12: #79c0ff;
-  --ansi-13: #d2a8ff;
-  --ansi-14: #56d4dd;
-  --ansi-15: #ffffff;
-}
-
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 /* 整个 app 是固定视口，页面本就不该滚；overscroll-behavior:none 掐掉 iOS 的文档级橡皮筋 */
@@ -229,7 +198,7 @@ button { font: inherit; color: inherit; }
   color: var(--fg);
 }
 .app[data-coarse='true'] .topbar { height: 40px; }
-/* 标签条自己横向滚动；状态点与 ⚙ 钉在右边不跟着滚 */
+/* 标签条自己横向滚动（滚动条隐藏，滚轮由 tabs.tsx 转成横向）；状态点钉在右边不跟着滚 */
 .tabbar {
   flex: 1 1 auto; min-width: 0;
   display: flex; align-items: stretch;
@@ -239,10 +208,11 @@ button { font: inherit; color: inherit; }
   touch-action: pan-x;
 }
 .tabbar::-webkit-scrollbar { display: none; }
+/* 等分标签条，120–240px；放不下时停在 120px，标签条横向滚动（ADR-0031） */
 .tab {
-  flex: none;
+  flex: 1 1 0;
   display: flex; align-items: center; gap: 5px;
-  min-width: 72px; max-width: 200px;
+  min-width: 120px; max-width: 240px;
   padding: 0 4px 0 12px;
   border-right: 1px solid var(--line);
   font-size: 13px;
@@ -282,12 +252,6 @@ button { font: inherit; color: inherit; }
 }
 .tab-new:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
 .tab-new:disabled { opacity: 0.35; cursor: default; }
-.topbar-btn {
-  flex: none; width: 40px;
-  border: 0; background: transparent; color: var(--muted);
-  font-size: 16px; cursor: pointer;
-}
-.topbar-btn:hover { background: var(--hover); color: var(--fg); }
 
 .conn-dot {
   flex: none; align-self: center;
@@ -327,10 +291,18 @@ button { font: inherit; color: inherit; }
 }
 .ek-side-btn:active { background: var(--hover); }
 .ek-side-btn[aria-pressed='true'] { color: var(--accent); }
-/* ☰ 的未读小红点 */
+/* 会话按钮：圆角方框里写会话数，学手机浏览器的「标签页」按钮（ADR-0030 §3） */
+.ek-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; padding: 0 3px;
+  border: 2px solid currentColor; border-radius: 6px;
+  font: 700 12px/1 var(--font-ui);
+}
+/* 未读小红点挂在方框右上角，描一圈底色和方框的边线分开 */
 .ek-side-btn[data-unread='true']::after {
-  content: ''; position: absolute; top: 8px; right: 8px;
-  width: 7px; height: 7px; border-radius: 50%; background: var(--err);
+  content: ''; position: absolute; top: 5px; right: 4px;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--err);
+  box-shadow: 0 0 0 2px var(--surface);
 }
 .ek-main { position: relative; min-width: 0; }
 /* 7 列 × 2 行，等宽，任何宽度下都不横向滚动 */
@@ -369,32 +341,40 @@ button { font: inherit; color: inherit; }
 .extrakeys[data-page='keys'] .ek-text { display: none; }
 .extrakeys[data-page='text'] .ek-keys { display: none; }
 
-/* ---------- 浮层（ADR-0018，layout.md §浮层） ---------- */
+/* ---------- 浮层（ADR-0018，layout.md §浮层）：只有手机会话抽屉，贴底整宽 sheet ---------- */
 
 .drawer-backdrop {
   position: fixed; inset: 0; z-index: 40;
   background: rgba(0, 0, 0, 0.45);
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: flex-end;
 }
 .drawer {
-  width: min(620px, 92vw); max-height: min(80vh, 720px);
+  width: 100%; max-height: 80vh;
   display: flex; flex-direction: column; min-height: 0;
   background: var(--bg); color: var(--fg);
-  border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--line); border-bottom: 0;
+  border-radius: 16px 16px 0 0; overflow: hidden;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   outline: none;
+  /* fixed 定位不在 .app 的 padding 里，自己让出 Home 指示条 */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  animation: sheet-up 170ms ease;
 }
-.drawer-grab { display: none; }
+.drawer-grab {
+  flex: none;
+  width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong);
+  margin: 8px auto 2px;
+}
 .drawer-head {
   flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 10px 8px 10px 14px; border-bottom: 1px solid var(--line);
+  padding: 6px 8px 8px 14px; border-bottom: 1px solid var(--line);
 }
-.drawer-title { flex: 1; margin: 0; font-size: 14px; font-weight: 600; }
+.drawer-title { flex: 1; margin: 0; font-size: 16px; font-weight: 600; }
 .drawer-close {
-  flex: none; width: 32px; height: 32px;
+  flex: none; width: 44px; height: 44px;
   display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: 8px; background: transparent; color: var(--muted);
-  font-size: 15px; cursor: pointer;
+  font-size: 17px; cursor: pointer;
 }
 .drawer-close:hover, .drawer-close:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
 .drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
@@ -404,27 +384,8 @@ button { font: inherit; color: inherit; }
   flex: 1 1 0; min-height: 52px;
   border: 0; background: transparent; cursor: pointer; font-size: 15px;
 }
-.drawer-actions button + button { border-left: 1px solid var(--line); }
 .drawer-actions button:hover:not(:disabled) { background: var(--hover); }
 .drawer-actions button:disabled { opacity: 0.4; cursor: default; }
-
-/* 触屏：贴底整宽 sheet，抓手 + 下滑关闭。形态只看触摸能力，不看 compact / wide */
-.app[data-coarse='true'] .drawer-backdrop { align-items: flex-end; }
-.app[data-coarse='true'] .drawer {
-  width: 100%; max-width: none; max-height: 80vh;
-  border-radius: 16px 16px 0 0; border-bottom: 0;
-  /* fixed 定位不在 .app 的 padding 里，自己让出 Home 指示条 */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  animation: sheet-up 170ms ease;
-}
-.app[data-coarse='true'] .drawer-grab {
-  display: block; flex: none;
-  width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong);
-  margin: 8px auto 2px;
-}
-.app[data-coarse='true'] .drawer-head { padding: 6px 8px 8px 14px; }
-.app[data-coarse='true'] .drawer-title { font-size: 16px; }
-.app[data-coarse='true'] .drawer-close { width: 44px; height: 44px; font-size: 17px; }
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .drawer { animation: none !important; }
@@ -487,24 +448,6 @@ button { font: inherit; color: inherit; }
 .session-menu button:hover, .session-menu button:focus-visible { background: var(--hover); outline: none; }
 .session-menu .danger { color: var(--err); }
 .menu-check { color: var(--accent); font-weight: 700; }
-
-/* ---------- 设置 ---------- */
-
-.settings-row {
-  display: flex; align-items: center; gap: 12px;
-  padding: 8px 14px; min-height: 44px;
-  border-bottom: 1px solid var(--line); font-size: 13px;
-}
-.settings-label { flex: 1; }
-.settings-row select, .settings-row input {
-  flex: none; font: inherit; font-size: 13px; padding: 6px 8px;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg);
-}
-.settings-row input[type='number'] { width: 84px; }
-.settings-value { color: var(--muted); }
-.font-sample { font-family: var(--font-mono); color: var(--fg); }
-.app[data-coarse='true'] .settings-row { min-height: 52px; font-size: 15px; }
-.app[data-coarse='true'] .settings-row select, .app[data-coarse='true'] .settings-row input { font-size: 16px; min-height: 40px; }
 
 /* ---------- 配对 / 闸门 ---------- */
 

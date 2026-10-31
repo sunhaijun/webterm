@@ -24,7 +24,6 @@ export type AppAction =
   | 'prevSession'
   | 'nextSession'
   | 'toggleSessions'
-  | 'settings'
 
 export interface KeyEventLike {
   key: string
@@ -50,9 +49,6 @@ export function appAction(e: KeyEventLike): AppAction | null {
     case 'B':
     case 'b':
       return 'toggleSessions'
-    case '<':
-    case ',':
-      return 'settings'
     default:
       return null
   }

@@ -11,7 +11,6 @@ import { AppController } from './controller'
 import { showsExtraKeys } from './form'
 import { ConnBanner, ImePreview, ToastView } from './notices'
 import { SessionList, SessionMenu } from './sessions'
-import { Settings } from './settings'
 import { TopBar } from './tabs'
 
 interface MenuAt {
@@ -77,7 +76,6 @@ export function App({ onRevoked }: AppProps = {}) {
           onRenameStart={(sid) => setRenaming(sid)}
           onRename={rename}
           onCancelRename={endRename}
-          onSettings={() => ctl.openSettings()}
         />
       )}
 
@@ -99,6 +97,7 @@ export function App({ onRevoked }: AppProps = {}) {
       {keys && (
         <ExtraKeys
           form={s.form}
+          count={s.sessions.length}
           unread={anyUnread}
           sticky={ctl.sticky}
           onOpenSessions={() => ctl.openSessions()}
@@ -128,9 +127,6 @@ export function App({ onRevoked }: AppProps = {}) {
               >
                 + 新会话
               </button>
-              <button data-testid="open-settings" onClick={() => ctl.openSettings()}>
-                ⚙ 设置
-              </button>
             </div>
           }
         >
@@ -144,18 +140,6 @@ export function App({ onRevoked }: AppProps = {}) {
             onCancelRename={() => setRenaming(null)}
           />
         </Drawer>
-      )}
-
-      {s.settingsOpen && (
-        <Settings
-          theme={s.theme}
-          fontSize={s.fontSize}
-          fontFamily={s.fontFamily}
-          onTheme={(t) => ctl.setTheme(t)}
-          onFontSize={(n) => ctl.setFontSize(n)}
-          onFontFamily={(id) => ctl.setFontFamily(id)}
-          onClose={() => ctl.closeSettings()}
-        />
       )}
 
       {menu && menuSession && (

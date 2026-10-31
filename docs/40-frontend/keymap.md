@@ -29,7 +29,6 @@
 | `Ctrl+Shift+W` | 关闭当前会话（规则见 [session-ux.md](session-ux.md)） |
 | `Ctrl+Shift+↑` / `↓` | 上一个 / 下一个会话（到头回绕） |
 | `Ctrl+Shift+B` | `compact`：打开 / 关闭会话抽屉。`wide`：不做任何事 |
-| `Ctrl+Shift+,` | 设置 |
 
 **被浏览器强占、不能用的组合**：`Ctrl+Shift+T/N`（新标签页 / 新窗口）、`Ctrl+Shift+P`（Firefox 隐私窗口）、`Ctrl+Shift+H`（Firefox 历史库）。
 

@@ -34,7 +34,6 @@ function makeStore() {
     onChange() {},
     onData: (_sid, data) => sent.push(data),
     allowKey: () => true,
-    font: () => ({ size: 14, family: 'monospace' }),
     theme: () => undefined,
   })
   store.upsert(info(1))
