@@ -29,7 +29,7 @@
 ```
 左列   键区（7 列 × 2 行，等宽，不横滑）
 ┌────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┐
-│ ☰  │ ESC  │  /   │  -   │ HOME │  ↑   │ END  │ PGUP │
+│ [3]│ ESC  │  /   │  -   │ HOME │  ↑   │ END  │ PGUP │
 ├────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
 │ ✎  │ TAB  │ CTRL │ ALT  │  ←   │  ↓   │  →   │ PGDN │
 └────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┘
@@ -37,7 +37,7 @@
 
 | 位置 | testid | 动作 |
 |---|---|---|
-| ☰（仅 `compact`） | `open-sessions` | 打开会话抽屉；有未读时带小红点（[session-ux.md](session-ux.md)） |
+| 会话按钮 `[3]`（仅 `compact`） | `open-sessions` | 圆角方框里写会话数；打开会话抽屉；有未读时带小红点（[session-ux.md](session-ux.md)） |
 | ✎ | `toggle-text` | 键位页 ⇄ 文本输入页 |
 | ESC / | - | `key-Escape` `key-Slash` `key-Minus` | 发对应字节 |
 | HOME ↑ END PGUP | `key-Home` `key-ArrowUp` `key-End` `key-PageUp` | 同上 |

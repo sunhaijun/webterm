@@ -249,13 +249,12 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 ## E2E-12 阅读输出
 
-> AC-5.1, AC-5.3, AC-5.4, AC-5.13
+> AC-5.1, AC-5.3, AC-5.4
 
 1. 跑 `emit.sh 3000` → 向上滚动能看到早期输出（无需进入任何模式）
-2. 在设置里调整字号（`font-size`）→ 生效并持久化到 `localStorage['webterm.fontSize.<形态>']`（刷新后保持），并且**补了 `resize`**（`__webterm.resizes()` 变大、列数跟着变）—— cell 尺寸变了而容器没变，`ResizeObserver` 不会响
+2. **外观跟随系统、没有设置**（AC-5.3）：`page.emulateMedia({ colorScheme: 'light' })` 下 `body` 与 xterm 视口（`.xterm-viewport`）的背景是浅色（`--bg` / `--term-bg`）；切到 `dark`，**不刷新**，两者都换成深色；终端行的字号是 14px；页面上没有 `open-settings`；按 `Ctrl+Shift+,` 不出现任何浮层（`.drawer` 为 0 个）
 3. 选中一段文本，此时有新输出到达 → **选区不被破坏**（选中的仍是原来那几行的内容）
 4. 复制 → 剪贴板内容正确
-5. **换终端字体**（AC-5.13）：设置里的 `font-family` 下拉至少有「系统默认」，且列出的每一项都是**本机装得到**的（把列出来的名字拿回页面里用同一套判据再量一遍，一个都不该是「没装」；一台机器一个清单字体都没装时，换字体那半边 `test.skip`）；换成另一项 → xterm 的 `options.fontFamily` 换成对应 stack、`resizes()` 变大；挑一个与当前字宽不同的字体时 `__webterm.size().cols` 跟着变（装得到的字体都与系统默认同宽时只断言前两条，并在报告里留注 —— 系统默认的 `monospace` 往往就解析成清单里的某一项）；刷新后仍是它；把 `localStorage['webterm.font.family']` 写成不存在的 id 再刷新 → 回落「系统默认」，不报错；设置面板里没有说明段落（`settings` 里没有 `p`，ADR-0028）
 
 ---
 
@@ -346,15 +345,14 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 ## E2E-28 浮层与手机会话抽屉
 
-> AC-4.10, AC-5.11, AC-4.8。`web/e2e/drawer.spec.ts`，Pixel 5 与 1440×900。触屏抽屉有约 170ms 的 `sheet-up` 进场动画：量「贴底」或长按抽屉里的行之前先等动画结束（`animationend`，或等矩形两次读数相同），否则拿到的是半路的位置。
+> AC-4.10, AC-5.11, AC-4.8。`web/e2e/drawer.spec.ts`，Pixel 5。触屏抽屉有约 170ms 的 `sheet-up` 进场动画：量「贴底」或长按抽屉里的行之前先等动画结束（`animationend`，或等矩形两次读数相同），否则拿到的是半路的位置。
 
-1. **形态**（Pixel 5）：点 `open-sessions` → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行有 `new-session` 与 `open-settings`。1440×900 上打开设置（`Ctrl+Shift+,`）是居中浮窗、没有抓手
+1. **形态**：会话按钮 `open-sessions` 里的数字等于会话数（`1`）；点它 → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行只有 `new-session`，没有 `open-settings`；从抽屉新建一个会话后按钮里是 `2`，关掉它变回 `1`
 2. **焦点进浮层**：每次打开，`document.activeElement.closest('.drawer')` 非空
 3. **关闭方式**（会话抽屉）：点遮罩、`Esc`、✕、选中一个会话、`page.goBack()`（系统返回键）各关一次；`goBack` 之后页面仍在 `/`；五次开关之后 `history.length` 至多比开始时多 1
-4. **不挤终端**：开关抽屉与设置前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
+4. **不挤终端**：开关抽屉前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
 5. **焦点恢复**（AC-4.8）：先点终端让它有焦点 → 开抽屉 → 选另一个会话 → 焦点在新会话的 helper textarea 上；先让终端失焦 → 开抽屉 → 选会话 → 焦点**不**在终端
 6. **会话菜单**：长按抽屉里的一行 → `session-menu` 出现，有 `session-rename` `session-pin` `session-close`；改名后列表里的名字跟着变；点外面关闭菜单
-7. **设置内容完整**：`theme-select` / `font-size` / `font-family` 都在；把字号改成 18 后 `__webterm.fontSize()` 为 18
 
 ---
 
@@ -558,7 +556,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 > `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述。
 
-1. **结构**：顶栏在终端上方；`tabbar`（可横滚的标签条）里有一个标签和 `new-session`，右侧钉住 `conn-dot` 与 `open-settings`；没有 `open-sessions`，没有附加键
+1. **结构**：顶栏在终端上方；`tabbar`（可横滚的标签条）里有一个标签和 `new-session`，右侧钉住 `conn-dot`，它在最右；没有 `open-settings`、没有 `open-sessions`，没有附加键
 2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
 3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹确认，确认后标签消失；中键点标签同样关闭
 4. **改名**：双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
@@ -573,7 +571,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 > `web/e2e/resync.spec.ts`。hook `WebSocket` 的 message 与 send。
 
 1. 起会话，`emit.sh 300 0`，等完成
-2. 在设置里把字号从 14 改到 18（列数变少）→ 客户端发出 `resize`，随后收到一份 SNAPSHOT
+2. 把窗口从 1280 宽改到 900 宽（列数变少）→ 客户端发出 `resize`，随后收到一份 SNAPSHOT
 3. 断言：快照之后终端的列数等于新的 `cols`；`line 00300` 仍在且只出现一次
 4. 只改高度（`page.setViewportSize` 只改 height，模拟软键盘）→ 发出 `resize`，**不**收到 SNAPSHOT
 

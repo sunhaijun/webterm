@@ -114,12 +114,12 @@ internal/
   webui/                前端产物的 go:embed 挂载点
 web/
   src/
-    app/                装配：形态判定、标签栏 / 会话抽屉、连接横幅与提示、设置
+    app/                装配：形态判定、标签栏 / 会话抽屉、连接横幅与提示
     keys/               附加键与文本输入页、keymap、终端直输的 IME 兜底、输入路径计数
     term/               xterm 封装、回放门、手势
     sessions/           会话状态、切换、未读
     conn/               WebSocket 连接层、seq 记账、重发队列、退避
-    ui/                 通用组件：浮层、配对页、字体、视口、本地设置
+    ui/                 通用组件：浮层、配对页、视口
     protocol/           消息类型、编解码（前后端契约的 TS 侧）
   tests/                Vitest
   e2e/                  Playwright
@@ -179,15 +179,16 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0015](adr/0015-bottom-keyrow.md) | 底栏单行键行（已被 0025 取代） |
 | [0016](adr/0016-hot-reexec.md) | 热升级：原地 re-exec 交接会话 |
 | [0017](adr/0017-numeric-pairing-code.md) | 数字配对码，二维码之外可以手输 |
-| [0018](adr/0018-one-drawer-primitive.md) | 次要界面共用一个浮层原语（⋯ 菜单与历史浮层已随 0025 删除） |
+| [0018](adr/0018-one-drawer-primitive.md) | 次要界面共用一个浮层原语（⋯ 菜单与历史浮层已随 0025 删除，设置与居中浮窗随 0030 删除） |
 | [0019](adr/0019-altscreen-redraw-not-replay.md) | 备用屏不回放历史，改为重画（已被 0026 取代） |
 | [0020](adr/0020-input-never-silently-dropped.md) | 输入路径绝不静默丢弃 |
 | [0021](adr/0021-drag-preview-not-live-relayout.md) | 跟手的手势只做预览，布局改动推到松手（适用对象已随 0025 删除，原则保留） |
 | [0022](adr/0022-drop-command-palette.md) | 砍掉命令面板 |
-| [0023](adr/0023-terminal-font-list.md) | 终端字体给一份探测过的清单（面板说明被 0028 收回） |
+| [0023](adr/0023-terminal-font-list.md) | 终端字体给一份探测过的清单（被 0030 取代） |
 | [0024](adr/0024-scrollback-layered-model.md) | 回滚历史的分层模型：先把内容留在追加流里（§2–§4 已被 0026 取代，§1 保留） |
-| [0025](adr/0025-termux-style-ui.md) | Termux 式界面：全屏终端 + 两行附加键，会话按设备分两种切换（§3 回车被 0027 修订，§5 纵向拖被 0029 修订） |
+| [0025](adr/0025-termux-style-ui.md) | Termux 式界面：全屏终端 + 两行附加键，会话按设备分两种切换（§3 回车被 0027 修订，§5 纵向拖被 0029 修订，设置被 0030 删除） |
 | [0026](adr/0026-agent-holds-terminal-state.md) | 输出链路：agent 持有终端状态，浏览器只负责显示 |
 | [0027](adr/0027-text-page-enter-submits.md) | 文本输入页：回车 = 发送并提交 |
-| [0028](adr/0028-settings-without-notes.md) | 设置面板不写说明文字 |
+| [0028](adr/0028-settings-without-notes.md) | 设置面板不写说明文字（面板被 0030 删除） |
 | [0029](adr/0029-touch-drag-to-wheel.md) | 触屏纵向拖：程序开了鼠标跟踪时转成滚轮 |
+| [0030](adr/0030-no-settings.md) | 不要设置：主题跟随系统，字号与字体用默认；会话按钮显示会话数 |

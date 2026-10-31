@@ -86,7 +86,7 @@
 | AC-4.6 | 关闭会话时先送 `SIGHUP`，2 秒后仍存活则 `SIGKILL`，并释放 PTY 与缓冲 | IT-session-5 |
 | AC-4.8 | **焦点跟着会话走**（ADR-0020）：切会话时 `activate()` 把上一个会话的 DOM 摘掉，焦点会落回 `body`；切换前（从抽屉切换时以**打开抽屉之前**为准）焦点在终端里的，切换后必须还给新会话的终端，**非触摸设备无条件还给终端**。少了这一步，用 `Ctrl+Shift+↑/↓`、标签栏或抽屉切过去之后打字彻底没反应，且没有任何提示 | E2E-34 |
 | AC-4.9 | **当前会话一眼可辨**：当前标签 / 抽屉里的当前行 = 强调色（下划线或左条）+ 强调色底色 + `aria-current="true"`，与 hover（中性灰）在同一屏上分得开。当前会话变化（点选、`Ctrl+Shift+↑/↓`、关掉当前会话后自动切）时把它**滚进可视区**，整个已可见则不动，不用 `smooth` | E2E-35 |
-| AC-4.10 | **会话切换两种形态**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §4）：`compact` 上 ☰ 打开底部会话抽屉，任一非当前会话未读时 ☰ 带红点；抽屉可由点遮罩、选中会话、`Esc`、✕、系统返回键关闭；系统返回键只关抽屉、不离开页面，反复开关不让历史记录累积（`history.length` 至多比初始多 1）。`wide` 上标签栏常驻：点标签切换、✕ 与中键关闭、双击改名、`+` 新建，右键 / 长按弹出会话菜单（改名 · 保持接收 · 关闭）；切换不改终端几何 | E2E-28, E2E-41 |
+| AC-4.10 | **会话切换两种形态**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §4）：`compact` 上附加键左列的会话按钮（圆角方框里写会话数，随新建 / 关闭即时更新）打开底部会话抽屉，任一非当前会话未读时按钮带红点；抽屉底部只有「+ 新会话」；抽屉可由点遮罩、选中会话、`Esc`、✕、系统返回键关闭；系统返回键只关抽屉、不离开页面，反复开关不让历史记录累积（`history.length` 至多比初始多 1）。`wide` 上标签栏常驻：点标签切换、✕ 与中键关闭、双击改名、`+` 新建，右键 / 长按弹出会话菜单（改名 · 保持接收 · 关闭）；切换不改终端几何 | E2E-28, E2E-41 |
 
 ---
 
@@ -95,12 +95,11 @@
 | ID | 标准 | 验证 |
 |---|---|---|
 | AC-5.1 | scrollback 至少 5000 行，滚动不进入任何模式 | E2E-12 |
-| AC-5.3 | 字号可调，按形态各存一份（`webterm.fontSize.compact` / `.wide`，默认 14px，范围 8–32px）；**改完要重新 `fit()` 并补一条 `resize`** —— cell 尺寸变了而容器没变，`ResizeObserver` 不会响，漏发就是客户端与 PTY 的 cols/rows 分家 | UT-font-1, E2E-12 |
+| AC-5.3 | **外观不提供设置**（[ADR-0030](../20-architecture/adr/0030-no-settings.md)）：主题只跟随系统（`prefers-color-scheme`），系统切换深浅色时界面与 xterm 一起变、不用刷新；终端字号固定 14px，字体固定为系统等宽栈（`--font-mono`）；两种形态都没有设置入口，`Ctrl+Shift+,` 不拦截、交给终端 | UT-look-1, E2E-12 |
 | AC-5.4 | 选中文本后有新输出到达，选区不被破坏（xterm 的选区按缓冲区坐标记） | E2E-12 |
-| AC-5.11 | **浮层**（设置；`compact` 上的会话抽屉）共用一个 `Drawer`：`pointer: coarse` 贴底整宽（抓手 + 标题栏 + ✕），`pointer: fine` 居中浮窗；点遮罩 / `Esc` / ✕ /（触屏）下滑都能关；打开时焦点进浮层；浮层 `fixed` 覆盖，**不改终端几何、不发 resize** | E2E-28 |
-| AC-5.13 | **终端字体可选**（[ADR-0023](../20-architecture/adr/0023-terminal-font-list.md)）：一份硬编码的等宽优选清单，用 canvas `measureText` 与 `monospace` / `serif` / `sans-serif` 三条基线比宽度，**只列本机真的装了的**（三条都一样宽 = 没装）；每项是一整段 stack，尾巴恒为 CJK 等宽 + `monospace`；选择存 `webterm.font.family`（存 id、全局一份、**不按形态分**）；改字体后所有 xterm 实例一起换、重新 `fit()`、补一条 `resize`；探测不可用（拿不到 2d 上下文）时退化成只有「系统默认」，不报错；面板里不写说明文字（[ADR-0028](../20-architecture/adr/0028-settings-without-notes.md)） | UT-font-1, E2E-12 |
+| AC-5.11 | **会话抽屉**（`compact`）用 `Drawer` 原语：贴底整宽的 sheet（抓手 + 标题栏 + ✕）；点遮罩 / `Esc` / ✕ / 下滑都能关；打开时焦点进浮层；浮层 `fixed` 覆盖，**不改终端几何、不发 resize** | E2E-28 |
 | AC-5.14 | **刷新之后仍能往回拖**：刷新页面后订阅走快照，能滚回刷新前缓冲的**最后 2000 行**（不足 2000 行则全部），内容与刷新前逐行一致且**只出现一份**；浏览器不存任何本地快照（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)） | IT-snapshot-1, E2E-36 |
-| AC-5.18 | **形态**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §1）：`.app[data-form]` 由屏幕短边决定，`< 600px` 为 `compact`，否则 `wide`；`compact` 没有标签栏、有 ☰，`wide` 有标签栏、没有 ☰；可视视口变化（软键盘弹出、旋转）不改变形态 | UT-form-1, E2E-39 |
+| AC-5.18 | **形态**（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §1）：`.app[data-form]` 由屏幕短边决定，`< 600px` 为 `compact`，否则 `wide`；`compact` 没有标签栏、有会话按钮，`wide` 有标签栏、没有会话按钮；可视视口变化（软键盘弹出、旋转）不改变形态 | UT-form-1, E2E-39 |
 
 ---
 
