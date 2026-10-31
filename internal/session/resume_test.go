@@ -1,6 +1,8 @@
 package session_test
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +207,41 @@ func TestInputAccountingIsPerClient(t *testing.T) {
 	waitFor(t, "两个 client 各自 ack", func() bool {
 		return s.InAck("tab-a") == 5 && s.InAck("tab-b") == 5
 	})
+}
+
+// seq 从 0 重来、而这个 client_id 已有记账 = client 把计数器重置了却沿用旧 id
+// （协议 §5.4，ADR-0020 第 5 条）。照旧按重发丢掉重复部分，但必须留一条 Warn ——
+// 这种丢弃在浏览器一侧没有任何迹象。正常的首帧与重连重发不该吵。
+func TestInputCounterResetIsLogged(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	m := newManager(t, cfg())
+	s := create(t, m)
+	if err := s.Write("tab", 0, []byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write("tab", 1, []byte("bcd")); err != nil { // 重连重发：前两字节重复
+		t.Fatal(err)
+	}
+	waitFor(t, "首帧与重发都写进去", func() bool { return s.InAck("tab") == 4 })
+	if logs.Len() != 0 {
+		t.Fatalf("首帧与正常重发不该记日志：%s", logs.String())
+	}
+
+	if err := s.Write("tab", 0, []byte("xyz")); err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "client=tab") || !strings.Contains(out, "accepted=4") {
+		t.Fatalf("计数器被重置却没留痕：%q", out)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := s.InAck("tab"); got != 4 {
+		t.Fatalf("in_ack = %d：重复部分仍应按重发丢掉", got)
+	}
 }
 
 // IT-resume-4：instance_id 不符 → 所有 resume 判 gone。

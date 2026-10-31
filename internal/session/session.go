@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -312,6 +313,13 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 		return ErrSessionExited
 	}
 	queued := s.inQueued[clientID]
+	if seq == 0 && queued > 0 {
+		// 【client 把 in_seq 重置了，这边的记账却还在】。正常重连不是这个形状：断开时
+		// accepted 已回退到 in_ack，client 按 in_ack 裁剪后从 in_ack 起重发。照旧按重发
+		// 处理，但这类丢弃在浏览器一侧毫无迹象（ADR-0020 第 5 条），宁可吵也要留痕。
+		slog.Warn("输入的 in_seq 从 0 重来，但这个 client_id 已有记账 —— 重复部分按重发丢弃（协议 §5.4）",
+			"sid", s.sid, "client", clientID, "accepted", queued, "len", len(data))
+	}
 	switch {
 	case seq > queued:
 		s.mu.Unlock()
