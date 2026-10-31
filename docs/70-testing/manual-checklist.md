@@ -69,6 +69,9 @@
 - [x] `setcap` 后以普通用户绑定 443 成功
 - [x] `--https-port 8443`：证书从 80 上的 HTTP-01 签出来，配对二维码里带着 `:8443` 且手机扫了能打开
 - [x] `loginctl enable-linger` 后，SSH 退出，服务仍在
+- [ ] 系统服务（ADR-0034）：`systemctl cat webterm` 里 `User=` 是自己；`cat /proc/$(systemctl show webterm -p MainPID --value)/oom_score_adj` 是 -900；会话里 `cat /proc/self/oom_score_adj` 是 0；会话里 `systemctl --user status` 正常
+- [ ] 从用户服务迁移：在 webterm 会话里跑 `webterm update --force-restart` 被拒绝；从 SSH 跑成功，用户单元已删、系统单元 active，tmux 里的会话还在
+- [ ] 内存压力（要 root，会扰动整台机器）：在一个 webterm 会话里跑 `stress-ng --vm 1 --vm-bytes 90%` → 被杀的是 stress-ng，webterm 和其它会话都还在
 - [x] 服务器重启后服务自动起来
 - [x] 替换二进制 + `setcap` + 重启 → 客户端收到"agent 即将重启"提示，重连后是新版本
 - [x] 反代场景（nginx）下 WebSocket 正常，且不会每 60 秒断
@@ -98,7 +101,7 @@
 ## 隐私（每次改存储/日志都要过）
 
 - [x] 会话里 `echo WEBTERM_CANARY_TEST`，然后 `grep -r WEBTERM_CANARY_TEST ~/.local/share/webterm/` → 零命中
-- [x] `journalctl --user -u webterm | grep -E 'pair#|webterm_session='` → 零命中
+- [x] `journalctl -u webterm | grep -E 'pair#|webterm_session='` → 零命中
 - [x] `--log-level debug` 下同样零命中
 
 ## 记录

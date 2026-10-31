@@ -68,6 +68,8 @@ PTY 的 master fd 由 agent 持有。agent 一死，slave 端的 shell 收到 `S
 
 **补法已落地**：[ADR-0016](0016-hot-reexec.md) 用原地 re-exec 交接 PTY fd、环形缓冲与会话元数据，升级不再丢会话。上面"负面后果"一段现在只对真正的进程重启（`SIGTERM`、崩溃、机器重启）成立。
 
+**OOM 那一半由 [ADR-0034](0034-system-service-oom-priority.md) 压下去**：改成以普通用户运行的系统服务后，agent 是 -900、会话是 0，内存吃紧时不再是 8 MB 的 agent 先被挑中、所有会话陪葬。
+
 ## 用户仍然可以自己用 tmux
 
 这个决策**不阻止**用户在 webterm 的会话里手动敲 `tmux`。它只是说 webterm 不管理 tmux。

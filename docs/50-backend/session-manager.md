@@ -215,12 +215,15 @@ Resize(cols, rows):
          + 备用屏兼容清单（AC-7.8）+ --session-env 的键值
    清理：BASH_ENV、ENV
 5. pty.StartWithSize(cmd, &pty.Winsize{...})
+   agent 的 oom_score_adj 是负数时，fork 前临时调到 0、Start 返回后调回（见下）
 6. vt = vterm.New(cols, rows, 2000)
 7. 起四个 goroutine
 8. 落库无（会话不持久化，见 ADR-0005）
 ```
 
 shell 按它自己的规则加载启动文件：登录 shell 读 profile 链，非登录的交互 shell 读 `~/.bashrc`。webterm 不注入任何东西。
+
+**OOM 优先级（[ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md) §3）**：系统服务把 agent 设成 -900，会话要和 SSH 登录一样是 0。shell 必须在执行任何用户代码之前就是 0，否则 `~/.profile` 里起的常驻进程（ssh-agent 之类）会永久继承 -900。所以第 5 步持 `spawnMu`：先读自己的值 self；self < 0 就写 0，起 shell，再写回 self。调高不需要特权，调回 self 也不会低于下限。self ≥ 0（手动 `webterm serve`、用户服务）时什么都不做。调回必须在 `cmd.Start` 返回之后：Go 用 `CLONE_VM|CLONE_VFORK` 起子进程，exec 之前内核会把 `oom_score_adj` 的改动同步给它。
 
 `TERM` 固定为 `xterm-256color`。不用 `xterm-kitty` 之类 —— 浏览器里的 xterm.js 的能力集与 `xterm-256color` 最匹配，查询也由它回答。
 
@@ -325,7 +328,7 @@ func (s *Session) displayName() string {
 
 任何一步失败（预检、memfd、exec 返回）→ `Thaw`：清 deadline、放行几个循环、恢复接受连接，日志 + notice 明说原因。**不自动退化成 restart**。
 
-进快照的字段（`internal/handoff.Session`）就是 `Session` 结构体里"不能丢"的那部分：sid、ptmx fd、shell pid、createdAt、name / nameManual、cwd、status / exitCode、cols / rows、ring（base + 字节）、**模拟器状态**、inQueued / inAck、未写完的输入。**不进**快照的：订阅者 —— 连接会重建。已退出的会话（ring 与模拟器保留供回看）也交接，只是没有 fd 和 pid。
+进快照的字段（`internal/handoff.Session`）就是 `Session` 结构体里"不能丢"的那部分：sid、ptmx fd、shell pid、createdAt、name / nameManual、cwd、status / exitCode、cols / rows、ring（base + 字节）、**模拟器状态**、inQueued / inAck、未写完的输入。**不进**快照的：订阅者 —— 连接会重建；agent 与 shell 的 `oom_score_adj` —— 前者随 execve 保留，后者本来就在 shell 进程上。已退出的会话（ring 与模拟器保留供回看）也交接，只是没有 fd 和 pid。
 
 **交接前后同一会话生成的快照必须逐字节相等**，增量路径必须字节级连续（`TestHandoffByteLevelContinuity`）。
 
