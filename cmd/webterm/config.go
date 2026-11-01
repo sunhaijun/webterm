@@ -48,7 +48,7 @@ var configKeys = map[string]bool{
 // 但报的是「已经删了、删掉这一行」，而不是让人怀疑自己拼错的「没有这个选项」。
 var removedConfigKeys = map[string]string{
 	"acme-staging": "staging 证书和正式证书共用缓存，用了反而让正式服务发 staging 证书；" +
-		"首次安装改为直接签正式证书（ADR-0042 §3）",
+		"首次安装改为直接签正式证书（ADR-0044 §3）",
 }
 
 func defaultConfigPath() string {

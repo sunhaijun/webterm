@@ -33,7 +33,7 @@ type status struct {
 	unit       unitKind // 装的是哪种 systemd 单元：决定提示里的命令，以及要不要提示迁移
 	url        string
 	certOK     bool
-	certStart  time.Time // NotBefore：「快到期」的阈值随有效期缩放（ADR-0042 §4）
+	certStart  time.Time // NotBefore：「快到期」的阈值随有效期缩放（ADR-0044 §4）
 	certExpiry time.Time
 	ipMode     bool // IP 证书只走 HTTP-01，续期要 80 一直可达
 	devices    int
@@ -187,7 +187,7 @@ func certFromCache(certDir, domain string) (*x509.Certificate, bool) {
 	return nil, false
 }
 
-// certWarnThreshold 是「快到期」的黄色阈值：min(10 天, 有效期/4)（ADR-0042 §4）。
+// certWarnThreshold 是「快到期」的黄色阈值：min(10 天, 有效期/4)（ADR-0044 §4）。
 //
 // 写死 10 天的话，6 天期的 IP 证书刚签下来就是黄的。按有效期缩放后，
 // 90 天证书仍是 10 天；160 小时的 IP 证书是 40 小时 —— 它本该在剩 53 小时时续好，

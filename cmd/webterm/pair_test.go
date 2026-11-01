@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// UT-pair-wait：探针成功前不往下走；超时提示看日志并照常返回（ADR-0043 §6）。
+// UT-pair-wait：探针成功前不往下走；超时提示看日志并照常返回（ADR-0045 §6）。
 func TestWaitCertReady(t *testing.T) {
 	var out bytes.Buffer
 	n := 0

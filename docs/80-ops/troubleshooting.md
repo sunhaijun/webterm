@@ -68,7 +68,7 @@ echo | openssl s_client -connect <域名>:<端口> -servername <域名> 2>/dev/n
 ```
 
 `issuer` 里带 `STAGING` 说明正式服务在发 staging 证书（没有客户端信任它）。
-**ADR-0042 之后不会再发生**：`--acme-staging` 已经删了。
+**ADR-0044 之后不会再发生**：`--acme-staging` 已经删了。
 但**以前**用它跑过的机器，`certs/` 里可能还留着一张 —— autocert
 判断缓存证书是否可用时只看有效期、域名、私钥匹配，**不看签发者**，所以它会一直被用到
 快过期才续。手工删掉：
@@ -98,7 +98,7 @@ dig +short <域名>                   # 应当等于 curl -s ifconfig.me
 
 ### IP 模式：证书过期了 / 状态总览里证书标黄
 
-IP 证书只有 6 天期，约 4 天续一次，**只走 80 上的 HTTP-01**（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md)）。
+IP 证书只有 6 天期，约 4 天续一次，**只走 80 上的 HTTP-01**（[ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md)）。
 标黄（剩不到 40 小时）说明续期已经失败了十几次：
 
 ```bash

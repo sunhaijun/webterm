@@ -174,7 +174,7 @@ func TestServeFlagsAreConfigurable(t *testing.T) {
 	})
 }
 
-// UT-config-removed-key：删掉的键（acme-staging，ADR-0042 §3）报「已经删掉了」并带行号，
+// UT-config-removed-key：删掉的键（acme-staging，ADR-0044 §3）报「已经删掉了」并带行号，
 // 而不是「没有这个选项」—— 后者会让人怀疑自己拼错了。
 func TestConfigRemovedKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")

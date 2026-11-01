@@ -2,15 +2,15 @@
 #
 # webterm 一键安装
 #
-#   ./webterm install [--domain term.example.com]      手边有二进制：用它自己装（推荐，ADR-0043）
+#   ./webterm install [--domain term.example.com]      手边有二进制：用它自己装（推荐，ADR-0045）
 #   curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh | bash
 #
-# 不给 --domain：以前装过就沿用上次的参数，否则用本机公网 IPv4（ADR-0042）。
+# 不给 --domain：以前装过就沿用上次的参数，否则用本机公网 IPv4（ADR-0044）。
 #
 # 【从网上取的这份只负责下载】：下载、校验 SHA256 之后，交给下载来的那个二进制
 # 的 `webterm install`（它嵌着【自己那个版本】的本脚本）接着装。这样干活的脚本
 # 与二进制永远是同一个版本 —— 以前 main 上的脚本配 latest 的旧二进制，
-# 写出来的单元旧二进制根本不认（ADR-0043 §2）。
+# 写出来的单元旧二进制根本不认（ADR-0045 §2）。
 #
 # 本地试用（不配 systemd、不动特权端口）：
 #
@@ -93,7 +93,7 @@ usage() {
 用法: install.sh [选项]
 
   --domain <地址>    域名或公网 IPv4。不给：以前装过就沿用上次的参数，
-                     否则用本机公网 IPv4（IP 证书，ADR-0042）
+                     否则用本机公网 IPv4（IP 证书，ADR-0044）
   --dev              本地试用：只装二进制，不配 systemd、不 setcap
   --binary <路径>    用这个本地二进制，不下载、不校验（webterm install 用的就是它）
   --channel <名字>   latest（默认）或 dev（main 的滚动构建）
@@ -160,7 +160,7 @@ finish_args() {
     check_port --http-port "$HTTP_PORT"
     [ "$HTTPS_PORT" != "$HTTP_PORT" ] || die "--https-port 和 --http-port 不能相同（都是 $HTTPS_PORT）"
     case "$DOMAIN" in
-        *:*) die "--domain $DOMAIN 是 IPv6 地址，暂只支持 IPv4（ADR-0042）。只有 IPv6 的机器请用域名（AAAA 记录）。" ;;
+        *:*) die "--domain $DOMAIN 是 IPv6 地址，暂只支持 IPv4（ADR-0044）。只有 IPv6 的机器请用域名（AAAA 记录）。" ;;
     esac
     # PORT_ARGS 只在非默认端口时出现 —— 单元文件里写一串默认值是噪音
     PORT_ARGS=""
@@ -187,9 +187,9 @@ detect_public_ip() {
     printf '%s' "$ip"
 }
 
-# resolve_address：不给 --domain 时用什么地址（ADR-0043 §3）。
+# resolve_address：不给 --domain 时用什么地址（ADR-0045 §3）。
 #   1. 以前装过（有 install-state）→ 整套沿用，命令行给的覆盖同名项
-#   2. 否则 → 本机公网 IPv4，走 IP 证书（ADR-0042）
+#   2. 否则 → 本机公网 IPv4，走 IP 证书（ADR-0044）
 # --dev / --no-service 不需要地址。
 resolve_address() {
     [ -z "$DOMAIN" ] && [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ] || return 0
@@ -464,7 +464,7 @@ else
         die "取不到 SHA256SUMS，无法校验完整性，已中止。"
     fi
 
-    # ---------- 交接（ADR-0043 §2）----------
+    # ---------- 交接（ADR-0045 §2）----------
     #
     # 后面的事交给【下载来的这个二进制】自带的安装脚本做，这份到此为止。
     # 不认 install 的旧二进制（v0.1.0 及更早）直接拒绝：拿这份新脚本去装它，
@@ -615,13 +615,13 @@ fi
 
 [ "$DRY_RUN" = 1 ] || info "版本: $("$PREFIX/webterm" version)"
 
-# ---------- 4. 防火墙 + 实签自检（ADR-0043 §4–5）----------
+# ---------- 4. 防火墙 + 实签自检（ADR-0045 §4–5）----------
 #
 # 【放在 setcap 之后、启动服务之前】：用的是已经有绑定权限的那个二进制，
 # 端口也还空着。以前在装之前用刚下载、还没 setcap 的临时二进制跑静态检查，
 # 两件事都做不到，而且查不出最常见的故障 —— 云安全组没放行 80。
 # 现在 doctor --acme 真的签一张【正式】证书存进 certs/，服务启动直接用 —— 不多签；
-# CA 连不进来当场就知道，失败只消耗按小时计的失败额度（ADR-0042 §3）。
+# CA 连不进来当场就知道，失败只消耗按小时计的失败额度（ADR-0044 §3）。
 
 # open_firewall 放行机器自己的防火墙。装的就是要监听这两个端口的服务，
 # 放行它们是安装的一部分。云安全组碰不到 —— 那个靠下面的实签测出来。
@@ -671,7 +671,7 @@ fi
 #
 # 有了它，pair / doctor / devices 都不用再重复 --domain --https-port。
 #
-# 【地址和端口每次都同步，其它键不动】（ADR-0043 §3）。以前是「文件在就整份不动」，
+# 【地址和端口每次都同步，其它键不动】（ADR-0045 §3）。以前是「文件在就整份不动」，
 # 从 IP 换到域名之后 pair / doctor / 状态总览还在用旧地址；而整份重写又会冲掉
 # 用户自己加的 session-env 之类。
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -901,7 +901,7 @@ cat <<EOF
 $SETCAP_NOTE
 EOF
 
-# ---------- 首次安装：直接配对（ADR-0043 §6）----------
+# ---------- 首次安装：直接配对（ADR-0045 §6）----------
 #
 # pair --wait 先等本机 HTTPS 用受信任的证书能打开（最多 90 秒）再打码，
 # 免得扫码看到证书错误。二维码是最后一屏 —— 用户接下来要做的就是扫它。

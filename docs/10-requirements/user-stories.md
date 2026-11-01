@@ -17,9 +17,9 @@
 
 **US-1.4**（m6）我能把 webterm 添加到手机主屏，打开后没有浏览器地址栏，跟原生 App 一样。
 
-**US-1.5**（m11）我没有域名，或者懒得为一台临时服务器配 DNS：直接用这台机器的公网 IP 也能拿到合法 HTTPS 证书，手机照样能扫码、能装 PWA（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md)）。
+**US-1.5**（m11）我没有域名，或者懒得为一台临时服务器配 DNS：直接用这台机器的公网 IP 也能拿到合法 HTTPS 证书，手机照样能扫码、能装 PWA（[ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md)）。
 
-**US-1.6**（m11）上一台新服务器，我只做一件机器外的事（云安全组放行 80/443），然后 `scp` 一个二进制、跑一条 `./webterm install`，最后看到的就是配对二维码。服务器上不需要留 GitHub 凭据；哪一步不通（尤其是安全组），在启动服务**之前**就告诉我（[ADR-0043](../20-architecture/adr/0043-install-from-the-binary.md)）。
+**US-1.6**（m11）上一台新服务器，我只做一件机器外的事（云安全组放行 80/443），然后 `scp` 一个二进制、跑一条 `./webterm install`，最后看到的就是配对二维码。服务器上不需要留 GitHub 凭据；哪一步不通（尤其是安全组），在启动服务**之前**就告诉我（[ADR-0045](../20-architecture/adr/0045-install-from-the-binary.md)）。
 
 ---
 

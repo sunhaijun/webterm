@@ -74,7 +74,7 @@ func TestDescribeACMEError(t *testing.T) {
 	}
 }
 
-// IP 模式（ADR-0042）：挑战失败只提 80 与「是不是本机公网 IP」，
+// IP 模式（ADR-0044）：挑战失败只提 80 与「是不是本机公网 IP」，
 // 不该让人去查 DNS、关 Cloudflare 小云朵 —— 那些和 IP 无关，只会把人带偏。
 func TestDescribeACMEErrorIPMode(t *testing.T) {
 	got := describeACMEError(errors.New("acme: authorization error for 203.0.113.7: Invalid response"), "203.0.113.7")
@@ -167,7 +167,7 @@ func TestCertManagerRenewBeforeUsesLibraryDefault(t *testing.T) {
 	}
 }
 
-// 默认走 Let's Encrypt 正式环境（staging 已删，ADR-0042 §3）；只有测试注入的目录能改它。
+// 默认走 Let's Encrypt 正式环境（staging 已删，ADR-0044 §3）；只有测试注入的目录能改它。
 func TestCertManagerDirectory(t *testing.T) {
 	prod := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir()})
 	if prod.Client != nil {

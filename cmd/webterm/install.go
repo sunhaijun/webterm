@@ -11,7 +11,7 @@ import (
 	"github.com/sunhaijun/webterm/scripts"
 )
 
-// runInstall 用二进制里嵌着的 install.sh、以自己为 --binary 安装（ADR-0043 §1）。
+// runInstall 用二进制里嵌着的 install.sh、以自己为 --binary 安装（ADR-0045 §1）。
 //
 // 【Go 这边只负责把脚本取出来跑】，不重写安装逻辑 —— 升级路径上的知识
 // （setcap 会随替换丢失、单元跟着端口走、迁移不能在自己的会话里做……）

@@ -23,7 +23,7 @@ import (
 	"golang.org/x/crypto/acme"
 )
 
-// IP 模式的证书（ADR-0042）。
+// IP 模式的证书（ADR-0044）。
 //
 // Let's Encrypt 的 IP 证书只有 shortlived 一种（约 160 小时），而 autocert
 // 只会下 dns 订单、只按 SNI 找证书 —— 浏览器连 IP 时根本不发 SNI。
@@ -51,7 +51,7 @@ func IsIPAddress(addr string) bool {
 // CheckAddress 校验 --domain 的取值。空值留给调用方按模式处理。
 //
 // IPv6 字面量先拒掉：监听地址默认 0.0.0.0、URL 拼接与端口检查都没处理
-// 方括号和双栈，让它进来只会在更远的地方以更难懂的方式失败（ADR-0042 §1）。
+// 方括号和双栈，让它进来只会在更远的地方以更难懂的方式失败（ADR-0044 §1）。
 func CheckAddress(addr string) error {
 	if strings.Contains(addr, ":") && net.ParseIP(strings.Trim(addr, "[]")) != nil {
 		return fmt.Errorf("--domain %s 是 IPv6 地址，暂只支持 IPv4。\n"+
@@ -222,7 +222,7 @@ func (m *ipCertManager) obtain(ctx context.Context) (*tls.Certificate, error) {
 	return c, nil
 }
 
-// authorize 过一个 authz：只走 HTTP-01（ADR-0042 §2 说了为什么不做 TLS-ALPN-01）。
+// authorize 过一个 authz：只走 HTTP-01（ADR-0044 §2 说了为什么不做 TLS-ALPN-01）。
 func (m *ipCertManager) authorize(ctx context.Context, client *acme.Client, zurl string) error {
 	z, err := client.GetAuthorization(ctx, zurl)
 	if err != nil {

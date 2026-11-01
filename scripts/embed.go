@@ -1,4 +1,4 @@
-// Package scripts 把 install.sh 编进二进制（ADR-0043）。
+// Package scripts 把 install.sh 编进二进制（ADR-0045）。
 //
 // `webterm install` 用的就是这一份：二进制和它的安装脚本永远是同一个版本，
 // scp 一个二进制上去就能装，不需要再从网上取脚本、也不需要 GitHub 凭据。

@@ -72,7 +72,7 @@ type Server struct {
 	// 没有它的话，ACME 失败在 autocert 里会被压成一句
 	// "no viable challenge type found"，查不动。
 	logf func(string, ...any)
-	// profiles 是目录里 meta.profiles 声明的 profile（ADR-0042：IP 证书要 shortlived）。
+	// profiles 是目录里 meta.profiles 声明的 profile（ADR-0044：IP 证书要 shortlived）。
 	// nil 表示这个 CA 不支持 profile —— 用来测「CA 不签 IP 证书」那条报错。
 	profiles map[string]string
 	// orders 按到达顺序记下每个订单的标识类型与 profile，测试据此断言请求的形状。

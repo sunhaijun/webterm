@@ -120,7 +120,7 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 - `UT-install-default-addr`：不给 `--domain` 时，有 `install-state` 就沿用它（命令行参数覆盖同名项），没有就用公网 IP（`WEBTERM_PUBLIC_IP` 注入，不联网）；用 `--print-unit` 看 `ExecStart`
 - `UT-install-config-sync`：已有配置文件时，重装改写 `domain` / 端口、端口回到默认值时删掉那一行，其它键原样保留
 
-### `internal/agent`：IP 证书（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md)）
+### `internal/agent`：IP 证书（[ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md)）
 
 - `UT-ipcert-1`：续期时刻 = `NotAfter - 有效期/3`；失败后一小时重试
 - `UT-ipcert-2`：IPv6 字面量、非 IP 的地址不进 IP 模式 / 被拒绝；`IsIPAddress` 判定

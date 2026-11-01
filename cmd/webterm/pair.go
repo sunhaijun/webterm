@@ -36,7 +36,7 @@ func runPair(args []string) error {
 		return fmt.Errorf("需要 --domain 来拼出配对 URL（本地开发用 --dev）")
 	}
 
-	// 先等证书，再生成配对码：码的 5 分钟从真正能用的那一刻开始算（ADR-0043 §6）
+	// 先等证书，再生成配对码：码的 5 分钟从真正能用的那一刻开始算（ADR-0045 §6）
 	if *wait && !c.dev {
 		waitCertReady(os.Stdout, 90*time.Second, time.Second, func() error {
 			return probeTrustedHTTPS(c.domain, *httpsPort)

@@ -14,7 +14,7 @@ import (
 	"github.com/sunhaijun/webterm/scripts"
 )
 
-// install.sh 的行为测试（ADR-0043）。全都不联网、不需要 sudo、不碰 systemd：
+// install.sh 的行为测试（ADR-0045）。全都不联网、不需要 sudo、不碰 systemd：
 // --print-unit 只打印；真跑的几条都带 --no-service --no-setcap，装到临时目录。
 
 const installScript = "../../scripts/install.sh"

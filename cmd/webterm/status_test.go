@@ -104,7 +104,7 @@ func TestRenderStatus(t *testing.T) {
 			nil,
 		},
 		{
-			// UT-status-cert：6 天期的 IP 证书刚签下来不标黄（ADR-0042 §4）
+			// UT-status-cert：6 天期的 IP 证书刚签下来不标黄（ADR-0044 §4）
 			"IP 证书刚签下来",
 			status{running: true, url: "https://203.0.113.7", ipMode: true, certOK: true,
 				certStart: now.Add(-time.Hour), certExpiry: now.Add(159 * time.Hour), devices: 1},

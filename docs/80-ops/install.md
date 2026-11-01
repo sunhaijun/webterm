@@ -5,7 +5,7 @@
 ## 从零到能用
 
 需要：一台有公网 IPv4 的 Linux 机器（x86_64 / arm64），一个能 sudo 的普通用户。
-**域名可选** —— 没有就用 IP（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md)）。
+**域名可选** —— 没有就用 IP（[ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md)）。
 
 ### 1. 云安全组放行 80 和 443
 
@@ -29,7 +29,7 @@ scp webterm server:  &&  ssh -t server ./webterm install                        
 scp webterm server:  &&  ssh -t server ./webterm install --domain term.example.com    # 用域名
 ```
 
-二进制里嵌着安装脚本，`webterm install` 用它自己装自己（[ADR-0043](../20-architecture/adr/0043-install-from-the-binary.md)）。
+二进制里嵌着安装脚本，`webterm install` 用它自己装自己（[ADR-0045](../20-architecture/adr/0045-install-from-the-binary.md)）。
 `-t` 不能省：脚本中途要 sudo 问密码。手边没有二进制就[从源码构建](#从源码构建)一个，或者在服务器上直接从网上装：
 
 ```bash
@@ -40,7 +40,7 @@ gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
 ```
 
 > `--channel dev` 在 v0.2.0 发布之前是必需的：`latest` 还是 v0.1.0，它早于这套安装流程，
-> 脚本会拒绝装它（[ADR-0043](../20-architecture/adr/0043-install-from-the-binary.md) §2）。
+> 脚本会拒绝装它（[ADR-0045](../20-architecture/adr/0045-install-from-the-binary.md) §2）。
 
 用**普通用户**跑，不要 sudo —— 脚本会在需要的地方自己调 sudo。
 （agent 跑在哪个用户下，攻破它就等于拿到哪个用户的权限。以 root 跑等于把
@@ -151,7 +151,7 @@ webterm 不往 shell 里注入任何东西，用哪个 shell、哪个版本都�
 
 `--acme` 那一项要**真的绑上**两个端口，所以只能在服务没在跑的时候做（升级时安装脚本会跳过它）。
 它签的是**正式证书**，存进 `certs/`，服务启动直接用 —— 不多签一张。`certs/` 里已经有有效证书时直接用它，
-会说「没有找 CA」。签失败只消耗按小时计的失败额度（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md) §3），
+会说「没有找 CA」。签失败只消耗按小时计的失败额度（[ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md) §3），
 所以不需要先拿 staging 试。
 
 ## 安装
@@ -206,7 +206,7 @@ curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/inst
 ```
 
 **从网上取的脚本只负责下载**：认架构 → 下载二进制 → **校验 SHA256** → 交给**下载来的那个二进制**
-的 `webterm install` 接着装（[ADR-0043](../20-architecture/adr/0043-install-from-the-binary.md) §2）。
+的 `webterm install` 接着装（[ADR-0045](../20-architecture/adr/0045-install-from-the-binary.md) §2）。
 这样干活的脚本和二进制永远是同一个版本。下载来的版本早于这套流程（不认 `install`，v0.1.0 及更早）
 时会直接中止 —— v0.2.0 发布之前 `latest` 就是这种情况，所以要加 `--channel dev`（`main` 的滚动构建）。
 
@@ -428,7 +428,7 @@ ss -lntp | grep -E ':(80|443)\b'
 
 ### IP 证书
 
-`--domain` 是 IPv4 时走另一套（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md)）：Let's Encrypt 的 IP 证书**只有 6 天期**
+`--domain` 是 IPv4 时走另一套（[ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md)）：Let's Encrypt 的 IP 证书**只有 6 天期**
 （`shortlived` profile，约 160 小时），autocert 不支持，由 agent 自己的证书管理器申请。
 
 | | 域名 | IP |

@@ -50,7 +50,7 @@ type Servers struct {
 	https *http.Server
 	http  *http.Server
 	lns   map[string]net.Listener
-	// stop 停掉后台的证书循环（IP 模式的续期，ADR-0042）
+	// stop 停掉后台的证书循环（IP 模式的续期，ADR-0044）
 	stop context.CancelFunc
 }
 
@@ -204,7 +204,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 		// autocert 默认是【懒加载】的：证书要等第一次 TLS 握手才去申请。
 		// 那意味着启动时看不出 ACME 通不通 —— 用户得开浏览器才知道。
 		// 这里主动触发一次，成功打出到期时间，失败给可读诊断（AC-1.13）。
-		// IP 模式下它还是续期循环（ADR-0042）：自管的证书没有 autocert 的定时器。
+		// IP 模式下它还是续期循环（ADR-0044）：自管的证书没有 autocert 的定时器。
 		go warm(ctx)
 	}
 	return s, errCh, nil
@@ -229,7 +229,7 @@ func (a *Agent) certSource(cfg ServeConfig) (certSource, func(context.Context)) 
 // tlsConfigFor 是 HTTPS 监听的 TLS 配置。
 //
 // 域名模式要带 acme-tls/1：autocert 先试 TLS-ALPN-01，续期在 80 关掉后也能走 443。
-// IP 模式只走 HTTP-01（ADR-0042 §2），不声明它。
+// IP 模式只走 HTTP-01（ADR-0044 §2），不声明它。
 func tlsConfigFor(cfg ServeConfig, src certSource) *tls.Config {
 	protos := []string{"h2", "http/1.1"}
 	if !IsIPAddress(cfg.Domain) {
@@ -252,14 +252,14 @@ func prepareCertDir(dir string) error {
 	return nil
 }
 
-// IssueCheck 是 webterm doctor --acme 的核心（ADR-0043 §4）：临时监听
+// IssueCheck 是 webterm doctor --acme 的核心（ADR-0045 §4）：临时监听
 // http / https 两个端口，把证书签好存进 cfg.CertDir（就是服务用的 certs/），
 // 返回叶子证书，然后释放端口。issued 报告这次是不是真的找 CA 签了一张 ——
 // 缓存里已经有有效证书时直接用它，不多签。
 //
 // 它证明的是机器内部唯一查不出来的那件事：CA 从公网连得进来
 // （云安全组、NAT、运营商封 80）。签的是【正式】证书：成功的那次就是正式签发，
-// 服务启动直接用；失败只消耗按小时计的失败额度（ADR-0042 §3），用不着 staging。
+// 服务启动直接用；失败只消耗按小时计的失败额度（ADR-0044 §3），用不着 staging。
 func IssueCheck(ctx context.Context, cfg ServeConfig) (leaf *x509.Certificate, issued bool, err error) {
 	if err := CheckAddress(cfg.Domain); err != nil {
 		return nil, false, err
@@ -329,7 +329,7 @@ func IssueCheck(ctx context.Context, cfg ServeConfig) (leaf *x509.Certificate, i
 //
 // 单独抽出来是为了能单测两条性质：HostPolicy 不通配，以及 RenewBefore 留空。
 func newCertManager(cfg ServeConfig) *autocert.Manager {
-	// 只为域名服务。IP 走 ipCertManager（ADR-0042）：autocert 只会下 dns 订单。
+	// 只为域名服务。IP 走 ipCertManager（ADR-0044）：autocert 只会下 dns 订单。
 	m := &autocert.Manager{
 		Prompt: autocert.AcceptTOS,
 		Cache:  autocert.DirCache(cfg.CertDir),
@@ -449,7 +449,7 @@ func warmupHello(domain string) *tls.ClientHelloInfo {
 }
 
 // describeACMEError 把 ACME 的失败翻译成"原因 + 怎么修"，
-// 而不是甩一行 Go 的 error（US-7.2 / AC-1.13）。domain 可以是 IP（ADR-0042）。
+// 而不是甩一行 Go 的 error（US-7.2 / AC-1.13）。domain 可以是 IP（ADR-0044）。
 func describeACMEError(err error, domain string) string {
 	msg := err.Error()
 	ip := IsIPAddress(domain)

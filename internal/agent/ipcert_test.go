@@ -19,7 +19,7 @@ import (
 	"github.com/sunhaijun/webterm/internal/store"
 )
 
-// IT-tls-4..6：IP 模式（ADR-0042）。和 acme_test.go 一样用本地假 CA。
+// IT-tls-4..6：IP 模式（ADR-0044）。和 acme_test.go 一样用本地假 CA。
 
 const testIP = "203.0.113.7"
 
@@ -137,7 +137,7 @@ func TestIPModeIssuesShortlivedIPCertificate(t *testing.T) {
 	}
 }
 
-// IP 模式不声明 acme-tls/1：它只走 HTTP-01（ADR-0042 §2），声明了 CA 也用不上，
+// IP 模式不声明 acme-tls/1：它只走 HTTP-01（ADR-0044 §2），声明了 CA 也用不上，
 // 反倒让扫描器以为这里能做 TLS-ALPN-01。
 func TestIPModeDoesNotAdvertiseACMEALPN(t *testing.T) {
 	ca := newCA(t)

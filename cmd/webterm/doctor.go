@@ -111,7 +111,7 @@ func runDoctor(args []string) error {
 	}
 
 	if agent.IsIPAddress(c.domain) {
-		// IP 模式（ADR-0042）：没有 DNS 可查，查的是「这个 IP 真是本机的公网 IP」
+		// IP 模式（ADR-0044）：没有 DNS 可查，查的是「这个 IP 真是本机的公网 IP」
 		check("公网 IP", func() (string, error) { return checkPublicIP(c.domain, lookupPublicIP) })
 	} else {
 		checkDNS(check, c.domain)
@@ -143,7 +143,7 @@ func runDoctor(args []string) error {
 	return summarize(failed, warned, *acmeCheck)
 }
 
-// runIssueCheck 把证书签好存进服务用的 certs/（ADR-0043 §4）。签下来的就是正式证书，
+// runIssueCheck 把证书签好存进服务用的 certs/（ADR-0045 §4）。签下来的就是正式证书，
 // 服务启动直接用，不签第二次；已有有效证书时直接用它并如实说「没有找 CA」。
 func runIssueCheck(domain, certDir string, httpPort, httpsPort int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
