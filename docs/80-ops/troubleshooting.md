@@ -223,6 +223,21 @@ sudo journalctl -u webterm | grep -iE 'oom|Main process exited|Stopping'
 
 systemd 的这些记录在系统日志里，所以要 `sudo`。`journalctl -u webterm` 不加 sudo 只能看到 agent 自己写的那部分。
 
+### 标签名不跟 claude 的标题变
+
+会话名优先用**前台程序**设的终端标题（[ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)），claude 空闲时是 `✳ …`、干活时是 `◐ …`。名字一直是目录名的话：
+
+- **在 tmux 里跑**：tmux 默认不把 pane 里程序的标题转给外层终端。在 `~/.tmux.conf` 加
+
+  ```
+  set -g set-titles on
+  set -g set-titles-string '#T'   # 当前 pane 的标题
+  ```
+
+  然后 `tmux source ~/.tmux.conf`。名字跟着的是 tmux **当前 pane** 的标题。
+- **程序就没设标题**：比如设了 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1`。
+- shell 自己在提示符时设的标题（Debian 默认 `.bashrc` 的 `user@host: dir`）**故意不用**，回到提示符就是目录名。
+
 ### "会话数已达上限"
 
 关掉不用的会话，或者加大：`--max-sessions 40`。

@@ -13,6 +13,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { Form } from '../app/form'
+import { EditIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { EXTRA_KEYS, appAction, isModifierKey, type ExtraKeyId, type Sticky } from './keymap'
@@ -138,7 +139,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
           onPointerDown={noFocus}
           onClick={p.onTogglePage}
         >
-          ✎
+          <EditIcon />
         </button>
       </div>
       <div

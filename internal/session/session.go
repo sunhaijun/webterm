@@ -57,6 +57,12 @@ type Session struct {
 	mu         sync.RWMutex // 保护以下所有字段
 	name       string
 	nameManual bool
+	// 终端标题作自动名（ADR-0043）：title 是此刻采用的（已清洗，"" = 不用），
+	// titlePgrp 是它的归属（最近一次写标题时在前台的进程组），titleSeen 是上一轮
+	// 轮询看到的写入次数。前两个进交接，titleSeen 跟着模拟器从导入后重新算。
+	title      string
+	titlePgrp  int
+	titleSeen  uint64
 	cwd        string
 	status     string
 	exitCode   *int
@@ -105,11 +111,14 @@ func (s *Session) Info() protocol.SessionInfo {
 	}
 }
 
-// displayNameLocked 实现自动命名（AC-4.4）。
-// 不做重名去重 —— 两个都在 webterm 目录下的会话本来就该同名。
+// displayNameLocked 实现自动命名（AC-4.4）：手动名 > 前台程序设的终端标题（ADR-0043）>
+// CWD 的 basename。不做重名去重 —— 两个都在 webterm 目录下的会话本来就该同名。
 func (s *Session) displayNameLocked() string {
 	if s.nameManual {
 		return s.name
+	}
+	if s.title != "" {
+		return s.title
 	}
 	if s.cwd == "" {
 		return "shell"
@@ -152,7 +161,7 @@ func (s *Session) TermSnapshot() (seq uint64, data []byte) {
 	return s.ring.HeadSeq(), s.term.Snapshot()
 }
 
-// Rename 设置手动名。传 nil 恢复跟随 CWD 自动改名。
+// Rename 设置手动名。传 nil 恢复自动命名（终端标题 / CWD）。
 func (s *Session) Rename(name *string) {
 	s.mu.Lock()
 	if name == nil || *name == "" {
@@ -571,7 +580,8 @@ func (s *Session) export() (handoff.Session, error) {
 	}
 	h := handoff.Session{
 		SID: s.sid, PtmxFD: -1, CreatedAt: s.createdAt,
-		Name: s.name, NameManual: s.nameManual, CWD: s.cwd, Status: s.status, ExitCode: s.exitCode,
+		Name: s.name, NameManual: s.nameManual, Title: s.title, TitlePgrp: s.titlePgrp,
+		CWD: s.cwd, Status: s.status, ExitCode: s.exitCode,
 		Cols: s.cols, Rows: s.rows,
 		RingBase: base, RingData: data,
 		VTerm:    vt,

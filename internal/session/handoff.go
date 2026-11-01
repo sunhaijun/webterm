@@ -128,6 +128,8 @@ func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
 		createdAt:  hs.CreatedAt,
 		name:       hs.Name,
 		nameManual: hs.NameManual,
+		title:      hs.Title,
+		titlePgrp:  hs.TitlePgrp,
 		cwd:        hs.CWD,
 		status:     hs.Status,
 		exitCode:   hs.ExitCode,
@@ -143,6 +145,8 @@ func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
 		readDone:   make(chan struct{}),
 		fz:         newFreezer(),
 	}
+	// 从环形缓冲重放出来的模拟器（schema 1）数过一遍历史里的标题：那些不是「刚设的」
+	_, s.titleSeen = s.term.Title()
 	if hs.Status != protocol.StatusRunning {
 		// 已退出：ring 与模拟器保留供回看（AC-4.5），没有 fd 也没有进程
 		s.inputQ.close()

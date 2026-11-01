@@ -20,7 +20,7 @@ test.afterEach(() => agent.stop())
 const geo = async (p: Page) => ({ rect: await rectOf(p, '[data-testid=terminal]'), size: await hooks.size(p) })
 const closeVisible = (p: Page, sid: number) =>
   p.getByTestId(`tab-${sid}-close`).evaluate((el) => getComputedStyle(el).visibility === 'visible')
-/** 标签上显示的名字（不含 ⇵ 与未读点）。 */
+/** 标签上显示的名字（不含编号、图钉与未读点）。 */
 const tabName = (p: Page, sid: number) => p.getByTestId(`tab-${sid}`).locator('.tab-name').textContent()
 /** `+` 的左边缘到标签条右边缘的间隔（ADR-0035 §2）。 */
 const plusGap = async (p: Page) => {
@@ -143,11 +143,13 @@ test.describe('1440×900 鼠标', () => {
     expect(dialogs, '不用浏览器对话框').toBe(0)
   })
 
-  test('E2E-41 ④ 改名：双击 → 输入框 → 回车；清空回车恢复自动命名', async ({ page }) => {
+  test('E2E-41 ④ 改名：双击 → 输入框 → 回车；清空回车恢复自动命名；改名前后都带编号', async ({ page }) => {
     await agent.open(page)
     const sid = (await hooks.sid(page))!
     const auto = (await tabName(page, sid))!
     expect(auto, '自动命名 = CWD 的 basename（家目录是 ~）').toBe('~')
+    const idx = page.getByTestId(`tab-${sid}-idx`)
+    await expect(idx, '标签带编号（ADR-0041）').toHaveText('[1]')
 
     await page.getByTestId(`tab-${sid}`).dblclick()
     const input = page.getByTestId('rename-input')
@@ -155,6 +157,7 @@ test.describe('1440×900 鼠标', () => {
     await input.fill('RENAMED')
     await input.press('Enter')
     await expect.poll(() => tabName(page, sid)).toBe('RENAMED')
+    await expect(idx, '改过名的也带编号，同抽屉').toHaveText('[1]')
 
     // 改名之后不再跟随 CWD
     await submit(page, 'cd /tmp')
@@ -180,7 +183,7 @@ test.describe('1440×900 鼠标', () => {
     await expect(menu.getByTestId('session-close')).toBeVisible()
     await menu.getByTestId('session-pin').click()
     await expect(menu).toHaveCount(0)
-    await expect(page.getByTestId(`tab-${a}`).locator('.pin-mark'), '名字前出现 ⇵').toHaveText('⇵')
+    await expect(page.getByTestId(`tab-${a}`).locator('.pin-mark svg'), '名字前出现图钉（SVG，ADR-0042）').toBeVisible()
 
     // A 跑持续输出，切到别的会话：A 的帧照样到（outSeq 在涨），也就不会有未读
     await switchTo(page, a)
@@ -197,7 +200,7 @@ test.describe('1440×900 鼠标', () => {
     expect(await hooks.unread(page, a)).toBe(false)
   })
 
-  test('E2E-41 ⑥ 未读：A 持续输出，切到 B → A 的标签有未读点；切回消失', async ({ page }) => {
+  test('E2E-41 ⑥ 未读：A 持续输出，切到 B → A 的标签有强调色的未读点；切回消失', async ({ page }) => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
     const b = await newSession(page)
@@ -207,6 +210,10 @@ test.describe('1440×900 鼠标', () => {
     await switchTo(page, b)
     await expect(page.getByTestId(`tab-${a}-unread`)).toBeVisible({ timeout: 20_000 })
     await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'true')
+    // 未读点是强调色（= 当前标签的文字色），不是红色（ADR-0042 §1）
+    const dot = await page.getByTestId(`tab-${a}-unread`).evaluate((e) => getComputedStyle(e).backgroundColor)
+    const accent = await page.getByTestId(`tab-${b}`).evaluate((e) => getComputedStyle(e).color)
+    expect(dot).toBe(accent)
     await switchTo(page, a)
     await expect(page.getByTestId(`tab-${a}-unread`)).toHaveCount(0)
     await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'false')
@@ -313,6 +320,19 @@ test.describe('1440×900 鼠标', () => {
     await expect(page.locator('.xterm-helper-textarea'), '关掉后焦点回到终端').toBeFocused()
     await page.keyboard.type('echo SETTINGS-BACK')
     await waitText(page, 'echo SETTINGS-BACK', '打字有回显')
+  })
+
+  test('E2E-41 ⑪ 终端标题作名字：前台程序设的用，shell 提示符设的不用，程序退出回到目录名（ADR-0043）', async ({ page }) => {
+    await agent.open(page)
+    const sid = (await hooks.sid(page))!
+    // harness 的 shell 读用户的 .bashrc：提示符可能每次都设 `user@host: dir` —— 不用
+    await submit(page, 'true')
+    await page.waitForTimeout(2000)
+    expect(await tabName(page, sid), 'shell 设的标题不用').toBe('~')
+    await submit(page, `bash -c 'printf "\\033]0;E2E TITLE\\007"; sleep 3'`)
+    await expect.poll(() => tabName(page, sid), { message: '前台程序设的标题' }).toBe('E2E TITLE')
+    await expect(page.getByTestId(`tab-${sid}-idx`), '编号仍在').toHaveText('[1]')
+    await expect.poll(() => tabName(page, sid), { message: '程序退出 → 回到目录名', timeout: 10_000 }).toBe('~')
   })
 })
 

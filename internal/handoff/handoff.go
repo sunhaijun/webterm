@@ -62,11 +62,16 @@ type Session struct {
 
 	Name       string `json:"name,omitempty"`
 	NameManual bool   `json:"name_manual,omitempty"`
-	CWD        string `json:"cwd"`
-	Status     string `json:"status"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
-	Cols       uint16 `json:"cols"`
-	Rows       uint16 `json:"rows"`
+	// Title / TitlePgrp：此刻采用的终端标题与它归属的前台进程组（ADR-0043 §4）。
+	// 不交接的话，升级后名字会先闪回目录名、等程序下次写标题才回来。旧快照里没有，
+	// 等于「没在用标题」。
+	Title     string `json:"title,omitempty"`
+	TitlePgrp int    `json:"title_pgrp,omitempty"`
+	CWD       string `json:"cwd"`
+	Status    string `json:"status"`
+	ExitCode  *int   `json:"exit_code,omitempty"`
+	Cols      uint16 `json:"cols"`
+	Rows      uint16 `json:"rows"`
 
 	RingBase uint64 `json:"ring_base"`
 	RingData []byte `json:"ring_data"`
