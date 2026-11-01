@@ -293,8 +293,8 @@ func TestACMEFailureIsDiagnosable(t *testing.T) {
 	for _, want := range []string{
 		"curl -sI http://" + testDomain, // 可以直接抄去跑
 		"dig +short " + testDomain,
-		"Cloudflare",     // 小云朵是第二常见的坑
-		"--acme-staging", // 正式环境失败时应当引导先去 staging
+		"Cloudflare",    // 小云朵是第二常见的坑
+		"doctor --acme", // 正式环境失败时应当引导先用 staging 实签一次（ADR-0043 §4）
 	} {
 		if !strings.Contains(report, want) {
 			t.Errorf("诊断里缺 %q，实际:\n%s", want, report)
