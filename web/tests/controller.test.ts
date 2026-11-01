@@ -615,3 +615,37 @@ describe('UT-order-1 拖动排序（ADR-0040）', () => {
     expect(ctl.get().sessions.map((s) => `${s.index}:${s.sid}`)).toEqual(['1:1', '2:2', '3:3'])
   })
 })
+
+describe('UT-close-1 关闭没落地', () => {
+  it('离线时关闭：提示，不标成关闭中（重连后照常收发）；确认浮层开着时再按关闭不覆盖', async () => {
+    sock.text(welcome([info(1), info(2)]))
+    ctl.requestClose(1)
+    ctl.requestClose(2)
+    expect(ctl.get().closing, '确认开着：第二次关闭忽略').toBe(1)
+    ctl.cancelClose()
+    sock.close()
+    ctl.requestClose(1)
+    ctl.confirmClose()
+    expect(ctl.get().toast?.text).toBe('未连接，稍后再关闭会话')
+    await new Promise((r) => setTimeout(r, 900))
+    const s2 = sockets[sockets.length - 1]!
+    s2.open()
+    s2.text(welcome([info(1), info(2)], { resumed: [{ sid: 1, status: 'ok', from_seq: 0, in_ack: 0 }] }))
+    inside('keydown', () => xterm(1).input('x', true))
+    expect(s2.inputs(), '没关成的会话照常收输入').toContain('x')
+  })
+
+  it('发出去了但重连后 welcome 里它还在：不再算关闭中', async () => {
+    sock.text(welcome([info(1), info(2)]))
+    ctl.requestClose(1)
+    ctl.confirmClose()
+    expect(sock.msgs('session.close')).toHaveLength(1)
+    sock.close()
+    await new Promise((r) => setTimeout(r, 900))
+    const s2 = sockets[sockets.length - 1]!
+    s2.open()
+    s2.text(welcome([info(1), info(2)], { resumed: [{ sid: 1, status: 'ok', from_seq: 0, in_ack: 0 }] }))
+    inside('keydown', () => xterm(1).input('y', true))
+    expect(s2.inputs()).toContain('y')
+  })
+})

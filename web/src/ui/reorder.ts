@@ -50,6 +50,8 @@ export interface DragOptions {
   scroller: HTMLElement
   /** 参与排序的各项，按当前顺序。 */
   items: HTMLElement[]
+  /** 开始拖时各项的 sid，与 items 一一对应（拖动中列表变了也按这份算）。 */
+  order: readonly number[]
   /** 被拖的那一项在 items 里的下标。 */
   from: number
   /** 按下时指针在轴上的位置（client 坐标）。 */
@@ -58,7 +60,7 @@ export interface DragOptions {
 
 /**
  * 一次拖动：被拖项跟着指针，其余项让位（都只改 transform，不动 DOM），靠边自动滚。
- * `finish()` 返回挪完之后的下标（没动就是 from），并把所有位移清掉。
+ * `finish()` 清掉所有位移，位置变了就返回该发的 session.move，否则 null。
  */
 export class DragReorder {
   private readonly o: DragOptions
@@ -76,9 +78,8 @@ export class DragReorder {
     const len = (b: DOMRect) => (o.axis === 'x' ? b.width : b.height)
     const rects = o.items.map(r)
     this.mids = rects.map((b) => lo(b) + len(b) / 2)
-    const me = rects[o.from]!
-    // 让位的距离 = 被拖项的尺寸 + 它和相邻项之间的空隙（标签之间没有空隙，行之间也没有）
-    this.size = len(me)
+    // 让位距离 = 被拖项的尺寸（项之间没有空隙）
+    this.size = len(rects[o.from]!)
     this.scroll0 = this.scrollPos()
     this.pos = o.start
     this.to = o.from
@@ -123,13 +124,15 @@ export class DragReorder {
     })
   }
 
-  /** 松手（或取消）：清掉位移，返回挪完之后的下标；`cancel` 时恒为 from。 */
-  finish(cancel = false): number {
+  /** 松手（或取消）：清掉位移；位置变了返回 `{sid, before}`（给 session.move），否则 null。 */
+  finish(cancel = false): { sid: number; before: number | null } | null {
     if (this.raf) cancelAnimationFrame(this.raf)
     this.raf = 0
     for (const el of this.o.items) el.style.transform = ''
     delete this.o.items[this.o.from]!.dataset.dragging
     delete this.o.scroller.dataset.reordering
-    return cancel ? this.o.from : this.to
+    const { order, from } = this.o
+    if (cancel || this.to === from) return null
+    return { sid: order[from]!, before: beforeAt(order, from, this.to) }
   }
 }

@@ -29,12 +29,10 @@ export interface ConnLike {
 export interface SessionView {
   sid: number
   name: string
-  nameIsManual: boolean
   cwd: string
   status: SessionStatus
   exitCode: number | null
-  createdAt: number
-  /** `[n]`：按创建顺序从 1 开始，关掉中间的后面的顺延。 */
+  /** `[n]`：当前显示顺序里的第几个（从 1 开始，ADR-0040）。 */
   index: number
   /** 保持接收（pin 订阅）。 */
   pinned: boolean
@@ -69,7 +67,7 @@ interface Entry {
 
 export class SessionStore {
   private readonly entries = new Map<number, Entry>()
-  /** 显示顺序（ADR-0040）：agent 给的，新建的排最后；不再按 created_at 排。 */
+  /** 显示顺序（ADR-0040）：agent 给的，新建的排最后。可能含还没收到 session.created 的 sid（占位）。 */
   private order: number[] = []
   private readonly conn: ConnLike
   private readonly h: StoreHooks
@@ -101,11 +99,9 @@ export class SessionStore {
     return this.ordered().map((e, i) => ({
       sid: e.info.sid,
       name: displayName(e.info),
-      nameIsManual: e.info.name_is_manual,
       cwd: e.info.cwd,
       status: e.info.status,
       exitCode: e.info.exit_code,
-      createdAt: e.info.created_at,
       index: i + 1,
       pinned: e.pinned,
       unread: e.info.sid !== this.activeSid && this.conn.isUnread(e.info.sid),
@@ -281,12 +277,13 @@ export class SessionStore {
 
   /**
    * agent 给的完整顺序（welcome.sessions[] 的顺序、session.order）：整个替换。
-   * 里面没有的已知会话（比如广播之前刚建的）按原来的相对顺序接在后面。
+   * 【还不认识的 sid 也留着占位】：别的连接刚建的会话，session.order 可能先于它的
+   * session.created 到（ADR-0040 §2），到了就落在 agent 给的位置上。
+   * 里面没有的已知会话（刚建、正在关）按原来的相对顺序接在后面。
    */
   setOrder(sids: readonly number[]): void {
-    const known = sids.filter((sid) => this.entries.has(sid))
-    const seen = new Set(known)
-    this.order = [...known, ...this.order.filter((sid) => !seen.has(sid) && this.entries.has(sid))]
+    const listed = new Set(sids)
+    this.order = [...sids, ...this.order.filter((sid) => !listed.has(sid) && this.entries.has(sid))]
     this.h.onChange()
   }
 

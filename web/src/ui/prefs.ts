@@ -22,7 +22,8 @@ export function readTheme(): Theme {
  * 打到 `<html data-theme>` 上。跟随系统时去掉，靠 `prefers-color-scheme`。
  * `color-scheme` 由 CSS 按 `data-theme` 设，这里不碰。
  */
-export function applyTheme(t: Theme, root: HTMLElement = document.documentElement): void {
+export function applyTheme(t: Theme): void {
+  const root = document.documentElement
   if (t === 'system') root.removeAttribute('data-theme')
   else root.setAttribute('data-theme', t)
 }
@@ -37,8 +38,7 @@ export function validFontSize(n: number): boolean {
 }
 
 export function readFontSize(): number {
-  const raw = safeGet(FONT_SIZE_KEY)
-  const n = raw === null || raw.trim() === '' ? NaN : Number(raw)
+  const n = Number(safeGet(FONT_SIZE_KEY)) // null / '' → 0，不合法
   return validFontSize(n) ? n : FONT_DEFAULT
 }
 

@@ -6,15 +6,13 @@
  * 上下位置也随字体度量变（ADR-0035 §3）。
  */
 
-const SIZE = 14
-
-function Icon({ d, size = SIZE }: { d: string; size?: number }) {
+function Icon({ d }: { d: string }) {
   return (
     <svg
       class="icon"
       viewBox="0 0 14 14"
-      width={size}
-      height={size}
+      width="14"
+      height="14"
       aria-hidden="true"
       fill="none"
       stroke="currentColor"

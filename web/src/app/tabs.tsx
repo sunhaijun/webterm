@@ -15,7 +15,8 @@ import type { ConnState, StateInfo } from '../conn/connection'
 import type { SessionView } from '../sessions/store'
 import { GearIcon, PlusIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
-import { DragReorder, beforeAt } from '../ui/reorder'
+import { capturePointer } from '../ui/pointer'
+import { DragReorder } from '../ui/reorder'
 import { needsReveal } from '../ui/viewport'
 import { connLabel } from './notices'
 import { RenameInput } from './sessions'
@@ -79,9 +80,9 @@ export function TopBar(p: TopBarProps) {
     setArmed(null)
     if (!t) return
     if (t.drag) {
-      const to = t.drag.finish(cancel)
+      const r = t.drag.finish(cancel)
       swallow.current = true
-      if (to !== t.index) latest.current.onMove(t.sid, beforeAt(latest.current.sessions.map((s) => s.sid), t.index, to))
+      if (r) latest.current.onMove(r.sid, r.before)
     } else if (t.armed && !cancel) {
       swallow.current = true
       latest.current.onMenu(t.sid, t.x, t.y)
@@ -91,13 +92,15 @@ export function TopBar(p: TopBarProps) {
   const startDrag = (t: TabPress, pointerId: number, el: HTMLElement) => {
     const strip = stripRef.current
     if (!strip) return
-    try {
-      el.setPointerCapture(pointerId)
-    } catch {
-      /* 合成事件没有活动指针 */
-    }
-    const items = [...strip.querySelectorAll<HTMLElement>('.tab')]
-    t.drag = new DragReorder({ axis: 'x', scroller: strip, items, from: t.index, start: t.x })
+    capturePointer(el, pointerId)
+    t.drag = new DragReorder({
+      axis: 'x',
+      scroller: strip,
+      items: [...strip.querySelectorAll<HTMLElement>('.tab')],
+      order: latest.current.sessions.map((s) => s.sid),
+      from: t.index,
+      start: t.x,
+    })
   }
 
   useLayoutEffect(() => {
@@ -167,6 +170,7 @@ export function TopBar(p: TopBarProps) {
             onPointerDown={(e) => {
               if ((e.target as Element).closest('.tab-close, input')) return
               if (e.pointerType !== 'touch' && e.button !== 0) return
+              if (tp.current) endPress(true) // 上一次按下没收到 pointerup（在别处松的手）
               const { clientX: x, clientY: y } = e
               const t: TabPress = { sid: s.sid, index, x, y, touch: e.pointerType === 'touch', armed: false, drag: null }
               tp.current = t
@@ -183,6 +187,7 @@ export function TopBar(p: TopBarProps) {
             onPointerMove={(e) => {
               const t = tp.current
               if (!t || t.sid !== s.sid) return
+              if (!t.touch && (e.buttons & 1) === 0) return endPress(true) // 鼠标已经在别处松开了
               if (t.touch && !t.armed) {
                 press.move(e.clientX, e.clientY)
                 return
@@ -202,7 +207,7 @@ export function TopBar(p: TopBarProps) {
               if (tp.current?.sid === s.sid) endPress(true)
             }}
             onClick={() => {
-              if (press.takeSwallowedClick() || swallow.current) {
+              if (swallow.current) {
                 swallow.current = false
                 return
               }
@@ -220,6 +225,8 @@ export function TopBar(p: TopBarProps) {
             onDblClick={() => p.onRenameStart(s.sid)}
             onContextMenu={(e) => {
               e.preventDefault()
+              // 触屏长按时 Android 会发 contextmenu：菜单由松手决定（原地松手才是菜单，移动了是拖）
+              if (tp.current?.touch) return
               p.onMenu(s.sid, e.clientX, e.clientY)
             }}
             onKeyDown={(e) => {

@@ -59,9 +59,6 @@ export interface AppState {
   page: KeyPage
 }
 
-/** 打开抽屉之前焦点在哪（AC-4.8：选中会话后按它恢复）。 */
-type FocusPlace = 'term' | 'text' | null
-
 const TOAST_MS = 3000
 
 export class AppController {
@@ -89,12 +86,13 @@ export class AppController {
   private toastTimer: ReturnType<typeof setTimeout> | undefined
   /** 自己发起的 session.create → 建好之后要不要把焦点给它。 */
   private readonly pendingCreate = new Map<string, boolean>()
-  private drawerFocus: FocusPlace = null
-  /** 打开设置之前焦点在哪：关掉设置后按它恢复。 */
-  private settingsFocus: FocusPlace = null
-  /** 打开关闭确认之前焦点在哪、是不是从会话抽屉里打开的（ADR-0038 §3）。 */
-  private closeFocus: FocusPlace = null
-  private closeFromDrawer = false
+  /**
+   * 浮层关掉之后要不要把焦点还给输入处（AC-4.8 / ADR-0037 §4 / ADR-0038 §3）：打开时记下。
+   * 抽屉记的是「打开前在不在打字」，选中会话、新建时再按形态算。
+   */
+  private drawerTyping = false
+  private settingsRefocus = false
+  private closeRefocus = false
   /**
    * 已经发了 session.close、还没收到 session.closed 的会话（ADR-0038 §5）。agent 先把会话从表里
    * 删掉、再等进程退出（最多 2s），这段时间里发给它的任何东西都会换来 unknown_session。
@@ -341,13 +339,12 @@ export class AppController {
   select(sid: number, focus?: boolean): void {
     const area = this.area
     if (!area || !this.store.has(sid)) return
-    const place = this.focusPlace()
+    const typing = this.typing()
     const same = sid === this.store.active
     this.store.activate(sid, area)
     this.attachIme()
     this.syncTextPage()
-    const want = focus ?? (place !== null || !this.state.coarse)
-    if (want && !(same && place !== null)) this.focusInput()
+    if ((focus ?? this.refocus(typing)) && !(same && typing)) this.focusInput()
     this.refresh()
   }
 
@@ -366,7 +363,7 @@ export class AppController {
       return
     }
     const reqID = `new-${++this.reqSeq}`
-    this.pendingCreate.set(reqID, focus ?? (this.focusPlace() !== null || !this.state.coarse))
+    this.pendingCreate.set(reqID, focus ?? this.refocus(this.typing()))
     const sid = this.store.active
     const cur = sid === null ? undefined : this.store.info(sid)
     const t = this.activeTerm()?.term
@@ -381,17 +378,16 @@ export class AppController {
     })
   }
 
-  /** 关闭会话：running 要二次确认，exited 直接关（session-ux.md §关闭会话）。 */
   /** 关闭会话：`running` 的先弹确认浮层（AC-4.11，ADR-0038），`exited` 的直接关。 */
   requestClose(sid: number): void {
     const info = this.store.info(sid)
-    if (!info) return
+    if (!info || this.state.closing !== null) return
     if (info.status !== 'running') {
       this.sendClose(sid)
       return
     }
-    this.closeFromDrawer = this.state.sessionsOpen
-    this.closeFocus = this.focusPlace()
+    // 从抽屉里打开的不还焦点（留在抽屉里）
+    this.closeRefocus = !this.state.sessionsOpen && this.refocus(this.typing())
     this.set({ closing: sid })
   }
 
@@ -413,11 +409,16 @@ export class AppController {
 
   private endClosing(): void {
     this.set({ closing: null })
-    if (!this.closeFromDrawer && (this.closeFocus !== null || !this.state.coarse)) this.focusInput()
+    if (this.closeRefocus) this.focusInput()
   }
 
   private sendClose(sid: number): void {
     if (this.closeSent.has(sid)) return
+    // 离线时 send 会静默丢掉：别标成关闭中（否则重连后它活着却再也收不到输入）
+    if (this.state.conn !== 'online') {
+      this.toast('warn', '未连接，稍后再关闭会话')
+      return
+    }
     this.closeSent.add(sid)
     this.conn.send({ t: T.sessionClose, req_id: `close-${++this.reqSeq}`, sid })
   }
@@ -444,7 +445,7 @@ export class AppController {
   // ---------- 浮层 ----------
 
   openSessions(): void {
-    this.drawerFocus = this.focusPlace()
+    this.drawerTyping = this.typing()
     this.set({ sessionsOpen: true, settingsOpen: false })
   }
 
@@ -454,31 +455,28 @@ export class AppController {
 
   /** 在抽屉里选中一个会话：关抽屉，焦点按「打开抽屉之前」恢复（在这次点击里，iOS 才弹键盘）。 */
   selectFromDrawer(sid: number): void {
-    const place = this.drawerFocus
     this.set({ sessionsOpen: false })
-    this.select(sid, place !== null || !this.state.coarse)
+    this.select(sid, this.refocus(this.drawerTyping))
   }
 
   newFromDrawer(): void {
-    const place = this.drawerFocus
     this.set({ sessionsOpen: false })
-    this.newSession(place !== null || !this.state.coarse)
+    this.newSession(this.refocus(this.drawerTyping))
   }
 
   /**
    * 打开设置（ADR-0037 §2）。从会话抽屉里打开的，焦点此刻在抽屉里，「之前在哪」看打开抽屉之前。
    */
   openSettings(): void {
-    this.settingsFocus = this.state.sessionsOpen ? this.drawerFocus : this.focusPlace()
+    this.settingsRefocus = this.refocus(this.state.sessionsOpen ? this.drawerTyping : this.typing())
     this.set({ settingsOpen: true, sessionsOpen: false })
   }
 
   /** 关掉设置：打开前在打字的、或非触摸设备，焦点还回去（ADR-0037 §4）。 */
   closeSettings(): void {
     if (!this.state.settingsOpen) return
-    const place = this.settingsFocus
     this.set({ settingsOpen: false })
-    if (place !== null || !this.state.coarse) this.focusInput()
+    if (this.settingsRefocus) this.focusInput()
   }
 
   // ---------- 偏好（AC-5.3，ADR-0037） ----------
@@ -746,6 +744,8 @@ export class AppController {
     const live = new Set(w.sessions.map((s) => s.sid))
     for (const s of this.store.list()) if (!live.has(s.sid)) this.store.remove(s.sid)
     for (const s of w.sessions) this.store.upsert(s)
+    // welcome 里还在的会话，它的 session.close 没落地（断线、agent 重启后 sid 复用）：不再算关闭中
+    this.closeSent.clear()
     // welcome.sessions[] 的顺序就是显示顺序（ADR-0040）
     this.store.setOrder(w.sessions.map((s) => s.sid))
     if (gone) this.toast('warn', '会话已结束（agent 可能已重启）')
@@ -766,13 +766,13 @@ export class AppController {
 
   private closeLocal(sid: number): void {
     const wasActive = this.store.active === sid
-    const typing = this.focusPlace() !== null
+    const typing = this.typing()
     const next = wasActive ? this.store.neighbourOf(sid) : null
     // 【先标成关闭中再拆】：dispose 时 xterm 失焦，开了焦点上报的程序会再吐一个 ESC [O
     this.closeSent.add(sid)
     this.store.remove(sid)
     this.closeSent.delete(sid)
-    if (next !== null) this.select(next, typing || !this.state.coarse)
+    if (next !== null) this.select(next, this.refocus(typing))
   }
 
   private activeTerm() {
@@ -780,11 +780,15 @@ export class AppController {
     return sid === null ? undefined : this.store.termOf(sid)
   }
 
-  private focusPlace(): FocusPlace {
+  /** 焦点在不在输入处（终端或文本输入页）里。 */
+  private typing(): boolean {
     const el = document.activeElement
-    if (this.textPage && el === this.textPage.text) return 'text'
-    if (this.area?.contains(el)) return 'term'
-    return null
+    return (!!this.textPage && el === this.textPage.text) || !!this.area?.contains(el)
+  }
+
+  /** 要不要把焦点给输入处：原来在打字的，或者非触摸设备（无条件给，AC-4.8）。 */
+  private refocus(typing: boolean): boolean {
+    return typing || !this.state.coarse
   }
 
   // ---------- 调试 / E2E 钩子 ----------

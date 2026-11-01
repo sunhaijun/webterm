@@ -87,11 +87,14 @@ describe('列表', () => {
     expect(view(), '新建的排最后').toEqual(['1:9', '2:2', '3:7'])
   })
 
-  it('UT-order-1 session.order：不认识的 sid 忽略，没列出的已知会话按原相对顺序接在后面；本地先挪', () => {
+  it('UT-order-1 session.order：不认识的 sid 占位（它的 session.created 晚到时落在那里），没列出的已知会话按原相对顺序接在后面；本地先挪', () => {
     const { store } = make()
     for (const sid of [1, 2, 3, 4]) store.upsert(info(sid))
     store.setOrder([3, 99, 1])
     expect(store.list().map((s) => s.sid)).toEqual([3, 1, 2, 4])
+    store.upsert(info(99))
+    expect(store.list().map((s) => s.sid), '晚到的 99 落在 agent 给的位置').toEqual([3, 99, 1, 2, 4])
+    store.remove(99)
     store.move(4, 3)
     expect(store.list().map((s) => s.sid)).toEqual([4, 3, 1, 2])
     store.move(4, null)

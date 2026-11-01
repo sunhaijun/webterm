@@ -14,7 +14,8 @@ import { shortCwd } from '../sessions/store'
 import { Drawer } from '../ui/drawer'
 import { GripIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
-import { DragReorder, beforeAt } from '../ui/reorder'
+import { capturePointer } from '../ui/pointer'
+import { DragReorder } from '../ui/reorder'
 import { RowSwipe } from '../ui/rowswipe'
 import { menuPosition } from '../ui/viewport'
 
@@ -37,19 +38,13 @@ interface RowGesture {
   swallow: boolean
 }
 
-interface GripDrag {
-  sid: number
-  from: number
-  drag: DragReorder
-}
-
 export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, onClose, onMove }: SessionListProps) {
   // 一次只会有一个按压：整张列表共用一个
   const press = useRef(new PressTracker()).current
   const swipe = useRef(new RowSwipe()).current
   const gesture = useRef<RowGesture | null>(null)
   const swallowClick = useRef(false)
-  const grip = useRef<GripDrag | null>(null)
+  const grip = useRef<DragReorder | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
   /** 同一时间只开一行（ADR-0039 §1）。 */
   const [openSid, setOpenSid] = useState<number | null>(null)
@@ -67,7 +62,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
   }, [sessions, openSid])
 
   // 拖到一半列表没了（抽屉被关）：清掉位移
-  useEffect(() => () => grip.current?.drag.finish(true), [])
+  useEffect(() => () => void grip.current?.finish(true), [])
 
   /**
    * 这次手势（左滑、长按）之后浏览器补发的那个 click 吞掉。【长按尤其要紧】：行被推开之后，
@@ -101,6 +96,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
   }
 
   const onRowMove = (e: PointerEvent) => {
+    if (e.buttons === 0) return // 没按着（鼠标悬停）：不是手势
     press.move(e.clientX, e.clientY)
     const g = gesture.current
     if (!g) return
@@ -109,11 +105,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
     if (!g.swallow) {
       g.swallow = true
       press.cancel()
-      try {
-        g.row.setPointerCapture(e.pointerId)
-      } catch {
-        /* 合成事件没有活动指针 */
-      }
+      capturePointer(g.row, e.pointerId)
       if (openSid !== null && openSid !== g.sid) setOpenSid(null)
     }
     g.row.style.transition = 'none'
@@ -153,28 +145,28 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
     onSelect(s.sid)
   }
 
-  const onGripDown = (e: PointerEvent, index: number, sid: number) => {
+  const onGripDown = (e: PointerEvent, index: number) => {
     e.preventDefault()
     e.stopPropagation()
     const list = listRef.current
-    if (!list || grip.current) return
+    if (!list) return
+    grip.current?.finish(true) // 上一次没收尾（拖到一半那一行没了）
     setOpenSid(null)
-    try {
-      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    } catch {
-      /* 合成事件没有活动指针 */
-    }
-    const scroller = list.closest<HTMLElement>('.drawer-body') ?? list
-    const items = [...list.children] as HTMLElement[]
-    grip.current = { sid, from: index, drag: new DragReorder({ axis: 'y', scroller, items, from: index, start: e.clientY }) }
+    capturePointer(e.currentTarget as Element, e.pointerId)
+    grip.current = new DragReorder({
+      axis: 'y',
+      scroller: list.closest<HTMLElement>('.drawer-body') ?? list,
+      items: [...list.children] as HTMLElement[],
+      order: sessions.map((s) => s.sid),
+      from: index,
+      start: e.clientY,
+    })
   }
 
   const onGripUp = (cancel: boolean) => {
-    const g = grip.current
+    const r = grip.current?.finish(cancel)
     grip.current = null
-    if (!g) return
-    const to = g.drag.finish(cancel)
-    if (to !== g.from) onMove(g.sid, beforeAt(sessions.map((s) => s.sid), g.from, to))
+    if (r) onMove(r.sid, r.before)
   }
 
   return (
@@ -249,8 +241,8 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
                 class="row-grip"
                 data-testid={`session-${s.sid}-grip`}
                 aria-label="拖动排序"
-                onPointerDown={(e) => onGripDown(e, i, s.sid)}
-                onPointerMove={(e) => grip.current?.drag.move(e.clientY)}
+                onPointerDown={(e) => onGripDown(e, i)}
+                onPointerMove={(e) => grip.current?.move(e.clientY)}
                 onPointerUp={() => onGripUp(false)}
                 onPointerCancel={() => onGripUp(true)}
                 onClick={(e) => e.stopPropagation()}

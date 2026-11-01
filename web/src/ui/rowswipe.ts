@@ -37,11 +37,6 @@ export class RowSwipe {
     return this.offset
   }
 
-  /** 是否接管了这次手势（接管了，抬手后的 click 要吞掉）。 */
-  get tracking(): boolean {
-    return this.horizontal === true
-  }
-
   /** 抬手：接管过就返回停在开还是关（过半算开），没接管返回 null。 */
   end(): 'open' | 'closed' | null {
     const took = this.horizontal === true

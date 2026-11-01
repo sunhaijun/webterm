@@ -73,7 +73,6 @@ describe('UT-swipe-1 行左滑', () => {
     const s = new RowSwipe()
     s.start(300, 100, false)
     expect(s.move(280, 102)).toBe(-20)
-    expect(s.tracking).toBe(true)
     expect(s.move(0, 102)).toBe(-ROW_ACTIONS_PX)
     expect(s.move(400, 102)).toBe(0)
   })

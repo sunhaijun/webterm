@@ -3,19 +3,11 @@
  *
  * 贴到 sheet 容器上。规则：手指从内部滚动区【已经到顶】时再往下拉，才当成关闭手势
  * （否则会和列表滚动打架）；拉过阈值松手即关，没到就弹回。只在触屏生效。
+ * `enabled`：此刻接不接这个手势（居中浮窗不接，ADR-0037 §4）。
  */
-export interface SwipeDismissOptions {
+export function installSwipeDismiss(host: HTMLElement, onDismiss: () => void, enabled: () => boolean): () => void {
   /** 拉过这么多像素松手就关。 */
-  threshold?: number
-  /** 找内部滚动区：返回它的 scrollTop，用来判断「是否已到顶」。默认找 Drawer 的 .drawer-body。 */
-  scroller?: (host: HTMLElement) => HTMLElement | null
-  /** 此刻接不接这个手势（居中浮窗不接，ADR-0037 §4）。默认一直接。 */
-  enabled?: () => boolean
-}
-
-export function installSwipeDismiss(host: HTMLElement, onDismiss: () => void, opts: SwipeDismissOptions = {}): () => void {
-  const threshold = opts.threshold ?? 90
-  const findScroller = opts.scroller ?? ((h) => h.querySelector<HTMLElement>('.drawer-body'))
+  const threshold = 90
   let startX = 0
   let startY = 0
   let dy = 0
@@ -23,17 +15,16 @@ export function installSwipeDismiss(host: HTMLElement, onDismiss: () => void, op
   /** 方向判定过没有：横向占优（左滑一行，ADR-0039）就整次不接管。 */
   let decided = false
 
-  const atTop = () => {
-    const sc = findScroller(host)
-    return !sc || sc.scrollTop <= 0
-  }
+  /** 内部滚动区（Drawer 的正文）到顶了没有。 */
+  const atTop = () => (host.querySelector<HTMLElement>('.drawer-body')?.scrollTop ?? 0) <= 0
   const onStart = (e: TouchEvent) => {
     if (e.touches.length !== 1) return
     startX = e.touches[0]!.clientX
     startY = e.touches[0]!.clientY
     dy = 0
     decided = false
-    dragging = (opts.enabled?.() ?? true) && atTop()
+    // 拖动柄上的按下是排序，不是关 sheet（ADR-0040）
+    dragging = enabled() && atTop() && !(e.target as Element).closest?.('.row-grip')
   }
   const onMove = (e: TouchEvent) => {
     if (!dragging || e.touches.length !== 1) return

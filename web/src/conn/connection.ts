@@ -19,6 +19,7 @@ import {
   T,
   decodeMessage,
   encodeMessage,
+  type Hello,
   type ResumeReq,
   type ServerMessage,
   type Welcome,
@@ -287,7 +288,7 @@ export class Connection {
           client_id: this.opts.clientID,
           instance_id: this.instanceID ?? null,
           resume,
-        }),
+        } satisfies Hello),
       )
     }
 

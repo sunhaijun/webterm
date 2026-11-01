@@ -1,5 +1,5 @@
 /**
- * 浮层原语 —— 手机上的会话抽屉、设置、关闭确认（ADR-0018，layout.md §浮层）。
+ * 浮层原语 —— 手机上的会话抽屉与改名、设置、关闭确认（ADR-0018，layout.md §浮层）。
  *
  * 形态看 `.app[data-form]`（CSS 里分，ADR-0037 §4）：`compact` 是贴底整宽 sheet（抓手 + 下滑关闭），
  * `wide` 是居中浮窗。关法：点遮罩 · `Esc` · ✕ ·（sheet）下滑。`backButton` 时另加系统返回键。
@@ -20,15 +20,13 @@ export interface DrawerProps {
   testid?: string
   /** 遮罩的 testid。 */
   backdropTestid?: string
-  /** 正文容器的 testid。 */
-  bodyTestid?: string
   /**
    * 系统返回键关闭（session-ux.md）：打开时 `history.pushState` 一条记录，`popstate`
    * 时关闭；用别的方式关闭时 `history.back()` 把那条记录消掉，不让记录越积越多 ——
    * 否则 Android 的 PWA 里按返回键会直接退出应用。
    */
   backButton?: boolean
-  /** 底部固定的一行（会话抽屉的「+ 新会话 · ⚙」）。 */
+  /** 底部固定的一行按钮（会话抽屉的「+ 新会话 · ⚙」，确认与改名的「取消 · 确定」）。 */
   foot?: ComponentChildren
   /** 哪一种浮层：CSS 按它挂各自的尺寸（会话抽屉有最小高度，ADR-0037 §5）。 */
   variant?: 'sessions' | 'settings' | 'confirm' | 'rename'
@@ -40,7 +38,6 @@ export function Drawer({
   onClose,
   testid,
   backdropTestid = 'drawer-backdrop',
-  bodyTestid,
   backButton = false,
   foot,
   variant,
@@ -56,13 +53,20 @@ export function Drawer({
     const el = sheetRef.current
     if (!el) return
     // 只有 sheet（compact）下滑关；形态和 CSS 看的是同一个属性
-    return installSwipeDismiss(el, () => closeRef.current(), { enabled: () => el.closest('.app[data-form="compact"]') !== null })
+    return installSwipeDismiss(el, () => closeRef.current(), () => el.closest('.app[data-form="compact"]') !== null)
   }, [])
   useLayoutEffect(() => {
     // 【焦点收进浮层】：它是模态，焦点留在外面的话 Esc 没有确定的接收者。
     // 打开会话抽屉时这一步也让软键盘收起，抽屉拿到完整高度。
     const el = sheetRef.current
-    if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true })
+    if (!el) return
+    const prev = document.activeElement as HTMLElement | null
+    if (!el.contains(prev)) el.focus({ preventScroll: true })
+    // 叠在另一层浮层上的（关闭确认、改名叠在抽屉上）：关掉时焦点还给下面那层，不掉到 body。
+    // 别的情况不管：焦点该不该回终端由控制器决定
+    return () => {
+      if (prev?.isConnected && prev.closest('.drawer') && el.contains(document.activeElement)) prev.focus({ preventScroll: true })
+    }
   }, [])
   useLayoutEffect(() => {
     // 捕获阶段兜底：焦点万一不在浮层里，Esc 仍归浮层，不落到终端里。
@@ -126,7 +130,7 @@ export function Drawer({
             ✕
           </button>
         </div>
-        <div class="drawer-body" data-testid={bodyTestid}>
+        <div class="drawer-body">
           {children}
         </div>
         {foot && <div class="drawer-foot">{foot}</div>}

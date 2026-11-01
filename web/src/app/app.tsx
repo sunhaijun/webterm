@@ -55,6 +55,13 @@ export function App({ onRevoked }: AppProps = {}) {
   const anyUnread = s.sessions.some((x) => x.unread)
   const empty = s.welcomed && s.sessions.length === 0
 
+  // 菜单 / 改名对着的会话没了（别处关掉、agent 重启）：状态也清掉 —— sid 会复用，
+  // 留着的话会对着后来同号的新会话弹出来（ADR-0038 §4 同理）
+  useEffect(() => {
+    if (menu && !menuSession) setMenu(null)
+    if (renaming !== null && !s.sessions.some((x) => x.sid === renaming)) setRenaming(null)
+  })
+
   // 改完名（或取消）输入框就没了，焦点会落回 body：鼠标设备上还给终端
   const endRename = () => {
     setRenaming(null)
@@ -193,14 +200,7 @@ export function App({ onRevoked }: AppProps = {}) {
       )}
 
       {renamingSheet && (
-        <RenameSheet
-          name={renamingSheet.name}
-          onCommit={(name) => {
-            setRenaming(null)
-            ctl.rename(renamingSheet.sid, name)
-          }}
-          onCancel={() => setRenaming(null)}
-        />
+        <RenameSheet name={renamingSheet.name} onCommit={(name) => rename(renamingSheet.sid, name)} onCancel={endRename} />
       )}
 
       {closing && <CloseConfirm name={closing.name} onOk={() => ctl.confirmClose()} onCancel={() => ctl.cancelClose()} />}

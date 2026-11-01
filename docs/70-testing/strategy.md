@@ -174,7 +174,7 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 | `UT-keymap-1` | 控制键映射表（对照 [`../40-frontend/keymap.md`](../40-frontend/keymap.md)） |
 | `UT-look-1` | 外观默认值：xterm 默认字号 14px、字体是系统等宽栈；`Ctrl+Shift+,` 不是应用快捷键（AC-5.3） |
 | `UT-close-1` | 关闭确认（AC-4.11，ADR-0038）：`running` 会话进 `closing` 而不发 `session.close`、`exited` 直接发；确认才发、取消不发；确认前先把焦点还给输入处；会话从列表里消失时 `closing` 清掉；关闭中的会话不发输入与 `resize`，它的 `unknown_session` 不弹 toast，本地没有的 sid 也不弹 |
-| `UT-order-1` | 排序（AC-4.13，ADR-0040）：`moveBefore` 挪到某项前 / 最后、`before` 不存在当作最后；按指针位置算插入下标（越过中线才换位）；store 按 agent 给的顺序列出、新建排最后、`session.order` 整个替换、`[n]` 跟着变 |
+| `UT-order-1` | 排序（AC-4.13，ADR-0040）：`moveBefore` 挪到某项前 / 最后、`before` 不存在当作最后；按指针位置算插入下标（越过中线才换位）；store 按 agent 给的顺序列出、新建排最后、`session.order` 整个替换（不认识的 sid 占位，晚到的会话落在那里）、`[n]` 跟着变 |
 | `UT-swipe-1` | 行左滑（AC-4.12，ADR-0039）：10px 门槛与横向占优、位移夹在 0 到 −216、过半松手打开否则弹回、打开后右滑关上；下滑关 sheet 只在纵向占优时接管 |
 | `UT-prefs-1` | 两项偏好（AC-5.3，ADR-0037）：主题默认跟随系统、`light` / `dark` 打上 `data-theme` 与 `color-scheme`、跟随系统时去掉；字号默认 14、只收 10–24 的整数、不合法回默认；`localStorage` 抛异常时用默认值且不抛；控制器改字号时所有实例一起换并补发 `resize`（容器没变也发），改主题时 xterm 主题跟着换 |
 | `UT-reconnect-1` | 指数退避序列、抖动范围、`online` 事件立即重试 |
