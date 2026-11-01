@@ -6,9 +6,8 @@
 云安全组放行 80/443  →  scp webterm server:  →  ssh -t server ./webterm install  →  扫码  →  开工
 ```
 
-不需要域名（直接用公网 IP 签证书），有域名就加 `--domain term.example.com`。
-安装会在启动服务之前先把证书签好，安全组没放行当场就报出来。
-手边还没有二进制就从源码构建（Go 1.27+、Node 22+）：`make build`。
+不需要域名（直接用公网 IP），有域名就加 `--domain term.example.com`。
+手边没有二进制就先下载：`gh release download --repo sunhaijun/webterm --pattern webterm-linux-amd64 -O webterm && chmod +x webterm`。
 详见 [安装文档](docs/80-ops/install.md)；本地试跑：`./webterm serve --dev`。
 
 ## 它解决什么
