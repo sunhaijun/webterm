@@ -38,6 +38,8 @@ const (
 	// ipCertRetry 是签发 / 续期失败后的重试间隔。Let's Encrypt 的失败验证限额是
 	// 每个账号每个标识每小时 5 次，一小时一次远在线下。
 	ipCertRetry = time.Hour
+	// ipCertAttemptTimeout 是一次签发（注册、下单、验证、出证）最多等多久。
+	ipCertAttemptTimeout = 5 * time.Minute
 
 	letsEncryptStagingURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
 )
@@ -388,7 +390,11 @@ func (a *Agent) runIPCert(ctx context.Context, m *ipCertManager, staging bool) {
 	env := envName(staging)
 	first := true
 	for {
-		leaf, renewed, err := m.ensure(ctx)
+		// 单次签发设上限：acme.Client 默认的 HTTP 客户端没有超时，CA 那边一挂起，
+		// 续期循环就永远卡在这一轮，证书几天后悄悄过期
+		attempt, cancel := context.WithTimeout(ctx, ipCertAttemptTimeout)
+		leaf, renewed, err := m.ensure(attempt)
+		cancel()
 		if ctx.Err() != nil {
 			return
 		}
