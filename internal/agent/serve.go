@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,9 +39,10 @@ type ServeConfig struct {
 	HTTPSPort int
 	CertDir   string
 
-	// ACMEDirectoryURL exists only for integration tests: it points at the
-	// local fake CA (internal/acmetest). Empty in production, which uses
-	// Let's Encrypt.
+	// ACMEDirectoryURL overrides the ACME directory: the local fake CA
+	// (internal/acmetest) in integration tests, or Let's Encrypt staging for
+	// doctor's reachability probe during a guided install (ADR-0046). Empty
+	// means Let's Encrypt production.
 	ACMEDirectoryURL string
 
 	// Inherited holds listener fds handed over by a hot upgrade (name → fd,
@@ -277,7 +279,8 @@ func prepareCertDir(dir string) error {
 // CA can reach it from the internet (cloud security groups, NAT, ISPs
 // blocking port 80). The certificate is a real production one that the
 // service uses as is; a failure only costs from the hourly failed-validation
-// limit (ADR-0044 §3), so staging isn't needed.
+// limit (ADR-0044 §3). Retries in a guided install probe staging first
+// (ADR-0046).
 func IssueCheck(ctx context.Context, cfg ServeConfig) (leaf *x509.Certificate, issued bool, err error) {
 	if err := CheckAddress(cfg.Domain); err != nil {
 		return nil, false, err
@@ -506,9 +509,16 @@ func describeACMEError(err error, domain string) string {
 		b.WriteString("  Failed validations are limited per hour (5 per hour): wait an hour and retry.\n")
 		b.WriteString("  Issued certificates are limited per week (50 per domain or IP, 5 for the same set of names):\n")
 		b.WriteString("  usually caused by deleting certs/ repeatedly. The only fix is to wait.\n")
-	case strings.Contains(msg, "no such host"), strings.Contains(msg, "NXDOMAIN"):
+	case strings.Contains(msg, "NXDOMAIN"), strings.Contains(msg, "no such host") && strings.Contains(msg, domain):
 		b.WriteString("  " + domain + " does not resolve. Check that the A/AAAA record exists and the old TTL has expired:\n")
 		b.WriteString("    dig +short " + domain + "\n")
+	case isOutboundFailure(err):
+		// This machine can't talk to the CA at all — not the CA failing to
+		// reach us. Opening inbound ports won't help.
+		b.WriteString("  This server can't reach Let's Encrypt (outbound HTTPS):\n")
+		b.WriteString("    " + msg + "\n")
+		b.WriteString("  Check outbound firewall rules, DNS on this server, or whether an HTTP proxy is required:\n")
+		b.WriteString("    curl -sI https://acme-v02.api.letsencrypt.org/directory\n")
 	case strings.Contains(msg, "not configured in HostWhitelist"):
 		b.WriteString("  The requested name does not match --domain. HostPolicy deliberately allows no wildcards;\n")
 		b.WriteString("  otherwise anyone could use this server to get certificates for arbitrary names.\n")
@@ -534,6 +544,34 @@ func describeACMEError(err error, domain string) string {
 		b.WriteString("  See \"Certificates and TLS\" in docs/80-ops/troubleshooting.md.\n")
 	}
 	return b.String()
+}
+
+// isValidationFailure reports whether the CA tried to validate this machine and
+// couldn't (a closed cloud firewall, NAT, DNS pointing elsewhere), as opposed to
+// this machine failing to talk to the CA at all.
+func isValidationFailure(err error) bool {
+	var ae *acme.AuthorizationError
+	var oe *acme.OrderError
+	if errors.As(err, &ae) || errors.As(err, &oe) {
+		return true
+	}
+	// autocert flattens its challenge failures into this message.
+	msg := err.Error()
+	return strings.Contains(msg, "no viable challenge type") || strings.Contains(msg, "authorization error")
+}
+
+// isOutboundFailure reports a network error on the way to the CA: no route,
+// DNS failure, or a timeout before any validation happened.
+func isOutboundFailure(err error) bool {
+	if isValidationFailure(err) {
+		return false
+	}
+	var ue *url.Error
+	var ne net.Error
+	if errors.As(err, &ue) || errors.As(err, &ne) {
+		return true
+	}
+	return strings.Contains(err.Error(), "dial tcp")
 }
 
 func isChallengeFailure(msg string) bool {

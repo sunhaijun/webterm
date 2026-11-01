@@ -105,9 +105,10 @@ func (s *Store) pragmas() error {
 // migrate applies pending migration scripts in order, each in its own
 // transaction.
 //
-// Rules: a released migration is never edited; only append new ones. Each
-// script must be safe to re-run after an interruption. There are no down
-// migrations.
+// Rules: the statements of a released migration never change (scripts are
+// tracked by number only, so editing comments is harmless); schema changes
+// are new scripts. Each script must be safe to re-run after an interruption.
+// There are no down migrations.
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec(
 		`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,

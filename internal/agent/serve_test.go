@@ -7,12 +7,16 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/acme"
 )
 
 // A failed certificate request explains what happened and how to fix it,
@@ -367,5 +371,42 @@ func TestACMEDirectorySelection(t *testing.T) {
 	}
 	if got := acmeDirectory(ServeConfig{ACMEDirectoryURL: "http://x/dir"}); got != "http://x/dir" {
 		t.Errorf("test-injected directory was overridden: %q", got)
+	}
+}
+
+// UT-issue-unreachable: only a failed validation means "the CA can't reach us";
+// failing to reach the CA must not send the user to their inbound firewall.
+func TestFailureClassification(t *testing.T) {
+	outbound := &url.Error{Op: "Get", URL: "https://acme-v02.api.letsencrypt.org/directory",
+		Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("i/o timeout")}}
+	authz := &acme.AuthorizationError{Identifier: "203.0.113.7",
+		Errors: []error{errors.New("urn:ietf:params:acme:error:connection: Timeout during connect (likely firewall problem)")}}
+	flattened := errors.New(`acme/autocert: unable to satisfy "https://example/authz/1" for domain "term.example.com": no viable challenge type found`)
+
+	for _, tc := range []struct {
+		name                  string
+		err                   error
+		validation, outbound_ bool
+		advice                string
+	}{
+		{"outbound timeout to the CA", outbound, false, true, "can't reach Let's Encrypt"},
+		{"CA timed out connecting to us", authz, true, false, "security group"},
+		{"autocert's flattened challenge failure", flattened, true, false, "security group"},
+		{"rate limit", errors.New("urn:ietf:params:acme:error:rateLimited: too many"), false, false, "rate limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isValidationFailure(tc.err); got != tc.validation {
+				t.Errorf("isValidationFailure = %v, want %v", got, tc.validation)
+			}
+			if got := isOutboundFailure(tc.err); got != tc.outbound_ {
+				t.Errorf("isOutboundFailure = %v, want %v", got, tc.outbound_)
+			}
+			if got := newIssueError(tc.err, "203.0.113.7"); got.Unreachable != tc.validation {
+				t.Errorf("IssueError.Unreachable = %v, want %v", got.Unreachable, tc.validation)
+			}
+			if d := describeACMEError(tc.err, "203.0.113.7"); !strings.Contains(d, tc.advice) {
+				t.Errorf("diagnosis lacks %q:\n%s", tc.advice, d)
+			}
+		})
 	}
 }

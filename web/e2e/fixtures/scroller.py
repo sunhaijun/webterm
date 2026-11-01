@@ -1,7 +1,7 @@
-"""E2E-44 夹具：备用屏 + 鼠标跟踪（SGR）的假全屏程序。
+"""E2E-44 fixture: a fake full-screen program on the alternate screen with SGR mouse tracking.
 
-显示 L001…L300 里的一屏（起始在最底下），每收到一次滚轮按 N 行滚动
-（argv[1]，默认 5 = tmux copy-mode 的步长）。q 或 Ctrl-C 退出。
+Shows one screen of L001…L300 (starting at the bottom) and scrolls N lines per wheel
+event (argv[1], default 5, tmux copy-mode's step). q or Ctrl-C quits.
 """
 import os
 import re
@@ -12,7 +12,7 @@ import tty
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 TOTAL = 300
 rows = os.get_terminal_size().lines
-top = TOTAL - rows  # 第一行显示的是 L(top + 1)
+top = TOTAL - rows  # the first row shows L(top + 1)
 fd = sys.stdin.fileno()
 saved = termios.tcgetattr(fd)
 tty.setraw(fd)

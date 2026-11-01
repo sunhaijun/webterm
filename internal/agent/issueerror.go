@@ -29,7 +29,7 @@ func IsUnreachable(err error) bool {
 func newIssueError(err error, domain string) *IssueError {
 	return &IssueError{
 		Diagnosis:   strings.TrimSpace(describeACMEError(err, domain)),
-		Unreachable: isChallengeFailure(err.Error()),
+		Unreachable: isValidationFailure(err),
 		err:         err,
 	}
 }

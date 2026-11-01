@@ -180,20 +180,26 @@ ask_address() {
     fi
     while :; do
         printf '  > '
-        IFS= read -r ans </dev/tty || ans=""
+        IFS= read -r ans </dev/tty || die "No address given."
         ans="${ans//[[:space:]]/}"
         ans="${ans#http://}"; ans="${ans#https://}"; ans="${ans%%/*}"   # tolerate a pasted URL
+        case "$ans" in
+            *:*:*) ;;   # IPv6: finish_args explains why it's refused
+            *:*) info "Type just the host name; for another HTTPS port, rerun with --https-port ${ans##*:}"; continue ;;
+        esac
         if [ -z "$ans" ] && [ -n "$ip" ]; then DOMAIN="$ip"; ADDR_SOURCE="this server's public IP"; return; fi
         if [ -n "$ans" ]; then DOMAIN="$ans"; ADDR_SOURCE=""; return; fi
     done
 }
 
-# resolve_address decides the address when --domain wasn't given (ADR-0045 §3):
-#   1. a previous install exists (install-state) → reuse its arguments; the command line wins
-#   2. otherwise ask on the terminal, defaulting to the public IPv4 (no terminal → use it)
-# --dev and --no-service don't need an address.
-resolve_address() {
-    [ -z "$DOMAIN" ] && [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ] || return 0
+# needs_address: only a production service install needs an address.
+needs_address() { [ -z "$DOMAIN" ] && [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ]; }
+
+# replay_state reuses a previous install's arguments when --domain wasn't given
+# (ADR-0045 §3); the command line wins. It never prompts, so the script fetched by
+# curl can run it too (it needs --channel to download the right build).
+replay_state() {
+    needs_address || return 0
     if [ -f "$STATE_FILE" ]; then
         local state=() line
         while IFS= read -r line; do
@@ -202,9 +208,15 @@ resolve_address() {
         done < "$STATE_FILE"
         parse_args "${state[@]}" "${ORIG_ARGS[@]}"
         ADDR_SOURCE="previous install, $STATE_FILE"
+        finish_args
     fi
-    # Still no address if the previous install was --dev or --no-service.
-    [ -z "$DOMAIN" ] && [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ] || { finish_args; return 0; }
+}
+
+# choose_address picks the address for a first install: ask on the terminal,
+# defaulting to the public IPv4; without a terminal, use it (ADR-0046). Only the
+# script that actually installs calls this — never the one that hands over.
+choose_address() {
+    needs_address || return 0
     local ip=""
     ip="$(detect_public_ip)" || ip=""
     if have_tty && [ "$DRY_RUN" != 1 ] && [ "$PRINT_UNIT" != 1 ]; then
@@ -280,7 +292,8 @@ EOF
 
 if [ "$PRINT_UNIT" = 1 ]; then
     [ "$(id -u)" != 0 ] || die "Don't run this as root: the unit's User= is whoever runs the script."
-    resolve_address
+    replay_state
+    choose_address
     [ -n "$DOMAIN" ] || die "--print-unit needs an address (--domain, or a previous install)"
     render_unit
     exit 0
@@ -314,7 +327,7 @@ EOF
 
 # ---------- 1. Preflight ----------
 
-resolve_address
+replay_state
 
 # FRESH: nothing is running yet. Only then do we open the firewall, obtain the
 # certificate up front, and print a pairing code. On upgrades the ports are busy
@@ -332,9 +345,6 @@ case "$(uname -m)" in
     *) die "Unsupported architecture $(uname -m). You can build from source: docs/80-ops/install.md" ;;
 esac
 info "Platform: linux/$ARCH"
-if [ -n "$DOMAIN" ]; then
-    if [ -n "$ADDR_SOURCE" ]; then info "Address:  $DOMAIN ($ADDR_SOURCE)"; else info "Address:  $DOMAIN"; fi
-fi
 
 # curl and sha256sum are only needed to download.
 NEED_CMDS="install"
@@ -370,13 +380,19 @@ if command -v bash >/dev/null 2>&1; then
     fi
 fi
 
-if [ "$FRESH" = 1 ] && [ "$DRY_RUN" != 1 ]; then
-    cat <<EOF
+if [ -n "$BINARY" ] || [ "$DRY_RUN" = 1 ]; then
+    if [ "$FRESH" = 1 ] && [ "$DRY_RUN" != 1 ]; then
+        cat <<EOF
 
   One thing has to be done outside this server: allow inbound TCP $HTTP_PORT and
   $HTTPS_PORT in your cloud provider's firewall (security group). If it isn't open yet,
-  the installer will stop at the certificate step and tell you where to do it.
+  the installer will stop at the certificate step, say where to open it, and wait.
 EOF
+    fi
+    choose_address
+    if [ -n "$DOMAIN" ]; then
+        if [ -n "$ADDR_SOURCE" ]; then info "Address:  $DOMAIN ($ADDR_SOURCE)"; else info "Address:  $DOMAIN"; fi
+    fi
 fi
 
 # ---------- 2. Get the binary ----------

@@ -353,21 +353,27 @@ func checkPublicIP(ip string, lookup func() (string, error)) (string, error) {
 
 // resolveViaPublicDNS asks public resolvers first: the local stub resolver caches
 // negative answers, so a freshly added record can take minutes to show up locally.
+//
+// Each resolver gets its own deadline: where outbound DNS to public resolvers is
+// blocked, they time out and the system resolver must still get its chance.
 func resolveViaPublicDNS(host string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	lookup := func(r *net.Resolver, timeout time.Duration) ([]string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return r.LookupHost(ctx, host)
+	}
 	for _, server := range []string{"1.1.1.1:53", "8.8.8.8:53"} {
 		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var dialer net.Dialer
 			return dialer.DialContext(ctx, "udp", server)
 		}}
-		ips, err := r.LookupHost(ctx, host)
+		ips, err := lookup(r, 2*time.Second)
 		var dnsErr *net.DNSError
 		if err == nil || (errors.As(err, &dnsErr) && dnsErr.IsNotFound) {
 			return ips, err
 		}
 	}
-	return net.DefaultResolver.LookupHost(ctx, host)
+	return lookup(net.DefaultResolver, 5*time.Second)
 }
 
 // classifyPortErr turns a failed bind into a verdict. No permission is not the same
