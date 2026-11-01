@@ -1,11 +1,8 @@
-# webterm 构建
-#
-# 不变式：单二进制、不引入 cgo。所有目标都走 CGO_ENABLED=0。
-# 详见 docs/80-ops/development.md。
+# webterm build. Invariant: one static binary, no cgo (every target uses CGO_ENABLED=0).
+# See docs/80-ops/development.md.
 
-# 【只认 v* tag】。main 上还挂着一个滚动的 dev tag（release.yml 每次提交都重建它），
-# 它和正式 tag 会落在【同一个提交】上 —— 不加 --match 的话 git describe 可能挑中 dev，
-# 正式构建就被标成 "webterm dev"（v0.1.0 第一次发布踩过）。
+# --match is required: the rolling `dev` tag can sit on the same commit as a release
+# tag, and without it git describe may label a release build "dev".
 VERSION ?= $(shell git describe --tags --dirty --match 'v[0-9]*' 2>/dev/null || echo "dev-$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)")
 LDFLAGS := -s -w -X main.version=$(VERSION)
 RELEASE_DIR := release
@@ -15,19 +12,16 @@ PLATFORMS := amd64 arm64
 
 all: build
 
-## build: 构建本机二进制（含前端）
+## build: build ./webterm for this machine (frontend included)
 build: web
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o webterm ./cmd/webterm
 	@echo "→ ./webterm  ($(VERSION))"
 
-## web: 构建前端产物（go:embed 的输入）
-#
-# 【必须先于 go build】。反了的话嵌进去的是空目录，二进制跑起来会明说
-# "没有嵌入前端产物"。
+## web: build the frontend, which go:embed picks up — so it must run before go build
 web:
 	cd web && npm ci --no-audit --no-fund && npm run build
 
-## release: 交叉编译到 release/，附 SHA256SUMS
+## release: cross-compile into release/ with install.sh and SHA256SUMS
 release: web
 	@rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
 	@for arch in $(PLATFORMS); do \
@@ -35,12 +29,13 @@ release: web
 		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch \
 			go build -ldflags "$(LDFLAGS)" -o $(RELEASE_DIR)/webterm-linux-$$arch ./cmd/webterm || exit 1; \
 	done
-	@cd $(RELEASE_DIR) && sha256sum webterm-* > SHA256SUMS
+	@cp scripts/install.sh $(RELEASE_DIR)/install.sh
+	@cd $(RELEASE_DIR) && sha256sum webterm-* install.sh > SHA256SUMS
 	@echo
 	@ls -lh $(RELEASE_DIR)
 	@echo "→ $(RELEASE_DIR)/  ($(VERSION))"
 
-## test: 跑全部测试。分开跑 —— 小内存机器上三套一起会触发低内存回收
+## test: all unit and integration tests, one suite at a time (small machines run out of memory otherwise)
 test: test-go test-web
 
 test-go:
@@ -50,12 +45,13 @@ test-go:
 test-web:
 	cd web && npm run typecheck && npm test
 
+## e2e: Playwright against the real binary
 e2e: build
 	cd web && npm run e2e
 
-## check: 提 PR 之前跑这个
+## check: run before opening a pull request
 check: test
-	gofmt -l . | grep -v '^$$' && { echo "以上文件未格式化"; exit 1; } || true
+	gofmt -l . | grep -v '^$$' && { echo "the files above need gofmt"; exit 1; } || true
 	python3 scripts/check-doc-links.py
 
 clean:

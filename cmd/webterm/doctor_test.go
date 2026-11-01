@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,53 +18,40 @@ import (
 	"github.com/sunhaijun/webterm/internal/agent"
 )
 
-// 没有绑定权限 ≠ 端口被占。混在一起会让全新安装被自己的自检拦住：
-// install.sh 的自检跑的是还没 setcap 的临时二进制，80 上必然 EACCES。
+// No permission is not the same as busy: a fresh binary without setcap always gets
+// EACCES on port 80, and that must not block an install.
 func TestClassifyPortErr(t *testing.T) {
 	eacces := &net.OpError{Op: "listen", Err: os.NewSyscallError("bind", syscall.EACCES)}
 	eaddrinuse := &net.OpError{Op: "listen", Err: os.NewSyscallError("bind", syscall.EADDRINUSE)}
-
 	free := func(int) bool { return false }
 	taken := func(int) bool { return true }
 
-	t.Run("没权限但端口空着 → 只提醒，不拦", func(t *testing.T) {
+	t.Run("no permission, port free: warning only", func(t *testing.T) {
 		_, err := classifyPortErr(80, eacces, free)
 		var w warning
 		if !errors.As(err, &w) {
-			t.Fatalf("该是 warning，得到 %T: %v", err, err)
+			t.Fatalf("want a warning, got %T: %v", err, err)
 		}
-		for _, want := range []string{"setcap", "install.sh 装完"} {
-			if !strings.Contains(w.msg, want) {
-				t.Errorf("提醒里缺 %q：%s", want, w.msg)
-			}
+		if !strings.Contains(w.msg, "setcap") {
+			t.Errorf("warning should mention setcap: %s", w.msg)
 		}
 	})
-
-	t.Run("没权限且端口有人听 → 真失败", func(t *testing.T) {
+	t.Run("no permission, port taken: failure", func(t *testing.T) {
 		_, err := classifyPortErr(80, eacces, taken)
 		var w warning
-		if errors.As(err, &w) {
-			t.Fatal("端口被占着不该只提醒")
-		}
-		if err == nil || !strings.Contains(err.Error(), "被占用") {
-			t.Errorf("该报被占用，得到 %v", err)
+		if errors.As(err, &w) || err == nil || !strings.Contains(err.Error(), "in use") {
+			t.Errorf("want an in-use failure, got %v", err)
 		}
 	})
-
-	t.Run("端口已被占（EADDRINUSE）→ 真失败，不去探测", func(t *testing.T) {
-		// busy 传 free，确认 EADDRINUSE 不经过探测就直接判失败
+	t.Run("EADDRINUSE: failure without probing", func(t *testing.T) {
 		_, err := classifyPortErr(8443, eaddrinuse, free)
 		var w warning
-		if errors.As(err, &w) {
-			t.Fatal("EADDRINUSE 不该是 warning")
-		}
-		if err == nil || !strings.Contains(err.Error(), "被占用") {
-			t.Errorf("该报被占用，得到 %v", err)
+		if errors.As(err, &w) || err == nil || !strings.Contains(err.Error(), "in use") {
+			t.Errorf("want an in-use failure, got %v", err)
 		}
 	})
 }
 
-// portBusy 得真的能分辨"有人听"和"没人听"。
 func TestPortBusy(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -71,30 +59,58 @@ func TestPortBusy(t *testing.T) {
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	if !portBusy(port) {
-		t.Errorf("端口 %d 上正听着，却报没人", port)
+		t.Errorf("port %d is listening but reported free", port)
 	}
 	ln.Close()
 	if portBusy(port) {
-		t.Errorf("端口 %d 已经关了，却报有人听", port)
+		t.Errorf("port %d is closed but reported busy", port)
 	}
 }
 
-// runDoctorCapture 跑一次 doctor，把输出收进字符串；公网 IP 与实签都换成假的。
-func runDoctorCapture(t *testing.T, dataDir, public string, issue func(context.Context, agent.ServeConfig) (*x509.Certificate, bool, error), args ...string) (string, error) {
+type issueFunc func(context.Context, agent.ServeConfig) (*x509.Certificate, bool, error)
+
+// doctorRun configures one doctor run with fakes for everything external.
+type doctorRun struct {
+	dataDir string
+	public  string
+	issue   issueFunc
+	hosts   func(string) ([]string, error)
+	tty     string // input typed at the terminal; "" with noTTY=false means an empty terminal
+	noTTY   bool
+}
+
+func (r doctorRun) run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	var buf bytes.Buffer
-	oldOut, oldIP, oldIssue := doctorOut, lookupPublicIP, issueCheck
-	t.Cleanup(func() { doctorOut, lookupPublicIP, issueCheck = oldOut, oldIP, oldIssue })
+	oldOut, oldIP, oldIssue, oldHost, oldTTY, oldVendor, oldInterval := doctorOut, lookupPublicIP, issueCheck, lookupHost, openTTY, cloudVendor, dnsPollInterval
+	t.Cleanup(func() {
+		doctorOut, lookupPublicIP, issueCheck, lookupHost, openTTY, cloudVendor, dnsPollInterval = oldOut, oldIP, oldIssue, oldHost, oldTTY, oldVendor, oldInterval
+	})
+
 	doctorOut = &buf
-	lookupPublicIP = func() (string, error) { return public, nil }
-	if issue != nil {
-		issueCheck = issue
+	lookupPublicIP = func() (string, error) { return r.public, nil }
+	if r.issue != nil {
+		issueCheck = r.issue
 	}
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // 不读开发机上真的配置文件
-	ports := freeTCPPorts(t, 2)
+	lookupHost = func(h string) ([]string, error) { return nil, errors.New("no such host") }
+	if r.hosts != nil {
+		lookupHost = r.hosts
+	}
+	openTTY = func() (io.ReadCloser, error) {
+		if r.noTTY {
+			return nil, errors.New("no tty")
+		}
+		return io.NopCloser(strings.NewReader(r.tty)), nil
+	}
+	cloudVendor = func() string { return "" }
+	dnsPollInterval = time.Millisecond
+
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // don't read the developer's real config
+	dataDir := r.dataDir
 	if dataDir == "" {
 		dataDir = t.TempDir()
 	}
+	ports := freeTCPPorts(t, 2)
 	base := []string{"--data-dir", dataDir,
 		"--http-port", strconv.Itoa(ports[0]), "--https-port", strconv.Itoa(ports[1])}
 	err := runDoctor(append(base, args...))
@@ -121,84 +137,186 @@ func freeTCPPorts(t *testing.T, n int) []int {
 	return ports
 }
 
-// UT-doctor-ip：IP 模式不查 DNS，查「--domain == 本机公网 IP」。
+var unreachable = &agent.IssueError{Diagnosis: "the CA couldn't connect (security group?)", Unreachable: true}
+
+// UT-doctor-ip: IP mode checks "--domain == public IP" instead of DNS.
 func TestDoctorIPMode(t *testing.T) {
-	out, err := runDoctorCapture(t, "", "203.0.113.7", nil, "--domain", "203.0.113.7")
+	out, err := doctorRun{public: "203.0.113.7", noTTY: true}.run(t, "--domain", "203.0.113.7")
 	if err != nil {
-		t.Fatalf("IP 对得上时不该失败: %v\n%s", err, out)
+		t.Fatalf("matching IP should pass: %v\n%s", err, out)
 	}
-	if strings.Contains(out, "DNS") {
-		t.Errorf("IP 模式不该查 DNS:\n%s", out)
-	}
-	if !strings.Contains(out, "✓ 公网 IP") {
-		t.Errorf("缺「公网 IP」这一项:\n%s", out)
+	if strings.Contains(out, "DNS") || !strings.Contains(out, "✓ Public IP") {
+		t.Errorf("IP mode output:\n%s", out)
 	}
 
-	out, err = runDoctorCapture(t, "", "198.51.100.9", nil, "--domain", "203.0.113.7")
+	out, err = doctorRun{public: "198.51.100.9", noTTY: true}.run(t, "--domain", "203.0.113.7")
 	if err == nil {
-		t.Fatalf("公网 IP 不一致时应当失败:\n%s", out)
+		t.Fatalf("a different public IP should fail:\n%s", out)
 	}
-	for _, want := range []string{"198.51.100.9", "不等于", "重新配对", "NAT"} {
+	for _, want := range []string{"198.51.100.9", "pair again", "NAT"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("不一致时的说明缺 %q:\n%s", want, out)
+			t.Errorf("mismatch explanation lacks %q:\n%s", want, out)
 		}
 	}
 }
 
 func TestDoctorRejectsIPv6(t *testing.T) {
-	out, err := runDoctorCapture(t, "", "", nil, "--domain", "2001:db8::1")
+	out, err := doctorRun{noTTY: true}.run(t, "--domain", "2001:db8::1")
 	if err == nil || !strings.Contains(out, "IPv4") {
-		t.Fatalf("IPv6 应当被拒并说明，err=%v\n%s", err, out)
+		t.Fatalf("IPv6 should be rejected with a reason, err=%v\n%s", err, out)
 	}
 }
 
-// --acme：静态检查都过了才签；签进服务用的 certs/（不是临时目录、不是 staging）；
-// 签的结果是一项检查；用的是现成证书时如实说没验证安全组；不带 --acme 时提示安全组查不出来。
+// --acme obtains the real certificate into the service's certs/ (not a temp dir,
+// not staging); a cached certificate is reported honestly; without --acme the
+// summary says the cloud firewall can't be checked from inside.
 func TestDoctorACME(t *testing.T) {
 	var called agent.ServeConfig
-	issuedNow := true
-	ok := func(_ context.Context, cfg agent.ServeConfig) (*x509.Certificate, bool, error) {
+	issued := true
+	issue := func(_ context.Context, cfg agent.ServeConfig) (*x509.Certificate, bool, error) {
 		called = cfg
-		return &x509.Certificate{NotAfter: time.Now().Add(160 * time.Hour)}, issuedNow, nil
+		return &x509.Certificate{NotAfter: time.Now().Add(160 * time.Hour)}, issued, nil
 	}
 	data := t.TempDir()
-	out, err := runDoctorCapture(t, data, "203.0.113.7", ok, "--domain", "203.0.113.7", "--acme")
+	out, err := doctorRun{dataDir: data, public: "203.0.113.7", issue: issue, noTTY: true}.run(t, "--domain", "203.0.113.7", "--acme")
 	if err != nil {
-		t.Fatalf("签成功却失败了: %v\n%s", err, out)
+		t.Fatalf("issued but failed: %v\n%s", err, out)
 	}
 	if want := filepath.Join(data, "certs"); called.CertDir != want {
-		t.Errorf("证书目录 = %q，想要服务用的 %q —— 签下来的证书要留给服务", called.CertDir, want)
+		t.Errorf("cert dir = %q, want the service's %q", called.CertDir, want)
 	}
 	if called.ACMEDirectoryURL != "" {
-		t.Errorf("doctor 不该改 ACME 目录: %q", called.ACMEDirectoryURL)
+		t.Errorf("production request went to %q", called.ACMEDirectoryURL)
 	}
-	if !strings.Contains(out, "✓ 证书") || !strings.Contains(out, "服务启动直接用") {
-		t.Errorf("缺签证书那一项:\n%s", out)
+	if !strings.Contains(out, "✓ Certificate") || !strings.Contains(out, "the service will use it") {
+		t.Errorf("missing certificate line:\n%s", out)
 	}
 
-	issuedNow = false
-	out, _ = runDoctorCapture(t, data, "203.0.113.7", ok, "--domain", "203.0.113.7", "--acme")
-	if !strings.Contains(out, "没有找 CA") {
-		t.Errorf("用现成证书时要说清没验证安全组:\n%s", out)
+	issued = false
+	out, _ = doctorRun{dataDir: data, public: "203.0.113.7", issue: issue, noTTY: true}.run(t, "--domain", "203.0.113.7", "--acme")
+	if !strings.Contains(out, "reachability wasn't tested") {
+		t.Errorf("a cached certificate must say reachability wasn't tested:\n%s", out)
 	}
 
 	fail := func(context.Context, agent.ServeConfig) (*x509.Certificate, bool, error) {
-		return nil, false, errors.New("CA 没能连上 http://203.0.113.7/ 做验证 …… 安全组")
+		return nil, false, unreachable
 	}
-	out, err = runDoctorCapture(t, "", "203.0.113.7", fail, "--domain", "203.0.113.7", "--acme")
-	if err == nil || !strings.Contains(out, "✗ 证书") || !strings.Contains(out, "安全组") {
-		t.Fatalf("签失败应当是一项 ✗ 并带诊断，err=%v\n%s", err, out)
+	out, err = doctorRun{public: "203.0.113.7", issue: fail, noTTY: true}.run(t, "--domain", "203.0.113.7", "--acme")
+	if err == nil || !strings.Contains(out, "✗ Certificate") || !strings.Contains(out, "security group") {
+		t.Fatalf("an unreachable CA should fail with the diagnosis, err=%v\n%s", err, out)
 	}
 
-	// 静态检查有 ✗ 时不去找 CA
 	called = agent.ServeConfig{}
-	out, _ = runDoctorCapture(t, "", "198.51.100.9", ok, "--domain", "203.0.113.7", "--acme")
-	if called.Domain != "" || !strings.Contains(out, "跳过") {
-		t.Errorf("静态检查失败时不该签:\n%s", out)
+	out, _ = doctorRun{public: "198.51.100.9", issue: issue, noTTY: true}.run(t, "--domain", "203.0.113.7", "--acme")
+	if called.Domain != "" || !strings.Contains(out, "skipped") {
+		t.Errorf("must not request a certificate while other checks fail:\n%s", out)
 	}
 
-	out, _ = runDoctorCapture(t, "", "203.0.113.7", nil, "--domain", "203.0.113.7")
-	if !strings.Contains(out, "--acme") || !strings.Contains(out, "安全组") {
-		t.Errorf("不带 --acme 时应当提示安全组只有真签才查得出来:\n%s", out)
+	out, _ = doctorRun{public: "203.0.113.7", noTTY: true}.run(t, "--domain", "203.0.113.7")
+	if !strings.Contains(out, "--acme") || !strings.Contains(out, "firewall") {
+		t.Errorf("without --acme the summary should explain the firewall can't be checked:\n%s", out)
+	}
+}
+
+// ADR-0046: guided, an unreachable CA leads to firewall instructions, a wait for
+// Enter, a staging re-check in a temp dir, and only then the real request.
+func TestDoctorGuidedFirewall(t *testing.T) {
+	var calls []agent.ServeConfig
+	probes := 0
+	issue := func(_ context.Context, cfg agent.ServeConfig) (*x509.Certificate, bool, error) {
+		calls = append(calls, cfg)
+		switch {
+		case cfg.ACMEDirectoryURL == "" && len(calls) == 1:
+			return nil, false, unreachable // first real attempt: firewall closed
+		case cfg.ACMEDirectoryURL != "":
+			probes++
+			if probes == 1 {
+				return nil, false, unreachable // user pressed Enter too early
+			}
+			return &x509.Certificate{NotAfter: time.Now().Add(time.Hour)}, true, nil
+		}
+		return &x509.Certificate{NotAfter: time.Now().Add(160 * time.Hour)}, true, nil
+	}
+	data := t.TempDir()
+	out, err := doctorRun{dataDir: data, public: "203.0.113.7", issue: issue, tty: "\n\n"}.run(t,
+		"--domain", "203.0.113.7", "--acme", "--guide")
+	if err != nil {
+		t.Fatalf("guided flow should end in success: %v\n%s", err, out)
+	}
+	for _, want := range []string{"Allow inbound TCP", "Press Enter", "Still can't reach", "Reachable", "✓ Certificate"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("guided output lacks %q:\n%s", want, out)
+		}
+	}
+	if len(calls) != 4 {
+		t.Fatalf("want real, probe, probe, real; got %d calls", len(calls))
+	}
+	for _, i := range []int{1, 2} {
+		if calls[i].ACMEDirectoryURL != letsEncryptStaging || calls[i].CertDir == filepath.Join(data, "certs") {
+			t.Errorf("probe %d must use staging and a temp dir: %+v", i, calls[i])
+		}
+	}
+	if last := calls[3]; last.ACMEDirectoryURL != "" || last.CertDir != filepath.Join(data, "certs") {
+		t.Errorf("the final request must be production into certs/: %+v", last)
+	}
+}
+
+// Guided but the terminal closes (EOF): give up with the original diagnosis.
+func TestDoctorGuidedGivesUpOnEOF(t *testing.T) {
+	fail := func(context.Context, agent.ServeConfig) (*x509.Certificate, bool, error) {
+		return nil, false, unreachable
+	}
+	out, err := doctorRun{public: "203.0.113.7", issue: fail, tty: ""}.run(t, "--domain", "203.0.113.7", "--acme", "--guide")
+	if err == nil || !strings.Contains(out, "✗ Certificate") {
+		t.Fatalf("EOF on the terminal should fail, err=%v\n%s", err, out)
+	}
+}
+
+// --guide without a terminal behaves like a plain check.
+func TestDoctorGuideWithoutTTY(t *testing.T) {
+	fail := func(context.Context, agent.ServeConfig) (*x509.Certificate, bool, error) {
+		return nil, false, unreachable
+	}
+	out, err := doctorRun{public: "203.0.113.7", issue: fail, noTTY: true}.run(t, "--domain", "203.0.113.7", "--acme", "--guide")
+	if err == nil || strings.Contains(out, "Press Enter") {
+		t.Fatalf("no terminal: fail once, don't prompt; err=%v\n%s", err, out)
+	}
+}
+
+// Guided DNS: show the exact record, then poll until it resolves here.
+func TestDoctorGuidedDNS(t *testing.T) {
+	lookups := 0
+	hosts := func(string) ([]string, error) {
+		lookups++
+		if lookups < 3 {
+			return []string{"198.51.100.1"}, nil
+		}
+		return []string{"203.0.113.7"}, nil
+	}
+	out, err := doctorRun{public: "203.0.113.7", hosts: hosts, tty: ""}.run(t, "--domain", "term.example.com", "--guide")
+	if err != nil {
+		t.Fatalf("DNS eventually points here: %v\n%s", err, out)
+	}
+	for _, want := range []string{"points to 198.51.100.1", "Type   A", "Value  203.0.113.7", "Waiting for the record", "✓ DNS (term.example.com → 203.0.113.7)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("guided DNS output lacks %q:\n%s", want, out)
+		}
+	}
+
+	out, err = doctorRun{public: "203.0.113.7", hosts: func(string) ([]string, error) { return nil, errors.New("no such host") }, noTTY: true}.run(t, "--domain", "term.example.com")
+	if err == nil || !strings.Contains(out, "Add this record") || strings.Contains(out, "Waiting") {
+		t.Errorf("unguided: fail once with the record to add, err=%v\n%s", err, out)
+	}
+}
+
+func TestFirewallAdvice(t *testing.T) {
+	got := firewallAdvice("203.0.113.7", 80, 443, "Alibaba Cloud: ECS console → Security Groups → Inbound rules")
+	for _, want := range []string{"http://203.0.113.7/", "TCP 80 and 443", "Alibaba Cloud"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("advice lacks %q:\n%s", want, got)
+		}
+	}
+	if got := firewallAdvice("term.example.com", 8080, 8443, ""); !strings.Contains(got, "term.example.com:8080") || !strings.Contains(got, "Security groups") {
+		t.Errorf("generic advice with a custom port:\n%s", got)
 	}
 }

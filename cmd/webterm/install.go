@@ -11,15 +11,13 @@ import (
 	"github.com/sunhaijun/webterm/scripts"
 )
 
-// runInstall 用二进制里嵌着的 install.sh、以自己为 --binary 安装（ADR-0045 §1）。
-//
-// 【Go 这边只负责把脚本取出来跑】，不重写安装逻辑 —— 升级路径上的知识
-// （setcap 会随替换丢失、单元跟着端口走、迁移不能在自己的会话里做……）
-// 只放在 install.sh 一个地方，和 webterm update 当初选「薄壳」同一个理由。
+// runInstall runs the install.sh embedded in this binary, with the binary itself as
+// --binary (ADR-0045 §1). Go only extracts and runs the script: the installation
+// logic lives in one place, install.sh.
 func runInstall(args []string) error {
 	self, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("找不到自己的路径: %w", err)
+		return fmt.Errorf("can't find this executable: %w", err)
 	}
 	if p, err := filepath.EvalSymlinks(self); err == nil {
 		self = p
@@ -39,19 +37,19 @@ func runInstall(args []string) error {
 		return err
 	}
 
-	// stdin 直通：脚本中途要 sudo 问密码
+	// Pass the terminal through: sudo and the guided steps ask questions.
 	cmd := exec.Command("bash", append([]string{script}, withSelfBinary(self, args)...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	err = cmd.Run()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
-		// 脚本自己已经把错误说清楚了，这里只把退出码带出去，不再补一句「错误：exit status 1」
+		// The script has already explained the failure; just propagate its exit code.
 		return exitCode(ee.ExitCode())
 	}
 	return err
 }
 
-// withSelfBinary 在用户参数前补上 --binary <自己>；用户自己给了 --binary 就尊重它。
+// withSelfBinary prepends --binary <self> unless the user passed --binary.
 func withSelfBinary(self string, args []string) []string {
 	for _, a := range args {
 		if a == "--binary" || strings.HasPrefix(a, "--binary=") {
@@ -61,7 +59,7 @@ func withSelfBinary(self string, args []string) []string {
 	return append([]string{"--binary", self}, args...)
 }
 
-// exitCode 是「子进程已经报过错了，只要带着这个退出码退出」。
+// exitCode means a child already reported the error; exit with this code silently.
 type exitCode int
 
 func (e exitCode) Error() string { return fmt.Sprintf("exit status %d", int(e)) }

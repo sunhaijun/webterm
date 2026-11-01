@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -18,32 +20,47 @@ import (
 	"github.com/sunhaijun/webterm/internal/agent"
 )
 
-// 以下几个是测试的注入点：不联网、不真的找 CA。
+// webterm doctor checks what a deployment needs and explains failures in plain
+// words (US-7.2, AC-1.13). --acme also obtains the certificate the service will
+// use. --guide, which the installer passes when there is a terminal, stops at the
+// steps only the user can do (a DNS record, the cloud firewall), says exactly what
+// to do, and checks again until they pass (ADR-0046).
+
+// Test seams: no network, no real CA.
 var (
-	doctorOut      io.Writer = os.Stdout
-	lookupPublicIP           = publicIP
-	issueCheck               = agent.IssueCheck
+	doctorOut       io.Writer = os.Stdout
+	lookupPublicIP            = publicIP
+	lookupHost                = resolveViaPublicDNS
+	issueCheck                = agent.IssueCheck
+	openTTY                   = func() (io.ReadCloser, error) { return os.Open("/dev/tty") }
+	cloudVendor               = detectCloudVendor
+	dnsPollInterval           = 10 * time.Second
+	dnsPollTimeout            = 30 * time.Minute
 )
 
-// warning 是"值得说，但不该拦住部署"的检查结果。
-//
-// 【区分它和失败很要紧】：install.sh 装之前跑的自检用的是刚下载、
-// 还【没 setcap】的临时二进制，它绑不上 80 是必然的 —— 那不是部署
-// 条件不满足，而是检查问错了问题（真正上岗的那个会被 setcap）。
-// 当成失败的话，任何一次用 80 端口的全新安装都会被自己的自检拦住。
+// letsEncryptStaging is only used to re-check reachability in a guided install:
+// staging has generous limits and the certificate is thrown away (ADR-0046).
+const letsEncryptStaging = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+// warning is worth reporting but shouldn't block a deployment.
 type warning struct{ msg string }
 
 func (w warning) Error() string { return w.msg }
 
-// runDoctor 逐项检查部署前置条件，给出【可读的】诊断而不是 Go 的 error 堆栈
-// （US-7.2 / AC-1.13）。部署前先跑它。
+type doctor struct {
+	out            io.Writer
+	tty            *bufio.Reader // nil when not guiding
+	failed, warned int
+}
+
 func runDoctor(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	var c commonFlags
 	c.register(fs)
-	httpPort := fs.Int("http-port", 80, "ACME 挑战端口")
-	httpsPort := fs.Int("https-port", 443, "HTTPS 端口")
-	acmeCheck := fs.Bool("acme", false, "再把证书签好存进 certs/，服务启动直接用（要临时占用两个端口，服务在跑时先停掉）")
+	httpPort := fs.Int("http-port", 80, "port for certificate validation and redirects")
+	httpsPort := fs.Int("https-port", 443, "HTTPS port")
+	acmeCheck := fs.Bool("acme", false, "also obtain the certificate the service will use (binds both ports; stop the service first)")
+	guide := fs.Bool("guide", false, "when something needs fixing by hand (DNS, cloud firewall), explain it and wait to check again; needs a terminal")
 	if err := applyConfig(fs, args); err != nil {
 		return err
 	}
@@ -51,44 +68,36 @@ func runDoctor(args []string) error {
 		return err
 	}
 
-	var failed, warned int
-	check := func(name string, fn func() (string, error)) {
-		detail, err := fn()
-		var w warning
-		switch {
-		case errors.As(err, &w):
-			warned++
-			fmt.Fprintf(doctorOut, "  ⚠ %s\n      %s\n", name, indent(w.msg))
-		case err != nil:
-			failed++
-			fmt.Fprintf(doctorOut, "  ✗ %s\n      %s\n", name, indent(err.Error()))
-		case detail != "":
-			fmt.Fprintf(doctorOut, "  ✓ %s（%s）\n", name, detail)
-		default:
-			fmt.Fprintf(doctorOut, "  ✓ %s\n", name)
+	d := &doctor{out: doctorOut}
+	if *guide {
+		if f, err := openTTY(); err == nil {
+			defer f.Close()
+			d.tty = bufio.NewReader(f)
 		}
 	}
 
-	fmt.Fprintln(doctorOut, "webterm doctor")
-	fmt.Fprintln(doctorOut)
+	fmt.Fprintln(d.out, "webterm doctor")
+	fmt.Fprintln(d.out)
 
-	check("bash 可用", func() (string, error) {
+	d.check("bash", func() (string, error) {
 		out, err := exec.Command("bash", "--version").Output()
 		if err != nil {
-			return "", fmt.Errorf("找不到 bash（会话默认的 shell）。\n" +
-				"装上 bash，或者用 --shell 指定别的 shell（任何支持 -l / -i 的都行）")
+			return "", errors.New("bash not found. Sessions run bash by default: install it, or pick another shell with --shell")
 		}
+		// "GNU bash, version 5.2.37(1)-release (x86_64-pc-linux-gnu)" → "5.2.37"
 		v := strings.SplitN(string(out), "\n", 2)[0]
-		return strings.TrimPrefix(v, "GNU bash, "), nil
+		if f := strings.Fields(strings.TrimPrefix(v, "GNU bash, version ")); len(f) > 0 {
+			v = strings.SplitN(f[0], "(", 2)[0]
+		}
+		return v, nil
 	})
-
-	check("数据目录可写", func() (string, error) {
+	d.check("Data directory", func() (string, error) {
 		if err := os.MkdirAll(c.dataDir, 0o700); err != nil {
-			return "", fmt.Errorf("无法创建 %s：%v", c.dataDir, err)
+			return "", fmt.Errorf("can't create %s: %v", c.dataDir, err)
 		}
 		f, err := os.CreateTemp(c.dataDir, ".doctor-*")
 		if err != nil {
-			return "", fmt.Errorf("%s 不可写：%v", c.dataDir, err)
+			return "", fmt.Errorf("%s isn't writable: %v", c.dataDir, err)
 		}
 		f.Close()
 		os.Remove(f.Name())
@@ -96,29 +105,27 @@ func runDoctor(args []string) error {
 	})
 
 	if c.dev {
-		fmt.Fprintln(doctorOut, "\n（--dev 模式：跳过地址与端口检查）")
-		return summarize(failed, warned, false)
+		fmt.Fprintln(d.out, "\n(--dev: address and port checks skipped)")
+		return d.summarize(false)
 	}
 	if c.domain == "" {
-		fmt.Fprintln(doctorOut, "  ✗ 地址\n      没有指定 --domain（域名或公网 IPv4）。ACME 需要它，Origin 校验也需要它。")
-		failed++
-		return summarize(failed, warned, false)
+		d.fail("Address", "No --domain given. Use a domain name, or this server's public IPv4.")
+		return d.summarize(false)
 	}
 	if err := agent.CheckAddress(c.domain); err != nil {
-		fmt.Fprintf(doctorOut, "  ✗ 地址\n      %s\n", indent(err.Error()))
-		failed++
-		return summarize(failed, warned, false)
+		d.fail("Address", err.Error())
+		return d.summarize(false)
 	}
 
 	if agent.IsIPAddress(c.domain) {
-		// IP 模式（ADR-0044）：没有 DNS 可查，查的是「这个 IP 真是本机的公网 IP」
-		check("公网 IP", func() (string, error) { return checkPublicIP(c.domain, lookupPublicIP) })
+		// IP mode (ADR-0044): no DNS; the address must be this machine's public IP.
+		d.check("Public IP", func() (string, error) { return checkPublicIP(c.domain, lookupPublicIP) })
 	} else {
-		checkDNS(check, c.domain)
+		d.check("DNS", func() (string, error) { return d.checkDNS(c.domain) })
 	}
 
 	for _, p := range []int{*httpPort, *httpsPort} {
-		check(fmt.Sprintf("%d 端口可用", p), func() (string, error) {
+		d.check(fmt.Sprintf("Port %d is free", p), func() (string, error) {
 			ln, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
 			if err == nil {
 				ln.Close()
@@ -129,120 +136,259 @@ func runDoctor(args []string) error {
 	}
 
 	if *acmeCheck {
-		if failed > 0 {
-			fmt.Fprintln(doctorOut, "  - 证书实签：跳过，先修好上面标 ✗ 的项"+
-				"（端口被 webterm 自己占着的话，先 sudo systemctl stop webterm）")
+		if d.failed > 0 {
+			fmt.Fprintln(d.out, "  - Certificate: skipped until the items above are fixed"+
+				" (if webterm itself holds the ports: sudo systemctl stop webterm)")
 		} else {
-			fmt.Fprintln(doctorOut, "  … 证书：向 Let's Encrypt 申请（最多等 2 分钟）")
-			check("证书", func() (string, error) {
-				return runIssueCheck(c.domain, agent.CertDirDefault(c.dataDir), *httpPort, *httpsPort)
+			fmt.Fprintln(d.out, "  … Certificate: requesting one from Let's Encrypt")
+			d.check("Certificate", func() (string, error) {
+				return d.obtainCert(c.domain, agent.CertDirDefault(c.dataDir), *httpPort, *httpsPort)
 			})
 		}
 	}
-
-	return summarize(failed, warned, *acmeCheck)
+	return d.summarize(!*acmeCheck)
 }
 
-// runIssueCheck 把证书签好存进服务用的 certs/（ADR-0045 §4）。签下来的就是正式证书，
-// 服务启动直接用，不签第二次；已有有效证书时直接用它并如实说「没有找 CA」。
-func runIssueCheck(domain, certDir string, httpPort, httpsPort int) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	leaf, issued, err := issueCheck(ctx, agent.ServeConfig{
+func (d *doctor) check(name string, fn func() (string, error)) {
+	detail, err := fn()
+	var w warning
+	switch {
+	case errors.As(err, &w):
+		d.warned++
+		fmt.Fprintf(d.out, "  ⚠ %s\n      %s\n", name, indent(w.msg))
+	case err != nil:
+		d.fail(name, err.Error())
+	case detail != "":
+		fmt.Fprintf(d.out, "  ✓ %s (%s)\n", name, detail)
+	default:
+		fmt.Fprintf(d.out, "  ✓ %s\n", name)
+	}
+}
+
+func (d *doctor) fail(name, msg string) {
+	d.failed++
+	fmt.Fprintf(d.out, "  ✗ %s\n      %s\n", name, indent(msg))
+}
+
+// note prints guidance while a check is waiting on the user.
+func (d *doctor) note(msg string) {
+	fmt.Fprintf(d.out, "\n  → %s\n", indent(msg))
+}
+
+// waitEnter blocks until the user presses Enter. False means no more input.
+func (d *doctor) waitEnter() bool {
+	fmt.Fprint(d.out, "      Press Enter to check again (Ctrl+C to quit) ")
+	_, err := d.tty.ReadString('\n')
+	return err == nil
+}
+
+// checkDNS requires the domain to resolve to this machine's public IP. Guided, it
+// shows the record to add and polls until it appears.
+func (d *doctor) checkDNS(domain string) (string, error) {
+	public, err := lookupPublicIP()
+	if err != nil {
+		if _, lerr := lookupHost(domain); lerr != nil {
+			return "", fmt.Errorf("%s doesn't resolve: %v", domain, lerr)
+		}
+		return "", warning{fmt.Sprintf("Couldn't detect this server's public IP (%v). Check by hand that\n"+
+			"  dig +short %s\nprints the same address as\n  curl -s ifconfig.me", err, domain)}
+	}
+	points := func() ([]string, bool) {
+		ips, err := lookupHost(domain)
+		return ips, err == nil && slices.Contains(ips, public)
+	}
+	ips, ok := points()
+	if ok {
+		return domain + " → " + public, nil
+	}
+	advice := dnsAdvice(domain, ips, public)
+	if d.tty == nil {
+		return "", errors.New(advice)
+	}
+	d.note(advice + fmt.Sprintf("\nWaiting for the record to appear (checking every %s, Ctrl+C to quit)…", dnsPollInterval))
+	for deadline := time.Now().Add(dnsPollTimeout); time.Now().Before(deadline); {
+		time.Sleep(dnsPollInterval)
+		if _, ok := points(); ok {
+			return domain + " → " + public, nil
+		}
+	}
+	return "", fmt.Errorf("%s still doesn't point to %s after %s", domain, public, dnsPollTimeout)
+}
+
+func dnsAdvice(domain string, ips []string, public string) string {
+	now := "doesn't resolve yet"
+	if len(ips) > 0 {
+		now = "points to " + strings.Join(ips, ", ")
+	}
+	return fmt.Sprintf("%s %s; it must point to this server (%s).\n"+
+		"Add this record at your DNS provider:\n"+
+		"  Type   A\n"+
+		"  Name   %s\n"+
+		"  Value  %s\n"+
+		"Use an A record, not a CNAME. On Cloudflare, set it to \"DNS only\" (grey cloud).",
+		domain, now, public, domain, public)
+}
+
+// obtainCert gets the certificate into certDir, where the service picks it up.
+// If Let's Encrypt can't reach this machine and we're guiding, it explains how to
+// open the cloud firewall, waits for Enter, and re-checks against staging (which
+// doesn't count against production limits) before requesting the real certificate.
+func (d *doctor) obtainCert(domain, certDir string, httpPort, httpsPort int) (string, error) {
+	cfg := agent.ServeConfig{
 		Domain: domain, Bind: "0.0.0.0",
 		HTTPPort: httpPort, HTTPSPort: httpsPort, CertDir: certDir,
-	})
+	}
+	detail, err := issueOnce(cfg)
+	if err == nil || d.tty == nil || !agent.IsUnreachable(err) {
+		return detail, err
+	}
+
+	d.note(firewallAdvice(domain, httpPort, httpsPort, cloudVendor()))
+	for {
+		if !d.waitEnter() {
+			return "", err
+		}
+		fmt.Fprintln(d.out, "  … Checking whether Let's Encrypt can reach this server")
+		perr := probeReachable(cfg)
+		if perr == nil {
+			break
+		}
+		if !agent.IsUnreachable(perr) {
+			return "", perr
+		}
+		fmt.Fprintf(d.out, "      Still can't reach http://%s/ from the internet.\n", hostPort(domain, httpPort))
+	}
+	fmt.Fprintln(d.out, "  … Reachable. Requesting the certificate")
+	return issueOnce(cfg)
+}
+
+func issueOnce(cfg agent.ServeConfig) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	leaf, issued, err := issueCheck(ctx, cfg)
 	if err != nil {
 		return "", err
 	}
 	exp := leaf.NotAfter.Local().Format("2006-01-02 15:04")
 	if !issued {
-		return "已有证书，到期 " + exp + "；没有找 CA，所以这一项没验证安全组", nil
+		return "already have one, expires " + exp + "; didn't contact the CA, so reachability wasn't tested", nil
 	}
-	return "签下来了（CA 从公网连进来了），到期 " + exp + "，服务启动直接用它", nil
+	return "issued, expires " + exp + "; the service will use it", nil
 }
 
-// checkPublicIP：IP 模式下 --domain 必须就是本机的公网 IP。
+func probeReachable(cfg agent.ServeConfig) error {
+	dir, err := os.MkdirTemp("", "webterm-probe-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	cfg.CertDir = dir
+	cfg.ACMEDirectoryURL = letsEncryptStaging
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	_, _, err = issueCheck(ctx, cfg)
+	return err
+}
+
+func firewallAdvice(domain string, httpPort, httpsPort int, vendor string) string {
+	where := "Your provider's console, usually under \"Security groups\" or \"Firewall\" → inbound rules."
+	if vendor != "" {
+		where = vendor
+	}
+	return fmt.Sprintf("Let's Encrypt can't reach http://%s/, so it can't issue a certificate.\n"+
+		"Allow inbound TCP %d and %d in your cloud firewall:\n"+
+		"  %s\n"+
+		"Behind NAT, or your ISP blocks port 80? See \"Behind NAT\" in docs/80-ops/install.md.",
+		hostPort(domain, httpPort), httpPort, httpsPort, where)
+}
+
+func hostPort(host string, port int) string {
+	if port == 80 {
+		return host
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+// detectCloudVendor reads the DMI vendor strings (world-readable) to point at the
+// right console page. Empty if unknown.
+func detectCloudVendor() string {
+	read := func(f string) string {
+		b, _ := os.ReadFile("/sys/class/dmi/id/" + f)
+		return strings.TrimSpace(string(b))
+	}
+	s := strings.ToLower(read("sys_vendor") + " " + read("product_name") + " " + read("bios_vendor"))
+	for _, v := range []struct{ key, where string }{
+		{"alibaba", "Alibaba Cloud: ECS console → Security Groups → Inbound rules"},
+		{"tencent", "Tencent Cloud: CVM console → Security Groups → Inbound rules"},
+		{"huawei", "Huawei Cloud: ECS console → Security Groups → Inbound Rules"},
+		{"amazon", "AWS: EC2 console → Security Groups → Edit inbound rules"},
+		{"google", "Google Cloud: VPC network → Firewall → Create firewall rule"},
+		{"microsoft", "Azure: your VM → Networking → Add inbound port rule"},
+		{"digitalocean", "DigitalOcean: Networking → Firewalls"},
+		{"hetzner", "Hetzner Cloud: Firewalls (or detach the firewall from this server)"},
+		{"vultr", "Vultr: Network → Firewall"},
+		{"oracle", "Oracle Cloud: your VCN → Security Lists → Ingress Rules"},
+	} {
+		if strings.Contains(s, v.key) {
+			return v.where
+		}
+	}
+	return ""
+}
+
+// checkPublicIP: in IP mode, --domain must be this machine's public IP.
 func checkPublicIP(ip string, lookup func() (string, error)) (string, error) {
 	public, err := lookup()
 	if err != nil {
-		return "", fmt.Errorf("查不到本机公网 IP（%v），请手工核对：\n  curl -s ifconfig.me   应当等于 %s", err, ip)
+		return "", fmt.Errorf("couldn't detect this server's public IP (%v). Check by hand:\n  curl -s ifconfig.me   should print %s", err, ip)
 	}
 	if public != ip {
-		return "", fmt.Errorf("本机公网 IP 是 %s，不等于 --domain %s。\n"+
-			"HTTP-01 挑战会打到 %s 上，不是这台机器的话证书签不下来。\n"+
-			"  IP 变了：用新 IP 重装（./webterm install --domain %s），设备要重新配对\n"+
-			"  在 NAT 后面：见 docs/80-ops/install.md 的「家宽 / NAT 后面」", public, ip, ip, public)
+		return "", fmt.Errorf("this server's public IP is %s, not %s.\n"+
+			"Let's Encrypt validates %s, so the certificate can't be issued here.\n"+
+			"  The IP changed: reinstall with --domain %s (devices must pair again)\n"+
+			"  Behind NAT: see \"Behind NAT\" in docs/80-ops/install.md", public, ip, ip, public)
 	}
-	return "本机公网 IP " + public, nil
+	return public, nil
 }
 
-// checkDNS 是域名模式的两项：解析得出来、并且指向本机。
-func checkDNS(check func(string, func() (string, error)), domain string) {
-	var resolved []string
-	check("DNS 解析", func() (string, error) {
-		ips, err := net.LookupHost(domain)
-		if err != nil {
-			return "", fmt.Errorf("解析 %s 失败：%v\n"+
-				"确认已经加了 A/AAAA 记录，并等 TTL 过期", domain, err)
+// resolveViaPublicDNS asks public resolvers first: the local stub resolver caches
+// negative answers, so a freshly added record can take minutes to show up locally.
+func resolveViaPublicDNS(host string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, server := range []string{"1.1.1.1:53", "8.8.8.8:53"} {
+		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "udp", server)
+		}}
+		ips, err := r.LookupHost(ctx, host)
+		var dnsErr *net.DNSError
+		if err == nil || (errors.As(err, &dnsErr) && dnsErr.IsNotFound) {
+			return ips, err
 		}
-		resolved = ips
-		return strings.Join(ips, ", "), nil
-	})
-
-	check("DNS 指向本机", func() (string, error) {
-		if len(resolved) == 0 {
-			return "", fmt.Errorf("上一步没解析出结果，跳过")
-		}
-		public, err := lookupPublicIP()
-		if err != nil {
-			return "", fmt.Errorf("查不到本机公网 IP（%v），请手工核对：\n"+
-				"  dig +short %s\n  curl -s ifconfig.me", err, domain)
-		}
-		for _, ip := range resolved {
-			if ip == public {
-				return "本机公网 IP " + public, nil
-			}
-		}
-		return "", fmt.Errorf("%s 解析到 %s，但本机公网 IP 是 %s。\n"+
-			"HTTP-01 挑战会打到解析出的那台机器上，不改的话证书签不下来。\n"+
-			"确认改的是 A/AAAA 记录，而不是 CNAME 到别处",
-			domain, strings.Join(resolved, ", "), public)
-	})
+	}
+	return net.DefaultResolver.LookupHost(ctx, host)
 }
 
-// classifyPortErr 把绑定失败翻成结论。
-//
-// 【没有绑定权限 ≠ 端口被占】。这两件事以前混在一起，结果是：全新安装时
-// 自检跑的是还没 setcap 的临时二进制，80 上必然 EACCES，自检报"端口不可用"
-// 把安装拦下 —— 而端口其实空着，装完 setcap 就能绑。
-//
-// 所以 EACCES 时改问一个这个进程答得了的问题：端口上有没有人在听。
-//
-// 单独抽出来还因为【CI 里造不出真实的 EACCES】—— 那需要特权端口，
-// 而 runner 上的权限模型和这里不一样。传入 busy 就能把两条路都测到。
+// classifyPortErr turns a failed bind into a verdict. No permission is not the same
+// as busy: a freshly downloaded binary without setcap can't bind port 80 even when
+// it's free, and that must not block an install (the installed copy gets setcap).
+// busy is injected because CI can't produce a real EACCES.
 func classifyPortErr(p int, err error, busy func(int) bool) (string, error) {
-	occupied := fmt.Errorf("被占用了。查是谁：\n  ss -lntp | grep :%d", p)
-	if !errors.Is(err, syscall.EACCES) {
+	occupied := fmt.Errorf("in use by another program. Find it with:\n  ss -lntp | grep :%d", p)
+	if !errors.Is(err, syscall.EACCES) || busy(p) {
 		return "", occupied
 	}
-	if busy(p) {
-		return "", occupied
-	}
-	return "", warning{fmt.Sprintf("%d 空着，但【当前这个二进制】没有绑定权限（1024 以下需要特权）。\n"+
-		"install.sh 装完会自动 setcap，所以这不拦着部署；手动装的话：\n"+
+	return "", warning{fmt.Sprintf("Port %d is free, but this binary may not bind it (ports below 1024 need a capability).\n"+
+		"The installer grants it. By hand:\n"+
 		"  sudo setcap 'cap_net_bind_service=+ep' $(command -v webterm)\n"+
-		"不要用 root 跑 webterm —— 那等于把 root shell 挂到公网", p)}
+		"Don't run webterm as root: that puts a root shell on the internet.", p)}
 }
 
-// portBusy 报告本机 p 端口上有没有人在听。
-//
-// 用连接而不是监听来问 —— 监听在特权端口上会因为没权限而失败，
-// 那时候拿到的答案是"我绑不上"，不是"有人占着"。
-//
-// 【局限】：只探回环。有人只绑在某个对外地址上的话这里看不见，
-// 那种情况留给启动时真正的 bind —— 它会报 address already in use，
-// 那条信息本身就够清楚。
+// portBusy reports whether something listens on port p, by connecting rather than
+// binding (binding a low port without permission can't tell busy from forbidden).
+// Only checks loopback; a listener bound to a single external address shows up
+// later as "address already in use".
 func portBusy(p int) bool {
 	c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(p)), time.Second)
 	if err != nil {
@@ -252,20 +398,21 @@ func portBusy(p int) bool {
 	return true
 }
 
-func summarize(failed, warned int, acmeChecked bool) error {
-	fmt.Fprintln(doctorOut)
-	if failed > 0 {
-		return fmt.Errorf("%d 项检查未通过，见上面的说明", failed)
+// summarize prints the verdict. firewallHint adds the note that only --acme can
+// tell whether the cloud firewall lets traffic in.
+func (d *doctor) summarize(firewallHint bool) error {
+	fmt.Fprintln(d.out)
+	if d.failed > 0 {
+		return fmt.Errorf("%d check(s) failed; see above", d.failed)
 	}
-	if warned > 0 {
-		fmt.Fprintf(doctorOut, "没有阻塞项（%d 项提醒，见上面标 ⚠ 的）。\n", warned)
+	if d.warned > 0 {
+		fmt.Fprintf(d.out, "Nothing blocking (%d warning(s) above).\n", d.warned)
 	} else {
-		fmt.Fprintln(doctorOut, "全部通过。")
+		fmt.Fprintln(d.out, "All checks passed.")
 	}
-	if !acmeChecked {
-		// 云安全组有没有放行，在机器内部只有真的让 CA 连一次才知道
-		fmt.Fprintln(doctorOut, "云安全组有没有放行 80/443 在机器内部查不出来：加 --acme 真的签一次证书")
-		fmt.Fprintln(doctorOut, "（要临时占用两个端口，webterm 在跑的话先停掉；签下来的证书留给服务用）。")
+	if firewallHint {
+		fmt.Fprintln(d.out, "Whether your cloud firewall lets port 80/443 in can't be checked from inside this machine;")
+		fmt.Fprintln(d.out, "add --acme to actually request the certificate (stop the service first).")
 	}
 	return nil
 }
