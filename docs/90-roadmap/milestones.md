@@ -281,6 +281,24 @@ m9 / m10 只依赖 m8，彼此独立。
 
 ---
 
+## m11 · `feat/80-ops-install-simplify`
+
+**新服务器上线只剩「安全组放行 + 一条命令 + 扫码」**（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md)、[ADR-0043](../20-architecture/adr/0043-install-from-the-binary.md)）。
+
+| 交付 | 对应文档 |
+|---|---|
+| `--domain` 接受公网 IPv4：自管的 IP 证书管理器（`shortlived` profile、HTTP-01、缓存、续期）；x/crypto 升到 v0.58.0 | ADR-0042、[install.md](../80-ops/install.md) |
+| staging 证书放 `certs-staging/`；状态总览的到期阈值随有效期缩放 | ADR-0042 §3–4 |
+| `webterm doctor --acme`（staging 实签）；IP 模式的 doctor 检查 | ADR-0043 §4、ADR-0042 §5 |
+| `webterm install`（嵌入 install.sh）；网上的 install.sh 下载后交接；不给 `--domain` 时沿用 install-state / 公网 IP；配置文件同步地址；放行 ufw/firewalld；首装 `doctor --acme` 前置、`pair --wait` 收尾 | ADR-0043、[install.md](../80-ops/install.md) |
+| 文档：install.md 的「从零到能用」重写，README 的部署说明 | — |
+
+**测试**：AC-1.16 – AC-1.20 对应的单测与集成测试（假 CA 扩展出 IP 标识与 profile）；真证书、真安全组、真机扫码进[手工清单](../70-testing/manual-checklist.md)「部署」
+
+**出口标准**：`go test ./...`、`npm test`、`npm run e2e` 全绿；手工清单「部署」里 IP 模式与 `webterm install` 的几项在一台真服务器上过一遍。
+
+---
+
 ## v0.2（不承诺时间）
 
 按价值排序（回滚历史已由 [ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1 与 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 解决）：

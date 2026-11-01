@@ -115,6 +115,20 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 ### `scripts/install.sh`
 
 - `UT-install-unit`：`install.sh --print-unit` 打印的系统单元里有 `User=` / `Group=`（当前用户）、`OOMScoreAdjust=-900`、`OOMPolicy=continue`、`XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS` 里的**字面 UID**（不是 `%U`）、`Wants=` / `After=user@<uid>.service`，`ExecStart` 带着端口参数；不联网、不需要 sudo
+- `UT-install-embed`：二进制里嵌的就是 `scripts/install.sh`（逐字节相等）；`webterm install --help` 跑的是它（打出 install.sh 的用法）
+- `UT-install-handover`：`--base-url file://…` 指向一个假二进制 + `SHA256SUMS`，install.sh 下载、校验之后调用 `<假二进制> install <原参数>`；假二进制不认 `install` 时脚本以「版本太旧」中止、不往下装。不联网、不需要 sudo
+- `UT-install-default-addr`：不给 `--domain` 时，有 `install-state` 就沿用它（命令行参数覆盖同名项），没有就用公网 IP（`WEBTERM_PUBLIC_IP` 注入，不联网）；用 `--print-unit` 看 `ExecStart`
+- `UT-install-config-sync`：已有配置文件时，重装改写 `domain` / 端口、端口回到默认值时删掉那一行，其它键原样保留
+
+### `internal/agent`：IP 证书（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md)）
+
+- `UT-ipcert-1`：续期时刻 = `NotAfter - 有效期/3`；失败后一小时重试
+- `UT-ipcert-2`：IPv6 字面量、非 IP 的地址不进 IP 模式 / 被拒绝；`IsIPAddress` 判定
+- `UT-ipcert-3`：CA 目录里没有 `shortlived` → 报错里说清楚「这个 CA 不签 IP 证书」
+- `UT-tls-staging-dir`：`--acme-staging` 的证书目录是 `certs-staging/`
+- `UT-status-cert`：到期阈值 `min(10 天, 有效期/4)` —— 90 天证书剩 11 天不标黄、剩 9 天标黄；160 小时证书刚签下来不标黄、剩 30 小时标黄
+- `UT-doctor-ip`：IP 模式不做 DNS 检查，公网 IP 不等于 `--domain` 时给出 NAT / 换 IP 的说明
+- `UT-pair-wait`：`--wait` 在探针成功前不打印配对码；超时后提示看日志并照常打印
 
 ## Go 集成测试清单
 
@@ -128,6 +142,8 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 | `IT-auth-1..4` | 路由认证矩阵（**含 `/ws`**）、Origin 校验、Cookie 属性、吊销即时生效 |
 | `IT-pair-1..3` | 二维码输出、配对码不进日志、限速 |
 | `IT-tls-1..3` | 用本地假 ACME CA（`internal/acmetest`）验证：真的签出证书并能握手；`--dev` 一次都不找 CA；挑战打不进来时给可读诊断（AC-1.13）。见下方「为什么不用 pebble」 |
+| `IT-tls-4..6` | IP 模式（AC-1.16）：假 CA 收到的订单是 `ip` 标识 + `shortlived` profile，签出的证书带 IP SAN，**不带 SNI 的握手**能用 CA 根校验通过；重启读缓存、不再找 CA；有效期短到触发续期时会换一张新证书 |
+| `IT-doctor-acme-1..2` | `doctor --acme` 的签发核心：假 CA 能验证时签出证书、临时目录用完删掉、端口释放；挑战打不进来时给可读诊断。域名与 IP 两种模式都跑 |
 | `IT-privacy-1..2` | canary 字符串不出现在数据目录 / 日志中 |
 | `IT-embed-1` | 删掉 `web/dist` 后二进制仍能提供前端（证明真的嵌入了） |
 | `IT-resize-1` | `resize` 消息导致 PTY 的 `TIOCSWINSZ` 生效（在会话内跑 `stty size` 验证） |

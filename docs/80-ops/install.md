@@ -2,119 +2,67 @@
 
 > 状态：Accepted
 
-## 从零到能用（六步）
+## 从零到能用
 
-需要：一台有公网 IP 的 Linux 机器 + 一个域名。照下面走完就能用。
+需要：一台有公网 IPv4 的 Linux 机器（x86_64 / arm64），一个能 sudo 的普通用户。
+**域名可选** —— 没有就用 IP（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md)）。
 
-### 1. 查这台机器的公网 IP
+### 1. 云安全组放行 80 和 443
+
+这是唯一一件安装脚本替你做不了的事。去云控制台的安全组 / 防火墙规则里放行
+**入方向 TCP `80` 和 `443`**（阿里云、腾讯云叫「安全组」，AWS 叫「Security Group」）。
+
+机器自己的防火墙（ufw / firewalld）不用管，脚本发现它们开着会自己放行。
+忘了这一步也不要紧：安装时的自检会在启动服务**之前**用 Let's Encrypt staging 实签一次，
+安全组没开会当场报出来。
+
+> 有域名的话，再加一条 `A` 记录指向这台机器的公网 IP。**不要用 CNAME 指到别处**；
+> 用 Cloudflare 的话**把小云朵关掉**（DNS only）—— 开着代理时挑战会被 Cloudflare 截住，
+> webterm 看到的 `Origin` 也不对。
+
+### 2. 装
+
+手边（笔记本、另一台服务器）已经有一个 webterm 二进制的话 —— **推荐这条**，不需要 GitHub 凭据：
 
 ```bash
-curl -s ifconfig.me
-# → 203.0.113.42
+scp webterm server:  &&  ssh -t server ./webterm install                              # 用公网 IP
+scp webterm server:  &&  ssh -t server ./webterm install --domain term.example.com    # 用域名
 ```
 
-拿不到就换 `curl -s ipinfo.io/ip`。如果它和机器上 `ip addr` 看到的地址不一样，
-说明你在 NAT 后面 —— 跳到[「家宽 / NAT 后面」](#家宽--nat-后面)。
-
-### 2. 加一条 DNS 记录
-
-去域名注册商（阿里云 / 腾讯云 / Cloudflare / Namecheap …）的 DNS 控制台，
-加**一条**记录：
-
-| 字段 | 填什么 |
-|---|---|
-| 类型 | `A`（IPv4）。只有 IPv6 就用 `AAAA` |
-| 主机记录 / Name | `term` —— 得到 `term.example.com`。想用根域就填 `@` |
-| 记录值 / Value | 第 1 步查到的公网 IP |
-| TTL | `600`（10 分钟）。先短一点，填错了改起来快 |
-
-**不要用 CNAME 指到别处。** Let's Encrypt 的 HTTP-01 挑战会打到解析出的那台
-机器上，指错了证书就签不下来。
-
-用 Cloudflare 的话**把小云朵关掉**（DNS only，不要 Proxied）—— 开着代理的话
-挑战会被 Cloudflare 截住，而且 webterm 看到的 `Origin` 也会不对。
-
-验证（刚加完可能要等 TTL）：
+二进制里嵌着安装脚本，`webterm install` 用它自己装自己（[ADR-0043](../20-architecture/adr/0043-install-from-the-binary.md)）。
+`-t` 不能省：脚本中途要 sudo 问密码。手边没有二进制就[从源码构建](#从源码构建)一个，或者在服务器上直接从网上装：
 
 ```bash
-dig +short term.example.com
-# 输出必须等于第 1 步的公网 IP
-```
-
-### 3. 放行 80 和 443
-
-**这一步最容易漏，而且症状是"DNS 明明对了，证书就是签不下来"。**
-
-- **云服务器**：去控制台的安全组 / 防火墙规则里放行入方向 TCP `80` 和 `443`。
-  阿里云叫「安全组」，腾讯云叫「安全组」，AWS 叫「Security Group」。
-- **机器自己的防火墙**：
-
-  ```bash
-  sudo ufw allow 80,443/tcp        # Debian/Ubuntu
-  sudo firewall-cmd --add-service={http,https} --permanent && sudo firewall-cmd --reload
-  ```
-
-- **确认没有别的东西占着**（nginx/apache/caddy 很常见）：
-
-  ```bash
-  ss -lntp | grep -E ':(80|443)\b'   # 应当为空
-  ```
-
-从外网验证一下（在别的机器上跑，或者用手机流量）：
-
-```bash
-curl -sI http://term.example.com/ | head -1
-# 有任何响应（哪怕是 502/404）就说明 80 通了；超时/拒绝说明没通
-```
-
-### 4. 装
-
-**仓库现在是私有的**，所以先在目标机器上 `gh auth login`，然后：
-
-```bash
+# 仓库目前是私有的：先 gh auth login
 gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
   -H 'Accept: application/vnd.github.raw' \
-  | bash -s -- --domain term.example.com --channel dev
+  | bash -s -- --channel dev                    # 有域名就加 --domain term.example.com
 ```
 
-裸 `curl` 那条（`raw.githubusercontent.com`）要等仓库转公开才能用 ——
-它不带凭据，私有仓库下 404。其它取法见[安装](#安装)。
+> `--channel dev` 在 v0.2.0 发布之前是必需的：`latest` 还是 v0.1.0，它早于这套安装流程，
+> 脚本会拒绝装它（[ADR-0043](../20-architecture/adr/0043-install-from-the-binary.md) §2）。
 
 用**普通用户**跑，不要 sudo —— 脚本会在需要的地方自己调 sudo。
 （agent 跑在哪个用户下，攻破它就等于拿到哪个用户的权限。以 root 跑等于把
-root shell 挂到公网。）装出来的是**以你的用户运行的系统服务**：sudo 只用来写单元，
-agent 和会话都是你自己（[ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md)）。
+root shell 挂到公网。）装出来的是**以你的用户运行的系统服务**：sudo 只用来写单元、setcap、
+放行防火墙，agent 和会话都是你自己（[ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md)）。
 
-### 5. 自检 + 先用 staging 试证书
+脚本依次做：
 
-```bash
-webterm doctor --domain term.example.com
-```
+1. 不给 `--domain` 时取本机公网 IP（以前装过就沿用上次的参数）
+2. 装到 `/usr/local/bin`，`setcap` 让普通用户能绑 80/443
+3. 放行已启用的 ufw / firewalld
+4. **自检**：`webterm doctor --acme` —— DNS、端口，再用 Let's Encrypt staging **实签一张证书**。
+   不通过就停在这里，服务不会被写成 systemd 单元；修好重跑同一条命令
+5. 写配置文件、生成 systemd 系统服务、启动
+6. 等正式证书签下来，打出**配对二维码**
 
-它会逐项检查 bash、数据目录、DNS 解析、DNS 是否指向本机、80/443 是否可用，
-失败的项会告诉你怎么修。**全绿了再往下走。**
+### 3. 扫码
 
-```bash
-sudo systemctl stop webterm
-webterm serve --domain term.example.com --acme-staging
-```
-
-看到「证书已就绪」就说明整条链路通了，`Ctrl+C` 停掉。
-
-**为什么一定要先 staging**：正式环境的 Let's Encrypt 限流窗口是**一周**，
-配错了反复重试撞上限流，只能干等。staging 没有这个限制。
-
-### 6. 正式启动 + 配对
-
-```bash
-sudo systemctl start webterm
-webterm pair
-```
-
-stdout 会打出一个配对 URL 和终端二维码：
+最后一屏就是这个：
 
 ```
-  https://term.example.com/pair#kJ8xR2mQ...
+  https://203.0.113.42/pair#kJ8xR2mQ...
 
   ▄▄▄▄▄▄▄ ▄  ▄▄ ▄▄▄▄▄▄▄
   █ ▄▄▄ █ ▀▄▄▀█▄ █ ▄▄▄ █
@@ -122,30 +70,45 @@ stdout 会打出一个配对 URL 和终端二维码：
 ```
 
 **手机扫码** → 自动完成授权 → 直接进终端。这台设备之后再也不用登录。
-扫不了码（终端在另一块屏幕上）就在手机浏览器打开 `https://<域名>/pair`，输入终端里那 16 位数字（`1234-5678-9012-3456`，空格或 `-` 分隔都行）。
+扫不了码（终端在另一块屏幕上）就在手机浏览器打开 `https://<地址>/pair`，输入终端里那 16 位数字（`1234-5678-9012-3456`，空格或 `-` 分隔都行）。
 
 配对码 5 分钟过期、用过即废。它走 URL fragment，**不会发给服务器**，所以不进
-访问日志、不进 Referer。
+访问日志、不进 Referer。错过了就再跑一次 `webterm pair`。别的设备也一样 ——
+在已经配对的设备上打开一个会话跑 `webterm pair` 就行，不用再 SSH。
+
+手机上可以「添加到主屏幕」装成 PWA。
 
 ### 走通了的样子
 
 ```bash
-curl -sI https://term.example.com/healthz | head -1   # HTTP/2 200
-systemctl status webterm                               # active (running)
-journalctl -u webterm -n 20                            # 有"证书已就绪"
+webterm                                   # 状态总览：服务、地址、证书、设备
+systemctl status webterm                  # active (running)
+journalctl -u webterm -n 20               # 有"证书已就绪"
 ```
 
-浏览器打开 `https://term.example.com`，应当看到终端、能敲命令。
-手机上可以「添加到主屏幕」装成 PWA。
+### IP 还是域名
+
+| | IP（`./webterm install`） | 域名（`--domain term.example.com`） |
+|---|---|---|
+| 要做的 DNS | 无 | 一条 A 记录 |
+| 证书 | 6 天期，约 4 天续一次 | 90 天期，提前 30 天续 |
+| 80 端口 | **必须一直开着**（续期只走 HTTP-01） | 签完可以关（续期也能走 443） |
+| 换机器 / 换 IP | 地址变了，设备要重新配对 | 改 A 记录就行，设备不用动 |
+
+**从 IP 换到域名**（或者 IP 变了）：`./webterm install --domain <新地址>` 重装一次。
+浏览器那边是一个新的 origin，Cookie、PWA 都不会跟过去，**每台设备要重新配对**。
+
+只支持 IPv4。IPv6 字面量会被拒绝 —— 只有 IPv6 的机器请用域名（`AAAA` 记录）。
 
 ---
 
 ### 家宽 / NAT 后面
 
-公网 IP 不在这台机器上（`ifconfig.me` 与 `ip addr` 不一致）时，有两条路：
+公网 IP 不在这台机器上（`curl -s ifconfig.me` 与 `ip addr` 不一致，而且不是云厂商的
+1:1 NAT）时，有两条路：
 
 1. **路由器端口映射**：把外部 80/443 转发到这台机器。很多运营商**封 80 入方向**，
-   那 HTTP-01 挑战就过不来 —— 这条路走不通。
+   那 HTTP-01 挑战就过不来 —— 安装时的自检会直接告诉你。
 2. **套隧道 / 反代**（推荐）：让 Cloudflare Tunnel / frp / nginx 终结 TLS，
    webterm 只监听回环。见[反向代理 / 隧道场景](#反向代理--隧道场景)。
 
@@ -154,49 +117,55 @@ journalctl -u webterm -n 20                            # 有"证书已就绪"
 不需要域名、证书、公网、root：
 
 ```bash
-# 私有仓库：需要 gh auth login。公开之后换成 curl -fsSL https://raw.githubusercontent.com/... 即可
-gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
-  -H 'Accept: application/vnd.github.raw' \
-  | bash -s -- --dev --channel dev
-webterm serve --dev
+./webterm serve --dev
 # → http://127.0.0.1:8080，stdout 有配对 URL 和二维码
 ```
 
 `http://localhost` 本身就是 secure context，PWA、剪贴板、Service Worker 都能测。
-但**手机访问局域网 IP 的 http 不算 secure context**，装不了 PWA —— 那个必须上正式域名。
+但**手机访问局域网 IP 的 http 不算 secure context**，装不了 PWA —— 那个必须上正式证书。
 
 ---
 
 ## 前置条件速查
 
-上面第 1–3 步就是在满足这张表。[ADR-0004](../20-architecture/adr/0004-acme-only-tls.md)
-决定 TLS 只走 ACME，所以这些是**硬要求**，不是建议：
+[ADR-0004](../20-architecture/adr/0004-acme-only-tls.md) 决定 TLS 只走 ACME，所以这些是**硬要求**，不是建议：
 
-| 要求 | 为什么 | 怎么验证 |
+| 要求 | 为什么 | 谁来查 |
 |---|---|---|
-| 一个域名 | ACME 需要它 | `dig +short term.example.com` |
-| 域名 A/AAAA 记录指向本机公网 IP | HTTP-01 挑战需要 | 上面的结果 == `curl -s ifconfig.me` |
-| **80 端口可用** | HTTP-01 挑战走 80 | `ss -lntp \| grep :80` 为空 |
-| **443 端口可用** | 服务本体 | `ss -lntp \| grep :443` 为空 |
-| 80/443 在**云安全组**里放行 | 挑战要从外网打进来 | 在别的机器上 `curl -sI http://<域名>/` |
+| 公网 IPv4，或者一个解析到它的域名 | ACME 要验证这个地址 | `webterm doctor`：域名查 DNS 是否指向本机，IP 查是否等于本机公网 IP |
+| **80 端口可用** | HTTP-01 挑战走 80 | `webterm doctor` |
+| **443 端口可用** | 服务本体（被占了就换 `--https-port`） | `webterm doctor` |
+| 80/443 在**云安全组**里放行 | 挑战要从外网打进来 | `webterm doctor --acme`（staging 实签，机器内部唯一查得出来的办法） |
 | Linux（x86_64 / arm64） | | `uname -m` |
 
 webterm 不往 shell 里注入任何东西，用哪个 shell、哪个版本都行。想让多行粘贴不被逐行执行，shell 要支持 bracketed paste（bash 4.4+、zsh、fish 都支持）。
 
-`webterm doctor` 子命令会逐项检查并给出可读的诊断。**部署前先跑它。**
+`webterm doctor` 逐项检查并给出可读的诊断，安装脚本在首次安装时会带 `--acme` 自动跑。
 
 检查结果分三档：`✓` 通过、`✗` 挡住部署、`⚠` 值得知道但不挡。
 
-`⚠` 目前只有一种情况：**特权端口空着，但当前这个二进制没有绑定权限**。
-全新安装时必然会看到它 —— 自检跑的是刚下载、还没 `setcap` 的二进制，
-而真正上岗的那个装完会被 `setcap`。当成失败的话，任何一次用 80 端口的
-全新安装都会被自己的自检拦住。
-
+`⚠` 目前只有一种情况：**特权端口空着，但当前这个二进制没有绑定权限**（还没 `setcap`）。
+安装脚本在 `setcap` 之后才跑自检，所以装的时候看不到它；手工跑一个刚下载的二进制会看到。
 端口【真的被别人占着】仍然是 `✗`：那时探测能连上去，两种情况分得开。
+
+`--acme` 那一项要**真的绑上**两个端口，所以只能在服务没在跑的时候做（升级时安装脚本会跳过它）。
+它签的是 staging 证书，缓存在临时目录、用完就删，不碰 `certs/`，staging 的限额也宽，反复跑没关系。
 
 ## 安装
 
-### 一条命令（推荐）
+### 用二进制自己装（推荐）
+
+```bash
+./webterm install [--domain term.example.com] [--https-port 8443] …
+```
+
+参数和下面 `install.sh` 的一样（`./webterm install --help`）。二进制里嵌着同一份 `install.sh`，
+`webterm install` 把它取出来、用自己当安装来源（`--binary`）跑一遍：不下载、不需要 GitHub 凭据。
+
+**在已经装好的机器上再跑一次**就是用这个二进制升级：不给 `--domain` 时沿用上次的安装参数，
+服务在跑、支持交接就热升级（会话保留），见[升级](#升级)。
+
+### 从网上装
 
 **仓库目前是私有的**，所以下面这两条路要分清 —— `raw.githubusercontent.com`
 和 `releases/download` 都**不带凭据**，私有仓库下一律 404，哪怕这台机器
@@ -207,7 +176,7 @@ webterm 不往 shell 里注入任何东西，用哪个 shell、哪个版本都�
 ```bash
 gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
   -H 'Accept: application/vnd.github.raw' \
-  | bash -s -- --domain term.example.com
+  | bash -s -- --channel dev
 ```
 
 没有 `gh` 就用 token（要有 repo 读权限）：
@@ -217,8 +186,11 @@ export GH_TOKEN=<token>
 curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
   -H 'Accept: application/vnd.github.raw' \
   https://api.github.com/repos/sunhaijun/webterm/contents/scripts/install.sh \
-  | bash -s -- --domain term.example.com
+  | bash -s -- --channel dev
 ```
+
+> 这两条都会在服务器上留下一份能读写你**所有仓库**的凭据，而这台机器正把 shell 挂在公网上。
+> 能用 `webterm install` 就用它。
 
 脚本自己也会用同一套凭据去下二进制：先试匿名，404 就回退到 `gh`，
 再回退到 `GH_TOKEN` / `GITHUB_TOKEN`。三条都不行会明确报错并中止，
@@ -227,26 +199,15 @@ curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
 仓库转公开之后，这条就够了（脚本不用改）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
-  | bash -s -- --domain term.example.com
+curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh | bash
 ```
 
-脚本会：认架构 → 下载二进制 → **校验 SHA256** → 装到 `/usr/local/bin` →
-`setcap` 让普通用户能绑 443 → 生成以你的用户运行的 systemd 系统服务
-（[`systemd.md`](systemd.md)）→ `enable-linger` → 启动服务。然后跑一次 `webterm pair` 就能扫码开工。
+**从网上取的脚本只负责下载**：认架构 → 下载二进制 → **校验 SHA256** → 交给**下载来的那个二进制**
+的 `webterm install` 接着装（[ADR-0043](../20-architecture/adr/0043-install-from-the-binary.md) §2）。
+这样干活的脚本和二进制永远是同一个版本。下载来的版本早于这套流程（不认 `install`，v0.1.0 及更早）
+时会直接中止 —— v0.2.0 发布之前 `latest` 就是这种情况，所以要加 `--channel dev`（`main` 的滚动构建）。
 
 先看它要做什么：加 `--dry-run`。全部选项：`--help`。
-
-**本地试用**（不需要域名、证书、root）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh \
-  | bash -s -- --dev
-webterm serve --dev      # → http://127.0.0.1:8080
-```
-
-> 正式 `v*` tag 之前 `latest` 是空的（GitHub 的 `latest` 不含预发布）——
-> 加 `--channel dev` 装 `main` 的滚动构建。main 上每次提交都会刷新它。
 
 > **自己的下载源**：`--base-url <地址>` 直接指向放着
 > `webterm-linux-<arch>` 和 `SHA256SUMS` 的任意 HTTP 服务。
@@ -254,7 +215,14 @@ webterm serve --dev      # → http://127.0.0.1:8080
 
 关于 `curl | bash`：装的是一个会把 shell 暴露到公网的东西，所以脚本
 **强制校验 SHA256**，取不到校验和就直接中止。不放心可以先
-`curl -fsSL … -o install.sh` 读一遍再跑，脚本只有两百来行。
+`curl -fsSL … -o install.sh` 读一遍再跑。
+
+### 不给 `--domain` 时用什么地址
+
+1. 以前在这台机器上装过（有 `~/.config/webterm/install-state`）→ **沿用上次那套参数**，命令行上给的覆盖同名项
+2. 否则 → 本机公网 IPv4（问 `api.ipify.org`，不行再问 `ifconfig.me`），走 IP 模式
+
+用的是哪个会打印出来。`--dev` / `--no-service` 不需要地址。
 
 ### 从源码构建
 
@@ -286,14 +254,13 @@ CGO_ENABLED=0 go build -ldflags "-s -w" -o webterm ./cmd/webterm
 ### 手工部署（不用安装脚本）
 
 ```bash
-# 1. 检查环境（DNS、端口、bash）
-./webterm doctor --domain term.example.com
+sudo setcap 'cap_net_bind_service=+ep' ./webterm
 
-# 2. 试运行（用 ACME staging，避免撞正式环境限流）
-sudo ./webterm serve --domain term.example.com --acme-staging
+# 1. 检查环境（地址、端口），并用 staging 实签一次 —— 安全组没开在这里暴露
+./webterm doctor --domain term.example.com --acme
 
-# 3. 正式运行
-sudo ./webterm serve --domain term.example.com
+# 2. 正式运行
+./webterm serve --domain term.example.com
 ```
 
 `--dev` 下 `http://localhost` 本身就是 secure context，所以 PWA、剪贴板、
@@ -324,7 +291,10 @@ webterm serve --domain X --http-port 8080 --https-port 8443
 
 ## 首次配对
 
-启动后 stdout 打印：
+用安装脚本装的，首次安装最后一步就是 `webterm pair --wait`：等本机 HTTPS 用系统信任的证书能打开了
+（最多 90 秒）再打印配对码，免得扫码后看到证书错误。
+
+手工跑 `webterm serve` 时，没有授权设备的话启动后 stdout 打印：
 
 ```
 time=... level=INFO msg="webterm 已启动" url=https://term.example.com
@@ -346,8 +316,7 @@ time=... level=INFO msg="webterm 已启动" url=https://term.example.com
 
 **「证书已就绪」这一行是启动时主动申请一次的结果。** autocert 默认懒加载 ——
 证书要等第一次 TLS 握手才去申请，那样启动时根本看不出 ACME 通不通。
-agent 会在监听起来之后主动触发一次，所以 `--acme-staging` 那一步是真的能
-验证整条链路。失败时打出的是「原因 + 怎么修」，不是一行 Go 的 error：
+agent 会在监听起来之后主动触发一次。失败时打出的是「原因 + 怎么修」，不是一行 Go 的 error：
 
 ```
 level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.example.com env="Let's Encrypt staging"
@@ -366,9 +335,9 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--domain` | — | 域名。生产必填 |
+| `--domain` | — | 域名，或公网 IPv4（[IP 模式](#ip-证书)）。生产必填 |
 | `--dev` | false | 本地开发：`127.0.0.1:8080` 明文，不申请证书 |
-| `--acme-staging` | false | 用 Let's Encrypt staging 环境（调试部署用） |
+| `--acme-staging` | false | 用 Let's Encrypt staging 环境（排障用）。证书放在 `certs-staging/`，不会被正式运行拿去用 |
 | `--data-dir` | `$XDG_DATA_HOME/webterm` | 数据目录 |
 | `--http-port` | 80 | ACME 挑战 + HTTPS 跳转 |
 | `--https-port` | 443 | 非 443 时**配对 URL 与启动日志会带上端口**，见[跑在非标准端口上](#跑在非标准端口上) |
@@ -390,9 +359,10 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 
 | 命令 | 说明 |
 |---|---|
-| `webterm doctor [--domain X]` | 检查部署前置条件 |
-| `webterm update` | 升级到最新版（按上次的安装参数重装） |
-| `webterm pair` | 生成新的配对码（打印 URL + 二维码 + 可手输的 16 位数字） |
+| `webterm install [参数]` | 用这个二进制本身安装 / 升级成系统服务（参数同 `install.sh`，见[安装](#安装)） |
+| `webterm doctor [--domain X] [--acme]` | 检查部署前置条件；`--acme` 再用 Let's Encrypt staging 实签一次（服务没在跑时才能用） |
+| `webterm update` | 从网上升级到最新版（按上次的安装参数重装） |
+| `webterm pair [--wait]` | 生成新的配对码（打印 URL + 二维码 + 可手输的 16 位数字）；`--wait` 先等 HTTPS 证书就绪 |
 | `webterm devices [list\|revoke <id>\|revoke-all]` | 设备管理（CLI 侧，UI 里也有） |
 | `webterm version` | 版本信息 |
 
@@ -454,6 +424,22 @@ journalctl -u webterm | grep -i '证书\|acme'
 ss -lntp | grep -E ':(80|443)\b'
 ```
 
+### IP 证书
+
+`--domain` 是 IPv4 时走另一套（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md)）：Let's Encrypt 的 IP 证书**只有 6 天期**
+（`shortlived` profile，约 160 小时），autocert 不支持，由 agent 自己的证书管理器申请。
+
+| | 域名 | IP |
+|---|---|---|
+| 有效期 | 90 天 | 约 160 小时 |
+| 什么时候续 | 剩 1/3（30 天） | 剩 1/3（约 53 小时） |
+| 验证 | HTTP-01（80）或 TLS-ALPN-01（443） | **只有 HTTP-01（80）** |
+| 续不上时 | autocert 自己重试 | 每小时重试一次 |
+
+所以 IP 模式下**80 端口不能关**：关了的话，几天之内证书就过期了。状态总览里证书剩不到
+`min(10 天, 有效期/4)` 会标黄（IP 证书就是 40 小时），看到黄色就说明续期已经失败过好几次了，
+去看 `journalctl -u webterm`。
+
 ### `certs/` 值得备份
 
 丢了会重新申请 —— 能成功，但 Let's Encrypt 每域名每周只给 50 次签发。
@@ -464,7 +450,8 @@ ss -lntp | grep -E ':(80|443)\b'
 ```
 $XDG_DATA_HOME/webterm/     （默认 ~/.local/share/webterm/）
 ├── webterm.db       ← 设备授权与配对（只存哈希）
-├── certs/           ← autocert 缓存（丢了会重新申请，注意 Let's Encrypt 限流）
+├── certs/           ← 证书缓存（丢了会重新申请，注意 Let's Encrypt 限流）
+├── certs-staging/   ← --acme-staging 的证书，和正式的分开放；可以随便删
 └── run/             ← 控制 socket，无需备份
 ```
 
@@ -475,6 +462,14 @@ $XDG_DATA_HOME/webterm/     （默认 ~/.local/share/webterm/）
 ## 升级
 
 **热升级不丢会话**（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）：agent 原地换成新二进制，PID 不变，各会话的 shell、环形缓冲、终端模拟器的状态、序号一并交接过去。浏览器只会看到连接横幅闪一下然后自动重连，正在跑的 vim / claude / ssh 都在原处。
+
+最省事的是拿新二进制再装一次 —— 替换、setcap、热升级都由安装脚本做：
+
+```bash
+scp webterm server:  &&  ssh -t server ./webterm install     # 沿用上次的安装参数
+```
+
+或者从网上取：`webterm update`（见下一节）。手工做的话是这样：
 
 ```bash
 # 1. 替换二进制（file capability 会丢，要重做 setcap）

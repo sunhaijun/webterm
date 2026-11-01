@@ -1,6 +1,7 @@
 # ADR-0004 TLS 只做 ACME 一档
 
 > 状态：Accepted · 2026-09-06
+> 补充：[ADR-0042](0042-ip-address-certificates.md)（2026-10-31）—— Let's Encrypt 开始签 IP 证书后，`--domain` 也接受公网 IPv4，不需要域名也能部署。下文「否决 sslip.io 兜底」仍然成立：IP 证书比借别人的域名更直接。
 
 ## 背景
 
@@ -59,5 +60,5 @@ TLS 代码路径只有两条：
 
 ## 后果
 
-- 部署前置条件变成硬要求：**必须有域名、必须能解析到本机、80/443 必须可用**。这些写进 [`../../80-ops/install.md`](../../80-ops/install.md) 的前置检查，并由 `webterm doctor` 子命令在启动前主动检测。
+- 部署前置条件变成硬要求：**必须有域名、必须能解析到本机、80/443 必须可用**（域名一条已由 ADR-0042 放宽为「域名或公网 IPv4」）。这些写进 [`../../80-ops/install.md`](../../80-ops/install.md) 的前置检查，并由 `webterm doctor` 子命令在启动前主动检测。
 - 测试用本地 ACME 服务器（pebble）验证签发流程（IT-tls-1），不打真实 Let's Encrypt。

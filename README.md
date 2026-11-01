@@ -3,12 +3,13 @@
 一个 Go 单二进制的浏览器终端。不是"网页版终端"，而是把终端当数据源、交互范式重新设计过的 Web 应用。
 
 ```
-scp webterm user@server:  →  ./webterm serve --domain term.example.com  →  扫码 →  开工
+云安全组放行 80/443  →  scp webterm server:  →  ssh -t server ./webterm install  →  扫码  →  开工
 ```
 
-> 还没有 release，先从源码构建（需要 Go 1.27+ 与 Node 22+）：
-> `cd web && npm ci && npm run build && cd .. && CGO_ENABLED=0 go build -o webterm ./cmd/webterm`
-> 本地试跑：`./webterm serve --dev`。详见 [安装文档](docs/80-ops/install.md)。
+不需要域名（直接用公网 IP 签证书），有域名就加 `--domain term.example.com`。
+安装会先用 Let's Encrypt staging 实签一次，安全组没放行在启动服务之前就报出来。
+手边还没有二进制就从源码构建（Go 1.27+、Node 22+）：`make build`。
+详见 [安装文档](docs/80-ops/install.md)；本地试跑：`./webterm serve --dev`。
 
 ## 它解决什么
 
