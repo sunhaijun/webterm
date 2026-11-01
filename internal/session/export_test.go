@@ -9,5 +9,8 @@ func SetChildOOMAdjForTest(v int) (restore func()) {
 	return func() { childOOMAdj = old }
 }
 
+// BusyForTest 报告会话的前台是不是 shell 以外的程序。
+func BusyForTest(s *Session) bool { return s.busy() }
+
 // ShellPIDForTest 返回会话 shell 的 pid。
 func ShellPIDForTest(s *Session) int { return s.proc.Pid }

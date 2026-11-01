@@ -180,7 +180,7 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 { "t": "session.rename", "req_id": "r3", "sid": 1, "name": "构建" }
 ```
 
-设置后该会话**停止**跟随 CWD 自动改名。`name` 传 `null` 恢复自动改名。
+设置后该会话**停止**自动命名（不再跟随终端标题与 CWD）。`name` 传 `null` 恢复自动命名。
 
 #### `session.move`
 
@@ -290,6 +290,7 @@ client 侧做 100ms 防抖。agent：
 - 三条都**广播给该设备的所有连接**（否则 B 标签页看不到 A 新建的会话）。`req_id` 只出现在发起请求的那条连接的副本上
 - `session.updated` 只包含**发生变化的字段** + `sid`。client 做增量合并
 - `cwd` 来自 agent 每秒读一次 `/proc/<前台进程组>/cwd`，变了才发；`name_is_manual == false` 时 `name` 跟着变（AC-4.4）
+- 自动名的来源（[ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)）：**前台程序**（不是 shell 本身）设的终端标题（OSC 0 / 2，清洗后最多 64 个字符）优先，没有时是 CWD 的 basename。标题与 CWD 在同一次每秒轮询里读，名字变了才发，所以每个会话每秒至多一条
 - **会话退出**：`session.updated{status:"exited", exit_code, head_seq}` 一定排在该会话**最后一个 OUTPUT 之后**（agent 等 PTY 读到 EOF 再发，最多等 500 ms —— 后台进程占着 PTY 时 EOF 不会来）。`head_seq` 是最终的输出总量：client 的 `out_seq` 追到它，才说明输出收齐了
 
 #### `session.order`

@@ -216,13 +216,15 @@ typing = 切换前焦点在终端里或文本框里
 ## 自动命名（AC-4.4）
 
 ```
-name = nameIsManual ? 手动名 : (cwd ? basename(cwd) : "shell")
+name = nameIsManual ? 手动名
+     : 前台程序设的终端标题 ?? (cwd ? basename(cwd) : "shell")
 ```
 
 - 会话名由 agent 算：`cwd` 为 home 目录时是 `~`，basename 为空（`/`）时是 `/`。
+- **终端标题**（[ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)）：前台程序（claude、vim、ssh…，不是 shell 本身）用 OSC 0 / 2 设的标题优先，原样显示（claude 的 `✳` 空闲 / `◐` 在干活）。shell 在提示符时设的 `user@host: dir` 不用；程序退出就回到目录名。tmux 默认不转发里面程序的标题（[troubleshooting.md](../80-ops/troubleshooting.md#标签名不跟-claude-的标题变)）。
 - 列表里显示的 CWD 由浏览器缩写：等于 `welcome.home` 或在它下面时换成 `~`；没有 `home` 时原样显示，不去猜 `/home/<user>`。
 - 重名时**不做去重后缀** —— 两个都在 `webterm` 目录下的会话本来就该同名，靠编号 / 顺序和 CWD 全路径区分。
-- 手动改名后 `nameIsManual = true`，停止跟随 CWD。改成空字符串则恢复自动。
+- 手动改名后 `nameIsManual = true`，停止自动命名（标题与 CWD 都不跟）。改成空字符串则恢复自动。
 
 ## 新建会话
 

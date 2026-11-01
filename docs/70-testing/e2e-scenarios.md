@@ -574,6 +574,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 8. **等宽与滚动**（ADR-0031 / ADR-0035）：建到 3 个会话 → 三个标签等宽（差 ≤ 1px）、都是 240px，`tabbar` 正好是三个标签的宽度、不横向滚动（`scrollWidth` = `clientWidth`），`new-session` 的左边缘 = 最后一个标签的右边缘 + 12px；把窗口改成 600×900（`screen` 不变，仍是 `wide`）、建到 5 个 → 每个标签 120px（差 ≤ 1px），`tabbar` 放不下（`scrollWidth > clientWidth`），当前（最后建的）整个可见；**`new-session` 整个落在顶栏里、可点（`elementFromPoint` 命中它），左边缘 = `tabbar` 右边缘 + 12px**；把 `tabbar` 滚到最左（`scrollLeft = 0`）→ `new-session` 的位置不变；（此时 `scrollLeft` 为 0）鼠标悬在标签条上纵向滚轮向下再向上 → `scrollLeft` 先变大后变小；窗口改回 1440 → 5 个都是 240px，不再横向滚动
 9. **间隔不可点**（ADR-0035 §2）：两个会话，焦点在终端里；在最后一个标签右边缘与 `new-session` 左边缘之间那 12px 的正中点击 → 会话数不变、当前会话不变、焦点仍在终端里
 10. **设置是居中浮窗**（AC-5.11，ADR-0037 §4）：焦点在终端里，点 `open-settings` → `settings` 水平、垂直都居中（中心与可视区中心差 ≤ 1px），宽 420px，没有抓手；`.term` 的矩形与 `__webterm.size()` 不变；按 `Esc` → 浮层消失，焦点回到终端的 helper textarea（打字有回显）
+11. **终端标题作名字**（AC-4.4，ADR-0043）：harness 的 shell 读用户的 `.bashrc`，提示符可能设 `user@host: dir` 标题 —— 等两秒，标签名仍是 `~`（shell 设的不用）；跑 `bash -c 'printf "\033]0;E2E TITLE\007"; sleep 3'` → 标签名变成 `E2E TITLE`、编号仍在；它退出回到提示符 → 标签名回到 `~`
 
 ---
 

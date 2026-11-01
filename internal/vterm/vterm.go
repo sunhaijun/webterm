@@ -23,6 +23,9 @@ const HistoryLines = 2000
 // Terminal 是一个终端模拟器。零值不可用，用 New / Import 构造。
 type Terminal struct {
 	t *vt.Emulator
+	// titleWrites 是 OSC 0 / 2 设标题的次数（同样的标题再设一次也算）。会话靠它判断
+	// 「前台程序设过标题」（ADR-0043 §2）。只在 Write 的调用栈里加，和模拟器同一把锁。
+	titleWrites uint64
 }
 
 // New 建一个 cols × rows、带 HistoryLines 行历史的模拟器。
@@ -32,7 +35,15 @@ func New(cols, rows int) *Terminal {
 	// kitty 图形上传的应答由浏览器负责（§5），这里一律不答 —— 关掉之后它也
 	// 不会为 f / t 介质去 open 服务器上的文件。
 	e.SetKittyUploadAnswers(false)
-	return &Terminal{t: e}
+	t := &Terminal{t: e}
+	e.SetCallbacks(vt.Callbacks{Title: func(string) { t.titleWrites++ }})
+	return t
+}
+
+// Title 返回窗口标题（OSC 0 / 2 设的，未清洗）与它被设过几次。导入的模拟器带着
+// 导出时的标题，次数从 0 起。
+func (t *Terminal) Title() (title string, writes uint64) {
+	return t.t.Titles().Title, t.titleWrites
 }
 
 // Write 喂 PTY 的原始输出。
@@ -123,5 +134,6 @@ func Import(data []byte) (*Terminal, error) {
 		return nil, fmt.Errorf("vterm: 导入状态: %w", err)
 	}
 	_ = t.t.TakeResponses()
+	t.titleWrites = 0 // 导入还原的标题不算「程序设的」
 	return t, nil
 }

@@ -321,6 +321,19 @@ test.describe('1440×900 鼠标', () => {
     await page.keyboard.type('echo SETTINGS-BACK')
     await waitText(page, 'echo SETTINGS-BACK', '打字有回显')
   })
+
+  test('E2E-41 ⑪ 终端标题作名字：前台程序设的用，shell 提示符设的不用，程序退出回到目录名（ADR-0043）', async ({ page }) => {
+    await agent.open(page)
+    const sid = (await hooks.sid(page))!
+    // harness 的 shell 读用户的 .bashrc：提示符可能每次都设 `user@host: dir` —— 不用
+    await submit(page, 'true')
+    await page.waitForTimeout(2000)
+    expect(await tabName(page, sid), 'shell 设的标题不用').toBe('~')
+    await submit(page, `bash -c 'printf "\\033]0;E2E TITLE\\007"; sleep 3'`)
+    await expect.poll(() => tabName(page, sid), { message: '前台程序设的标题' }).toBe('E2E TITLE')
+    await expect(page.getByTestId(`tab-${sid}-idx`), '编号仍在').toHaveText('[1]')
+    await expect.poll(() => tabName(page, sid), { message: '程序退出 → 回到目录名', timeout: 10_000 }).toBe('~')
+  })
 })
 
 test.describe('iPad Mini 触屏', () => {

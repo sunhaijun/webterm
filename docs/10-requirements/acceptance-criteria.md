@@ -83,7 +83,7 @@
 | AC-4.1 | 可同时存在多个会话，各自独立 PTY、独立缓冲、独立序列号 | IT-session-1 |
 | AC-4.2 | 会话数达上限（默认 20，可配）时 `session.create` 返回 `session_limit` 错误，UI 显示提示 | IT-session-2, E2E-11 |
 | AC-4.3 | 未订阅会话产生输出时，agent 发 `session.updated{head_seq}`；client 按 `head_seq > out_seq` 显示未读标记。**节流吞掉的那条必须补发最新值**（协议 §6.3）—— 输出一阵一阵的时候，最后一条被吞掉就意味着未读永远不亮 | E2E-6, IT-unread-1 |
-| AC-4.4 | 会话默认名为其 CWD 的 basename；CWD 由 agent 每秒读一次 `/proc/<前台进程组>/cwd`，变了才发 `session.updated`，任何 shell 都适用；手动改名后停止自动更新，改成空字符串恢复 | IT-session-3, UT-name-1 |
+| AC-4.4 | 会话自动命名：**前台程序**（不是 shell 本身）设了终端标题（OSC 0 / 2）时用它（清洗控制字符、最多 64 个字符，`✳` 之类前缀原样保留），否则用 CWD 的 basename；shell 在提示符时设的标题不用，程序退出回到提示符即回到目录名，再启动的程序设标题之前不沿用上一次的（[ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)）。CWD 与标题由 agent 每秒读一次（`/proc/<前台进程组>/cwd`、模拟器的标题），变了才发 `session.updated`，任何 shell 都适用；跨热升级保留；手动改名后停止自动更新，改成空字符串恢复 | IT-session-3, IT-session-6, UT-name-1, UT-name-2, IT-handoff-1 |
 | AC-4.5 | shell 退出后会话状态变 `exited` 并携带退出码；缓冲内容保留可查看。终端末尾出现一行本地提示 `[进程已结束（退出码 N）· 按 Enter 关闭]`：它在最后一段输出**之后**、不改变 `outSeq`；在该会话里按 `Enter`（或文本输入页回车）关闭会话；agent 的"已退出"消息排在最后一个 OUTPUT 之后并带 `head_seq`，client 在 `out_seq` 追到它之后才写提示行；刷新或重连拿到快照后（提示行不在 agent 的模拟器里）按会话状态再写一次，始终**只有一行** | IT-session-4, E2E-11 |
 | AC-4.6 | 关闭会话时先送 `SIGHUP`，2 秒后仍存活则 `SIGKILL`，并释放 PTY 与缓冲 | IT-session-5 |
 | AC-4.8 | **焦点跟着会话走**（ADR-0020）：切会话时 `activate()` 把上一个会话的 DOM 摘掉，焦点会落回 `body`；切换前（从抽屉切换时以**打开抽屉之前**为准）焦点在终端里**或文本框里**的，切换后必须还给**新会话的输入处**（它停在文本页就是文本框，否则是终端，[ADR-0036](../20-architecture/adr/0036-text-page-per-session.md)），**非触摸设备无条件还**。少了这一步，用 `Ctrl+Shift+↑/↓`、标签栏或抽屉切过去之后打字彻底没反应，且没有任何提示 | E2E-34, E2E-40 |
