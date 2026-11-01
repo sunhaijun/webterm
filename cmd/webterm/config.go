@@ -32,7 +32,6 @@ var configKeys = map[string]bool{
 	"https-port":          true,
 	"no-tls":              true,
 	"trust-proxy":         true,
-	"acme-staging":        true,
 	"shell":               true,
 	"max-sessions":        true,
 	"max-conns":           true,
@@ -45,6 +44,13 @@ var configKeys = map[string]bool{
 
 // defaultConfigPath 遵循 XDG：$XDG_CONFIG_HOME/webterm/config，否则
 // ~/.config/webterm/config。
+// removedConfigKeys 是删掉了的键。写了它们照样启动失败（静默忽略会让人以为还在生效），
+// 但报的是「已经删了、删掉这一行」，而不是让人怀疑自己拼错的「没有这个选项」。
+var removedConfigKeys = map[string]string{
+	"acme-staging": "staging 证书和正式证书共用缓存，用了反而让正式服务发 staging 证书；" +
+		"首次安装改为直接签正式证书（ADR-0044 §3）",
+}
+
 func defaultConfigPath() string {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "webterm", "config")
@@ -110,6 +116,9 @@ func loadConfigInto(fs *flag.FlagSet, path string) error {
 		key = strings.TrimLeft(key, "-") // 容忍写成 --domain
 
 		if !configKeys[key] {
+			if why, ok := removedConfigKeys[key]; ok {
+				return fmt.Errorf("%s:%d: --%s 已经删掉了：%s。\n  删掉这一行即可", path, line, key, why)
+			}
 			if key == "dev" || key == "config" {
 				return fmt.Errorf("%s:%d: --%s 不能写进配置文件。\n"+
 					"  --dev 是「临时本地跑一下」的开关，写进文件等于把生产配置永久降级；\n"+

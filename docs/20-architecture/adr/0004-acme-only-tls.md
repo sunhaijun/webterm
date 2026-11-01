@@ -1,6 +1,7 @@
 # ADR-0004 TLS 只做 ACME 一档
 
 > 状态：Accepted · 2026-09-06
+> 补充：[ADR-0044](0044-ip-address-certificates.md)（2026-10-31）—— Let's Encrypt 开始签 IP 证书后，`--domain` 也接受公网 IPv4，不需要域名也能部署。下文「否决 sslip.io 兜底」仍然成立：IP 证书比借别人的域名更直接。
 
 ## 背景
 
@@ -54,10 +55,10 @@ TLS 代码路径只有两条：
   - 80 端口被占用 → 提示查 `ss -lntp`，说明 HTTP-01 挑战需要 80
   - DNS 未指向本机 → 打印解析结果与本机公网 IP 的对比
   - Let's Encrypt 限流 → 说明限流窗口，建议先用 `--acme-staging` 调通
-- 提供 `--acme-staging` 开关，用 Let's Encrypt staging 环境调试部署，避免撞正式环境的限流
+- 提供 `--acme-staging` 开关，用 Let's Encrypt staging 环境调试部署，避免撞正式环境的限流（**已由 [ADR-0044](0044-ip-address-certificates.md) §3 删除**：它和正式证书共用缓存，用了反而会让正式服务发 staging 证书；装前自检改为直接签正式证书）
 - 保留 `--bind` 与 `--no-tls`（仅允许绑定到回环或私有地址），用于用户自己套反向代理/隧道的场景 —— 见 [ADR-0002](0002-self-contained-binary.md)
 
 ## 后果
 
-- 部署前置条件变成硬要求：**必须有域名、必须能解析到本机、80/443 必须可用**。这些写进 [`../../80-ops/install.md`](../../80-ops/install.md) 的前置检查，并由 `webterm doctor` 子命令在启动前主动检测。
+- 部署前置条件变成硬要求：**必须有域名、必须能解析到本机、80/443 必须可用**（域名一条已由 ADR-0044 放宽为「域名或公网 IPv4」）。这些写进 [`../../80-ops/install.md`](../../80-ops/install.md) 的前置检查，并由 `webterm doctor` 子命令在启动前主动检测。
 - 测试用本地 ACME 服务器（pebble）验证签发流程（IT-tls-1），不打真实 Let's Encrypt。

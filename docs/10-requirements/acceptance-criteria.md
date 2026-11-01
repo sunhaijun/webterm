@@ -28,6 +28,11 @@
 | AC-1.13 | 证书申请失败时 stdout 给出「原因 + 怎么修」（至少覆盖：80 被占、DNS 未指向本机、ACME 限流），不是 Go error 堆栈；`webterm doctor` 逐项检查同样的前置条件（US-7.2） | IT-tls-3 |
 | AC-1.15 | 手输配对（ADR-0017）：终端把数字码打成 `dddd-dddd-dddd-dddd`；`GET /pair` 无 fragment 时显示数字输入框（`inputmode=numeric`，边输边 4 位分组，满 16 位才能提交），空格与 `-` 都接受；提交走同一个 `POST /auth/pair`，服务端剥掉分隔符后匹配数字码；输错 / 过期 → 401 提示，输入框保留可重试 | IT-pair-4, E2E-27 |
 | AC-1.14 | PWA：`manifest.json` 字段完整、Service Worker 注册成功、`display: standalone`；SW **只缓存静态壳**，不缓存 `/api/*` 与 `/ws`；离线时显示明确状态页（US-1.4） | E2E-17 |
+| AC-1.16 | IP 模式（ADR-0044）：`--domain` 是 IPv4 字面量时，用 ACME 申请 IP 标识（RFC 8738）、`shortlived` profile 的证书，只走 HTTP-01；握手不看 SNI、一律给这张证书，**握手从不触发签发**；证书缓存在 `certs/<ip>`（与 autocert 同格式），重启读缓存不找 CA；剩余 < 有效期 1/3 时续期，失败每小时重试；CA 目录没有 `shortlived` → 可读报错；IPv6 字面量 → 拒绝并说明 | IT-tls-4..6, UT-ipcert-1..3 |
+| AC-1.17 | 没有 staging（ADR-0044 §3）：`serve` 不认 `--acme-staging`；配置文件里写了 `acme-staging` → 启动失败并说明它已删除、删掉那一行即可 | UT-config-removed-key |
+| AC-1.18 | `webterm doctor --acme`：静态检查通过后临时监听 http/https 端口，向正式环境申请证书并存进 `certs/`（服务启动直接用，不签第二次；已有有效证书时直接用并报告「没有找 CA」）；失败给出与启动时同样的「原因 + 怎么修」。IP 模式下 doctor 不查 DNS，改查「本机公网 IP == `--domain`」 | IT-doctor-acme-1..2, UT-doctor-ip |
+| AC-1.19 | `webterm install`（ADR-0045）：用二进制里嵌的 install.sh、以自身为 `--binary` 安装；网上取的 install.sh 下载并校验后交给下载来的二进制的 `install`，不认 `install` 的旧版本被拒绝；不给 `--domain` 时先沿用 `install-state`，没有就用公网 IPv4；配置文件里的 `domain` / 端口每次安装都同步；首次安装在启动服务前跑 `doctor --acme`、放行已启用的 ufw/firewalld，启动后 `pair --wait` 打出配对码 | UT-install-embed, UT-install-handover, UT-install-default-addr, UT-install-config-sync, UT-pair-wait, 手工清单「部署」 |
+| AC-1.20 | 状态总览里证书「快到期」的黄色阈值是 `min(10 天, 有效期/4)`：90 天证书仍是 10 天，6 天期的 IP 证书刚签下来不标黄 | UT-status-cert |
 
 ---
 

@@ -173,3 +173,23 @@ func TestServeFlagsAreConfigurable(t *testing.T) {
 		t.Errorf("serve 有 --%s 但没进 configKeys —— 要么加进去，要么在 excluded 里说明为什么", f.Name)
 	})
 }
+
+// UT-config-removed-key：删掉的键（acme-staging，ADR-0044 §3）报「已经删掉了」并带行号，
+// 而不是「没有这个选项」—— 后者会让人怀疑自己拼错了。
+func TestConfigRemovedKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte("domain = x.example.com\nacme-staging = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.String("domain", "", "")
+	err := loadConfigInto(fs, path)
+	if err == nil {
+		t.Fatal("写了 acme-staging 却没报错 —— 静默忽略会让人以为它还在生效")
+	}
+	for _, want := range []string{":2:", "已经删掉了", "删掉这一行"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("报错里缺 %q：%v", want, err)
+		}
+	}
+}

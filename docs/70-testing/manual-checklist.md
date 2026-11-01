@@ -70,7 +70,7 @@
 ## 部署（m2 后每次改动 TLS/安装流程都要过）
 
 - [x] `webterm doctor` 在缺条件时给出可读诊断（分别测：80 被占、DNS 指错、无域名）
-- [x] `--acme-staging` 能签出 staging 证书
+- [ ] 首次安装的 `doctor --acme` 签出正式证书；服务启动后日志里是「证书已就绪」且没有第二次签发（`certs/` 里只有一张）
 - [x] 正式 Let's Encrypt 签发成功
 - [x] 手机扫二维码完成配对（终端二维码在实际字号下可扫）
 - [x] `setcap` 后以普通用户绑定 443 成功
@@ -82,6 +82,13 @@
 - [x] 服务器重启后服务自动起来
 - [x] 替换二进制 + `setcap` + 重启 → 客户端收到"agent 即将重启"提示，重连后是新版本
 - [x] 反代场景（nginx）下 WebSocket 正常，且不会每 60 秒断
+- [ ] IP 模式（ADR-0044）：`./webterm install`（不给 `--domain`）在一台云服务器上签出正式 IP 证书；手机扫码打开 `https://<IP>`，地址栏没有证书警告；能加到主屏（iOS / Android 各一台）
+- [ ] IP 证书续期：服务跑满 5 天后 `webterm` 状态总览里的到期时间往后挪了，日志里有续期成功
+- [ ] `webterm install`（ADR-0045）：`scp` 上去直接装，服务器上没有 `gh`、没有 `GH_TOKEN`；装完最后一屏就是二维码
+- [ ] 安全组故意不放行 80：`webterm install` 在启动服务前就停下，报的是「CA 没能连上本机」，服务没有被写成 systemd 单元
+- [ ] ufw 已启用的机器：安装后 `sudo ufw status` 里有 80/443
+- [ ] 同一台机器从 IP 改成域名：`./webterm install --domain X` 之后，`webterm` 状态总览、`webterm pair` 用的都是新域名
+- [ ] 从网上装（`gh api … | bash -s -- --channel dev`）：日志里有「交给 webterm … 自带的安装脚本继续」，装出来的版本就是 dev
 
 ## 终端兼容性（每次改渲染都要过）
 

@@ -14,6 +14,15 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/sunhaijun/webterm/internal/agent"
+)
+
+// 以下几个是测试的注入点：不联网、不真的找 CA。
+var (
+	doctorOut      io.Writer = os.Stdout
+	lookupPublicIP           = publicIP
+	issueCheck               = agent.IssueCheck
 )
 
 // warning 是"值得说，但不该拦住部署"的检查结果。
@@ -34,6 +43,7 @@ func runDoctor(args []string) error {
 	c.register(fs)
 	httpPort := fs.Int("http-port", 80, "ACME 挑战端口")
 	httpsPort := fs.Int("https-port", 443, "HTTPS 端口")
+	acmeCheck := fs.Bool("acme", false, "再把证书签好存进 certs/，服务启动直接用（要临时占用两个端口，服务在跑时先停掉）")
 	if err := applyConfig(fs, args); err != nil {
 		return err
 	}
@@ -48,19 +58,19 @@ func runDoctor(args []string) error {
 		switch {
 		case errors.As(err, &w):
 			warned++
-			fmt.Printf("  ⚠ %s\n      %s\n", name, indent(w.msg))
+			fmt.Fprintf(doctorOut, "  ⚠ %s\n      %s\n", name, indent(w.msg))
 		case err != nil:
 			failed++
-			fmt.Printf("  ✗ %s\n      %s\n", name, indent(err.Error()))
+			fmt.Fprintf(doctorOut, "  ✗ %s\n      %s\n", name, indent(err.Error()))
 		case detail != "":
-			fmt.Printf("  ✓ %s（%s）\n", name, detail)
+			fmt.Fprintf(doctorOut, "  ✓ %s（%s）\n", name, detail)
 		default:
-			fmt.Printf("  ✓ %s\n", name)
+			fmt.Fprintf(doctorOut, "  ✓ %s\n", name)
 		}
 	}
 
-	fmt.Println("webterm doctor")
-	fmt.Println()
+	fmt.Fprintln(doctorOut, "webterm doctor")
+	fmt.Fprintln(doctorOut)
 
 	check("bash 可用", func() (string, error) {
 		out, err := exec.Command("bash", "--version").Output()
@@ -86,45 +96,26 @@ func runDoctor(args []string) error {
 	})
 
 	if c.dev {
-		fmt.Println("\n（--dev 模式：跳过域名、DNS 与端口检查）")
-		return summarize(failed, warned)
+		fmt.Fprintln(doctorOut, "\n（--dev 模式：跳过地址与端口检查）")
+		return summarize(failed, warned, false)
 	}
 	if c.domain == "" {
-		fmt.Println("  ✗ 域名\n      没有指定 --domain。ACME 需要它，Origin 校验也需要它。")
+		fmt.Fprintln(doctorOut, "  ✗ 地址\n      没有指定 --domain（域名或公网 IPv4）。ACME 需要它，Origin 校验也需要它。")
 		failed++
-		return summarize(failed, warned)
+		return summarize(failed, warned, false)
+	}
+	if err := agent.CheckAddress(c.domain); err != nil {
+		fmt.Fprintf(doctorOut, "  ✗ 地址\n      %s\n", indent(err.Error()))
+		failed++
+		return summarize(failed, warned, false)
 	}
 
-	var resolved []string
-	check("DNS 解析", func() (string, error) {
-		ips, err := net.LookupHost(c.domain)
-		if err != nil {
-			return "", fmt.Errorf("解析 %s 失败：%v\n"+
-				"确认已经加了 A/AAAA 记录，并等 TTL 过期", c.domain, err)
-		}
-		resolved = ips
-		return strings.Join(ips, ", "), nil
-	})
-
-	check("DNS 指向本机", func() (string, error) {
-		if len(resolved) == 0 {
-			return "", fmt.Errorf("上一步没解析出结果，跳过")
-		}
-		public, err := publicIP()
-		if err != nil {
-			return "", fmt.Errorf("查不到本机公网 IP（%v），请手工核对：\n"+
-				"  dig +short %s\n  curl -s ifconfig.me", err, c.domain)
-		}
-		for _, ip := range resolved {
-			if ip == public {
-				return "本机公网 IP " + public, nil
-			}
-		}
-		return "", fmt.Errorf("%s 解析到 %s，但本机公网 IP 是 %s。\n"+
-			"HTTP-01 挑战会打到解析出的那台机器上，不改的话证书签不下来。\n"+
-			"确认改的是 A/AAAA 记录，而不是 CNAME 到别处",
-			c.domain, strings.Join(resolved, ", "), public)
-	})
+	if agent.IsIPAddress(c.domain) {
+		// IP 模式（ADR-0044）：没有 DNS 可查，查的是「这个 IP 真是本机的公网 IP」
+		check("公网 IP", func() (string, error) { return checkPublicIP(c.domain, lookupPublicIP) })
+	} else {
+		checkDNS(check, c.domain)
+	}
 
 	for _, p := range []int{*httpPort, *httpsPort} {
 		check(fmt.Sprintf("%d 端口可用", p), func() (string, error) {
@@ -137,7 +128,87 @@ func runDoctor(args []string) error {
 		})
 	}
 
-	return summarize(failed, warned)
+	if *acmeCheck {
+		if failed > 0 {
+			fmt.Fprintln(doctorOut, "  - 证书实签：跳过，先修好上面标 ✗ 的项"+
+				"（端口被 webterm 自己占着的话，先 sudo systemctl stop webterm）")
+		} else {
+			fmt.Fprintln(doctorOut, "  … 证书：向 Let's Encrypt 申请（最多等 2 分钟）")
+			check("证书", func() (string, error) {
+				return runIssueCheck(c.domain, agent.CertDirDefault(c.dataDir), *httpPort, *httpsPort)
+			})
+		}
+	}
+
+	return summarize(failed, warned, *acmeCheck)
+}
+
+// runIssueCheck 把证书签好存进服务用的 certs/（ADR-0045 §4）。签下来的就是正式证书，
+// 服务启动直接用，不签第二次；已有有效证书时直接用它并如实说「没有找 CA」。
+func runIssueCheck(domain, certDir string, httpPort, httpsPort int) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	leaf, issued, err := issueCheck(ctx, agent.ServeConfig{
+		Domain: domain, Bind: "0.0.0.0",
+		HTTPPort: httpPort, HTTPSPort: httpsPort, CertDir: certDir,
+	})
+	if err != nil {
+		return "", err
+	}
+	exp := leaf.NotAfter.Local().Format("2006-01-02 15:04")
+	if !issued {
+		return "已有证书，到期 " + exp + "；没有找 CA，所以这一项没验证安全组", nil
+	}
+	return "签下来了（CA 从公网连进来了），到期 " + exp + "，服务启动直接用它", nil
+}
+
+// checkPublicIP：IP 模式下 --domain 必须就是本机的公网 IP。
+func checkPublicIP(ip string, lookup func() (string, error)) (string, error) {
+	public, err := lookup()
+	if err != nil {
+		return "", fmt.Errorf("查不到本机公网 IP（%v），请手工核对：\n  curl -s ifconfig.me   应当等于 %s", err, ip)
+	}
+	if public != ip {
+		return "", fmt.Errorf("本机公网 IP 是 %s，不等于 --domain %s。\n"+
+			"HTTP-01 挑战会打到 %s 上，不是这台机器的话证书签不下来。\n"+
+			"  IP 变了：用新 IP 重装（./webterm install --domain %s），设备要重新配对\n"+
+			"  在 NAT 后面：见 docs/80-ops/install.md 的「家宽 / NAT 后面」", public, ip, ip, public)
+	}
+	return "本机公网 IP " + public, nil
+}
+
+// checkDNS 是域名模式的两项：解析得出来、并且指向本机。
+func checkDNS(check func(string, func() (string, error)), domain string) {
+	var resolved []string
+	check("DNS 解析", func() (string, error) {
+		ips, err := net.LookupHost(domain)
+		if err != nil {
+			return "", fmt.Errorf("解析 %s 失败：%v\n"+
+				"确认已经加了 A/AAAA 记录，并等 TTL 过期", domain, err)
+		}
+		resolved = ips
+		return strings.Join(ips, ", "), nil
+	})
+
+	check("DNS 指向本机", func() (string, error) {
+		if len(resolved) == 0 {
+			return "", fmt.Errorf("上一步没解析出结果，跳过")
+		}
+		public, err := lookupPublicIP()
+		if err != nil {
+			return "", fmt.Errorf("查不到本机公网 IP（%v），请手工核对：\n"+
+				"  dig +short %s\n  curl -s ifconfig.me", err, domain)
+		}
+		for _, ip := range resolved {
+			if ip == public {
+				return "本机公网 IP " + public, nil
+			}
+		}
+		return "", fmt.Errorf("%s 解析到 %s，但本机公网 IP 是 %s。\n"+
+			"HTTP-01 挑战会打到解析出的那台机器上，不改的话证书签不下来。\n"+
+			"确认改的是 A/AAAA 记录，而不是 CNAME 到别处",
+			domain, strings.Join(resolved, ", "), public)
+	})
 }
 
 // classifyPortErr 把绑定失败翻成结论。
@@ -181,18 +252,21 @@ func portBusy(p int) bool {
 	return true
 }
 
-func summarize(failed, warned int) error {
-	fmt.Println()
+func summarize(failed, warned int, acmeChecked bool) error {
+	fmt.Fprintln(doctorOut)
 	if failed > 0 {
 		return fmt.Errorf("%d 项检查未通过，见上面的说明", failed)
 	}
 	if warned > 0 {
-		fmt.Printf("没有阻塞项（%d 项提醒，见上面标 ⚠ 的）。\n", warned)
+		fmt.Fprintf(doctorOut, "没有阻塞项（%d 项提醒，见上面标 ⚠ 的）。\n", warned)
 	} else {
-		fmt.Println("全部通过。")
+		fmt.Fprintln(doctorOut, "全部通过。")
 	}
-	fmt.Println("第一次部署建议先用 --acme-staging 调通，")
-	fmt.Println("正式环境的 Let's Encrypt 限流窗口是一周，撞上了只能等。")
+	if !acmeChecked {
+		// 云安全组有没有放行，在机器内部只有真的让 CA 连一次才知道
+		fmt.Fprintln(doctorOut, "云安全组有没有放行 80/443 在机器内部查不出来：加 --acme 真的签一次证书")
+		fmt.Fprintln(doctorOut, "（要临时占用两个端口，webterm 在跑的话先停掉；签下来的证书留给服务用）。")
+	}
 	return nil
 }
 

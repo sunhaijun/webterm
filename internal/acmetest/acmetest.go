@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,10 +72,24 @@ type Server struct {
 	// 没有它的话，ACME 失败在 autocert 里会被压成一句
 	// "no viable challenge type found"，查不动。
 	logf func(string, ...any)
+	// profiles 是目录里 meta.profiles 声明的 profile（ADR-0044：IP 证书要 shortlived）。
+	// nil 表示这个 CA 不支持 profile —— 用来测「CA 不签 IP 证书」那条报错。
+	profiles map[string]string
+	// orders 按到达顺序记下每个订单的标识类型与 profile，测试据此断言请求的形状。
+	orderLog []OrderInfo
+}
+
+// OrderInfo 是一个订单在客户端那侧【请求了什么】。
+type OrderInfo struct {
+	Type    string // "dns" 或 "ip"
+	Value   string
+	Profile string
 }
 
 type order struct {
+	idType  string
 	domain  string
+	profile string
 	token   string
 	status  string // pending | valid | invalid
 	certPEM []byte
@@ -110,6 +125,11 @@ func New() (*Server, error) {
 		caCert:       caCert,
 		orders:       map[string]*order{},
 		certLifetime: 90 * 24 * time.Hour, // 与 Let's Encrypt 一致
+		// 与 Let's Encrypt 一致：classic 是默认，shortlived 是 6 天期（IP 证书只能用它）
+		profiles: map[string]string{
+			"classic":    "https://example.invalid/classic",
+			"shortlived": "https://example.invalid/shortlived",
+		},
 	}
 	s.ts = httptest.NewServer(s.mux())
 	return s, nil
@@ -158,7 +178,21 @@ func (s *Server) SetCertLifetime(d time.Duration) {
 	s.mu.Unlock()
 }
 
-// Issued 返回签发过的域名。测试用它断言 --dev 下【根本没发起签发】。
+// SetProfiles 改目录里声明的 profile；nil = 这个 CA 不支持 profile。
+func (s *Server) SetProfiles(p map[string]string) {
+	s.mu.Lock()
+	s.profiles = p
+	s.mu.Unlock()
+}
+
+// Orders 返回收到的订单（按顺序）。
+func (s *Server) Orders() []OrderInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]OrderInfo(nil), s.orderLog...)
+}
+
+// Issued 返回签发过的域名 / IP。测试用它断言 --dev 下【根本没发起签发】。
 func (s *Server) Issued() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,13 +239,19 @@ func withNonce(next http.Handler) http.Handler {
 }
 
 func (s *Server) directory(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
+	dir := map[string]any{
 		"newNonce":   s.ts.URL + "/nonce",
 		"newAccount": s.ts.URL + "/new-account",
 		"newOrder":   s.ts.URL + "/new-order",
 		"revokeCert": s.ts.URL + "/revoke",
 		"keyChange":  s.ts.URL + "/key-change",
-	})
+	}
+	s.mu.Lock()
+	if s.profiles != nil {
+		dir["meta"] = map[string]any{"profiles": s.profiles}
+	}
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, dir)
 }
 
 func (s *Server) nonce(w http.ResponseWriter, _ *http.Request) {
@@ -237,16 +277,30 @@ func (s *Server) newOrder(w http.ResponseWriter, r *http.Request) {
 			Type  string `json:"type"`
 			Value string `json:"value"`
 		} `json:"identifiers"`
+		Profile string `json:"profile"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil || len(req.Identifiers) == 0 {
 		writeProblem(w, http.StatusBadRequest, "malformed", "订单里没有 identifiers")
 		return
 	}
+	id0 := req.Identifiers[0]
 
 	s.mu.Lock()
+	s.orderLog = append(s.orderLog, OrderInfo{Type: id0.Type, Value: id0.Value, Profile: req.Profile})
+	if req.Profile != "" && s.profiles[req.Profile] == "" {
+		s.mu.Unlock()
+		writeProblem(w, http.StatusBadRequest, "invalidProfile", "不认识的 profile "+req.Profile)
+		return
+	}
+	// 和 Let's Encrypt 一样：IP 证书只能是 shortlived
+	if id0.Type == "ip" && req.Profile != "shortlived" {
+		s.mu.Unlock()
+		writeProblem(w, http.StatusBadRequest, "rejectedIdentifier", "IP 标识只能用 shortlived profile")
+		return
+	}
 	s.nextID++
 	id := fmt.Sprintf("%d", s.nextID)
-	o := &order{domain: req.Identifiers[0].Value, token: randomToken(), status: "pending"}
+	o := &order{idType: id0.Type, domain: id0.Value, profile: req.Profile, token: randomToken(), status: "pending"}
 	s.orders[id] = o
 	s.mu.Unlock()
 
@@ -259,7 +313,7 @@ func (s *Server) orderJSON(id string, o *order) map[string]any {
 		"status":  o.status,
 		"expires": time.Now().Add(time.Hour).Format(time.RFC3339),
 		"identifiers": []map[string]string{
-			{"type": "dns", "value": o.domain},
+			{"type": o.idType, "value": o.domain},
 		},
 		"authorizations": []string{s.ts.URL + "/authz/" + id},
 		"finalize":       s.ts.URL + "/finalize/" + id,
@@ -281,7 +335,7 @@ func (s *Server) authz(w http.ResponseWriter, r *http.Request) {
 	}
 	body := map[string]any{
 		"status":     o.status,
-		"identifier": map[string]string{"type": "dns", "value": o.domain},
+		"identifier": map[string]string{"type": o.idType, "value": o.domain},
 		"challenges": []map[string]any{
 			{
 				"type":   "http-01",
@@ -419,6 +473,9 @@ func (s *Server) finalize(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	o.certPEM = certPEM
 	s.issued = append(s.issued, csr.DNSNames...)
+	for _, ip := range csr.IPAddresses {
+		s.issued = append(s.issued, ip.String())
+	}
 	s.mu.Unlock()
 
 	w.Header().Set("Location", s.ts.URL+"/order/"+id)
@@ -462,8 +519,9 @@ func (s *Server) issue(csr *x509.CertificateRequest) ([]byte, error) {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: firstOr(csr.DNSNames, "unknown")},
+		Subject:      pkix.Name{CommonName: firstOr(csr.DNSNames, "")},
 		DNSNames:     csr.DNSNames,
+		IPAddresses:  append([]net.IP(nil), csr.IPAddresses...),
 		NotBefore:    time.Now().Add(-time.Minute),
 		NotAfter:     time.Now().Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

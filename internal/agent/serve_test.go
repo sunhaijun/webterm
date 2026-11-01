@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"log/slog"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // 证书申请失败时给「原因 + 怎么修」，而不是甩一行 Go 的 error（US-7.2 / AC-1.13）。
@@ -35,9 +38,9 @@ func TestDescribeACMEError(t *testing.T) {
 			[]string{"安全组", "80", "443", "curl -sI http://term.example.com/", "dig +short", "Cloudflare"},
 		},
 		{
-			"限流 → 说清窗口有多长",
+			"限流 → 说清窗口有多长（失败按小时、签发按周）",
 			errors.New("urn:ietf:params:acme:error:rateLimited: too many certificates"),
-			[]string{"限流", "一周", "--acme-staging"},
+			[]string{"限流", "每小时", "每周"},
 		},
 		{
 			"域名解析不出来",
@@ -57,7 +60,7 @@ func TestDescribeACMEError(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := describeACMEError(tc.err, "term.example.com", false)
+			got := describeACMEError(tc.err, "term.example.com")
 			for _, want := range tc.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("诊断里没有 %q：\n%s", want, got)
@@ -71,14 +74,58 @@ func TestDescribeACMEError(t *testing.T) {
 	}
 }
 
-// 已经在用 staging 时不该再劝人用 staging。
-func TestDescribeACMEErrorStagingHint(t *testing.T) {
-	err := errors.New("rateLimited")
-	if strings.Contains(describeACMEError(err, "x.example.com", true), "先用 --acme-staging 调通") {
-		t.Error("已经在 staging 了还劝人用 staging")
+// IP 模式（ADR-0044）：挑战失败只提 80 与「是不是本机公网 IP」，
+// 不该让人去查 DNS、关 Cloudflare 小云朵 —— 那些和 IP 无关，只会把人带偏。
+func TestDescribeACMEErrorIPMode(t *testing.T) {
+	got := describeACMEError(errors.New("acme: authorization error for 203.0.113.7: Invalid response"), "203.0.113.7")
+	for _, want := range []string{"安全组", "curl -sI http://203.0.113.7/", "只走 80", "ifconfig.me"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("IP 模式的诊断里没有 %q：\n%s", want, got)
+		}
 	}
-	if !strings.Contains(describeACMEError(err, "x.example.com", false), "--acme-staging") {
-		t.Error("正式环境失败时应当提示先用 staging")
+	for _, bad := range []string{"dig +short", "Cloudflare", "TLS-ALPN-01"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("IP 模式的诊断里不该有 %q：\n%s", bad, got)
+		}
+	}
+}
+
+// UT-ipcert-3：CA 不支持 profile / 没有 shortlived 时，说清「这个 CA 不签 IP 证书」。
+func TestDescribeACMEErrorNoShortlivedProfile(t *testing.T) {
+	for _, msg := range []string{
+		"acme: certificate authority does not support profiles",
+		"acme: certificate authority does not advertise a profile with name shortlived (supported profiles: classic)",
+		"400 urn:ietf:params:acme:error:rejectedIdentifier: Error creating new order :: Default profile does not permit IP address identifiers.",
+	} {
+		got := describeACMEError(errors.New(msg), "203.0.113.7")
+		if !strings.Contains(got, "不签 IP 证书") || !strings.Contains(got, "shortlived") {
+			t.Errorf("%q 的诊断没说清：\n%s", msg, got)
+		}
+	}
+}
+
+// UT-ipcert-2：只有 IPv4 字面量进 IP 模式；IPv6 字面量被拒。
+func TestAddressClassification(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"203.0.113.7":      true,
+		"term.example.com": false,
+		"1.2.3.4.nip.io":   false,
+		"2001:db8::1":      false,
+		"":                 false,
+	} {
+		if got := IsIPAddress(addr); got != want {
+			t.Errorf("IsIPAddress(%q) = %v，want %v", addr, got, want)
+		}
+	}
+	for _, addr := range []string{"2001:db8::1", "[2001:db8::1]", "::ffff:1.2.3.4"} {
+		if err := CheckAddress(addr); err == nil || !strings.Contains(err.Error(), "IPv4") {
+			t.Errorf("CheckAddress(%q) 应当拒绝并说明只支持 IPv4，得到 %v", addr, err)
+		}
+	}
+	for _, addr := range []string{"203.0.113.7", "term.example.com", ""} {
+		if err := CheckAddress(addr); err != nil {
+			t.Errorf("CheckAddress(%q) 不该报错：%v", addr, err)
+		}
 	}
 }
 
@@ -120,15 +167,15 @@ func TestCertManagerRenewBeforeUsesLibraryDefault(t *testing.T) {
 	}
 }
 
-// --acme-staging 才走 staging 目录，默认必须是正式环境。
-func TestCertManagerStagingSwitch(t *testing.T) {
+// 默认走 Let's Encrypt 正式环境（staging 已删，ADR-0044 §3）；只有测试注入的目录能改它。
+func TestCertManagerDirectory(t *testing.T) {
 	prod := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir()})
 	if prod.Client != nil {
 		t.Error("默认不该指定 ACME 目录（用 acme 包的正式默认值）")
 	}
-	staging := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir(), ACMEStaging: true})
-	if staging.Client == nil || !strings.Contains(staging.Client.DirectoryURL, "staging") {
-		t.Errorf("--acme-staging 没有切到 staging 目录: %+v", staging.Client)
+	fake := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir(), ACMEDirectoryURL: "http://x/dir"})
+	if fake.Client == nil || fake.Client.DirectoryURL != "http://x/dir" {
+		t.Errorf("测试注入的目录没生效: %+v", fake.Client)
 	}
 }
 
@@ -257,4 +304,56 @@ func (l *lockedBuf) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.b.String()
+}
+
+// UT-ipcert-1：续期时刻 = NotAfter - 有效期/3，与 autocert 同一条规则。
+func TestRenewAtIsOneThirdBeforeExpiry(t *testing.T) {
+	nb := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		lifetime, before time.Duration
+	}{
+		{160 * time.Hour, 160 * time.Hour / 3}, // IP 证书：约 53 小时前
+		{90 * 24 * time.Hour, 30 * 24 * time.Hour},
+	} {
+		leaf := &x509.Certificate{NotBefore: nb, NotAfter: nb.Add(tc.lifetime)}
+		if got, want := renewAt(leaf), leaf.NotAfter.Add(-tc.before); !got.Equal(want) {
+			t.Errorf("有效期 %v：renewAt = %v，want %v", tc.lifetime, got, want)
+		}
+	}
+}
+
+// 握手从不触发签发；挑战 handler 只认登记过的 token，其它请求交给 fallback。
+func TestIPCertManagerHandshakeAndChallenge(t *testing.T) {
+	m := newIPCertManager(ServeConfig{Domain: "203.0.113.7", CertDir: t.TempDir()})
+	if _, err := m.GetCertificate(&tls.ClientHelloInfo{}); err == nil {
+		t.Error("没有证书时 GetCertificate 应当失败，而不是去签")
+	}
+
+	m.tokens["tok"] = "tok.thumb"
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusMovedPermanently) })
+	h := m.HTTPHandler(fallback)
+	for path, want := range map[string]int{
+		"/.well-known/acme-challenge/tok":   http.StatusOK,
+		"/.well-known/acme-challenge/other": http.StatusNotFound,
+		"/":                                 http.StatusMovedPermanently,
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Errorf("%s → %d，want %d", path, rec.Code, want)
+		}
+		if want == http.StatusOK && rec.Body.String() != "tok.thumb" {
+			t.Errorf("挑战应答 = %q", rec.Body.String())
+		}
+	}
+}
+
+// IP 模式默认走 Let's Encrypt 正式目录；测试注入的目录优先。
+func TestACMEDirectorySelection(t *testing.T) {
+	if got := acmeDirectory(ServeConfig{}); !strings.Contains(got, "acme-v02.api.letsencrypt.org") {
+		t.Errorf("默认目录 = %q", got)
+	}
+	if got := acmeDirectory(ServeConfig{ACMEDirectoryURL: "http://x/dir"}); got != "http://x/dir" {
+		t.Errorf("测试注入的目录被覆盖了: %q", got)
+	}
 }
