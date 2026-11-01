@@ -1,191 +1,161 @@
-# ADR-0019 备用屏不回放历史，改为重画
+# ADR-0019 Alternate screen: redraw instead of replaying history
 
-> **已被 [ADR-0026](0026-agent-holds-terminal-state.md) 取代**：agent 持有终端状态，落出窗口一律发快照，不再有 `redraw`、粘性模式跟踪、抖窗口尺寸与 300ms 兜底。以下保留作历史记录。
+Status: Accepted (2026-09-13), implemented (the `internal/termstate` observer, the `redraw` message, size jiggle and fallback, handoff fields, E2E-31; the [implementation gaps](#implementation-gaps-found-along-the-way) were fixed first). Superseded by [ADR-0026](0026-agent-holds-terminal-state.md): the agent holds the terminal state and sends a snapshot whenever a client falls out of the window, so `redraw`, sticky-mode tracking, size jiggling and the 300 ms fallback are gone.
 
-状态：已接受（2026-09-13）· **已落地**（观察器 `internal/termstate`、`redraw` 消息、抖动与兜底、交接字段、E2E-31）。「[顺带暴露的实现缺口](#顺带暴露的实现缺口不属于本-adr-的决策但同批修)」那一批先一步落了。**细化续传模型**：把会话输出分成两类 —— 主屏是**追加流**（字节即真相，回放字节是对的），备用屏是**状态**（历史字节没有价值，回放必须交付"当前屏"）。`out_seq` 记账口径（[CLAUDE.md](../../../CLAUDE.md) 不变式 ④）、增量续传（`resumed[].status == "ok"`）、[ADR-0006](0006-agent-side-osc-parsing.md) 的 OSC 剥离都不变。不引入完整终端模拟器。
+## Context
 
-## 背景
+### Symptom
 
-### 症状
+Switch away from a session running claude and come back a few minutes later: the terminal shows **many copies of claude's logo and header**, and the status line that should update in place on the last row **turns into many consecutive lines**. Reloading the page, or reconnecting after a longer outage, shows the same thing.
 
-claude 会话跑着的时候切到别的会话，过几分钟切回来，终端里出现**很多份 claude 的 logo 与头部说明**，那条"固定在最后一行就地刷新"的状态行**变成很多行连续排列**。刷新页面、或断线时间长一点再重连，也能看到同样的画面。
+### What a full-screen TUI actually writes to the PTY
 
-### 实测：全屏 TUI 到底往 PTY 里写什么
+Captured from claude 2.1.270 on a pty (100×30, `TERM=xterm-256color`, the same as the agent sets for sessions):
 
-用 pty 抓 claude 2.1.270 的真实输出（100×30，`TERM=xterm-256color`，与 agent 给会话设的一致）：
-
-| 观测 | 数值 | 含义 |
+| Observation | Value | Meaning |
 |---|---|---|
-| `ESC[?1049h`（切备用屏） | **全程只出现 1 次**，在启动的头 20 个字节里 | 会话累计输出一超过 `ring_bytes`，这个开关就永远不在缓冲窗口里了 |
-| LF（`0x0a`） | **0 个** | 它从不"打印"，只画屏 |
-| 稳态帧 | ~40 B：`ESC[?25l` `ESC[H` `CR` `ESC[23B` `一个字符` `ESC[30;1H` `ESC[27;3H` `ESC[?25h` | 纯差分 + **绝对行定位**，假设屏上已经有上一帧 |
-| SIGWINCH 之后 | `ESC[?1000h…` + **`ESC[2J` `ESC[H`** + 整屏 ≈ **1.2 KB** | 唯一的自包含整屏重画；**不重发 `?1049h`** |
-| 同尺寸 `TIOCSWINSZ` | 43 B（内核不发 SIGWINCH） | 想逼出重画必须真的改尺寸 |
-| 对话中的速率 | 0.5–0.8 KB/s（工具输出另算） | 1 MiB 的环形缓冲在活跃会话下几分钟到几十分钟翻一轮 |
+| `ESC[?1049h` (enter alternate screen) | **Exactly once**, in the first 20 bytes after start | Once total output exceeds `ring_bytes`, the switch is never in the buffer window again |
+| LF (`0x0a`) | **0** | It never "prints", it only paints |
+| Steady-state frame | ~40 B: `ESC[?25l` `ESC[H` `CR` `ESC[23B` one character `ESC[30;1H` `ESC[27;3H` `ESC[?25h` | Pure diff with **absolute row positioning**; assumes the previous frame is on screen |
+| After SIGWINCH | `ESC[?1000h…` + **`ESC[2J` `ESC[H`** + full screen ≈ **1.2 KB** | The only self-contained full redraw; **`?1049h` is not resent** |
+| Same-size `TIOCSWINSZ` | 43 B (the kernel sends no SIGWINCH) | Forcing a redraw requires an actual size change |
+| Rate during a conversation | 0.5–0.8 KB/s (tool output extra) | A 1 MiB ring buffer wraps every few to tens of minutes in an active session |
 
-vim / less / htop / codex 是同一类程序：进备用屏、绝对定位、差分重绘、只在 SIGWINCH 时整屏重画。
+vim, less, htop and codex are the same kind of program: alternate screen, absolute positioning, differential redraws, a full redraw only on SIGWINCH.
 
-### 为什么现有模型必然出错
+### Why the byte-window model must fail
 
-环形缓冲保存的是**字节流窗口**。对上面这种流，窗口里的字节离开上下文就没有意义：
+The ring buffer keeps a **window of the byte stream**. For streams like the above, bytes out of context are meaningless:
 
-1. **一次性的模式开关会被裁掉。** `ESC[?1049h` 只出现一次。`ringbuf.Slice` 按字节切窗口，窗口一滑过去，reset 回放就是"把备用屏的差分流画进主屏"。
-2. **差分帧不自包含。** 回放起点几乎不可能落在程序的一次整屏重画上，补丁被打在错误的底图上，而且**不会自愈** —— 下一次整屏重画要等到 SIGWINCH。
-3. **回放尺寸 ≠ 产出尺寸。** 后台会话的 PTY 不跟随布局变化；切回时 `activate()` 先 `fit()` 改 xterm 尺寸、紧接着 `subscribe` 灌入按旧尺寸排版的积压，而 `resize` 是 100ms 尾防抖，PTY 最后才知道。
+1. **One-shot mode switches get trimmed.** `ESC[?1049h` appears once. `ringbuf.Slice` cuts the window by bytes, and once the window slides past it, a reset replay paints the alternate screen's diff stream onto the main screen.
+2. **Diff frames aren't self-contained.** The replay start almost never lands on one of the program's full redraws, so patches are applied to the wrong base, and it **doesn't heal**: the next full redraw waits for a SIGWINCH.
+3. **Replay size ≠ production size.** A background session's PTY doesn't follow layout changes. On switch-back, `activate()` first `fit()`s xterm to the new size, then `subscribe` immediately pours in backlog laid out for the old size, while `resize` has a 100 ms trailing debounce, so the PTY finds out last.
 
-用真实字节 + 真实 xterm.js 复现（去掉开头的 `?1049h` 后重放同一段）：
+Reproduced with the real bytes in real xterm.js (replaying the same capture minus the leading `?1049h`):
 
 ```
-终端 100×30（与 PTY 同尺寸）→ scrollback 0 行，无重复，只是内容陈旧
-终端  45×24（比 PTY 窄）    → scrollback 多出 10 行，同一处内容出现 4 份
+terminal 100×30 (same as the PTY) → 0 lines of scrollback, no duplicates, just stale content
+terminal  45×24 (narrower)        → 10 extra lines of scrollback, the same content 4 times
 ```
 
-窄终端里超宽的框线在屏幕底部折行，把内容顶进 scrollback，**每帧留一份残影** —— 这就是"很多份 logo"和"状态行变成很多行"。
+In the narrow terminal, over-wide box lines wrap at the bottom of the screen and push content into scrollback, **leaving a ghost per frame**. That is the "many logos" and the "status line turned into many lines".
 
-### 顺带暴露的实现缺口（不属于本 ADR 的决策，但同批修）
+### Implementation gaps found along the way
 
-- `Session.Subscribe` 判定 reset 时**从不发** `reset` 控制消息（协议 §4.2 定义了它，全仓库无人发送）；客户端 `connection.ts` 的 `attrPrefix` 分支也不清屏、不去重 → 每切回一次就把整个环形缓冲**追加**一次。
-- `Connection.subscribe()` 不设 `catchupTo` → 切回时补齐的积压不算回放，历史里的 DSR/DA 查询被 xterm 再次自动应答并当成用户输入送进 PTY。
-- `web/src/term/interactive.ts` 的注释把 claude/codex 归为"主屏就地重绘、不切备用缓冲" —— 对 2.x 已经不成立。
+Not decisions of this ADR, but fixed in the same batch:
 
-## 决定
+- `Session.Subscribe` **never sent** the `reset` control message when it decided on a reset (protocol §4.2 defined it, and nothing in the repo sent it). The `attrPrefix` branch in the client's `connection.ts` neither cleared the screen nor deduplicated, so every switch-back **appended** the whole ring buffer again.
+- `Connection.subscribe()` didn't set `catchupTo`, so the backlog filled in on switch-back didn't count as replay; xterm answered historical DSR/DA queries again and sent the answers to the PTY as user input.
+- A comment in `web/src/term/interactive.ts` classified claude / codex as "redraw in place on the main screen, no alternate buffer", which no longer held for 2.x.
 
-### 1. agent 跟踪每会话的粘性终端模式
+## Decision
 
-在 OSC 剥离之后、`ring.Append` 之前挂一个 CSI/ESC **观察器**：只读不写，一个字节都不改，[ADR-0006](0006-agent-side-osc-parsing.md) 的 `out_seq` 不变式不受影响。
+Refine the resume model by splitting session output in two. The main screen is an **append stream**: the bytes are the truth, and replaying them is correct. The alternate screen is **state**: historical bytes are worthless, and replay must deliver the current screen. Unchanged: `out_seq` accounting ([CLAUDE.md](../../../CLAUDE.md) invariant 4), incremental resume (`resumed[].status == "ok"`), and [ADR-0006](0006-agent-side-osc-parsing.md)'s OSC stripping. No full terminal emulator.
 
-跟踪表（"粘性" = 一次设定长期有效，被裁掉就再也回不来）：
+### 1. The agent tracks sticky terminal modes per session
 
-| 序列 | 含义 | 恢复 |
+A CSI/ESC **observer** sits after OSC stripping and before `ring.Append`. It only reads and changes no bytes, so [ADR-0006](0006-agent-side-osc-parsing.md)'s `out_seq` invariant holds.
+
+Tracked modes ("sticky" = set once, effective for a long time, gone for good once trimmed):
+
+| Sequence | Meaning | Restore |
 |---|---|---|
-| `?1049` | 备用屏 | ✅ 必须第一条 |
-| `?1` | DECCKM 应用光标键 | ✅ |
-| `?7` | 自动折行 | ✅（仅当被关掉） |
-| `?25` | 光标可见 | ✅ |
-| `?1000/1002/1003/1006/1015` | 鼠标跟踪与编码 | ✅ |
-| `?2004` | 括号粘贴 | ✅ |
-| `?1004` | 焦点上报 | ✅ |
-| `CSI > flags u` / `CSI < u` | Kitty 键盘协议栈 | ✅ 按栈顶恢复 |
+| `?1049` | Alternate screen | ✅ Must be first |
+| `?1` | DECCKM application cursor keys | ✅ |
+| `?7` | Autowrap | ✅ (only if turned off) |
+| `?25` | Cursor visible | ✅ |
+| `?1000/1002/1003/1006/1015` | Mouse tracking and encodings | ✅ |
+| `?2004` | Bracketed paste | ✅ |
+| `?1004` | Focus reporting | ✅ |
+| `CSI > flags u` / `CSI < u` | Kitty keyboard protocol stack | ✅ Restore the top of the stack |
 | `CSI > n ; m m` | modifyOtherKeys | ✅ |
-| `CSI t ; b r` | DECSTBM 滚动区 | ✅ |
-| `?2026` | 同步输出 | ❌ **绝不恢复** —— 它是单帧的包裹，恢复成"开"会让客户端渲染器卡住 |
-| SGR / 字符集 | 颜色、G0 | ❌ 不跟踪；前缀里统一发 `ESC[0m` `ESC(B` 给一张干净底图，内容由程序自己重画 |
+| `CSI t ; b r` | DECSTBM scroll region | ✅ |
+| `?2026` | Synchronized output | ❌ **Never restore**: it wraps a single frame, and restoring it as "on" would stall the client's renderer |
+| SGR / character sets | Colors, G0 | ❌ Not tracked; the prefix always sends `ESC[0m` `ESC(B` for a clean base, and the program repaints the content itself |
 
-这份状态**必须进 [`internal/handoff`](0016-hot-reexec.md) 的会话快照**：它无法从环形缓冲里重新推导（推导不出来正是本 ADR 的起因），热升级丢了它就等于丢了备用屏判定。
+This state **must go into the [`internal/handoff`](0016-hot-reexec.md) session snapshot**. It can't be re-derived from the ring buffer (that's the whole reason for this ADR), so losing it in a hot upgrade means losing the alternate-screen state.
 
-### 2. reset 分支按屏分流
+### 2. Reset splits by screen
 
-判据不动增量路径，只在**要 reset 的那一刻**分流：
+The incremental path is untouched. The split happens only **at the moment of a reset**:
 
 ```
-out_seq ∈ [base, head]  → status "ok"     增量续传（不变，字节级连续性照旧）
-out_seq <  base_seq     → 会话当前在主屏   → 现有 reset 回放（ESC[0m + 窗口内容）
-                        → 会话当前在备用屏 → redraw（本 ADR）
+out_seq ∈ [base, head]  → status "ok"     incremental resume (unchanged, byte-level continuity as before)
+out_seq <  base_seq     → session on the main screen      → existing reset replay (ESC[0m + window contents)
+                        → session on the alternate screen → redraw (this ADR)
 ```
 
-备用屏没有 scrollback，那段历史字节对用户**零价值**，丢掉它不是有损，是去掉噪音。
+The alternate screen has no scrollback, so those historical bytes are worth **nothing** to the user. Dropping them isn't lossy; it removes noise.
 
-### 3. 重画由 SIGWINCH 逼出，尺寸先对齐
+### 3. Force a redraw with SIGWINCH, after aligning the size
 
-`subscribe` 带上 `cols`/`rows`，agent **先应用尺寸再决定回放还是重画**，一次性堵掉"按旧尺寸排版的字节灌进新尺寸终端"。
+`subscribe` carries `cols` / `rows`, and the agent **applies the size before choosing between replay and redraw**. That closes off "bytes laid out for the old size poured into a terminal of the new size" in one step.
 
-- 客户端报的尺寸与 PTY 当前不同 → 直接 `TIOCSWINSZ`，自然的 SIGWINCH 就是重画请求（实测 1.2 KB）。
-- 尺寸相同 → **抖动**：`rows-1` → 等 80ms → 设回。选 rows 而不是 cols，是因为改列宽会让 xterm 主屏 scrollback 重排。
+- The client's size differs from the PTY's → `TIOCSWINSZ` directly; the natural SIGWINCH is the redraw request (measured at 1.2 KB).
+- Same size → **jiggle**: `rows-1`, wait 80 ms, set it back. Rows rather than cols, because changing the width reflows xterm's main-screen scrollback.
 
-抖动必须留间隔，这是实测结论：
+The jiggle needs the gap; measured:
 
-| 做法 | 程序输出 | 整屏重画 |
+| Approach | Program output | Full redraw |
 |---|---|---|
-| 两次 `ioctl` 之间无间隔 | 43 B | ❌ SIGWINCH 被合并，程序读到的尺寸没变 |
-| 两次之间隔 80ms | 2509 B | ✅ 两次重画 |
-| 真实尺寸变化一次 | 1174 B | ✅ 一次重画 |
+| Two `ioctl`s back to back | 43 B | ❌ The SIGWINCHes coalesce; the program sees no size change |
+| 80 ms apart | 2509 B | ✅ Two redraws |
+| One real size change | 1174 B | ✅ One redraw |
 
-代价是抖动路径要画两次（~2.5 KB），中间那一帧按少一行排版，视觉上闪一下。仍然比回放 1 MiB 便宜两个数量级。
+The jiggle path draws twice (~2.5 KB), and the frame in between is laid out one row short, so it flickers. Still two orders of magnitude cheaper than replaying 1 MiB.
 
-**顺序不能反**：先在锁内取 `seq = head_seq` 并把 `redraw` 入队，**然后**才触发重画。反过来的话，重画的字节先进了环形缓冲、随后被 `seq` 跳过，客户端拿不到那一屏，只能靠 §6 的兜底退回字节回放 —— 白折腾一趟。
+**The order can't be reversed**: under the lock, take `seq = head_seq` and enqueue `redraw` first, **then** trigger the redraw. Reversed, the redraw's bytes would enter the ring buffer before `seq` and be skipped; the client would never get that screen and would fall through to §6's fallback for nothing.
 
-### 4. 协议增量
+### 4. Protocol additions
 
-新增一条 agent → client 的控制消息（`websocket-protocol.md` §4.2）：
+A new agent → client control message (`websocket-protocol.md` §4.2):
 
 ```json
 { "t": "redraw", "sid": 1, "seq": 991337, "modes": "<ESC>[0m<ESC>(B<ESC>[?1049h<ESC>[?1h<ESC>[?1000h<ESC>[?1006h<ESC>[?2004h" }
 ```
 
-（`<ESC>` 在线上就是 `\u001b`，JSON 字符串里转义即可，不需要 base64。）
+(`<ESC>` is `\u001b` on the wire; ordinary JSON string escaping, no base64.)
 
-- `seq`：客户端把该会话的 `out_seq` **直接跳到**这里（= 发出时的 `head_seq`）。跳过的字节被有意丢弃。
-- `modes`：agent 按 §1 的跟踪表生成的 ASCII 转义序列，只含 agent 自己拼出来的模式开关，**不含任何程序输出的原文**。几十字节。
-- `modes` 的字节**不计入 `out_seq`** —— 与 `ATTR_PREFIX` 同一条规则（协议 §3、CLAUDE.md 不变式 ④ 的例外清单要加这一条）。
-- **顺序承诺**：`redraw` 与后续 OUTPUT 帧走同一条按序写队列，且"把订阅者的起点设为 `seq`"与它在同一把锁下完成 —— 与 `Session.Subscribe` 今天的纪律相同。
+- `seq`: the client **jumps** the session's `out_seq` straight here (= `head_seq` when sent). The skipped bytes are dropped on purpose.
+- `modes`: ASCII escape sequences the agent generates from §1's table. Only mode switches the agent composed itself, **never any program output**. A few dozen bytes.
+- `modes` bytes **don't count toward `out_seq`**, the same rule as `ATTR_PREFIX` (protocol §3; added to the exceptions to CLAUDE.md invariant 4).
+- **Ordering guarantee**: `redraw` and the OUTPUT frames after it go through the same ordered write queue, and setting the subscriber's start to `seq` happens under the same lock, the same discipline `Session.Subscribe` already followed.
 
-不新增 `resumed[].status` 的取值：重连路径仍然报 `"reset"`，随后跟一条 `redraw`。协议里唯一**明文**的前向兼容承诺是"未知 `t` 一律忽略"，靠它退化最安全（老前端 = 今天的行为，不崩）。客户端认识 `redraw` 时要撤掉 `reset` 顺带打出的"历史输出已截断"提示 —— 备用屏本来就没有历史，那条提示是误导。
+No new `resumed[].status` value: the reconnect path still reports `"reset"`, followed by a `redraw`. The protocol's only **explicit** forward-compatibility promise is "ignore unknown `t`", and relying on it is the safest way to degrade (old frontends behave as before and don't crash). A client that understands `redraw` withdraws the "history truncated" notice that `reset` shows: the alternate screen has no history, so the notice would mislead.
 
-`subscribe` 增加两个字段：
+`subscribe` gains two fields:
 
 ```json
 { "t": "subscribe", "sid": 1, "out_seq": 483920, "cols": 90, "rows": 30 }
 ```
 
-缺省（老客户端不带）时 agent 沿用会话当前尺寸，行为与今天一致。
+When they're absent (old clients), the agent keeps the session's current size, as before.
 
-### 5. 客户端动作
+### 5. Client behavior
 
-收到 `redraw`：① 清空输出写队列并恢复跟随 → ② `terminal.reset()` → ③ 写 `modes` → ④ `outSeq = catchupTo = seq` → ⑤ 之后按普通实时帧接收。第一批实时帧就是程序自己的整屏重画。
+On `redraw`: (1) clear the output write queue and resume following; (2) `terminal.reset()`; (3) write `modes`; (4) `outSeq = catchupTo = seq`; (5) treat what follows as ordinary live frames. The first live frames are the program's own full redraw.
 
-切会话的顺序也要改：`select()` 里 **`resize` 先于 `subscribe`**，不走 100ms 防抖（防抖是给连续拖动用的，切会话是单次事件）。尺寸随 `subscribe` 一起报给 agent 之后，本地这一步就只剩 `fit()`。
+Session switching changes order too: in `select()`, **`resize` comes before `subscribe`**, without the 100 ms debounce (the debounce is for continuous drags; a session switch is a single event). Since the size travels to the agent with `subscribe`, the local step is just `fit()`.
 
-### 6. 兜底：程序不重画就退回字节回放
+### 6. Fallback: replay bytes if the program doesn't redraw
 
-赌"程序会响应 SIGWINCH"是有风险的：不重画，客户端就对着一块清过屏的空白。
+Betting that the program responds to SIGWINCH is risky: if it doesn't redraw, the client stares at a cleared, blank screen.
 
-agent 在发出重画请求后起一个 **300ms 定时器**，判据是 **`head_seq` 有没有超过 `redraw.seq`**（不是"这个会话有没有输出"）：没超过 → 判定程序不重画 → 按**现有 reset 规则**把窗口内容发出去（`ESC[0m` 前缀 + `flags` bit0）。最坏情况被钉死在"不比今天差"。
+After requesting the redraw, the agent starts a **300 ms timer**. The test is **whether `head_seq` has moved past `redraw.seq`** (not "did this session produce any output"). If not, the program isn't redrawing, so send the window contents under the **existing reset rules** (`ESC[0m` prefix + `flags` bit 0). The worst case is pinned at "no worse than before".
 
-### 7. 不做的
+### 7. Not doing
 
-- **不做完整 VT 屏幕模型**。服务端跑 headless 终端、回放 = 序列化当前屏，是彻底方案（tmux / mosh 的做法），也能顺带解决"硬裁剪切断转义序列"这条已知限制、以及首次订阅要拉 1 MiB 的问题。但它要引入一个新依赖、每会话几十 KB 内存、每字节多一次解析，且 handoff 要交接整屏状态。**记进 v0.2 候选，等本 ADR 的实际效果再决定。**
-- **不动主屏的就地重绘程序**（进度条、老版本 claude、`\r` 刷新的脚本）。它们的输出是追加流，字节回放是对的模型；宽度变化导致的错位是[环形缓冲文档](../../50-backend/ring-buffer.md)里已接受的限制。
-- **不改增量续传**。`status == "ok"` 这条路一个字节都不动，AC-2.1 不受影响。
+- **No full VT screen model.** Running a headless terminal on the server, with replay = serialize the current screen, is the complete solution (what tmux and mosh do). It would also fix the known limitation of hard trimming cutting escape sequences, and the first subscribe pulling 1 MiB. But it brings a new dependency, tens of KB of memory per session, one more parse per byte, and the handoff would have to carry the whole screen state. **Recorded as a v0.2 candidate, to be decided after seeing how this ADR works out.** (ADR-0026 did it.)
+- **Main-screen in-place redrawers stay as they are** (progress bars, older claude versions, scripts refreshing with `\r`). Their output is an append stream, so replaying bytes is the right model; misalignment after width changes is an accepted limitation in the [ring buffer doc](../../50-backend/ring-buffer.md).
+- **Incremental resume doesn't change.** Not one byte of the `status == "ok"` path changes; AC-2.1 is unaffected.
 
-## 代价与取舍
+## Consequences
 
-- **丢历史（已拍板接受）**：备用屏会话切回时，切走期间的字节不再补齐。这与 AC-2.11 现在的措辞（"切回时通过 resume 补齐，不丢输出"）冲突，**AC-2.11 要改口径**：备用屏会话补的是"当前屏"，不是历史字节。备用屏没有 scrollback，那段字节用户本来也翻不到。
-- **多两次重画**：尺寸没变时抖动要画两次（~2.5 KB）。可接受。
-- **agent 多认一点终端语义**：[ADR-0003](0003-no-tmux.md) 说 agent 自持 PTY 但不做终端模拟。本 ADR 让它认十来个模式开关 —— 是"记住开关状态"，不是"模拟屏幕"。边界写死在这里：**一旦开始跟踪光标位置或单元格内容，就说明该上 §7 的完整 VT 了。**
-- **抖动依赖时序**：80ms 是启发式。对不响应 SIGWINCH 的程序由 §6 兜底。
-- **多一条协议消息**：`redraw`。靠"未知 `t` 忽略"退化。
-
-## 影响
-
-### 要改的文档
-
-| 文档 | 改动 |
-|---|---|
-| `30-protocol/websocket-protocol.md` | §4.1 `subscribe` 加 `cols`/`rows`；§4.2 新增 `redraw`；§3 注明 `redraw.modes` 同样不计入 `out_seq`；§5.2 续传流程加分流 |
-| `50-backend/ring-buffer.md` | "回放的属性修正"一节加备用屏分支；已知限制一节注明备用屏不再走硬裁剪那条路 |
-| `50-backend/session-manager.md` | 粘性模式观察器的位置与锁规则；handoff 字段 |
-| `40-frontend/session-ux.md` | §订阅策略：备用屏会话切回 = 重画而非补齐；"保持接收"对备用屏会话的意义随之变化 |
-| `10-requirements/acceptance-criteria.md` | AC-2.11 改口径；AC-2.6 加备用屏分支；新增 AC-2.16/17/18/19（见下） |
-| `70-testing/e2e-scenarios.md` | 新增"切走 → 积压超过 ring → 切回"场景（现有 E2E-2c / E2E-4 只覆盖重连那半边） |
-| `20-architecture/overview.md` | 决策记录表（**顺带**：这张表停在 0010，0011–0018 都没登记） |
-
-### 新增验收标准
-
-- **AC-2.16**：备用屏程序运行中，切走使积压超过 `ring_bytes` 后切回 —— 终端显示该程序**当前**的完整一屏，且 scrollback 中不出现该程序界面的任何副本。
-- **AC-2.17**：同一场景下切回所传字节 < 8 KiB（今天是整个 `ring_bytes`）。
-- **AC-2.18**：程序在 300ms 内没有重画时，退回现有 reset 回放，屏幕不留空白。
-- **AC-2.19**：观察器只读（观察前后字节逐字节相等）；状态进热升级快照；`?2026` 绝不恢复。
-
-### 测试要求
-
-- **UT**：模式观察器 —— 任意分片、畸形序列、DECRST 复位、`?2026` 不恢复；**观察之后的字节与输入逐字节相等**（只读不写）。
-- **UT**：`redraw.modes` 的生成是确定的，且不计入 `out_seq`。
-- **IT**：reset 分支分流（备用屏 → 发 `redraw` 且不 Push 窗口内容；主屏 → 现有行为原样）。
-- **IT**：抖动逻辑 —— 尺寸不同走一次 resize；尺寸相同走 `rows-1` → 80ms → 设回；300ms 无输出触发兜底。
-- **交接**：模式状态进 `internal/handoff.Session`，在 `TestHandoffByteLevelContinuity` 之外再加一条"交接后备用屏判定不丢"。
-- **字节级连续性（AC-2.1）**：增量路径未动，现有测试必须原样通过 —— 这是本 ADR 的回归红线。
-- **E2E**：新场景用 `--ring-bytes 65536` 的实例，断言终端序列化结果里程序界面只出现一份。
-
-### 代码落点
-
-`internal/session`（观察器 + 分流 + 抖动 + 兜底定时器）、`internal/protocol`（`redraw`、`subscribe` 字段、`testdata/vectors.json`）、`internal/handoff`（快照字段）、`web/src/conn/connection.ts`（`redraw` 处理、`catchupTo`）、`web/src/sessions/store.ts` 与 `web/src/ui/app.tsx`（resize 先于 subscribe、撤销"已截断"提示）。
+- **History is dropped (accepted).** Switching back to an alternate-screen session no longer fills in the bytes from while you were away. This contradicted AC-2.11 ("switch-back fills in via resume, no output lost"), so **AC-2.11 was reworded**: for alternate-screen sessions it delivers the current screen, not historical bytes. The alternate screen has no scrollback, so the user couldn't have scrolled back to those bytes anyway.
+- **Two extra redraws** when the size hasn't changed (~2.5 KB). Acceptable.
+- **The agent learns a little terminal semantics.** [ADR-0003](0003-no-tmux.md) has the agent own the PTY without emulating a terminal; this ADR teaches it about a dozen mode switches. That's remembering switch states, not emulating the screen. The line is drawn here: **once we start tracking the cursor position or cell contents, it's time for §7's full VT.**
+- **The jiggle depends on timing.** 80 ms is a heuristic; programs that don't respond to SIGWINCH are covered by §6.
+- **One more protocol message**, `redraw`, which degrades via "ignore unknown `t`".
+- New acceptance criteria: **AC-2.16** (with an alternate-screen program running, switch away until the backlog exceeds `ring_bytes`, then switch back: the terminal shows the program's **current** full screen, and scrollback contains no copies of its UI); **AC-2.17** (that switch-back transfers < 8 KiB, instead of the whole `ring_bytes`); **AC-2.18** (if the program doesn't redraw within 300 ms, fall back to the existing reset replay, with no blank screen); **AC-2.19** (the observer is read-only, bytes identical before and after; its state goes into the hot-upgrade snapshot; `?2026` is never restored).
+- Tests: unit tests for the observer (arbitrary splits, malformed sequences, DECRST, `?2026` never restored, **output bytes identical to input**) and for deterministic `redraw.modes` excluded from `out_seq`; integration tests for the reset split (alternate screen → `redraw` and no window push; main screen → unchanged) and the jiggle (different size → one resize; same size → `rows-1`, 80 ms, restore; no output within 300 ms → fallback); a handoff test that alternate-screen state survives, in addition to `TestHandoffByteLevelContinuity`; byte-level continuity (AC-2.1) on the untouched incremental path as the regression red line; E2E with a `--ring-bytes 65536` instance, asserting the program's UI appears exactly once in the serialized terminal.
+- Code: `internal/session` (observer, split, jiggle, fallback timer), `internal/protocol` (`redraw`, `subscribe` fields, `testdata/vectors.json`), `internal/handoff` (snapshot fields), `web/src/conn/connection.ts` (`redraw` handling, `catchupTo`), `web/src/sessions/store.ts` and `web/src/ui/app.tsx` (resize before subscribe, withdraw the "truncated" notice).

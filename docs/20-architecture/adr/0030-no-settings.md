@@ -1,59 +1,59 @@
-# ADR-0030 不要设置：主题跟随系统，字号与字体用默认；会话按钮显示会话数
+# ADR-0030 No settings: theme follows the system, size and font use defaults; the session button shows the session count
 
-> **§1 的主题与字号、§2 的浮层形态被 [ADR-0037](0037-settings-theme-and-font-size.md) 取代**：设置回来了，只有主题（跟随系统 / 浅色 / 深色）与终端字号两项，入口回到标签栏最右和会话抽屉底部；浮层按形态分成底部 sheet 与居中浮窗。字体固定、`Ctrl+Shift+,` 不拦截、§3 的会话按钮都不变。下文保留原决定作历史记录。
+Status: Accepted (2026-10-31). **Supersedes [ADR-0023](0023-terminal-font-list.md) (terminal font list) and [ADR-0028](0028-settings-without-notes.md) (no notes in the settings panel).** Revises [ADR-0025](0025-termux-style-ui.md) §2 (m9's configurable key layout), §4 (☰ and ⚙), §5 (font size via settings before m10), §7 (`Ctrl+Shift+,`) and §8 (the config-file row), and the two overlay forms of [ADR-0018](0018-one-drawer-primitive.md).
 
-状态：已接受（2026-10-31）。**取代 [ADR-0023](0023-terminal-font-list.md)（终端字体清单）与 [ADR-0028](0028-settings-without-notes.md)（设置面板不写说明）**。修订 [ADR-0025](0025-termux-style-ui.md) 的 §2（m9 的键位可配）、§4（☰ 与 ⚙）、§5（m10 之前改字号走设置面板）、§7（`Ctrl+Shift+,`）、§8（配置文件一行），以及 [ADR-0018](0018-one-drawer-primitive.md) 的两种浮层形态。
+Later: **§1's theme and font size, and §2's overlay form, are superseded by [ADR-0037](0037-settings-theme-and-font-size.md).** Settings came back with only theme (system / light / dark) and terminal font size, reached from the right end of the tab bar and the bottom of the session drawer; overlays are a bottom sheet or a centered dialog depending on the form. The fixed font, the unbound `Ctrl+Shift+,`, and §3's session button are unchanged.
 
-## 背景
+## Context
 
-m8 的设置面板有四行：主题（跟随系统 / 浅色 / 深色）、终端字号（按形态各存一份）、终端字体（从本机探测出来的清单里选）、预览。入口有三个：`wide` 标签栏最右边的 ⚙、手机会话抽屉底部的「⚙ 设置」，以及 `Ctrl+Shift+,`。
+The m8 settings panel had four rows: theme (system / light / dark), terminal font size (stored per form), terminal font (picked from fonts detected on the device), and a preview. It had three entry points: ⚙ at the right end of the `wide` tab bar, "⚙ Settings" at the bottom of the phone's session drawer, and `Ctrl+Shift+,`.
 
-用户试用后的反馈是：「设置按钮和相关功能也是多余的，主题跟随系统即可，其他按默认即可，无需设置」。
+After trying it, the user's verdict was that the settings button and everything behind it were unnecessary: the theme should just follow the system, and everything else should use defaults.
 
-这几项设置的成本：
+What these settings cost:
 
-- 代码：设置浮层、`prefs.ts`、`fonts.ts`（canvas 探测）、控制器里改字号 / 改字体 / 改主题三条路径（每条都要补发 `resize`）。CSS 里深色变量要写两遍，一遍放在媒体查询里，一遍放在 `[data-theme=dark]` 里。浮层的居中浮窗形态也只有设置在用。
-- 使用：偏好存在这台浏览器的 `localStorage` 里，换一台设备就得重新设一遍。默认值本来就是按设备挑的（手机竖屏 14px 约 45 列，见 [devices-and-layout.md](../../10-requirements/devices-and-layout.md)）。
+- Code: the settings overlay, `prefs.ts`, `fonts.ts` (canvas detection), and three paths in the controller for font size, font and theme, each of which must send an extra `resize`. The dark-theme CSS variables had to be written twice, once in the media query and once under `[data-theme=dark]`. The centered-dialog overlay form existed only for settings.
+- Use: preferences live in this browser's `localStorage`, so every new device starts over. The defaults were already chosen per device (14px on a portrait phone gives about 45 columns, see [devices-and-layout.md](../../10-requirements/devices-and-layout.md)).
 
-同一轮还有一条反馈：「点击显示会话抽屉的图标不是特别合适」。手机上 ☰ 约定俗成的意思是「菜单」，点开却是一列会话，图标和内容对不上。
+The same round of feedback said the icon for opening the session drawer didn't fit. On phones ☰ conventionally means "menu", but it opened a list of sessions.
 
-## 决策
+## Decision
 
-### 1. 不提供任何设置
+### 1. No settings at all
 
-- **主题只跟随系统**（`prefers-color-scheme`）。系统切换深浅色时，界面和 xterm 一起变，不用刷新。
-- **终端字号固定 14px**，两种形态一样。
-- **终端字体固定为系统等宽栈**，也就是 CSS 里的 `--font-mono`，带 CJK 等宽回退。
-- 删除的东西：设置浮层；⚙ 入口（标签栏里的和抽屉底部的）；`Ctrl+Shift+,`（不再拦截，直接交给终端）；`localStorage` 里的 `webterm.theme`、`webterm.fontSize.*`、`webterm.font.family`。老浏览器里留下的这几个值不再读取，也不专门清理，留着无害。
-- 运行时会改终端几何的事情只剩两件：可视视口变化（软键盘、旋转、窗口缩放），以及 `pointer: coarse` 变化。
+- **The theme follows the system** (`prefers-color-scheme`). When the system switches between light and dark, the UI and xterm switch together without a reload.
+- **The terminal font size is fixed at 14px** in both forms.
+- **The terminal font is the system monospace stack**, the CSS `--font-mono`, with a CJK monospace fallback.
+- Removed: the settings overlay; both ⚙ entry points (tab bar and drawer); `Ctrl+Shift+,` (no longer intercepted; it goes to the terminal); the `localStorage` keys `webterm.theme`, `webterm.fontSize.*` and `webterm.font.family`. Values left in existing browsers are no longer read and aren't cleaned up; they're harmless.
+- Only two things still change terminal geometry at runtime: visual viewport changes (on-screen keyboard, rotation, window resize) and a change in `pointer: coarse`.
 
-### 2. 浮层只剩一种形态：底部 sheet
+### 2. One overlay form: the bottom sheet
 
-`wide` 上唯一的浮层就是设置，它也是居中浮窗形态唯一的使用者。会话抽屉只在 `compact` 上出现，而 `compact` 就是手机。
+On `wide`, the only overlay was settings, and it was the only user of the centered-dialog form. The session drawer appears only on `compact`, which means phones.
 
-所以 `Drawer` 统一成贴底整宽的 sheet：抓手、下滑关闭、系统返回键都和原来一样，不再按 `pointer` 分成两种形态。
+So `Drawer` becomes a single bottom-anchored, full-width sheet: grab handle, swipe down to close, and the system back button work as before, with no split by `pointer`.
 
-### 3. 会话按钮：圆角方框里写会话数
+### 3. Session button: a rounded square with the session count
 
-☰ 换成手机浏览器「标签页」按钮的样子：一个圆角方框，框里写着当前有几个会话。手机用户都认得这个按钮，Chrome、Safari、Firefox 切换标签页用的都是它，点开看到一列会话正好符合预期。框里的数字还顺带告诉用户现在开着几个。
+☰ is replaced by something that looks like a mobile browser's tab switcher: a rounded square with the number of open sessions inside. Phone users know this button (Chrome, Safari and Firefox all use it to switch tabs), so a list of sessions is what they expect to see. The number also tells them how many sessions are open.
 
-- 位置、尺寸和 testid 都不变：附加键左列的上格，`open-sessions`。
-- 未读红点照旧，挂在方框右上角，外面描一圈底色，和方框的边线分开。
-- 框里的数字用界面字体加粗，两位数也放得下（会话上限默认 20）。
+- Position, size and testid are unchanged: top cell of the extra keys' left column, `open-sessions`.
+- The unread dot stays, on the top-right corner of the square, with a ring in the background color to separate it from the square's border.
+- The number uses the bold UI font; two digits fit (the default session limit is 20).
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **只保留主题一项。** 用户说的是「主题跟随系统即可」。
-- **把字号挪到快捷键上**（`Ctrl+=` / `Ctrl+-`）。这是把设置藏起来，不是不要设置；而且 `Ctrl+-` 在终端里是 `^_`，会撞键。
-- **保留居中浮窗形态。** 去掉设置以后，只有屏幕短边小于 600px、又用鼠标的设备才会碰到它，现实里几乎遇不到。
-- **会话按钮用 Unicode 字符**（`⧉`、`❐` 之类）。这些字符各平台的字形差别很大，有的还会被渲染成 emoji，而且一样看不出是「会话」。
-- **会话按钮显示当前会话的编号。** 抽屉里的 `[n]` 已经显示了编号；用户在按钮上更想知道的是一共开着几个。
+- **Keep only the theme.** The user said "the theme should follow the system".
+- **Move font size to shortcuts** (`Ctrl+=` / `Ctrl+-`). That hides a setting rather than removing it, and `Ctrl+-` is `^_` in a terminal, a collision.
+- **Keep the centered-dialog form.** Without settings, only a device with a short side under 600px *and* a mouse would ever see it; that hardly exists.
+- **Use a Unicode character for the session button** (`⧉`, `❐`, …). Glyphs vary a lot across platforms, some render as emoji, and none of them reads as "sessions".
+- **Show the current session's number on the button.** The drawer already shows `[n]`; on the button, users care more about how many are open.
 
-## 后果
+## Consequences
 
-- 用户在老版本里改过的主题、字号、字体全部失效，回到默认值。
-- **m9 的「键位可配」一并取消**：它需要一个编辑界面，和「无需设置」冲突。上划副键、长按连发不受影响。
-- **m10 的双指捏合改字号保留在路线图上**：它是手势，不是设置项。m10 之前字号固定 14px。
-- 删除 AC-5.13；AC-5.3 改写为「外观不提供设置」；AC-4.10、AC-5.11、AC-5.18 里的 ☰ 改成会话按钮，浮层只剩 sheet 一种形态。
-- E2E-12 的 ② 改成验证「跟随系统、没有设置入口」，⑤ 删除；E2E-28 删掉居中浮窗和 ⑦，① 加上会话数的断言；E2E-41 的 ① 去掉 ⚙；E2E-42 的 ② 改成通过窗口变窄来改列数。
-- 前端删除 `app/settings.tsx`、`ui/prefs.ts`、`ui/fonts.ts` 及其单测。
+- Theme, font size and font changed in older versions are ignored; everyone is back to the defaults.
+- **m9's configurable key layout is dropped too**: it needs an editing UI, which contradicts "no settings". Swipe-up secondary keys and auto-repeat are unaffected.
+- **m10's pinch-to-zoom stays on the roadmap**: it's a gesture, not a setting. Until m10, the font size is fixed at 14px.
+- AC-5.13 deleted; AC-5.3 rewritten as "appearance has no settings"; in AC-4.10, AC-5.11 and AC-5.18, ☰ becomes the session button and overlays have only the sheet form.
+- E2E-12 ② now checks "follows the system, no settings entry point" and ⑤ is deleted; E2E-28 drops the centered dialog and ⑦, and ① asserts the session count; E2E-41 ① drops ⚙; E2E-42 ② changes columns by narrowing the window.
+- Frontend deletes `app/settings.tsx`, `ui/prefs.ts`, `ui/fonts.ts` and their unit tests.

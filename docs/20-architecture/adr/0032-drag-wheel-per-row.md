@@ -1,33 +1,33 @@
-# ADR-0032 触屏拖动转滚轮：去掉标定，手指每移动一行高发一次
+# ADR-0032 Touch drag to wheel: drop calibration, one wheel event per row of finger movement
 
-状态：已接受（2026-10-31）。**修订 [ADR-0029](0029-touch-drag-to-wheel.md) §1「跟手靠自动标定」**，改写 AC-3.21。什么时候转换（开了鼠标跟踪、位移满 10px、纵向占优）、方向、怎么发（合成 `WheelEvent` 交给 xterm）、节流（一次 `touchmove` 最多 3 次）、`preventDefault`，都不变。
+Status: Accepted (2026-10-31). **Revises [ADR-0029](0029-touch-drag-to-wheel.md) §1 (auto-calibration)**; rewrites AC-3.21. When the conversion applies (mouse tracking on, at least 10px of movement, vertical dominant), direction, dispatch (a synthetic `WheelEvent` handed to xterm), throttling (at most 3 events per `touchmove`) and `preventDefault` are unchanged.
 
-## 背景
+## Context
 
-ADR-0029 为了跟手，每次拖动先发一下滚轮，等程序重画回来，看屏幕挪了几行，量出步长，之后手指每移动「步长 × 行高」才发一次。
+To track the finger, ADR-0029 sent one wheel event at the start of each drag, waited for the program to redraw, measured how many lines the screen moved, and from then on sent one event per "step × row height" of finger movement.
 
-用户试用后的反馈是：「所谓的滑动跟手过于缓慢」，要求「去掉跟手处理，看看不特殊处理是什么效果」。
+After trying it, the user found scrolling far too slow and asked to drop the finger tracking and see what plain behavior is like.
 
-慢在两处：
+It was slow in two ways:
 
-- **起步慢**：标定要等一个网络往返（最多 300ms），这期间手指在动、屏幕不动。tmux 的第一下只是进 copy-mode，量不到，还要再等一次往返。
-- **走得慢**：跟手的意思是手指走一行、内容走一行。在手机上翻长输出，手指走一屏，内容也只走一屏。
+- **Slow to start**: calibration waits for a network round trip (up to 300ms) while the finger moves and the screen doesn't. In tmux, the first event only enters copy-mode and measures nothing, so it waits for a second round trip.
+- **Slow to move**: tracking means one row of finger movement moves content by one row. Paging through long output on a phone, one screen of swipe moves only one screen of content.
 
-## 决策
+## Decision
 
-**手指每移动一行高，就发一次滚轮。** 不标定，不记步长。
+**Send one wheel event for every row height the finger moves.** No calibration, no remembered step.
 
-- 程序一次滚几行由程序自己定：tmux 的 copy-mode 一次 5 行，内容就是手指的 5 倍快；步长是 1 的程序就是逐行跟手。这和 Termux 的做法一样。
-- 拖动一成立就开始发，不等任何往返。
-- 节流不变：一次 `touchmove` 最多发 3 次，超出的丢掉，不攒到下一帧。
+- The program decides how many lines each event scrolls. In tmux copy-mode it's 5, so content moves 5 times as fast as the finger; a program with a step of 1 tracks the finger line by line. This is what Termux does.
+- Events start as soon as the drag is recognized, without waiting for any round trip.
+- Throttling is unchanged: at most 3 events per `touchmove`; the excess is dropped, not carried over to the next frame.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **保留标定，只缩短等待时间。** 等的是网络往返加程序重画，客户端缩短不了。
-- **固定按 3 行一次换算。** 一样是事先猜步长，猜错了照样不跟手；而且它比一行一次更慢。
+- **Keep calibration, just wait less.** The wait is a network round trip plus a redraw; the client can't shorten it.
+- **Assume a fixed 3 lines per event.** It's still a guess at the step, still wrong when the guess is wrong, and slower than one event per row.
 
-## 后果
+## Consequences
 
-- ADR-0029 的 §1 和「后果」里的实测表不再成立。tmux 默认配置下，手指拖 10 行，tmux 翻约 50 行。想要逐行，照 ADR-0029 §3 把 copy-mode 的滚轮改成 `-N 1`。
-- 代码删掉 `detectShift`、标定状态和步长记忆，`DragWheel` 只剩按行高累计这一件事。
-- AC-3.21、E2E-44、UT-touch-1、手工清单里的 tmux 一条，都按「一行高一次」改写。
+- ADR-0029 §1 and its measurement table no longer hold. With tmux's default config, a 10-row drag scrolls tmux about 50 lines. For line-by-line scrolling, change the copy-mode wheel binding to `-N 1` as in ADR-0029 §3.
+- The code drops `detectShift`, the calibration state and the remembered step; `DragWheel` only accumulates by row height.
+- AC-3.21, E2E-44, UT-touch-1 and the tmux item in the manual checklist are rewritten for "one event per row".

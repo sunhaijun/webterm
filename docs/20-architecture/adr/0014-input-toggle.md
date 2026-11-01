@@ -1,33 +1,30 @@
-# ADR-0014 底栏输入互切键（终端输入 ⇄ 编辑面板）
+# ADR-0014 Bottom bar input toggle (terminal input ⇄ edit panel)
 
-> **已被 [ADR-0025](0025-termux-style-ui.md) 取代**（互切键与编辑面板一起删除，换成 Termux 式的附加键 + 文本输入页）。以下保留作历史记录。
+Status: Accepted (2026-09-11). Refines the input surface of [ADR-0013](0013-terminal-only.md) §2, replacing "no input mode, routed by touch location, edit panel always in the bottom bar" with an **explicit toggle** that defaults to terminal input. Superseded by [ADR-0025](0025-termux-style-ui.md): the toggle and the edit panel were removed in favor of Termux-style extra keys and a text page.
 
-状态：已接受（2026-09-11）。**细化 [ADR-0013](0013-terminal-only.md) 决定 #2 的输入面**：把 ADR-0013 的「无输入模式、按触摸位置全自动分流 + 编辑面板常驻底栏」改成一个**显式互切键**，默认终端输入。终端唯一显示面、点终端逐键直送、编辑面板整段发送这些都不变。
+The terminal as the only display surface, tap-the-terminal-to-type, and whole-text sending from the edit panel were unchanged.
 
-## 背景
+## Context
 
-ADR-0013 让编辑输入条常驻底栏，按触摸位置自动分流：点终端 = 直送，点输入条 = 编辑后发送。真机用下来两个问题：
+ADR-0013 kept the edit bar permanently in the bottom bar and routed input by touch location: tap the terminal = direct input, tap the input bar = edit then send. On real devices this had two problems:
 
-- **常驻的编辑面板占地方、显冗余**。多数时候用户就想点终端直接打字（读输出、按 y/n、选数字、单键快捷），底部那条编辑框是干扰，也吃掉了本可留给终端的屏幕。
-- **claude 里"找不到输入条"**。底栏形态跟着「在跑什么」自动变，用户对"现在能不能整段编辑"没有把握（真机反馈：进 claude 后一度没看到输入条，刷新才见）。
+- **The permanent edit panel took space and felt redundant.** Most of the time users just want to tap the terminal and type (read output, answer y/n, pick a number, single-key shortcuts). The edit box at the bottom was a distraction and took screen space that could go to the terminal.
+- **Users couldn't find the input bar in claude.** The bar changed shape with what was running, so users weren't sure whether they could edit a whole prompt right now (one report: after starting claude the bar didn't show until a reload).
 
-用户要的是：默认最省屏的终端直输，需要写长 prompt 时**一键**叫出编辑面板。
+What the user wanted: the most space-efficient direct terminal input by default, and **one tap** to bring up the edit panel for long prompts.
 
-## 决定
+## Decision
 
-1. **底栏第一个键是互切键**，在【终端输入】⇄【编辑面板】之间切，**默认终端输入**：
-   - **终端输入（默认）**：终端铺满，点终端逐键直送 PTY。底栏只有互切键 `⌨▸编辑` + ⋯；命令在跑 / 占屏 / 集成降级时才挂功能键条（Esc ^C 方向键；claude/codex 换 AI 键条）。最省屏、最直接。
-   - **编辑面板**：升起 Composer（同目录历史 / 路径补全 / 多行），整段编辑后一次发送（`xterm.paste` 括号粘贴 + 回车）。面板头第一个键 `✎▸终端` 切回终端输入；半屏 / 全屏可拖；发送 / Esc 清空后再 Esc / 收起都回终端输入。
-2. **全屏 TUI（备用缓冲 vim/top/less）强制终端输入**，互切键让位给退出 / 方向键条 —— 编辑面板对逐键交互的 TUI 没有意义。
-3. **内部「命令是否在跑」的信号不变**（ADR-0007 的 composer/raw 状态机），只用来驱动功能键条的出现；它和这个用户可见的互切键是**两条正交的轴**。
-4. **从历史 / 命令面板 / chip「填入」**时，终端输入态下先自动把编辑面板升起来再填（否则 Composer 还没挂载）。
-5. **桌面经典底栏不变**（Composer 常在，没有互切键）。
+1. **The first key in the bottom bar toggles** between terminal input and the edit panel. **Terminal input is the default.**
+   - **Terminal input (default)**: the terminal fills the screen; tapping it sends keystrokes directly to the PTY. The bar holds only the toggle `⌨▸Edit` and ⋯; the key bar appears only when a command is running, a program owns the screen or integration is degraded (Esc ^C arrows; AI keys for claude / codex). Most space-efficient and most direct.
+   - **Edit panel**: raises the Composer (same-directory history, path completion, multi-line); edit the whole text and send it at once (`xterm.paste` with bracketed paste, plus Enter). The first key in the panel header, `✎▸Terminal`, switches back. The panel drags between half and full height. Sending, Esc on an empty box after clearing, or collapsing all return to terminal input.
+2. **Full-screen TUIs (alternate buffer: vim / top / less) force terminal input**, and the toggle gives way to exit / arrow keys. An edit panel makes no sense for keystroke-driven TUIs.
+3. **The internal "is a command running" signal is unchanged** (ADR-0007's composer/raw state machine) and only drives the key bar. It is **orthogonal** to the user-visible toggle.
+4. **"Fill" from history, the command palette or chips** first raises the edit panel when in terminal input (otherwise the Composer isn't mounted).
+5. **The desktop classic bottom bar is unchanged** (Composer always visible, no toggle).
 
-## 代价与取舍
+## Consequences
 
-- **默认逐键直输，慢网下打字会卡**。编辑面板本就是为慢网做的（本地整段编好、一次送出，不逐键往返）。互切键正是逃生口：慢网 / 长文一键切到编辑面板即可。换的是**默认**，不是丢功能。
-- **比 ADR-0013 设想的"零模式"多了一个开关要理解**。但它是一个**看得见、有默认、二选一**的键，比"全自动按触摸位置分流"更可预期 —— 真机反馈恰恰是自动分流让人对"现在是什么状态"没底。这不算倒退，是换了个更清楚的表达。
-
-## 影响
-
-底栏渲染（`web/src/ui/app.tsx`：`editing` / `forceTerminal` / `termLead` / `toEdit` / `toTerminal` / `fillComposer`）、`WriteSheet` 新增 `lead` 槽（互切键落在面板头）、`KeyBar`。testid：新增 `term-bar` / `term-lead` / `to-edit` / `to-terminal`；旧 `tui-bar` 并入 `term-bar`。E2E：`inputmodel.spec` / `sheet.spec` 重写为互切模型；harness `submit()` 自动先切到编辑面板，新增 `openComposer()`。相关文档：[input.md](../../40-frontend/input.md)。
+- **Direct per-keystroke input is the default, so typing lags on slow networks.** The edit panel exists for exactly that case (edit locally, send once, no per-keystroke round trips), and the toggle is the escape hatch: one tap for slow networks or long text. Only the default changed; no capability was lost.
+- **One more control to understand than ADR-0013's "zero modes".** But it is **visible, has a default, and has two states**, which is more predictable than automatic routing by touch location. The real-device feedback was precisely that automatic routing left users unsure of the current state, so this is a clearer expression, not a step back.
+- Touched the bottom bar in `web/src/ui/app.tsx`, a `lead` slot in `WriteSheet` for the toggle in the panel header, and `KeyBar`; E2E `inputmodel.spec` / `sheet.spec` rewritten for the toggle model. See [input.md](../../40-frontend/input.md).

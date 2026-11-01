@@ -1,103 +1,79 @@
-# ADR-0010 通过临时 rcfile 注入 shell 集成
+# ADR-0010 Inject shell integration with a temporary rcfile
 
-> **已被 [ADR-0026](0026-agent-holds-terminal-state.md) 取代**：shell 集成整体删除，shell 按自己的规则启动（默认 `bash -l -i`），不再生成 rcfile。以下保留作历史记录。
+Status: Accepted (2026-09-06). Superseded by [ADR-0026](0026-agent-holds-terminal-state.md): shell integration was removed entirely; the shell starts by its own rules (default `bash -l -i`) and no rcfile is generated.
 
-> 状态：Accepted · 2026-09-06
+## Context
 
-## 背景
+Shell integration was a v0.1 requirement: it fed command history, CWD reporting and automatic input mode switching ([ADR-0007](0007-dual-mode-input.md)).
 
-shell 集成是 v0.1 的必需项（它同时支撑命令历史、CWD 上报、输入模式自动切换 —— 见 [ADR-0007](0007-dual-mode-input.md)）。
+The usual approach is asking users to add `eval "$(webterm shell-init bash)"` to `~/.bashrc`. That needs manual setup (so installing is no longer "just run it"), leaves the line behind after webterm is uninstalled, and lets the script in the rc file drift from the agent's version.
 
-传统做法是让用户往 `~/.bashrc` 里加一行 `eval "$(webterm shell-init bash)"`。但这有几个问题：
+## Decision
 
-- 需要用户手动配置，安装体验不再是"跑起来就行"
-- 用户改了 dotfile 之后，webterm 卸载了这行还在
-- 多版本 agent 与 rc 里的脚本版本可能不匹配
-
-## 决策
-
-**agent 启动会话时生成一个临时 rcfile，用 `bash --rcfile <path> -i` 启动。用户不需要修改任何 dotfile。**
+**When starting a session, the agent writes a temporary rcfile and runs `bash --rcfile <path> -i`. Users change no dotfiles.**
 
 ```go
 cmd := exec.Command("bash", "--rcfile", rcPath, "-i")
 ```
 
-> **参数顺序不能反。** bash 的长选项必须排在短选项前面：`bash -i --rcfile <path>`
-> 会报 `bash: --: invalid option`，打一屏用法然后退出，会话根本起不来。
+Argument order matters: bash requires long options before short ones. `bash -i --rcfile <path>` fails with `bash: --: invalid option`, prints usage and exits, so the session never starts.
 
-## 关键细节：正确模拟 bash 的初始化语义
+### Emulating bash's startup semantics
 
-`--rcfile` 只影响**交互式非登录** shell。登录 shell 读 `~/.bash_profile` 并**忽略** `--rcfile`。所以不能简单地加 `-l`。
-
-生成的 rcfile 按模式做不同的事：
+`--rcfile` only applies to **interactive non-login** shells. A login shell reads `~/.bash_profile` and **ignores** `--rcfile`, so we can't just add `-l`. The generated rcfile emulates both modes:
 
 ```bash
 if [ "$__WEBTERM_LOGIN" = 1 ]; then
-    # 登录模式：走 profile 链，取第一个存在的
+    # login mode: walk the profile chain, first file that exists
     [ -r /etc/profile ] && . /etc/profile
     for f in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
         [ -r "$f" ] && { . "$f"; break; }
     done
 else
-    # 非登录模式：只走 bashrc
+    # non-login mode: bashrc only
     [ -r /etc/bash.bashrc ] && . /etc/bash.bashrc
     [ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"
 fi
 
-__webterm_install_hooks    # 必须在用户配置之后
+__webterm_install_hooks    # must run after the user's config
 ```
 
-**注意登录模式下我们不额外 source `~/.bashrc`。** 这不是遗漏，而是刻意的：
+- **Login mode deliberately doesn't also source `~/.bashrc`.** Almost every `~/.bash_profile` sources it already; one that doesn't reflects real login-shell semantics, which we should respect; and this avoids loading `.bashrc` twice (which duplicates PATH entries and aliases and stacks prompt decorations).
+- **Login mode is the default.** Users come from `ssh host`, which gives a login shell. Otherwise PATH set in `~/.bash_profile` would vanish, an unacceptable regression. `--no-login-shell` opts out.
 
-- 绝大多数人的 `~/.bash_profile` 里都有 `. ~/.bashrc`，所以它会被加载
-- 如果某人的 `.bash_profile` 故意不 source `.bashrc`，那正是 bash 登录 shell 的真实语义，我们应该遵守
-- **这样就完全避免了 `.bashrc` 被重复加载**（重复 source 常导致 PATH 重复、别名重复定义、prompt 被叠加）
+### Hooks go in after the user's config
 
-**默认用登录模式**，因为用户是从 `ssh host` 迁移过来的，而 `ssh host` 给的就是登录 shell。若不这样，用户在 `~/.bash_profile` 里设的 PATH 会突然消失，这是无法接受的回归。提供 `--no-login-shell` 开关。
+That's why the code above ends with `__webterm_install_hooks`. It wraps the user's configuration rather than overwriting it:
 
-## 钩子必须安装在用户配置之后
+- `PS1`: add OSC 133 A/B marks around it, keeping the original content.
+- `PROMPT_COMMAND`: append our function rather than replace it (bash 5.1+ supports an array form, handled separately).
+- `DEBUG` trap: chain an existing trap rather than replace it.
 
-这是上面代码顺序的原因。`__webterm_install_hooks` 需要**包装**而不是覆盖用户已有的配置：
+User config may still rewrite `PS1` on every prompt (some theme frameworks do), so the precmd function **re-asserts** the marks every time rather than once at install.
 
-- `PS1`：在前后追加 OSC 133 A/B 标记，保留原有内容
-- `PROMPT_COMMAND`：追加我们的函数，不覆盖（bash 5.1+ 支持数组形式，需要分别处理）
-- `DEBUG` trap：如果已有 trap，链式调用，不替换
+### Integration failures must not affect usability
 
-即便如此，用户配置仍可能在 prompt 渲染时动态重写 `PS1`（比如某些主题框架）。所以我们的 precmd 函数每次都**重新断言**标记存在，而不是只在安装时设一次。
+Everything webterm-specific in the rcfile is wrapped in fault-tolerant functions. A script error (syntax error, bash too old) must never stop the shell from starting: no integration is acceptable, no terminal is not (AC-7.7). Hook installation is wrapped in `{ ... } 2>/dev/null || true`, and the script checks the bash version first (4.4+ for reliable `PS0`; older versions fall back to the `DEBUG` trap plus `PROMPT_COMMAND`).
 
-## 备选方案与否决理由
+### Rejected alternatives
 
-### A. 要求用户改 `~/.bashrc`
+- **Ask users to edit `~/.bashrc`.** Breaks "just run it" and leaves residue on uninstall. Kept as a **fallback**: `webterm shell-init bash` prints the script for manual setup in special environments (the user `exec`s another shell, uses containers, or switches user with `su`).
+- **Inject via environment variables (`BASH_ENV` / `PROMPT_COMMAND`).** `BASH_ENV` only affects non-interactive shells. An inherited `PROMPT_COMMAND` gets overwritten by the user's `.bashrc`.
+- **Write the script into the PTY after start.** Leaves traces on the user's screen, and the timing is unreliable (no way to know when the shell is ready to read).
 
-**否决**：破坏"跑起来就行"的安装体验，且留下卸载残留。仍然作为**降级方案**保留 —— `webterm shell-init bash` 子命令输出脚本，供特殊环境（用户用 `exec` 换了 shell、用容器、用 `su` 切用户）手动接入。
+## Consequences
 
-### B. 通过环境变量注入（`BASH_ENV` / `PROMPT_COMMAND`）
+Positive:
 
-**否决**：`BASH_ENV` 只对非交互 shell 生效。从环境继承 `PROMPT_COMMAND` 会被用户的 `.bashrc` 覆盖。
+- Zero manual setup; installing stays "scp and run".
+- The script is embedded with `go:embed`, so it always matches the agent's version.
+- Uninstalling the agent leaves nothing behind.
 
-### C. 启动后往 PTY 里写入脚本
+Negative:
 
-**否决**：会在用户屏幕上留下痕迹，且时序不可靠（不知道 shell 什么时候准备好读输入）。
-
-### D. 临时 rcfile（采纳）
-
-## 后果
-
-**正面**：
-- 零手工配置。安装体验保持为"scp + 跑"
-- 脚本版本与 agent 版本天然同步（脚本 `go:embed` 在二进制里）
-- 卸载 agent 就干净了，不留残留
-
-**负面**：
-- 需要正确处理 bash 初始化语义的所有分支（上面已展开）。这块必须有集成测试覆盖（AC-7.3）。
-- rcfile 是临时文件，需要处理：
-  - 权限 `0600`，放在 agent 的运行时目录而不是 `/tmp`（避免同机其他用户读取，避免 `/tmp` 清理策略干扰）
-  - 会话结束后删除；agent 崩溃残留的文件在下次启动时清理
-  - `$BASH_ENV` 等可能干扰的变量在启动 PTY 前清理
-- **无法覆盖用户在会话内 `exec zsh` / `su` / 进容器的情况**。这时集成失效，agent 通过"10 秒内没收到 `OSC 1701;hello`"检测到并标记 `integration: inactive`，UI 显示降级提示（AC-7.6）。
-
-## 集成失败必须不影响可用性
-
-rcfile 里所有 webterm 相关逻辑都包在函数里并且容错。脚本出错（语法错误、bash 版本太老）绝对不能导致 shell 启动失败 —— 宁可没有集成，也不能没有终端（AC-7.7）。
-
-具体做法：把钩子安装包在 `{ ... } 2>/dev/null || true` 里，并在脚本开头检查 bash 版本（需要 4.4+ 才有可靠的 `PS0`；更老的版本退化为只用 `DEBUG` trap + `PROMPT_COMMAND`）。
+- Every branch of bash's startup semantics must be handled correctly (above), with integration tests (AC-7.3).
+- The rcfile is a temporary file:
+  - mode `0600`, in the agent's runtime directory rather than `/tmp` (other users on the machine, `/tmp` cleanup policies);
+  - deleted when the session ends; files left by an agent crash are cleaned up at the next start;
+  - `$BASH_ENV` and other interfering variables are cleared before starting the PTY.
+- **It can't follow `exec zsh`, `su` or entering a container inside the session.** Integration stops working there. The agent detects it when no `OSC 1701;hello` arrives within 10 seconds, marks the session `integration: inactive`, and the UI shows a degraded-mode notice (AC-7.6).

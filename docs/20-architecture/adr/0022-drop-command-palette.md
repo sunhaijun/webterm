@@ -1,36 +1,34 @@
-# ADR-0022 去掉命令面板
+# ADR-0022 Remove the command palette
 
-状态：已接受（2026-09-13）。**收回 [ADR-0018](0018-one-drawer-primitive.md) 收进 `Drawer` 的四个次要界面之一**，作废 AC-6.8 / US-6.6。历史面板、快捷命令（[ADR-0008](0008-pinned-history-as-snippets.md)）、`Drawer` 原语本身、其余快捷键都不变。
+Status: Accepted (2026-09-13). Takes back one of the four secondary screens [ADR-0018](0018-one-drawer-primitive.md) moved into `Drawer`, and voids AC-6.8 / US-6.6. The history panel, snippets ([ADR-0008](0008-pinned-history-as-snippets.md)), the `Drawer` primitive itself and the other shortcuts are unchanged.
 
-## 背景
+## Context
 
-命令面板（`Ctrl/Cmd+K`）是 m7 按"桌面端唯一主入口"的设想做的：一个入口搞定会话、快捷命令、历史、动作，以此换取"快捷键极少"。落地之后它没有兑现这个定位 —— 面板里的每一类东西都另有一条更短、更专的路：
+The command palette (`Ctrl/Cmd+K`) was built in m7 as the single main entry point on desktop: one place for sessions, snippets, history and actions, in exchange for keeping shortcuts to a minimum. Once shipped, it didn't live up to that role. Everything in it already had a shorter, more specific path:
 
-| 面板里的东西 | 本来就有的路 |
+| In the palette | Existing path |
 |---|---|
-| 历史 / 快捷命令 | 历史面板（搜索 + 目录/失败过滤 + 置顶 + 短名 + 删除，功能是面板的超集）；编辑面板的 chips；Composer 的 `↑` 前缀历史 |
-| 会话 | 侧栏常驻（desktop）、⋯ → 会话（phone / tablet）、`Ctrl+Shift+↑/↓`、横滑 |
-| 动作（新建会话 / 设置 / 切主题） | 模式条按钮、⋯ 菜单、`Ctrl+Shift+Enter`、`Ctrl+Shift+,`、设置里的主题选择 |
+| History / snippets | The history panel (search + directory / failure filters + pin + labels + delete, a superset of the palette); chips in the edit panel; `↑` prefix history in the Composer |
+| Sessions | The permanent sidebar (desktop), ⋯ → Sessions (phone / tablet), `Ctrl+Shift+↑/↓`, horizontal swipe |
+| Actions (new session / settings / switch theme) | Mode bar buttons, the ⋯ menu, `Ctrl+Shift+Enter`, `Ctrl+Shift+,`, the theme picker in settings |
 
-总入口的价值来自**候选多到记不住**（编辑器的几百条命令、IDE 的上千个文件）。webterm 的候选是个位数的会话加十几条快捷命令，这个量级下"打开面板 → 打字 → 挑一条"比直接点那个按钮更慢，而维护成本是实打实的：一个组件、一套模糊匹配与打分、一条快捷键、两个入口、一批样式、一组测试，每次改 `Drawer` / 历史 / 会话都要顺带照顾它。
+A universal entry point pays off when **there are too many candidates to remember** (hundreds of commands in an editor, thousands of files in an IDE). webterm's candidates are a single-digit number of sessions plus a dozen snippets. At that scale "open the palette → type → pick one" is slower than tapping the button directly, and the maintenance cost was real: a component, fuzzy matching and scoring, a shortcut, two entry points, a set of styles, a set of tests, and every change to `Drawer`, history or sessions had to account for it.
 
-## 决策
+## Decision
 
-1. **彻底删除命令面板**，不留开关、不留降级入口：组件 `web/src/commands/palette.tsx`、模糊匹配 `web/src/commands/fuzzy.ts`、`Ctrl/Cmd+K` 绑定与 `'palette'` 动作、模式条与 ⋯ 菜单里的两个入口、`.palette-*` 样式、对应单测与 E2E 用例。
+1. **Delete the command palette completely**, with no toggle and no fallback entry: the component `web/src/commands/palette.tsx`, the fuzzy matcher `web/src/commands/fuzzy.ts`, the `Ctrl/Cmd+K` binding and the `'palette'` action, both entry points (mode bar and ⋯ menu), the `.palette-*` styles, and their unit and E2E tests.
+2. **Give `Ctrl/Cmd+K` back to the terminal.** In readline, `Ctrl+K` kills to the end of the line (bash / zsh / emacs / fish all share it), and we had been intercepting a key terminals actually use at the app layer. Removing the palette fixes a real bug; it isn't collateral damage. Afterwards the design-constraint table in `keymap.md` reduces to one clean rule: **app shortcuts use only `Ctrl+Shift+*`**, with `Ctrl/Cmd+F` (in-session search, unused by terminals) as the only exception.
+3. **No new shortcuts to make up for the lost entry point.** Keeping shortcuts to a minimum is still the goal; the reason changes from "the palette covers everything" to "there are few entry points and they're all on screen".
 
-2. **`Ctrl/Cmd+K` 归还终端。** readline 的 `Ctrl+K` 是"删到行尾"（bash / zsh / emacs / fish 通用），我们此前把一个终端真正在用的键拦在了应用层 —— 这是删面板顺带修掉的一个真 bug，而不是附带损失。删掉之后 `keymap.md` 的设计约束表恢复成一句干净的话：**应用快捷键只用 `Ctrl+Shift+*`**，唯一的例外是 `Ctrl/Cmd+F`（会话内搜索，终端不用它）。
+Rejected alternatives:
 
-3. **不给"少了总入口"补快捷键。** 快捷键保持极少仍然是目标，只是理由从"有面板兜底"换成"入口本来就少且都在屏幕上"。
+- **Keep it but hide it** (keep the shortcut, drop the two visible entry points). Hidden features go unused but still need maintenance, and it would keep holding `Ctrl/Cmd+K`.
+- **Turn it into history-only search.** The history panel already has substring search and filters; a second, weaker search window would split the mental model.
 
-## 不采纳的方案
+## Consequences
 
-- **留着但藏起来（只保留快捷键、去掉两个可见入口）。** 藏起来的功能没人用，却仍然要维护，还得继续占着 `Ctrl/Cmd+K`。
-- **把它改造成"只搜历史"。** 历史面板已经有子串搜索 + 过滤，再开一个更弱的搜索窗只会分裂心智模型。
-
-## 后果
-
-- AC-6.8、US-6.6 作废（文档里划掉并注明本 ADR，不删行 —— 保留决策痕迹）。
-- E2E-14 的「命令面板」用例删除；E2E-28 从"四个入口是同一种壳"变成三个（会话 / 历史 / 设置）。
-- `Ctrl+Shift+W` 在普通标签页里被浏览器抢走时的备用路径，改为会话列表里每条会话的 ✕（`session-<sid>-close`）。
-- `fuzzy.ts` 没有别的使用者，一并删除。将来若真需要"跨历史模糊搜索"，历史面板里加一个匹配模式即可，不必再造一个窗口。
-- `Drawer` 原语不变，只是使用者从四个变成三个 —— [ADR-0018](0018-one-drawer-primitive.md) 的"一个浮层原语"结论不受影响。
+- AC-6.8 and US-6.6 are void (struck through in the docs with a pointer to this ADR, not deleted, to keep the decision trail).
+- The "command palette" case in E2E-14 is removed; E2E-28 goes from "four entry points share one shell" to three (sessions / history / settings).
+- When the browser grabs `Ctrl+Shift+W` in a normal tab, the fallback is now the ✕ on each session in the session list (`session-<sid>-close`).
+- `fuzzy.ts` had no other users and goes too. If fuzzy search across history is ever needed, add a match mode to the history panel rather than building another window.
+- `Drawer` is unchanged, just with three users instead of four; [ADR-0018](0018-one-drawer-primitive.md)'s "one overlay primitive" conclusion stands.

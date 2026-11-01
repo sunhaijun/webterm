@@ -1,127 +1,129 @@
-# 手工测试清单
+# Manual test checklist
 
-> 状态：Accepted · 随实现补充
+> Status: Accepted · grows with the implementation
 
-自动化测不到的东西。**每次发布前人工跑一遍**，勾不完不发。
+What automation can't test. **Run it by hand before every release**; don't release until every box is checked.
 
-自动化覆盖的部分见 [`strategy.md`](strategy.md) 与 [`e2e-scenarios.md`](e2e-scenarios.md)。
+Automated coverage is in [`strategy.md`](strategy.md) and [`e2e-scenarios.md`](e2e-scenarios.md).
 
 ---
 
-## 中文输入（m4 后每次都要过）
+## CJK input (every time since m4)
 
-自动化只能派发 composition 事件，测不到真实输入法的候选框行为。
+Automation can only dispatch composition events; it can't test how a real IME's candidate window behaves.
 
-- [ ] **iOS 拼音**：文本输入页里写一段 100+ 字中文，候选框位置正确、可改中间的字、可粘贴；回车把内容送进终端并提交；在 claude 里 300 字的 prompt 一次回车就提交，不留在输入框里
-- [x] **iOS 拼音**：终端直输（跑 `vim`）输入中文，内联预览浮层位置跟随光标
-- [ ] **Android Gboard**：同上两项
-- [x] **macOS 拼音 / 微软拼音**：桌面端终端直输输入中文，预览浮层跟随光标
-- [ ] 组字期间按 `Enter` 选词 —— **不能误提交**（终端直输与文本输入页各验一次）
-- [x] 组字期间按方向键切候选 —— 不能被终端吃掉
-- [x] 中文与英文混排时，终端里的宽字符对齐正确（`unicode11` addon 生效）
-- [x] 粘贴含中文的多行文本，不被逐行执行
+- [ ] **iOS Pinyin**: write 100+ Chinese characters on the text page. Candidate window in place; editing mid-text and paste work; Enter sends and submits. In claude, a 300-character prompt submits with one Enter
+- [x] **iOS Pinyin**: type Chinese in direct input (running `vim`); the inline preview follows the cursor
+- [ ] **Android Gboard**: same two items as above
+- [x] **macOS Pinyin / Microsoft Pinyin**: type Chinese in direct input on desktop; the preview follows the cursor
+- [ ] Press `Enter` during composition to pick a candidate — **must not submit by mistake** (check once in direct input and once on the text page)
+- [x] Use arrow keys during composition to move between candidates — the terminal must not eat them
+- [x] Mixed Chinese and English: wide characters line up correctly in the terminal (`unicode11` addon active)
+- [x] Paste multi-line text containing Chinese; it isn't executed line by line
 
-## 软键盘与布局（m4 / m6 后）
+## On-screen keyboard and layout (since m4 / m6)
 
-- [ ] iOS Safari 标签页：键盘弹出，终端收缩，两行附加键贴在键盘上方、完全可见
-- [ ] iOS PWA（加到主屏）：同上
-- [ ] Android Chrome：同上
-- [ ] 键盘收起后布局复原，无残留空白
-- [ ] 竖屏 → 横屏 → 竖屏，来回切三次，布局与终端尺寸都正确；**形态不翻转**（手机横屏仍是会话按钮 + 抽屉，平板弹键盘仍是标签栏）
-- [ ] 有刘海/Home 指示条的机型上，内容不被遮挡（`safe-area-inset`）
-- [ ] 点终端：软键盘弹出 / 收起交替；在开了鼠标跟踪的程序里（`htop`、`vim` 开 `mouse=a`）点终端是点击，不切键盘
-- [ ] tmux（`set -g mouse on`）里手指上下拖能翻 pane 的历史（进 copy-mode），手指一动就开始翻、没有起步的停顿（tmux 默认拖 1 行翻 5 行），`q` 退出；直接跑 claude 时手指上下拖能滚它的对话
-- [ ] 按附加键不会让软键盘收起或弹出；`CTRL` 点一下再在软键盘上按 `c` = `^C`，长按 `CTRL` 锁定
-- [ ] ✎ 切到文本输入页、再切回，终端行列数不变；在键区左右滑动也能切
-- [ ] 平板：在会话 A 的文本页里用拼音组字到一半（候选框还开着）就点会话 B 的标签 → 组到一半的字留在 A 的草稿里（或被输入法提交进去），**没有跑进 B 的文本框**，也没有发进任何终端；切回 A 草稿还在
-- [ ] 手机：会话按钮（方框里的数字 = 会话数）打开会话抽屉；**系统返回键关抽屉而不是退出 PWA**；键盘弹着时开抽屉、选会话，回来键盘仍弹着
-- [ ] iPhone（有 Home 指示条）：会话抽屉底部的「+ 新会话」与 ⚙ 整个在指示条上方、与它之间有空隙；只有一个会话时抽屉约半屏高；⚙ 进设置，设置 sheet 底部同样不贴指示条
-- [ ] iOS / Android：⚙ 与 `+`、✎ 粗细一致，不被渲染成彩色 emoji
-- [ ] iOS / Android：抽屉里左滑一行出「⇵ / 改名 / 关闭」；上下滑列表不会误开；点「改名」后改名 sheet 整个在键盘上方、输入框可见
-- [ ] 关一个跑着 tmux 或 claude 的会话（标签 ✕、抽屉左滑关闭都试）→ 不出现「会话不存在」
-- [ ] 平板 / PC：标签栏切换、改名（双击 / 长按）、关闭、`+` 新建都正常，切换时终端不重排
-- [ ] 平板：开到标签放不下，`+` 仍在标签条右边、看得见；手指点当前标签的 ✕ 和 `+` 不会互相误触
-- [ ] 平板接外接键盘 → `Ctrl+Shift+*` 快捷键生效
+- [ ] iOS Safari tab: the keyboard opens, the terminal shrinks, and both rows of extra keys sit on top of the keyboard, fully visible
+- [ ] iOS PWA (added to home screen): same
+- [ ] Android Chrome: same
+- [ ] After the keyboard closes the layout recovers, with no leftover blank space
+- [ ] Rotate portrait → landscape → portrait three times: layout and terminal size stay right, and **the form doesn't flip** (landscape phone keeps the session button + drawer; tablet with keyboard up keeps the tab bar)
+- [ ] On devices with a notch / home indicator, nothing is covered (`safe-area-inset`)
+- [ ] Tap the terminal: the keyboard alternately opens and closes; in programs with mouse tracking (`htop`, `vim` with `mouse=a`) a tap is a click and doesn't toggle the keyboard
+- [ ] In tmux (`set -g mouse on`), drag to scroll pane history (enters copy-mode): scrolling starts as soon as the finger moves (tmux default: 1 row of drag = 5 lines); `q` exits. With claude run directly, dragging scrolls its conversation
+- [ ] Pressing extra keys doesn't open or close the keyboard; tap `CTRL` then `c` on the keyboard = `^C`; long-press `CTRL` to lock it
+- [ ] Switch to the text page with ✎ and back; terminal rows and columns don't change; swiping over the keys also switches
+- [ ] Tablet: mid-composition on session A's text page (candidates still open), tap session B's tab → the partial text stays in A's draft, **never lands in B's textarea**, and isn't sent anywhere; switching back to A shows the draft
+- [ ] Phone: the session button (shows the session count) opens the drawer; **the system back button closes the drawer, not the PWA**; picking a session with the keyboard up keeps the keyboard up
+- [ ] iPhone with home indicator: `+ New session` and ⚙ in the drawer sit fully above the indicator, with a gap; with one session the drawer is about half the screen; the settings sheet also clears the indicator
+- [ ] iOS / Android: ⚙ has the same stroke weight as `+` and ✎ and isn't rendered as a color emoji
+- [ ] iOS / Android: swipe a drawer row left to reveal Pin / Rename / Close; scrolling the list doesn't open rows; the rename sheet sits fully above the keyboard
+- [ ] Close a session running tmux or claude (try both the tab ✕ and swipe-to-close in the drawer) → no "Session not found" error appears
+- [ ] Tablet / PC: switching tabs, renaming (double-click / long-press), closing, and creating with `+` all work; the terminal doesn't reflow on switch
+- [ ] Tablet: open more tabs than fit; `+` stays visible right of the tab strip; tapping the current tab's ✕ and `+` never hits the other
+- [ ] Tablet with an external keyboard → `Ctrl+Shift+*` shortcuts work
 
-## 真实网络（m3 后每次都要过）★
+## Real networks (every time since m3) ★
 
-这是"永不断线"承诺的真实验证，自动化只能模拟。
+The real test of the "never disconnects" promise; automation can only simulate it.
 
-- [x] Wi-Fi → 4G 切换：跑着 `emit.sh`，切网，屏幕**接着长**，不重画不空白
-- [x] 地铁 / 电梯：进隧道断 30 秒，出来自动恢复，内容完整
-- [ ] 飞行模式开 2 分钟再关：恢复（可能走快照，画面整个重画一次），画面完整、后续输出正确
-- [ ] 笔记本合盖 2 小时再打开：会话还在，当前画面完整（落出窗口时走快照，至多 2000 行历史）
-- [ ] 断网期间在终端里敲三条命令 → 恢复后按顺序执行，不丢不重
-- [x] 弱网（限速到 100kbps）下滚动与输入仍可接受
-- [ ] 连接横幅（重连中 / 离线）与"已恢复 · 补齐 N KB"在真实网络下都出现过，数字合理；横幅出现、消失时终端不重排
-- [ ] 刷新页面：claude / vim / htop / 普通 shell 四种会话的画面都和刷新前一致，普通 shell 能往回翻（快照带的 2000 行）
-- [ ] 转屏（改列数）之后再刷新：画面与刷新前一致（列数一变 agent 就重发快照，以它的重排为准）
-- [ ] 中文长输出（含大量 。…—“”）里标点一个不少（xterm 切开 UTF-8 丢字的回归）
+- [x] Wi-Fi → 4G: with `emit.sh` running, switch networks; the screen **keeps growing**, no redraw, no blank
+- [x] Subway / elevator: lose signal for 30 seconds in a tunnel; it recovers on its own afterwards with complete content
+- [ ] Airplane mode on for 2 minutes, then off: recovers (may redraw once via snapshot), screen complete, later output correct
+- [ ] Close the laptop lid for 2 hours, then open it: the session is there and the current screen is complete (snapshot, up to 2000 lines of history)
+- [ ] Type three commands in the terminal while offline → after recovery they run in order, none lost, none duplicated
+- [x] On a weak network (throttled to 100kbps), scrolling and typing are still acceptable
+- [ ] On a real network, see both the connection banner (reconnecting / offline) and "Resumed · caught up N KB" with sensible numbers; the terminal doesn't reflow when the banner comes and goes
+- [ ] Refresh: claude / vim / htop / plain shell sessions look the same as before, and the plain shell scrolls back (2000 lines from the snapshot)
+- [ ] Rotate (column count changes), then refresh: the screen matches what it was before (the agent's reflow wins)
+- [ ] Long CJK output (lots of 。…—“”) loses no punctuation (regression for xterm dropping characters from split UTF-8)
 
-## PWA（m6 后）
+## PWA (since m6)
 
-- [x] iOS：加到主屏，图标正确，启动无地址栏
-- [x] Android：安装提示出现，安装后启动正常
-- [x] 深浅色主题跟随系统切换
-- [ ] 设置里强制浅色 / 深色：状态栏、滚动条、终端同步变；重新从主屏打开 PWA 不闪另一种底色；改回跟随系统后又跟着系统走
-- [x] 断网后启动 PWA → 显示"无法连接到 agent"，不是白屏也不假装能用
-- [x] 发布新版本后，旧 PWA 提示"有更新 · 刷新"，且**不自动刷新**（不能打断会话）
+- [x] iOS: add to home screen; icon correct, launches without an address bar
+- [x] Android: install prompt appears; launches fine after install
+- [x] Light/dark theme follows the system
+- [ ] Force light / dark in settings: status bar, scrollbars, and terminal all switch together; reopening the PWA from the home screen doesn't flash the other background; switching back to System follows the system again
+- [x] Start the PWA while offline → shows "Can't reach the agent", not a white screen, and doesn't pretend to work
+- [x] After a new version is released, an old PWA prompts "Update available · Reload" and **doesn't reload on its own** (it must not interrupt sessions)
 
-## 部署（m2 后每次改动 TLS/安装流程都要过）
+## Deployment (every time TLS / install changes, since m2)
 
-- [x] `webterm doctor` 在缺条件时给出可读诊断（分别测：80 被占、DNS 指错、无域名）
-- [ ] 首次安装的 `doctor --acme` 签出正式证书；服务启动后日志里是「证书已就绪」且没有第二次签发（`certs/` 里只有一张）
-- [x] 正式 Let's Encrypt 签发成功
-- [x] 手机扫二维码完成配对（终端二维码在实际字号下可扫）
-- [x] `setcap` 后以普通用户绑定 443 成功
-- [x] `--https-port 8443`：证书从 80 上的 HTTP-01 签出来，配对二维码里带着 `:8443` 且手机扫了能打开
-- [x] `loginctl enable-linger` 后，SSH 退出，服务仍在
-- [ ] 系统服务（ADR-0034）：`systemctl cat webterm` 里 `User=` 是自己；`cat /proc/$(systemctl show webterm -p MainPID --value)/oom_score_adj` 是 -900；会话里 `cat /proc/self/oom_score_adj` 是 0；会话里 `systemctl --user status` 正常
-- [ ] 从用户服务迁移：在 webterm 会话里跑 `webterm update --force-restart` 被拒绝；从 SSH 跑成功，用户单元已删、系统单元 active，tmux 里的会话还在
-- [ ] 内存压力（要 root，会扰动整台机器）：在一个 webterm 会话里跑 `stress-ng --vm 1 --vm-bytes 90%` → 被杀的是 stress-ng，webterm 和其它会话都还在
-- [x] 服务器重启后服务自动起来
-- [x] 替换二进制 + `setcap` + 重启 → 客户端收到"agent 即将重启"提示，重连后是新版本
-- [x] 反代场景（nginx）下 WebSocket 正常，且不会每 60 秒断
-- [ ] IP 模式（ADR-0044）：`./webterm install`（不给 `--domain`）在一台云服务器上签出正式 IP 证书；手机扫码打开 `https://<IP>`，地址栏没有证书警告；能加到主屏（iOS / Android 各一台）
-- [ ] IP 证书续期：服务跑满 5 天后 `webterm` 状态总览里的到期时间往后挪了，日志里有续期成功
-- [ ] `webterm install`（ADR-0045）：`scp` 上去直接装，服务器上没有 `gh`、没有 `GH_TOKEN`；装完最后一屏就是二维码
-- [ ] 安全组故意不放行 80：`webterm install` 在启动服务前就停下，报的是「CA 没能连上本机」，服务没有被写成 systemd 单元
-- [ ] ufw 已启用的机器：安装后 `sudo ufw status` 里有 80/443
-- [ ] 同一台机器从 IP 改成域名：`./webterm install --domain X` 之后，`webterm` 状态总览、`webterm pair` 用的都是新域名
-- [ ] 从网上装（`gh api … | bash -s -- --channel dev`）：日志里有「交给 webterm … 自带的安装脚本继续」，装出来的版本就是 dev
+- [x] `webterm doctor` gives a readable diagnosis when something is missing (test each: port 80 taken, DNS pointing elsewhere, no domain)
+- [ ] On a first install, `doctor --acme` issues a production certificate; after the service starts the log says "Certificate ready" and there's no second issuance (only one certificate in `certs/`)
+- [x] Production Let's Encrypt issuance succeeds
+- [x] Pair a phone by scanning the QR code (the terminal QR code scans at the actual font size)
+- [x] After `setcap`, a regular user can bind 443
+- [x] `--https-port 8443`: the certificate is issued via HTTP-01 on port 80, the pairing QR code includes `:8443`, and scanning it on a phone opens the page
+- [x] After `loginctl enable-linger`, the service keeps running when SSH exits
+- [ ] System service (ADR-0034): `systemctl cat webterm` shows `User=` as yourself; `cat /proc/$(systemctl show webterm -p MainPID --value)/oom_score_adj` is -900; `cat /proc/self/oom_score_adj` in a session is 0; `systemctl --user status` works in a session
+- [ ] Migrate from a user service: `webterm update --force-restart` run inside a webterm session is refused; run from SSH it succeeds, the user unit is gone, the system unit is active, and sessions inside tmux survive
+- [ ] Memory pressure (needs root, disturbs the whole machine): run `stress-ng --vm 1 --vm-bytes 90%` in a webterm session → stress-ng is what gets killed; webterm and the other sessions survive
+- [x] The service starts automatically after a server reboot
+- [x] Replace the binary + `setcap` + restart → clients see the "The agent is restarting" notice and reconnect to the new version
+- [x] Behind a reverse proxy (nginx), WebSocket works and doesn't drop every 60 seconds
+- [ ] IP mode (ADR-0044): `./webterm install` (no `--domain`) on a cloud server issues a production IP certificate; scanning the code on a phone opens `https://<IP>` with no certificate warning in the address bar; it can be added to the home screen (one iOS and one Android device)
+- [ ] IP certificate renewal: after the service has run for 5 days, the expiry in the `webterm` status overview has moved later and the log shows a successful renewal
+- [ ] `webterm install` (ADR-0045): `scp` the binary up and install directly, with no `gh` and no `GH_TOKEN` on the server; the last screen of the install is the QR code
+- [ ] Guided install (ADR-0046), port 80 blocked in the security group: the installer names the console page to open, waits; after opening the port, Enter re-checks and the install finishes with a QR code. Run without a terminal (`ssh server ./webterm install </dev/null`), it stops before writing a systemd unit
+- [ ] Guided install with a domain whose `A` record doesn't exist yet: the installer shows the record to add and continues on its own once it resolves
+- [ ] One-line install from a release: `curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install.sh | bash` on a fresh server asks for the address and ends with a QR code
+- [ ] On a machine with ufw enabled: `sudo ufw status` shows 80/443 after the install
+- [ ] Switch the same machine from IP to a domain: after `./webterm install --domain X`, both the `webterm` status overview and `webterm pair` use the new domain
+- [ ] Install from the web (`gh api … | bash -s -- --channel dev`): the log shows "Handing over to webterm …" (the binary's bundled install script), and the installed version is the dev build
 
-## 终端兼容性（每次改渲染都要过）
+## Terminal compatibility (every time rendering changes)
 
-- [x] `vim` / `nvim`：编辑、`:wq`、可视模式、方向键
-- [ ] `htop`：刷新、方向键、`F` 键；切走再切回画面正确（快照）
-- [x] `less` / `man`：翻页、搜索、`q`
-- [ ] `tail -f`：持续输出下贴底跟随；往上翻时视口不被拽走
-- [x] `git log` 的分页器与颜色
-- [x] `Ctrl+C` 打断 `sleep 100`
-- [ ] `Ctrl+D` 退出 shell → 末尾出现「进程已结束 · 按 Enter 关闭」一行，内容保留；按 `Enter` 关闭会话
-- [ ] 在会话里跑 Claude Code / 其它 TUI agent：用文本输入页送长中文 prompt 正常
-- [x] 输出一个二进制文件（`head -c 4096 /dev/urandom`）→ 不崩溃，后续输出正常
-- [x] 256 色与真彩色显示正确
-- [x] 超长行（无换行的 100KB）→ 不卡死
+- [x] `vim` / `nvim`: editing, `:wq`, visual mode, arrow keys
+- [ ] `htop`: refresh, arrow keys, `F` keys; switching away and back shows the right screen (snapshot)
+- [x] `less` / `man`: paging, search, `q`
+- [ ] `tail -f`: follows the bottom under continuous output; scrolling up isn't yanked back down
+- [x] `git log` pager and colors
+- [x] `Ctrl+C` interrupts `sleep 100`
+- [ ] `Ctrl+D` exits the shell → a "Process exited · press Enter to close" line appears at the end, content is kept; `Enter` closes the session
+- [ ] Run Claude Code / another TUI agent in a session: sending a long Chinese prompt from the text page works
+- [x] Print a binary file (`head -c 4096 /dev/urandom`) → no crash, later output is fine
+- [x] 256 colors and true color display correctly
+- [x] A very long line (100KB, no newline) → doesn't hang
 
-## 会话启动（每次改 shell 启动方式都要过）
+## Session startup (every time the shell launch changes)
 
-- [ ] 全新用户（空 `.bashrc`）：会话正常起来，提示符正常
-- [ ] `~/.bash_profile` 里设的 PATH 在会话里可见（默认登录 shell）；`--no-login-shell` 时读的是 `~/.bashrc`
-- [ ] 故意在 `.bashrc` 里放语法错误 → shell 仍能启动
-- [ ] `cd` 到别的目录，1 秒内会话名跟着变；会话里跑 `vim`，名字变成 vim 所在目录
-- [ ] `--shell zsh`（或 fish）：会话正常、会话名随目录变
+- [ ] Brand-new user (empty `.bashrc`): the session starts with a normal prompt
+- [ ] PATH set in `~/.bash_profile` is visible in the session (login shell by default); with `--no-login-shell`, `~/.bashrc` is read instead
+- [ ] Put a deliberate syntax error in `.bashrc` → the shell still starts
+- [ ] `cd` to another directory; the session name follows within 1 second; run `vim` in the session and the name becomes the directory vim is in
+- [ ] `--shell zsh` (or fish): the session works and its name follows the directory
 
-## 隐私（每次改存储/日志都要过）
+## Privacy (every time storage / logging changes)
 
-- [x] 会话里 `echo WEBTERM_CANARY_TEST`，然后 `grep -r WEBTERM_CANARY_TEST ~/.local/share/webterm/` → 零命中
-- [x] `journalctl -u webterm | grep -E 'pair#|webterm_session='` → 零命中
-- [x] `--log-level debug` 下同样零命中
+- [x] `echo WEBTERM_CANARY_TEST` in a session, then `grep -r WEBTERM_CANARY_TEST ~/.local/share/webterm/` → zero hits
+- [x] `journalctl -u webterm | grep -E 'pair#|webterm_session='` → zero hits
+- [x] Zero hits with `--log-level debug` too
 
-## 记录
+## Record
 
-每次发布把跑过的日期、版本、机型/OS 记在 PR 或 release note 里。**不要只勾框不记环境** —— 下次出问题时需要知道上次是在什么环境上验过的。
+For every release, record the date, version, and devices / OS you ran this on in the PR or release notes. **Don't just tick boxes without recording the environment**: next time something breaks, you need to know where it was last verified.
 
-| 日期 | 版本 | 机型 / OS | 备注 |
+| Date | Version | Device / OS | Notes |
 |---|---|---|---|
-| 2026-09-14 | v0.1.0 | 未记 | 8 组 60 项全部过一轮 |
+| 2026-09-14 | v0.1.0 | Not recorded | All 60 items in 8 groups passed once |

@@ -1,77 +1,75 @@
-# ADR-0039 手机会话列表：左滑出按钮；改名用一张小 sheet；浮层跟着可视区走
+# ADR-0039 Phone session list: swipe a row left for actions; rename in a small sheet; overlays follow the visual viewport
 
-状态：已接受（2026-10-31）。修订 [ADR-0025](0025-termux-style-ui.md) §4 与 [session-ux.md](../../40-frontend/session-ux.md) §会话菜单 在 `compact` 上的部分：抽屉里不再弹锚定的会话菜单。`wide` 的标签菜单不变。
+Status: Accepted (2026-10-31). Revises the `compact` parts of [ADR-0025](0025-termux-style-ui.md) §4 and of the session menu in [session-ux.md](../../40-frontend/session-ux.md): the drawer no longer pops up an anchored session menu. The `wide` tab menu is unchanged.
 
-## 背景
+## Context
 
-用户的反馈：
+The user asked for session actions such as renaming to be reached by swiping a row left on narrow screens, and pointed out that the rename field got covered while editing, asking for something simpler and more reliable.
 
-> 关于会话的标题编辑等，窄屏上最好能用左滑动手势出按钮的形式，另外编辑时目前输入框有被遮挡的问题，需要更简洁可靠的实现。
+How it worked:
 
-现状：
+- Long-pressing a row in the phone drawer opened a small menu anchored next to the finger (Rename · Pin · Close). "Rename" turned that row's name into an input in place.
+- As soon as the input got focus the on-screen keyboard opened. The drawer is `position: fixed` against the bottom of the **layout viewport**. Android Chrome only shrinks the **visual viewport** for the keyboard (`resizes-visual`), so the drawer didn't move and its lower half, input included, ended up behind the keyboard. iOS sometimes pushes the page up (`offsetTop > 0`); then `.app` gets a `translateY` and the drawer follows it, but when it doesn't push, it's covered just like on Android. The drawer's `max-height: 80vh` was also computed against the layout viewport, so with the keyboard up it was taller than the visible area.
+- An input inside a row had to coexist with list scrolling, row taps and long-presses, and blur-to-cancel: several code paths.
 
-- 手机抽屉里长按一行，弹出一个锚在手指旁边的小菜单（改名 · 保持接收 · 关闭）。点「改名」后，那一行的名字原地变成输入框。
-- 输入框一拿焦点，软键盘就弹出来。抽屉是 `position: fixed` 贴着**布局视口**的底边。Android Chrome 弹键盘只缩**可视视口**（`resizes-visual`），抽屉不动，下半截连同输入框都在键盘后面。iOS 有时会把页面上推（`offsetTop > 0`），这时 `.app` 有 `translateY`，抽屉跟着 `.app` 走；没上推的时候就和 Android 一样被挡。抽屉的 `max-height: 80vh` 也是按布局视口算的，键盘弹起后比可见区还高。
-- 一行里塞一个输入框，还要处理列表滚动、行的点击与长按、失焦取消，一共好几条路径。
+## Decision
 
-## 决策
-
-### 1. 左滑一行出三个按钮
+### 1. Swipe a row left to reveal three buttons
 
 ```
 ┌─────────────────────────────────────┐
 │ [1] webterm     ~/github/webterm    │
-│ [2] api   • ~/srv/a │ ⇵  │ 改名 │ 关闭 │  ← 左滑露出，各 72px、整行高
+│ [2] api   • ~/srv/a │ Pin │Rename│Close│  ← revealed by swiping left; 72px each, full row height
 │ [3] build       exit 1              │
 └─────────────────────────────────────┘
 ```
 
-- 按钮从右往左依次是：**关闭**（`--err` 底、白字）、**改名**（`--accent` 底、白字）、**保持接收**（`--line-strong` 底；开着时文字是「取消保持」）。testid 是 `row-close`、`row-rename`、`row-pin`，挂在那一行里。
-- **手势**：横向位移 > 10px 且横向占优时接管，行跟着手指平移（0 到 −216px）；松手时过了一半就停在打开，否则弹回。打开的行往右滑关上。纵向滑动照常滚动列表（行设 `touch-action: pan-y`）。
-- **长按一行 = 打开这一行的按钮**，和左滑的结果一样。抽屉里不再弹锚定的小菜单，一种界面、两种手势。
-- **同一时间只开一行**：开另一行、点列表里别的地方、点开着的那一行的正文，都会把它关上；点正文**只关不切换**，免得想关按钮却切走了。
-- 点按钮之后，那一行先关上，再做事：保持接收就地切换；改名开改名 sheet（§2）；关闭走关闭确认（[ADR-0038](0038-close-confirm-sheet.md)），会话在跑时确认 sheet 叠在抽屉上。
+- From right to left: **Close** (`--err` background, white text), **Rename** (`--accent` background, white text), **Pin** (`--line-strong` background; reads "Unpin" when on). testids `row-close`, `row-rename`, `row-pin`, inside the row.
+- **Gesture**: take over once horizontal movement exceeds 10px and dominates; the row follows the finger (0 to −216px). On release, stay open if past halfway, otherwise spring back. Swipe an open row right to close it. Vertical swipes scroll the list as usual (rows have `touch-action: pan-y`).
+- **Long-pressing a row opens its buttons**, the same result as swiping. The drawer no longer pops an anchored menu: one UI, two gestures.
+- **Only one row open at a time**: opening another row, tapping elsewhere in the list, or tapping the open row's body closes it. Tapping the body **only closes, it doesn't switch**, so trying to close the buttons doesn't accidentally switch sessions.
+- After a button is tapped, the row closes first, then acts: Pin toggles in place; Rename opens the rename sheet (§2); Close goes through close confirmation ([ADR-0038](0038-close-confirm-sheet.md)), stacked on the drawer if the session is running.
 
-为什么手机上可以用隐藏的手势：左滑出按钮是 iOS 邮件、微信这些常用应用的通用做法，用户会去试；长按同样能打开。PC 和 Pad 的标签栏仍是右键、长按出菜单，加上双击改名。
+Why a hidden gesture is acceptable on phones: swipe-left-for-actions is a common pattern (iOS Mail, WeChat), so users try it, and long-press opens the same buttons. On PCs and tablets, the tab bar still uses right-click / long-press for a menu, plus double-click to rename.
 
-### 2. 改名是一张小 sheet，不在行里原地改
+### 2. Rename in a small sheet, not in place in the row
 
 ```
 ┌─────────────── ═══ ───────────────┐
-│ 改名                            ✕ │
+│ Rename                          ✕ │
 ├───────────────────────────────────┤
 │ ┌───────────────────────────────┐ │
-│ │ webterm                       │ │  ← 打开时选中全部，键盘弹起
+│ │ webterm                       │ │  ← all selected on open, keyboard up
 │ └───────────────────────────────┘ │
 ├───────────────────────────────────┤
 │  ┌─────────────┐ ┌─────────────┐  │
-│  │    取消     │ │    保存     │  │
+│  │   Cancel    │ │    Save     │  │
 │  └─────────────┘ └─────────────┘  │
 └───────────────────────────────────┘
 ```
 
-- `Drawer` 原语，`data-testid="rename-sheet"`，叠在会话抽屉上；输入框沿用 `rename-input`，按钮是 `rename-cancel`、`rename-ok`。
-- 输入框整行宽，字号 16px（iOS 对小于 16px 的输入框会在聚焦时自动放大页面）。占位文字「留空 = 跟随目录」保留。
-- `Enter` 或「保存」确认，留空就恢复跟随目录自动命名；`Esc`、✕、点遮罩、下滑、「取消」都是取消。**失焦不再算取消**：键盘上的「完成」、点 sheet 里的空白，都不该把改了一半的名字扔掉。
-- `wide` 的标签仍是双击原地改名（标签栏在屏幕顶上，不会被键盘挡）。
+- A `Drawer` with `data-testid="rename-sheet"`, stacked on the session drawer; the input keeps `rename-input`, buttons are `rename-cancel` and `rename-ok`.
+- The input is full width with a 16px font (iOS zooms the page when focusing inputs under 16px). The placeholder says that leaving it blank uses the directory name.
+- `Enter` or "Save" confirms; blank restores the automatic directory-based name. `Esc`, ✕, tapping the backdrop, swiping down and "Cancel" all cancel. **Blur no longer cancels**: the keyboard's "Done" or a tap on empty space in the sheet shouldn't throw away a half-edited name.
+- On `wide`, tabs still rename in place on double-click (the tab bar is at the top of the screen and never under the keyboard).
 
-### 3. 浮层跟着可视区走
+### 3. Overlays follow the visual viewport
 
-- **`.app` 成为 `position: fixed` 后代的包含块**（`contain: layout`）。`.app` 的高度本来就跟着 `visualViewport`，键盘弹起时还会 `translateY` 跟上（[layout.md §高度计算](../../40-frontend/layout.md#高度计算ac-38)）。浮层的遮罩 `inset: 0` 盖住的就是可见区，sheet 贴着的底边就是键盘的上沿。
-- sheet 的高度按遮罩的百分比算：最大 80%、会话抽屉最小 50%，不再用 `vh`。
-- 底部的安全区用 `.app` 上的 `--sa-bottom`，不直接用 `env()`：键盘弹起时它已被置 0，键盘本来就盖住了 Home 指示条，不用再空出一截。
+- **`.app` becomes the containing block for its `position: fixed` descendants** (`contain: layout`). `.app`'s height already follows `visualViewport`, and it `translateY`s to keep up when the keyboard opens ([layout.md, Height](../../40-frontend/layout.md#height-ac-38)). An overlay backdrop with `inset: 0` then covers exactly the visible area, and a sheet's bottom edge is the top of the keyboard.
+- Sheet heights are percentages of the backdrop: at most 80%, the session drawer at least 50%. No more `vh`.
+- The bottom safe area uses `--sa-bottom` on `.app` rather than `env()` directly: with the keyboard up it's set to 0, since the keyboard already covers the home indicator.
 
-只靠第 3 条，改名 sheet 就不会被挡：它在键盘上沿，输入框在 sheet 的最上面。
+§3 alone keeps the rename sheet visible: it sits on top of the keyboard, with the input at the top of the sheet.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **保留行内改名，聚焦后把输入框滚进视野**。键盘弹起的动画期间可视区尺寸一直在变，滚到哪儿要等它停；一行里的输入框还要和点击、长按、列表滚动这些手势分开处理。
-- **用 `prompt()` 改名**。和浏览器的 `confirm()` 一样，不是一套界面（ADR-0038 的理由）。
-- **左滑出的按钮只放关闭**，改名和保持接收留在长按菜单里。用户要的是改名也从左滑进去；一行上只有一种界面最简单。
-- **右滑也出按钮**（比如右滑切换保持接收）。左右两种语义要记，误触的代价也高。
+- **Keep in-place rename and scroll the input into view on focus.** The visual viewport keeps changing while the keyboard animates, so scrolling has to wait for it to settle; and an input inside a row still has to be separated from taps, long-presses and list scrolling.
+- **Rename with `prompt()`.** Like `confirm()`, it doesn't match the rest of the UI (ADR-0038's reasons).
+- **Put only Close behind the swipe**, keeping Rename and Pin in the long-press menu. The user wanted rename reachable by swiping; one UI per row is simplest.
+- **Also reveal buttons on a right swipe** (e.g. right swipe toggles Pin). Two directions with different meanings to remember, and accidental triggers cost more.
 
-## 后果
+## Consequences
 
-- 抽屉里不再用 `SessionMenu`，也不再原地改名；`SessionList` 不再接收 `onMenu`、`renaming`。
-- 新增 AC-4.12；E2E-28 ⑥ 改成左滑、长按、改名 sheet、保持接收、关闭这几步；手动清单加两条：真机上改名 sheet 在键盘上方，左滑和纵向滚动互不干扰。
-- `swipe.ts` 的下滑关闭只在纵向占优时接管，免得左滑一行时带着整个 sheet 往下走。
+- The drawer no longer uses `SessionMenu` or in-place rename; `SessionList` no longer takes `onMenu` or `renaming`.
+- Adds AC-4.12; E2E-28 ⑥ becomes swipe left, long-press, rename sheet, pin and close; the manual checklist gets two items: on a real device the rename sheet sits above the keyboard, and swiping left and scrolling vertically don't interfere.
+- `swipe.ts` swipe-down-to-close only takes over when vertical movement dominates, so swiping a row left doesn't drag the whole sheet down.

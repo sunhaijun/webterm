@@ -1,24 +1,24 @@
-# ADR-0028 设置面板不写说明文字
+# ADR-0028 No explanatory text in the settings panel
 
-> **设置面板整个被 [ADR-0030](0030-no-settings.md) 删除**。「界面上不写说明文字」这条原则不受影响。[ADR-0037](0037-settings-theme-and-font-size.md) 加回来的两项设置同样不写说明。
+Status: Accepted (2026-10-31). **Withdraws the requirement in [ADR-0023](0023-terminal-font-list.md)'s consequences that the settings panel must explain missing ligatures**; rewrites AC-5.13. The font list, detection, persistence, and the fact that ligatures don't render are unchanged.
 
-状态：已接受（2026-10-31）。**收回 [ADR-0023](0023-terminal-font-list.md)「后果」里的「连字不生效这一条必须写在设置面板里」**，改写 AC-5.13。字体清单、探测、持久化，以及「连字不生效」这个事实本身，都不变。
+Later: the whole settings panel was removed by [ADR-0030](0030-no-settings.md). The principle of no explanatory text in the UI still applies, including to the two settings [ADR-0037](0037-settings-theme-and-font-size.md) brought back.
 
-## 背景
+## Context
 
-ADR-0023 担心装了 Fira Code 的人会把「连字没了」当成 bug，于是要求设置面板底部写一段说明：只列本机装了的字体、连字不生效、字号按形态分别记住。
+ADR-0023 worried that people with Fira Code installed would report missing ligatures as a bug, so it required a paragraph at the bottom of the settings panel: only installed fonts are listed, ligatures don't render, font size is remembered per form.
 
-m8 上线后用户的反馈是「设置的时候有多余的解释，没有必要」。设置面板只有主题、字号、字体、预览四行，每一行自己就看得懂；那段说明比任何一行都长，在手机的底部抽屉里占掉一大块。
+After m8 shipped, the feedback was that the settings carried unnecessary explanations. The panel had four rows (theme, font size, font, preview), each self-explanatory. The paragraph was longer than any row and took a large chunk of the phone's bottom drawer.
 
-## 决策
+## Decision
 
-设置面板只放设置项和预览，不放说明段落。「连字不生效」「字号按形态分别记住」写在文档里（[layout.md](../../40-frontend/layout.md) §终端字体可选），不写在界面上。
+The settings panel contains only settings and the preview, no explanatory paragraphs. "Ligatures don't render" and "font size is remembered per form" are documented in [layout.md, Fonts](../../40-frontend/layout.md#fonts), not shown in the UI.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **缩短成一行小字。** 用户说的是「没有必要」，不是「太长」。预览一行已经把字体实际显示成什么样摆在眼前了：连字没生效，看预览就知道。
+- **Shorten it to one line of small print.** The feedback was "unnecessary", not "too long". The preview row already shows exactly how the font renders; missing ligatures are visible right there.
 
-## 后果
+## Consequences
 
-- AC-5.13 去掉「面板里写明连字不生效」；E2E-12 ⑤ 不再断言说明文字。
-- 设置面板以后加新项，也不配说明段落。一个设置项要靠一段话才能说明白，说明这个设置项本身该改。
+- AC-5.13 no longer requires the panel to state that ligatures don't render; E2E-12 ⑤ no longer asserts the note.
+- New settings don't get explanatory paragraphs either. If a setting needs a paragraph to be understood, the setting itself should change.

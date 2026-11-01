@@ -1,46 +1,46 @@
-# ADR-0031 标签栏：按宽度等分，放不下时横向滚动
+# ADR-0031 Tab bar: equal-width tabs, horizontal scrolling when they don't fit
 
-> **「`+` 紧跟最后一个标签」与 §实现被 [ADR-0035](0035-tabbar-new-button-pinned.md) 修订**：`+` 移出滚动的标签条，放不下时也常驻可见，前面留 12px（触屏 16px）不可点的间隔；标签改用 `width: 240px` 加 `flex-shrink` 实现等宽。
+Status: Accepted (2026-10-31). **Revises the tab width of the `wide` tab bar in [ADR-0025](0025-termux-style-ui.md) §4** (previously sized to the name, 72–200px). Horizontal scrolling when tabs don't fit and scrolling the current tab into view are unchanged, as are the actions on a tab (select, ✕, middle-click, double-click rename, right-click / long-press menu).
 
-状态：已接受（2026-10-31）。**修订 [ADR-0025](0025-termux-style-ui.md) §4 `wide` 标签栏的标签宽度**（原来是宽度随名字变，72–200px）。放不下时横向滚动、当前标签滚进视野，这两条不变。标签上的操作（点选、✕、中键、双击改名、右键 / 长按菜单）也不变。
+Later: **"`+` follows the last tab" and the Implementation section are revised by [ADR-0035](0035-tabbar-new-button-pinned.md).** `+` moves out of the scrolling tab strip and stays visible when tabs overflow, behind a non-clickable 12px gap (16px on touch); equal widths are implemented as `width: 240px` plus `flex-shrink`.
 
-## 背景
+## Context
 
-m8 的标签宽度随名字变：
+In m8 a tab was as wide as its name:
 
-- **宽度参差。** 名字是 `~` 的标签只有 72px，名字长的有 200px。点击目标大小不一，一排看起来也乱。
-- **宽度用不满。** 窗口很宽、会话不多时，标签挤在左边，右边空着一大片。
+- **Uneven widths.** A tab named `~` was 72px, a long name 200px. Click targets varied in size and the row looked messy.
+- **Wasted width.** In a wide window with few sessions, tabs crowded to the left and the right side sat empty.
 
-用户的提议是：标签按可用宽度等分，占满整条；窄到不好点时，再另想办法。「另想办法」讨论过把放不下的收进一个按钮、点开显示列表，用户比较之后选了横向滚动。
+The user proposed splitting the available width equally and dealing with tabs that get too narrow separately. One option discussed was collapsing overflow into a button that opens a list; after comparing, the user chose horizontal scrolling.
 
-## 决策
+## Decision
 
-### 1. 等分，有上下限
+### 1. Equal widths, with limits
 
-显示出来的每个标签**一样宽**：宽度 = 标签条的可用宽度 ÷ 会话数，**最宽 240px，最窄 120px**。`+` 紧跟在最后一个标签后面。
+Every visible tab is **the same width**: available tab-strip width ÷ number of sessions, **at most 240px, at least 120px**. `+` follows the last tab.
 
-- **为什么设上限**：窗口 1440px 宽、只开两个会话时，完全等分出来每个标签约 700px。名字在最左，✕ 在最右，鼠标关一个标签要横跨大半个屏幕，看起来也更像工具栏而不是标签。Chrome 的标签同样有上限（约 240px）。
-- **为什么是 120px**：扣掉 ✕ 和边距，还能放下约 10 个字母（5 个汉字）的名字。触屏上标签高 40px，宽度也远超 44px 的命中区。
+- **Why a maximum**: at 1440px with two sessions, an even split makes each tab about 700px. The name sits at the far left and ✕ at the far right, so closing a tab means crossing half the screen, and the row looks more like a toolbar than tabs. Chrome caps its tabs too (around 240px).
+- **Why 120px**: after ✕ and padding, it still fits a name of about 10 Latin letters (5 CJK characters). On touch, tabs are 40px tall, and the width is far above the 44px hit target.
 
-### 2. 放不下时横向滚动
+### 2. Scroll horizontally when they don't fit
 
-每个标签会窄于 120px 时，标签保持 120px，标签条横向滚动。这和 m8 一样：当前标签变化时把它滚进视野，整个已可见则不动，不用 `smooth`。
+When tabs would get narrower than 120px, they stay at 120px and the tab strip scrolls horizontally, as in m8. When the current tab changes, scroll it into view; leave it alone if already fully visible; no `smooth`.
 
-### 3. 鼠标滚轮横着滚标签条
+### 3. The mouse wheel scrolls the tab strip sideways
 
-标签条的滚动条是隐藏的。m8 里鼠标用户只能 `Shift + 滚轮` 翻标签条，基本发现不了。现在在标签条上纵向滚滚轮，就横向滚动标签条（标签条确实放不下时才拦截）。触控板本来就有横向滑动，不受影响。
+The tab strip's scrollbar is hidden. In m8, mouse users could only scroll it with `Shift + wheel`, which almost nobody discovers. Now a vertical wheel over the tab strip scrolls it horizontally (intercepted only when the strip actually overflows). Trackpads already scroll horizontally and are unaffected.
 
-### 实现
+### Implementation
 
-纯 CSS：`.tab { flex: 1 1 0; min-width: 120px; max-width: 240px }`，放在原来那个可横向滚动的标签条里。不需要 JS 去量宽度。滚轮转换是标签条上的一个 `wheel` 监听。
+Pure CSS: `.tab { flex: 1 1 0; min-width: 120px; max-width: 240px }`, inside the existing horizontally scrolling tab strip. No JS measuring. The wheel conversion is one `wheel` listener on the tab strip.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **完全等分，不设上限。** 原因见 §1。
-- **放不下的收进「更多」按钮的列表。** 设想是：当前标签永远显示，按钮上写着收起了几个，收起的会话有未读时带红点，点开是列表。用户比较之后选了横向滚动：所有会话留在同一条里，顺序不变，也不多一个按钮和一层列表。代价是滚出视野的会话有未读时看不到，要滚过去才看得到。
-- **缩小字号继续塞。** 放不下的根本原因是会话数量多，缩小字号只是把问题推后，名字反而看不清。
+- **Equal split with no maximum.** See §1.
+- **Collapse overflowing tabs into a "more" button with a list.** The idea: the current tab is always visible, the button shows how many are hidden with a red dot if any have unread output, and opens a list. The user chose horizontal scrolling instead: all sessions stay in one row in a stable order, with no extra button or list. The cost is that unread output in a tab scrolled out of view isn't visible until you scroll to it.
+- **Shrink the font to fit more.** The real cause is the number of sessions; a smaller font only delays the problem and makes names harder to read.
 
-## 后果
+## Consequences
 
-- AC-4.10 加上等分与滚轮；AC-4.9（当前标签滚进视野）不变。
-- E2E-35 ⑥ 不用再先 `cd` 进长目录名把标签撑宽：600px 宽的窗口里 5 个会话在 120px 下就放不下。E2E-41 新增 ⑧（等宽、上下限、滚动、滚轮）。
+- AC-4.10 adds equal widths and wheel scrolling; AC-4.9 (scroll the current tab into view) is unchanged.
+- E2E-35 ⑥ no longer needs to `cd` into a long directory name to widen tabs: in a 600px window, 5 sessions at 120px already overflow. E2E-41 adds ⑧ (equal widths, limits, scrolling, wheel).

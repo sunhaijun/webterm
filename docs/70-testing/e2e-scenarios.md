@@ -1,301 +1,297 @@
-# E2E 场景清单
+# E2E scenarios
 
-> 状态：Accepted
+> Status: Accepted
 >
-> Playwright。每个场景标注它验证的验收标准。**改动触及协议、重连、输入或布局时必须更新这份清单**（[CLAUDE.md](../../CLAUDE.md)）。
+> Playwright. Each scenario lists the acceptance criteria it verifies. **Changes that touch the protocol, reconnects, input, or layout must update this list** ([CLAUDE.md](../../CLAUDE.md)).
 
-## 测试夹具
+## Fixtures
 
-### 启动
+### Startup
 
 ```
-1. go build 出真二进制（含 go:embed 的前端产物）
-2. webterm serve --dev --data-dir <临时目录> --max-sessions 5
-   默认 ring-bytes（256 KiB）—— 断线窗口内的输出不会溢出，增量路径的字节级比较才稳定
-   只有 E2E-2c / E2E-4 / E2E-30 / E2E-31 用 --ring-bytes 65536 单独起一个实例，让快照路径可测
-3. 从 stdout 抓配对 URL
-4. Playwright 打开 URL，完成配对
+1. go build the real binary (with the frontend embedded via go:embed)
+2. webterm serve --dev --data-dir <temp dir> --max-sessions 5
+   default ring-bytes (256 KiB): output during a disconnect window never overflows, so byte-level
+   comparison on the incremental path is stable
+   only E2E-2c / E2E-4 / E2E-30 / E2E-31 start a separate instance with --ring-bytes 65536, so the
+   snapshot path can be tested
+3. grab the pairing URL from stdout
+4. Playwright opens the URL and completes pairing
 ```
 
-### 确定性输出脚本
+### Deterministic output script
 
-`e2e/fixtures/emit.sh` —— 产生固定内容的输出，用于字节级比较：
+`e2e/fixtures/emit.sh` produces fixed output for byte-level comparison:
 
 ```bash
 #!/bin/bash
-# 用法: emit.sh <总行数> [每行延迟ms] [mono]
-# 内容含：ANSI 颜色、CJK 宽字符、超长行；每行以 `line NNNNN` 开头、147 列宽
-# mono：整段只有开头一个 SGR、结尾一个复位（一段跨越很多帧的同色文本）
+# Usage: emit.sh <total lines> [per-line delay ms] [mono]
+# Contains ANSI colors, CJK wide characters, very long lines; each line starts with `line NNNNN` and is 147 columns wide
+# mono: a single SGR at the start and a single reset at the end (one same-colored span across many frames)
 ```
 
-必须**完全确定性**（不含时间戳、不含随机数、不含主机名、不含 `$PWD`），否则字节级比较无意义。
+It must be **fully deterministic** (no timestamps, random numbers, hostnames, or `$PWD`), or byte-level comparison is meaningless.
 
-两条容易踩的坑：
+Two easy traps:
 
-- **完成标记必须只出现在输出里。** 写 `echo EMIT-DONE` 的话，被回显的命令行本身就含这个串，等待条件会在命令刚敲完时就满足 —— 测的是回显不是输出。用 `printf 'EMIT-%s\n' DONE`。
-- **要测断线期间的行为，就得给每行加延迟**，让输出跨越整个断线窗口。不加的话几千行可能在你把线掐掉之前就全送到了。
+- **The completion marker must appear only in the output.** With `echo EMIT-DONE`, the echoed command line itself contains the string, so the wait is satisfied as soon as the command is typed — you'd be testing the echo, not the output. Use `printf 'EMIT-%s\n' DONE`.
+- **To test behavior during a disconnect, add a per-line delay** so the output spans the whole disconnect window. Without it, thousands of lines may all arrive before you cut the connection.
 
-### 断开 WebSocket 的手段
+### Cutting the WebSocket
 
 ```ts
-// 方式一：路由层面切断（首选）。装一个可控的中继，随时掐断、随时恢复。
+// Option 1: cut at the routing layer (preferred). Installs a controllable relay that can cut and restore at any time.
 const net = await installWSControl(page)   // e2e/harness.ts
 await net.goOffline()
 net.goOnline()
 
-// 方式二：CDP 模拟离线
+// Option 2: CDP offline emulation
 const cdp = await context.newCDPSession(page)
 await cdp.send('Network.emulateNetworkConditions', { offline: true, ... })
 ```
 
-**方式一是首选。** CDP 的 offline 对【已建立】的 WebSocket 不会立刻触发 `onclose` —— 页面会一直以为自己还在线，直到 40 秒后心跳判死。那测的就不是断线了。方式二适合测浏览器 `online` 事件驱动的立即重试。
+**Option 1 is preferred.** CDP offline doesn't fire `onclose` right away on an **established** WebSocket: the page keeps thinking it's online until the heartbeat declares it dead 40 seconds later, so you wouldn't be testing a disconnect. Option 2 is for testing the immediate retry driven by the browser's `online` event.
 
 ---
 
-## E2E-1 基础往返
+## E2E-1 Basic round trip
 
 > AC-1.3, AC-1.9, AC-4.1
 
-1. 配对成功，进入主界面
-2. Cookie 属性正确（`HttpOnly` / `SameSite=Strict`）
-3. 自动创建（或手动创建）一个会话
-4. 点终端，输入 `echo hello-webterm`，回车
-5. 终端出现 `hello-webterm`
-6. `stty size` 的输出与前端的 cols/rows 一致
+1. Pairing succeeds and the main UI loads
+2. Cookie attributes are correct (`HttpOnly` / `SameSite=Strict`)
+3. A session is created automatically (or manually)
+4. Click the terminal, type `echo hello-webterm`, press Enter
+5. `hello-webterm` appears in the terminal
+6. The output of `stty size` matches the frontend's cols/rows
 
 ---
 
-## E2E-2 断线续传 ★ 核心
+## E2E-2 Resume after disconnect ★ core
 
 > AC-2.1, AC-2.2, AC-2.3, AC-2.5
 
-### E2E-2a 基准 + 单次断开
+### E2E-2a Baseline + one disconnect
 
-1. 跑 `emit.sh 2000`，不断开 → `serialize()` → 基准
-2. 新会话，再跑 `emit.sh 2000`，输出进行到约 50% 时切断 WS
-3. 等 UI 显示"重连中"→"已恢复"
-4. 等输出跑完
-5. `serialize()` 与基准**逐字节相等**
+1. Run `emit.sh 2000` without disconnecting → `serialize()` → baseline
+2. New session, run `emit.sh 2000` again, cut the WS at about 50% of the output
+3. Wait for the UI to go "Reconnecting" → "Resumed"
+4. Wait for the output to finish
+5. `serialize()` is **byte-identical** to the baseline
 
-### E2E-2b 断开 5 秒（缓冲不溢出）
+### E2E-2b Disconnected for 5 seconds (buffer doesn't overflow)
 
-同上，但断开后 `page.waitForTimeout(5000)` 再允许重连。断言字节一致。
+Same as above, but after disconnecting `page.waitForTimeout(5000)` before allowing the reconnect. Assert byte-identical.
 
-### E2E-2c 断开期间输出超过 ring_bytes → 快照
+### E2E-2c Output during the disconnect exceeds ring_bytes → snapshot
 
-> 用 `--ring-bytes 65536` 的实例。
+> Uses the `--ring-bytes 65536` instance.
 
-1. 跑基准：`emit.sh 5000`，不断开 → 序列化**最后 2000 行 + 当前屏** → 基准
-2. 新会话，断开，在断开期间让会话产出 > 64 KiB 输出（`emit.sh 5000`）
-3. 重连
-4. 断言：
-   - `resumed[].status == "snapshot"`，随后收到 SNAPSHOT 帧
-   - **没有**「历史输出已截断」之类的提示
-   - 序列化的最后 2000 行 + 当前屏与基准**逐行一致**（屏幕级，AC-2.21）。比较前去掉行尾空白：快照把写出来的行尾空格记成空格子，`translateToString` 却会保留写出来的空格，Vitest 的逐格比较也是这样归一的
-   - **重连后新产生的输出完全正确**（后续 `echo marker-xyz` 能正常显示）
+1. Baseline: `emit.sh 5000` without disconnecting → serialize **the last 2000 lines + current screen** → baseline
+2. New session, disconnect, and have the session produce > 64 KiB of output while disconnected (`emit.sh 5000`)
+3. Reconnect
+4. Assert:
+   - `resumed[].status == "snapshot"`, followed by a SNAPSHOT frame
+   - **No** "history truncated" notice or anything like it
+   - The serialized last 2000 lines + current screen match the baseline **line by line** (screen-level, AC-2.21). Strip trailing whitespace before comparing: the snapshot records written trailing spaces as empty cells, while `translateToString` keeps written spaces; the Vitest cell comparison normalizes the same way
+   - **Output produced after the reconnect is entirely correct** (a later `echo marker-xyz` shows up normally)
 
-### E2E-2d 连续快速断开
+### E2E-2d Rapid disconnects
 
-断开 10 次，每次间隔 300ms。最终字节一致（验证无累积错位）。
+Disconnect 10 times, 300ms apart. The final result is byte-identical (no accumulated drift).
 
-### E2E-2e 断点落在着色区间内
+### E2E-2e Cut inside a colored span
 
-用 `emit.sh <行数> <延迟> mono` 输出一段跨越多帧的同色文本，**在这段中间**断开重连。断言：
+Use `emit.sh <lines> <delay> mono` to output a same-colored span across many frames, and disconnect/reconnect **in the middle of it**. Assert:
 
-- 走的是增量（`status == "ok"`），回放的字节与基准在同一位置逐字节相同 —— agent 不改写输出流（AC-2.5）
-- 断点之后的文本颜色与基准一致
+- The incremental path is taken (`status == "ok"`), and the replayed bytes are byte-identical to the baseline at the same position — the agent doesn't rewrite the output stream (AC-2.5)
+- Text after the cut has the same color as in the baseline
 
 ---
 
-## E2E-3 断线期间的输入不丢
+## E2E-3 Input during a disconnect isn't lost
 
 > AC-2.4
 
-1. 建立会话，点终端
-2. 切断 WS（不让它立即重连）
-3. 在终端里敲三条命令：`echo A1`、`echo A2`、`echo A3`，各自回车
-4. 输入没被静默吞掉：连接横幅显示「重连中」，且 `__webterm.inputStats().unackedBytes > 0`（这些字节在重发队列里）
-5. 恢复连接
-6. 终端依次出现 `A1`、`A2`、`A3`，**顺序正确、无重复、无丢失**。**按子串找，不按整行比**：三条命令在重连后一批到达，bash 跑第一条时内核会把后两条的预输入回显出来，readline 重画后输出行上可能留下回显的零头（实测 `A1p`、`inA1`、`A2r`，main 上 12 次 4 次）。所以输出标记要选命令回显里不会出现的串（命令写成 `printf "A%s-OK\n" 1`，输出 `A1-OK`，回显里只有 `A%s-OK`），在整段终端文本里数它出现几次、比位置
-7. 断言重连过程中**没有出现 `input_gap`**：`welcome.resumed[].in_ack` 必须是断开前的累计值而不是 0（AC-2.12）
+1. Set up a session, click the terminal
+2. Cut the WS (don't let it reconnect right away)
+3. Type three commands in the terminal: `echo A1`, `echo A2`, `echo A3`, each followed by Enter
+4. The input wasn't silently swallowed: the connection banner shows "Reconnecting", and `__webterm.inputStats().unackedBytes > 0` (the bytes are in the resend queue)
+5. Restore the connection
+6. `A1`, `A2`, `A3` appear in the terminal **in order, with no duplicates and no losses**. **Search for substrings; don't compare whole lines**: the three commands arrive in one batch after the reconnect, and while bash runs the first, the kernel echoes the typed-ahead other two, so after readline redraws, output lines can carry leftover echo fragments (seen: `A1p`, `inA1`, `A2r`, 4 times in 12 runs on main). So pick output markers that can't appear in the echoed command (write the command as `printf "A%s-OK\n" 1`; the output is `A1-OK`, the echo only contains `A%s-OK`), and count occurrences and compare positions in the full terminal text
+7. Assert **no `input_gap`** during the reconnect: `welcome.resumed[].in_ack` must be the cumulative value from before the disconnect, not 0 (AC-2.12)
 
-变体：断开期间提交超过 64 KiB 的输入 → UI 明确提示"离线输入已满"，不静默丢弃。
+Variant: submit more than 64 KiB of input while disconnected → the UI clearly says the offline input buffer is full, instead of dropping it silently.
 
 ---
 
-## E2E-4 快照路径的 UI 表现
+## E2E-4 How the snapshot path looks in the UI
 
 > AC-2.6
 
-见 E2E-2c。独立列出是因为它还要验证 UI 侧的表现：写快照之前清了屏（同一段内容只出现一份）、回看位置回到底部、不出现任何"截断"提示。
+See E2E-2c. Listed separately because it also verifies the UI side: the screen is cleared before the snapshot is written (the same content appears only once), the scrollback position returns to the bottom, and no "truncated" notice appears.
 
 ---
 
-## E2E-5 连接状态指示
+## E2E-5 Connection status
 
 > AC-2.10
 
-Pixel 5（`compact`）与 1440×900（`wide`）各跑一遍。
+Run once on Pixel 5 (`compact`) and once at 1440×900 (`wide`).
 
-1. 在线：`compact` 上看不到横幅，`conn-text` 在 DOM 里、文本为「在线」、视觉隐藏；`wide` 上标签栏右侧 `conn-dot` 是在线色
-2. 切断 → 横幅出现「重连中 · Ns 后重试」，倒计时递减；`wide` 上状态点变色
-3. **横幅不改几何**：横幅出现前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `__webterm.resizes()` 不变
-4. 恢复 → 横幅消失，toast「已恢复 · 补齐 N KB」，3 秒后消失
-5. 断言 toast 里的字节数与实际回放量一致（数量级即可）
+1. Online: on `compact` no banner is visible; `conn-text` is in the DOM, reads "Online", and is visually hidden; on `wide` the `conn-dot` at the right of the tab bar has the online color
+2. Cut → the banner shows "Reconnecting · retry in Ns", counting down; on `wide` the status dot changes color
+3. **The banner doesn't change geometry**: the `.term` rect is identical field by field before and after the banner appears, and `__webterm.size()` and `__webterm.resizes()` don't change
+4. Restore → the banner disappears and the toast "Resumed · caught up N KB" shows, gone after 3 seconds
+5. The byte count in the toast matches the actual replay size (order of magnitude is enough)
 
 ---
 
-## E2E-6 多会话与未读
+## E2E-6 Multiple sessions and unread
 
 > AC-2.11, AC-4.3
 
-1. 创建会话 A、B
-2. 在 A 里跑 `emit.sh 100 50`（持续输出）
-3. 切到 B
-4. A 出现未读标记（由 `session.updated{head_seq}` > 本地 `out_seq` 推导）：Pixel 5 上 `open-sessions` 带未读点（`data-unread=true`）、抽屉里 A 那行有未读点；1440×900 上 A 的标签有未读点
-5. 在 B 里 `echo in-b`，正常工作
-6. 切回 A：内容**完整**（切走期间的输出全在），未读标记清除
-7. A 的滚动位置保持在切走前的位置（除非之前在底部，则跟到底部）
+1. Create sessions A and B
+2. Run `emit.sh 100 50` in A (continuous output)
+3. Switch to B
+4. A gets an unread marker (derived from `session.updated{head_seq}` > local `out_seq`): on Pixel 5, `open-sessions` has an unread dot (`data-unread=true`) and A's row in the drawer has one; at 1440×900, A's tab has one
+5. `echo in-b` in B works normally
+6. Switch back to A: content is **complete** (all the output produced while away is there), and the unread marker clears
+7. A's scroll position is where it was before switching away (unless it was at the bottom, in which case it follows to the bottom)
 
 ---
 
-## E2E-7 中文 IME 输入
+## E2E-7 CJK IME input
 
-> AC-3.3, AC-3.14。文本输入页的组字见 E2E-40。
+> AC-3.3, AC-3.14. Composition on the text page is in E2E-40.
 
-Playwright 可以派发 composition 事件。
+Playwright can dispatch composition events.
 
-### 终端直输
+### Direct input
 
-1. 点终端
-2. 派发 `compositionstart` → `compositionupdate`（data: `ni`）→ `compositionupdate`（data: `你`）→ `compositionend`（data: `你好`）
-3. 断言：`compositionend` 之前零 INPUT 帧；`compositionend` 时**一次**发出 `你好`
-4. 组字期间光标位置有内联预览浮层
+1. Click the terminal
+2. Dispatch `compositionstart` → `compositionupdate` (data: `ni`) → `compositionupdate` (data: `你`) → `compositionend` (data: `你好`)
+3. Assert: zero INPUT frames before `compositionend`; `你好` is sent **once** at `compositionend`
+4. An inline preview appears at the cursor during composition
 
-### 终端直输 · 切过会话之后（回归）
+### Direct input after switching sessions (regression)
 
-**每个会话有自己的 xterm 实例，也就有自己的 helper textarea**，而
-`store.activate()` 会把上一个会话的 host 从 DOM 摘掉。所以切会话必须
-重新挂 `RawIme`。
+**Each session has its own xterm instance, and so its own helper textarea**, and `store.activate()` removes the previous session's host from the DOM. So switching sessions must reattach `RawIme`.
 
-1. 建第二个会话并切过去
-2. 点终端，派发 composition 事件
-3. 断言：内联预览浮层可见 —— 没重新挂就不会出现。**这条是有效的回归点**
-   （已用变异验证：还原成"只挂一次"后它失败）
-4. 断言：`compositionend` 之前零 INPUT 帧 —— 留着防回归，但**它测不到本
-   bug 的要害**：合成的 `CompositionEvent` 不会触发 xterm 的 `onData`，
-   所以「`isComposing` 恒为 false → 组字字节直通 PTY，违反 AC-3.3」这个
-   后果只有真输入法能演示（见 [自动化边界](../90-roadmap/milestones.md)）
+1. Create a second session and switch to it
+2. Click the terminal and dispatch composition events
+3. Assert: the inline preview is visible — it doesn't appear if `RawIme` wasn't reattached. **This is the effective regression check** (verified by mutation: reverting to "attach once" makes it fail)
+4. Assert: zero INPUT frames before `compositionend`. Kept as a guard, but **it can't catch the heart of this bug**: synthetic `CompositionEvent`s don't trigger xterm's `onData`, so the consequence ("`isComposing` is always false → composed bytes go straight to the PTY, violating AC-3.3") can only be demonstrated with a real IME (see [automation limits](../90-roadmap/milestones.md#what-automation-cant-cover))
 
-### 终端直输 · 软键盘直接插入的标点（AC-3.14）
+### Direct input: punctuation inserted directly by the on-screen keyboard (AC-3.14)
 
-iPhone 中文键盘下「逗号打不进终端，句号可以」—— 同一个键盘上两个键报的 `keyCode` 不同，
-xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#直接插入的文本ac-314)）。
+With the iPhone Chinese keyboard, "comma doesn't reach the terminal, period does": two keys on the same keyboard report different `keyCode`s, and xterm handles one but not the other (see [input.md](../40-frontend/input.md#directly-inserted-text-ac-314)).
 
-终端直输时，对 helper textarea 按软键盘的样子派发 `keydown` → 插字符 → `input(insertText)` → `keyup`：
+In direct input, dispatch on the helper textarea what an on-screen keyboard does: `keydown` → insert the character → `input(insertText)` → `keyup`:
 
-1. `keyCode: 0` 的「，」「！」→ **必须进终端**（修复前这里丢字，是本 bug 的要害）
-2. `keyCode: 229` 的「。」→ 仍然进终端（xterm 的差量路，别被改坏）
-3. `keyCode: 191` 的「？」→ 仍然进终端（xterm 的 keydown 路）
-4. 组字提交「你好」紧跟一个 `keyCode: 0` 的「，」→ 两段都在，且**都只出现一次**（不重复发送）
-5. 提交后终端输出里没有 `，，` / `你好你好` 这类重复
-**另起一条用例**（不能并进上面那一串：上面第 5 步断言的是"终端里不该出现 `，，`"，而这一条要求的恰恰是出现 `，，`，两者只有在"这一串里没有连打"的前提下才不矛盾）：
+1. "，" and "！" with `keyCode: 0` → **must reach the terminal** (these were lost before the fix; this is the heart of the bug)
+2. "。" with `keyCode: 229` → still reaches the terminal (xterm's diff path; don't break it)
+3. "？" with `keyCode: 191` → still reaches the terminal (xterm's keydown path)
+4. Commit "你好" by composition, immediately followed by "，" with `keyCode: 0` → both are there, and **each appears only once** (no duplicate sends)
+5. After commit, the terminal output contains no duplicates like `，，` / `你好你好`
 
-6. **连打两下同一个 `keyCode: 0` 的「，」（两次派发在同一个 `evaluate` 里，间隔 < 120ms）→ 终端回显必须是两个「，」**。去重只该压住「另一条路已经送过」的那一次，不能把用户连打的第二下也吃掉 —— 那是静默丢弃（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)）。这条走的是**软键盘直接插入**那条路，第二下没有别的路会替它发，吃掉就是永久丢字
+**A separate test case** (it can't be folded into the sequence above: step 5 asserts that `，，` must not appear, while this one requires exactly `，，`; the two only agree because that sequence has no repeated keystroke):
 
-> 真机的事件序列没法在 headless 里完全复刻（`keyCode` 是 iOS 自己报的），
-> 但「keydown 发生过 + insertText」这个组合就是要害，合成事件能精确覆盖它。
+6. **Press the same `keyCode: 0` "，" twice (both dispatches in one `evaluate`, < 120ms apart) → the terminal must echo two "，"**. Dedup must only suppress the copy "another path already sent"; it must not eat the user's second keystroke — that would be a silent drop ([ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)). This goes through the **on-screen keyboard direct-insert** path, where nothing else would send the second press, so eating it loses the character for good
 
-> 这个 bug 真的存在过（`attachIme` 里的 `if (ime) return` 让它只挂第一个会话），
-> 而且只在 CI 上暴露 —— 原来的实现靠 `setInterval(attachIme, 300)` 轮询挂载，
-> 本机跑得快正好赶上，CI 上就丢事件。轮询已换成在 `select()` 里确定性挂载。
+> The real device's event sequence can't be reproduced exactly in headless mode (iOS reports the `keyCode` itself),
+> but the combination "a keydown happened + insertText" is the heart of it, and synthetic events cover it precisely.
+
+> This bug really existed (`if (ime) return` in `attachIme` attached it to the first session only),
+> and it only showed up in CI: the old implementation attached by polling with `setInterval(attachIme, 300)`,
+> which happened to be fast enough locally but lost events in CI. Polling was replaced with deterministic attachment in `select()`.
 
 ---
 
-## E2E-10 手机布局与附加键
+## E2E-10 Phone layout and extra keys
 
 > AC-3.18, AC-3.20
 
-`web/e2e/mobile.spec.ts`，Pixel 5 设备描述（触屏）。hook `WebSocket.send` 记 INPUT 帧。
+`web/e2e/mobile.spec.ts`, Pixel 5 device descriptor (touch). Hook `WebSocket.send` to record INPUT frames.
 
-1. **结构**：`data-form=compact`；没有 `tabbar`；附加键区在终端下方、高 80px；左列是 `open-sessions` 与 `toggle-text`；键区 14 个键的 testid 依次为 `key-Escape key-Slash key-Minus key-Home key-ArrowUp key-End key-PageUp key-Tab key-Ctrl key-Alt key-ArrowLeft key-ArrowDown key-ArrowRight key-PageDown`
-2. **全可见、不横滑**：键区 `scrollWidth ≤ clientWidth + 1`，14 个键的矩形都在视口内
-3. **静态**：`sleep 30` 在跑、`less` 占屏、退出 `less` 之后，键区的 testid 序列都与第 1 步一致
-4. **字节**：`key-Escape` → `1b`；`key-ArrowUp` → `1b5b41`；`printf '\033[?1h'` 打开 DECCKM 后 `key-ArrowUp` → `1b4f41`、`key-Home` → `1b4f48`；`printf '\033[?1l'` 后复原。每按一次，`inputStats().data.n` 都涨
-5. **不抢焦点**：先点终端让它有焦点，按 `key-Tab` → `document.activeElement` 不变
-6. **粘滞 CTRL**：点 `key-Ctrl` → `data-sticky=armed`；`keyboard.type('c')` → 发出 `03`，`data-sticky=off`；点 `key-Ctrl` 再点 `key-ArrowLeft` → 发出 `1b5b313b3544`（`ESC[1;5D`）
-7. **锁定**：长按 `key-Ctrl`（> 500ms）→ `data-sticky=locked`；连续 `c` `u` → `03` `15`（不用 `d`：空提示符下的 `^D` 会让 bash 退出）；再点一下 → `off`
-8. **点按终端**（AC-3.20）：点 `.term` 一下 → 焦点进 xterm 的 helper textarea；再点一下 → 焦点离开；纵向拖 30px 不改变焦点；**纵向拖动真的在滚**（有足够 scrollback 时连续拖 20 帧，`viewportY` 变化不止一行 —— 防 DOM 渲染器换掉行元素后 touchmove 落到脱离文档的节点上，只滚第一帧）；`printf '\033[?1000h'` 开鼠标跟踪后点一下 → 焦点不变、INPUT 帧里出现鼠标上报（`1b5b4d` 开头），`printf '\033[?1000l'` 复原
-9. **安全区**：Chromium 里 `env(safe-area-inset-*)` 恒为 0，所以直接在 `.app` 上覆盖 `--sa-top: 47px`、`--sa-bottom: 34px` → 终端顶边落到 47px、附加键底边离 `.app` 底边 34px、`.app` 高度不变、终端正好矮 81px、页面不溢出；清掉 `--sa-bottom` → 复位
-10. **横屏**：`viewport` 与 `screen` 都是 851×393 → 仍是 `compact`，附加键 80px、14 个键全可见
+1. **Structure**: `data-form=compact`; no `tabbar`; the extra-keys area is below the terminal, 80px tall; the left column is `open-sessions` and `toggle-text`; the 14 keys' testids in order are `key-Escape key-Slash key-Minus key-Home key-ArrowUp key-End key-PageUp key-Tab key-Ctrl key-Alt key-ArrowLeft key-ArrowDown key-ArrowRight key-PageDown`
+2. **All visible, no horizontal scroll**: key area `scrollWidth ≤ clientWidth + 1`, and all 14 key rects are inside the viewport
+3. **Static**: while `sleep 30` runs, while `less` holds the screen, and after quitting `less`, the key testid sequence matches step 1
+4. **Bytes**: `key-Escape` → `1b`; `key-ArrowUp` → `1b5b41`; after `printf '\033[?1h'` turns on DECCKM, `key-ArrowUp` → `1b4f41`, `key-Home` → `1b4f48`; back to normal after `printf '\033[?1l'`. Every press increments `inputStats().data.n`
+5. **Doesn't steal focus**: click the terminal so it has focus, press `key-Tab` → `document.activeElement` is unchanged
+6. **Sticky CTRL**: tap `key-Ctrl` → `data-sticky=armed`; `keyboard.type('c')` → sends `03`, `data-sticky=off`; tap `key-Ctrl` then `key-ArrowLeft` → sends `1b5b313b3544` (`ESC[1;5D`)
+7. **Lock**: long-press `key-Ctrl` (> 500ms) → `data-sticky=locked`; `c` then `u` → `03` `15` (not `d`: `^D` at an empty prompt makes bash exit); tap again → `off`
+8. **Tapping the terminal** (AC-3.20): tap `.term` once → focus moves to xterm's helper textarea; tap again → focus leaves; a 30px vertical drag doesn't change focus; **vertical drags really scroll** (with enough scrollback, 20 consecutive drag frames change `viewportY` by more than one line — guards against touchmove landing on a node detached when the DOM renderer replaces row elements, which scrolls only the first frame); after `printf '\033[?1000h'` turns on mouse tracking, a tap → focus unchanged and a mouse report (starting with `1b5b4d`) appears in the INPUT frames; restore with `printf '\033[?1000l'`
+9. **Safe area**: in Chromium `env(safe-area-inset-*)` is always 0, so override `--sa-top: 47px` and `--sa-bottom: 34px` directly on `.app` → the terminal's top edge is at 47px, the extra keys' bottom edge is 34px above `.app`'s bottom, `.app`'s height is unchanged, the terminal is exactly 81px shorter, and the page doesn't overflow; clear `--sa-bottom` → back to normal
+10. **Landscape**: `viewport` and `screen` both 851×393 → still `compact`, extra keys 80px, all 14 keys visible
 
-> **注**：Playwright 无法真正弹出软键盘。软键盘几何见 E2E-21（改容器高度、重放 `visualViewport` 事件来模拟），真机放在手工清单。
+> **Note**: Playwright can't actually open an on-screen keyboard. Keyboard geometry is covered by E2E-21 (simulated by changing the container height and replaying `visualViewport` events); real devices are in the manual checklist.
 
 ---
 
-## E2E-11 会话生命周期
+## E2E-11 Session lifecycle
 
 > AC-4.2, AC-4.5, US-7.3
 
-1. 创建到上限（5 个，夹具里配的）→ `new-session` 禁用，并提示「会话数已达上限 5」
-2. 在某会话里先 `printf 'LAST-%s\n' LINE`，再 `exit 1` → 终端末尾出现 `[进程已结束（退出码 1）· 按 Enter 关闭]`，它在 `LAST-LINE` **之后**；提示行是前端自己写的、不计入 seq：它出现之后 `__webterm.outSeq()` 不再变，且等于 agent 的 `head_seq`（刷新后用 `welcome.sessions[].head_seq` 核对）
-3. 已退出会话的内容仍可滚动、可选择复制
-4. 抽屉列表里显示 `exit 1`（警示色）；标签只变灰（`data-exited`），不显示退出码
-5. **刷新页面** → 提示行在缓冲里**只出现一次**
-6. 在该会话里按 `Enter` → 会话关闭（不需要确认），切到相邻会话
-7. 关闭 `running` 会话（会话菜单 → 关闭）→ 弹 `close-confirm`（不是浏览器对话框：整个过程没有 `dialog` 事件），标题里有会话名，焦点在 `close-ok` 上；点 `close-cancel` → 浮层消失、会话还在；再关一次，按 `Esc` → 同样不关；再关一次，按 `Enter` → 会话关闭（ADR-0038）
+1. Create sessions up to the limit (5, set in the fixture) → `new-session` is disabled and says "Session limit reached (5)"
+2. In one session, `printf 'LAST-%s\n' LINE`, then `exit 1` → `[Process exited (code 1) · press Enter to close]` appears at the end of the terminal, **after** `LAST-LINE`; the notice is written by the frontend and not counted in seq: after it appears `__webterm.outSeq()` doesn't change any more, and equals the agent's `head_seq` (checked after a reload against `welcome.sessions[].head_seq`)
+3. The exited session's content is still scrollable, selectable, and copyable
+4. The drawer list shows `exit 1` (warning color); the tab is only grayed out (`data-exited`), with no exit code
+5. **Reload the page** → the notice appears **only once** in the buffer
+6. Press `Enter` in that session → the session closes (no confirmation) and an adjacent session becomes current
+7. Close a `running` session (session menu → Close) → `close-confirm` opens (not a browser dialog: no `dialog` event fires at any point), its title contains the session name, and focus is on `close-ok`; click `close-cancel` → the sheet disappears and the session is still there; close again and press `Esc` → also not closed; close again and press `Enter` → the session closes (ADR-0038)
 
 ---
 
-## E2E-12 阅读输出
+## E2E-12 Reading output
 
 > AC-5.1, AC-5.3, AC-5.4
 
-1. 跑 `emit.sh 3000` → 向上滚动能看到早期输出（无需进入任何模式）
-2. **外观：默认跟随系统，设置里改主题与字号**（AC-5.3，[ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)）：
-   - 默认：`page.emulateMedia({ colorScheme: 'light' })` 下 `body` 与终端区（`.stage`）的背景是浅色（`--bg` / `--term-bg`），xterm 的主题背景（`.xterm-viewport` 的内联样式；CSS 把它的计算值压成透明）也是 `--term-bg`；切到 `dark`，**不刷新**，三者都换成深色；`<html>` 没有 `data-theme`；终端字号（`__webterm.fontSize()`）是 14；按 `Ctrl+Shift+,` 不出现任何浮层（`.drawer` 为 0 个）
-   - 改主题：系统仍是 `dark`，点 `open-settings` → `settings` 出现，`theme-system` 是 `aria-checked="true"`；点 `theme-light` → **不刷新**，`<html data-theme="light">`，三处背景都是浅色；刷新 → 仍是浅色、配对过的页面一加载就是浅色；再打开设置点 `theme-system` → 回到深色、`data-theme` 被去掉
-   - 改字号：记下 `__webterm.size()` 与 `resizes()`；点两次 `font-inc` → `font-size` 显示 16、`__webterm.fontSize()` 是 16、列数变少，且**发出了 `resize`**（`resizes()` 变大，最后一条 `resize` 的 `cols` 等于新列数）；刷新 → 仍是 16；连点 `font-dec` 到 10 → `font-dec` 变 `disabled`；`localStorage` 里只有 `webterm.fontSize`，没有按形态分的 key
-3. 选中一段文本，此时有新输出到达 → **选区不被破坏**（选中的仍是原来那几行的内容）
-4. 复制 → 剪贴板内容正确
+1. Run `emit.sh 3000` → scroll up to see early output (no special mode needed)
+2. **Appearance: follows the system by default; theme and font size are changed in settings** (AC-5.3, [ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)):
+   - Default: with `page.emulateMedia({ colorScheme: 'light' })`, the backgrounds of `body` and the terminal area (`.stage`) are light (`--bg` / `--term-bg`), and so is xterm's theme background (the inline style on `.xterm-viewport`; CSS forces its computed value to transparent), which is `--term-bg`; switch to `dark` **without reloading** and all three turn dark; `<html>` has no `data-theme`; the terminal font size (`__webterm.fontSize()`) is 14; pressing `Ctrl+Shift+,` opens no sheet (zero `.drawer`s)
+   - Change theme: with the system still `dark`, click `open-settings` → `settings` appears, and `theme-system` has `aria-checked="true"`; click `theme-light` → **without reloading**, `<html data-theme="light">` and all three backgrounds are light; reload → still light, and a paired page loads light from the start; open settings again and click `theme-system` → back to dark, `data-theme` removed
+   - Change font size: note `__webterm.size()` and `resizes()`; click `font-inc` twice → `font-size` shows 16, `__webterm.fontSize()` is 16, fewer columns, and **a `resize` was sent** (`resizes()` grew, and the last `resize`'s `cols` equals the new column count); reload → still 16; click `font-dec` down to 10 → `font-dec` becomes `disabled`; `localStorage` has only `webterm.fontSize`, with no per-form keys
+3. Select some text while new output arrives → **the selection isn't broken** (it still covers the same lines)
+4. Copy → the clipboard contents are correct
 
 ---
 
-## E2E-15 设备管理
+## E2E-15 Device management
 
 > AC-1.3, AC-1.11
 
-1. `GET /api/devices` 返回当前设备，`current: true`
-2. 用第二个 browser context 完成第二次配对 → 两台设备
-3. 从设备一吊销设备二 → **设备二的 WebSocket 在 5 秒内断开**，界面显示"此设备已被吊销"并跳到配对引导页
-4. 一键吊销全部（`POST /api/devices/revoke-all`）→ 自己也退出，跳到配对引导页
+1. `GET /api/devices` returns the current device with `current: true`
+2. Pair a second time from a second browser context → two devices
+3. Revoke device two from device one → **device two's WebSocket closes within 5 seconds**, and its UI says "This device has been revoked" and goes to the pairing page
+4. Revoke all at once (`POST /api/devices/revoke-all`) → this device is logged out too and goes to the pairing page
 
-> 前端没有设备管理界面（列表与吊销走 API 和 `webterm devices`），所以这里直接调 API。
+> The frontend has no device management UI (listing and revoking go through the API and `webterm devices`), so this calls the API directly.
 
 ---
 
-## E2E-16 未认证访问
+## E2E-16 Unauthenticated access
 
 > AC-1.7, AC-1.8
 
-1. 清除 Cookie 后访问 `/` → 静态页正常返回，前端显示"需要配对"引导
+1. Clear cookies and open `/` → the static page loads, and the frontend shows the "Pairing required" instructions
 2. `GET /api/devices` → 401
-3. **`GET /ws` 升级 → 401**（不能只测 REST）
-4. 伪造 `Origin: https://evil.com` 的 WS 升级（带有效 Cookie）→ 403
-5. 用错误的配对码 `POST /auth/pair`，按连续失败的退避间隔（1s、2s、4s、8s，见 [auth-pairing.md §限速](../60-security/auth-pairing.md#限速ac-16)）重试 → 前 5 次 401，第 6 次落在同一分钟里返回 429 + `Retry-After`；退避期内不等就重试也是 429
+3. **`GET /ws` upgrade → 401** (testing only REST isn't enough)
+4. WS upgrade with a forged `Origin: https://evil.com` (and a valid cookie) → 403
+5. `POST /auth/pair` with a wrong pairing code, retrying at the backoff intervals for consecutive failures (1s, 2s, 4s, 8s; see [auth-pairing.md §Rate limiting](../60-security/auth-pairing.md#rate-limiting-ac-16)) → the first 5 get 401, the 6th, within the same minute, gets 429 + `Retry-After`; retrying without waiting out the backoff also gets 429
 
 ---
 
-## E2E-27 手输数字配对码（ADR-0017）
+## E2E-27 Typing in the digit pairing code (ADR-0017)
 
 > AC-1.15
 
-`web/e2e/pairdigits.spec.ts`。夹具从 agent stdout 里抓 `dddd-dddd-dddd-dddd`。
+`web/e2e/pairdigits.spec.ts`. The fixture grabs `dddd-dddd-dddd-dddd` from the agent's stdout.
 
-1. 打开 `/pair`（没有 fragment）→ 出现数字输入框与「配对」按钮，按钮在不足 16 位时禁用
-2. 把数字码**用空格分隔**粘进去 → 输入框显示成 `-` 分组的 16 位；点「配对」→ 跳到 `/`，`conn-text` 为「在线」
-3. 同一次配对的 URL 码（二维码那把）此时已作废：另一个 context 打开配对链接 → 「配对码无效或已过期」
-4. 输一个 16 位但错误的码 → 401 提示「配对码无效或已过期」，输入框仍在可重试
+1. Open `/pair` (no fragment) → a digit input and a "Pair" button appear; the button is disabled with fewer than 16 digits
+2. Paste the digits **separated by spaces** → the input shows 16 digits grouped with `-`; click "Pair" → goes to `/`, and `conn-text` reads "Online"
+3. The URL code from the same pairing (the one in the QR code) is now invalid: opening the pairing link in another context → "Invalid or expired pairing code"
+4. Enter a 16-digit wrong code → 401 with "Invalid or expired pairing code"; the input is still there for a retry
 
 ---
 
@@ -303,327 +299,324 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 > AC-1.14
 
-1. `manifest.json` 可访问，字段完整
-2. Service Worker 注册成功
-3. 断网后刷新 → 显示"无法连接到 agent"的明确状态页（不是浏览器的默认错误页，也不假装能用）
-4. 断言 Service Worker **没有缓存任何 `/api/*` 或 `/ws` 的响应**
+1. `manifest.json` is reachable with all fields
+2. The service worker registers
+3. Reload while offline → a clear "Can't reach the agent" status page (not the browser's default error page, and not pretending to work)
+4. Assert the service worker **cached no `/api/*` or `/ws` responses**
 
 ---
 
-## E2E-18 agent 重启后不张冠李戴
+## E2E-18 No mix-ups after an agent restart
 
 > AC-2.13
 
-1. 开两个标签页，各自持有会话
-2. 重启 agent 进程（会话全部消失，[ADR-0003](../20-architecture/adr/0003-no-tmux.md)）
-3. 标签页 A 先重连并新建一个会话 → 它拿到 `sid = 1`
-4. 标签页 B 随后重连，`hello` 里带着旧的 `instance_id` 与 `resume{sid:1, out_seq:很大}`
-5. 断言：B 拿到的是 `status: "gone"`，UI 提示"会话已结束"，**屏幕上没有把 A 的新会话的输出接到 B 的旧内容后面**
+1. Open two browser tabs, each holding sessions
+2. Restart the agent process (all sessions disappear, [ADR-0003](../20-architecture/adr/0003-no-tmux.md))
+3. Tab A reconnects first and creates a session → it gets `sid = 1`
+4. Tab B reconnects afterwards, its `hello` carrying the old `instance_id` and `resume{sid:1, out_seq:<large>}`
+5. Assert: B gets `status: "gone"`, the UI says the session ended, and **A's new session's output is not appended to B's old content on screen**
 
 ---
 
-## E2E-21 软键盘几何：键盘一弹附加键仍在可视区
+## E2E-21 On-screen keyboard geometry: the extra keys stay visible when the keyboard opens
 
-> AC-3.8。`web/e2e/keyboard.spec.ts`，Pixel 5 视口。两种浏览器模型都覆盖（见 [`../40-frontend/layout.md`](../40-frontend/layout.md#高度计算ac-38)）：
+> AC-3.8. `web/e2e/keyboard.spec.ts`, Pixel 5 viewport. Covers both browser models (see [`../40-frontend/layout.md`](../40-frontend/layout.md#height-ac-38)):
 
-1. **布局视口一起缩**（`resizes-content`）：点终端后把视口从 727 缩到 450 → `.app` 高 450、无 `translateY`、附加键完整落在 [0,450]、`data-form` 仍是 `compact`、`resize` 发出且 rows 变少
-2. **只缩可视视口 + 上推**（iOS Safari / Chrome `resizes-visual`）：假 `visualViewport` 重放"可视 727→400、`offsetTop`→327"，分别在 **Safari 语义（`innerHeight` 跟着变 400）** 与 Chrome 语义（恒 727）下 → `.app` 必须 `translateY(327px)`、顶部 = 327、附加键在可视区 [327,727]；文本输入页聚焦时同样；键盘收起全部复位
-3. **普通回弹不补偿**：`offsetTop` 变成 −40 / 60 而高度不变 → `.app` 无 `translateY`（守住拖动抖动的修复）
-
----
-
-## E2E-26 热升级不丢会话（ADR-0016）
-
-`web/e2e/reexec.spec.ts`。夹具给 agent 进程发 `SIGUSR2`（`Agent.reexec()`）——
-真二进制原地 exec 同一个文件，PID 不变，stdout 管道照旧。
-
-1. 起一条持续输出的命令（300 行、每行间隔 20ms、最后打 `REEXEC-DONE`），输出中途发 `SIGUSR2`
-2. 浏览器只看到一次重连：`conn-text` 短暂离开「在线」后回到「在线」；重连后的 `welcome.resumed[0].status == "ok"`（`instance_id` 没变）
-3. 命令跑完后终端里 300 行**每行恰好一次、顺序正确**（不丢不重），`REEXEC-DONE` 在
-4. shell 仍活着：再提交一条命令有输出；`webterm reload --probe` 对新进程返回 0，`status` 里的 `generation` 为 1
-5. **模拟器状态交接了**：等输出跑完、会话静止，再热升级一次；这次升级前后各开一个新标签页（`out_seq == 0`，走快照）序列化终端，两份逐行一致
-6. 预检失败路径：把 `--handoff-check-fail` 之类的注入留给 Go 集成测试（IT-handoff-1），E2E 不模拟
+1. **Layout viewport shrinks too** (`resizes-content`): after clicking the terminal, shrink the viewport from 727 to 450 → `.app` is 450 tall with no `translateY`, the extra keys lie entirely within [0,450], `data-form` is still `compact`, and a `resize` is sent with fewer rows
+2. **Only the visual viewport shrinks and scrolls up** (iOS Safari / Chrome `resizes-visual`): a fake `visualViewport` replays "visual 727→400, `offsetTop`→327", once with **Safari semantics (`innerHeight` follows to 400)** and once with Chrome semantics (stays 727) → `.app` must be `translateY(327px)`, its top = 327, and the extra keys within the visible area [327,727]; the same with the text page focused; everything resets when the keyboard closes
+3. **Plain bounce isn't compensated**: `offsetTop` becomes −40 / 60 with the height unchanged → `.app` has no `translateY` (guards the fix for drag jitter)
 
 ---
 
-## E2E-28 浮层与手机会话抽屉
+## E2E-26 Hot upgrade keeps sessions (ADR-0016)
 
-> AC-4.10, AC-5.11, AC-4.8。`web/e2e/drawer.spec.ts`，Pixel 5。触屏抽屉有约 170ms 的 `sheet-up` 进场动画：量「贴底」或长按抽屉里的行之前先等动画结束（`animationend`，或等矩形两次读数相同），否则拿到的是半路的位置。
+`web/e2e/reexec.spec.ts`. The fixture sends `SIGUSR2` to the agent process (`Agent.reexec()`): the real binary execs the same file in place, with the same PID and the same stdout pipe.
 
-1. **形态**：会话按钮 `open-sessions` 里的数字等于会话数（`1`）；点它 → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行是 `new-session` 与 `open-settings`，各有一个 SVG 图标；从抽屉新建一个会话后按钮里是 `2`；在抽屉里左滑它 → `row-close` → `close-confirm` 是贴底 sheet、**叠在抽屉上**（两个 `.drawer`），按 `Esc` 只关掉确认、抽屉仍在；再关一次点 `close-ok` → 行消失、抽屉仍开着，按钮里变回 `1`（AC-4.11）
-2. **焦点进浮层**：每次打开，`document.activeElement.closest('.drawer')` 非空
-3. **关闭方式**（会话抽屉）：点遮罩、`Esc`、✕、选中一个会话、`page.goBack()`（系统返回键）各关一次；`goBack` 之后页面仍在 `/`；五次开关之后 `history.length` 至多比开始时多 1
-4. **不挤终端**：开关抽屉前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
-5. **焦点恢复**（AC-4.8）：先点终端让它有焦点 → 开抽屉 → 选另一个会话 → 焦点在新会话的 helper textarea 上；先让终端失焦 → 开抽屉 → 选会话 → 焦点**不**在终端
-6. **行操作**（AC-4.12，ADR-0039）：两个会话。触摸左滑第二行 120px → 松手后它停在打开（行内容左移 216px），`row-pin` `row-rename` `row-close` 可见；只左滑 60px → 弹回；打开后右滑 → 关上；纵向拖列表不打开任何一行。长按一行 → 同样打开、**不出现** `session-menu`；再左滑另一行 → 前一行关上；点开着那行的正文 → 关上、当前会话不变。`row-pin` → 名字前出现图钉（`.pin-mark` 里是 SVG）、行关上。`row-rename` → `rename-sheet` 叠在抽屉上（两个 `.drawer`），`rename-input` 有焦点、内容全选、字号 16px；输入 `RENAMED` 按 `Enter` → sheet 消失、抽屉仍在，那一行显示 `RENAMED`；再打开改名清空按「保存」→ 恢复自动命名；再打开改名按 `Esc` → 只关改名
-9. **浮层跟着可视区**（ADR-0039 §3）：打开改名 sheet 后把视口高度减 300px（模拟可视视口被键盘压缩：`.app` 的高度跟着变）→ `rename-sheet` 的底边与 `.app` 的底边差 ≤ 1px，`rename-input` 整个在 `.app` 的矩形里；`session-drawer` 的高度 ≤ `.app` 高度的 80%
-7. **高度与留白**（AC-5.11，ADR-0037 §5）：只有 1 个会话时打开抽屉 → `session-drawer` 的高度 ≥ 可视区高度的 50%（差 ≤ 1px）；底部一行贴着 sheet 底部；`new-session` 的底边与 sheet 底边之间 ≥ 16px、左边与 sheet 左边之间 16px，`open-settings` 的右边与 sheet 右边之间 16px，两个按钮之间 12px，两个按钮一样高（48px）
-10. **路径与名字**（ADR-0042 §3）：三个会话，分别 `cd` 到 `/usr/local/share`、`e2e/fixtures`（绝对路径，通常在家目录下，显示成 `~/…`）、`/`；打开抽屉 → 每一行路径文本节点的**第一个字符显示在最后一个字符左边**（用 `Range` 量字符的实际矩形；只比 `textContent` 测不出颠倒），最后一个字符整个落在 `.sl-meta` 的矩形里；`fixtures` 那一行的名字整个可见（`.sl-text` 的 `scrollWidth ≤ clientWidth`）
-8. **从抽屉进设置**：点 `open-settings` → `session-drawer` 消失，`settings` 出现，贴底整宽、有抓手；它的高度小于可视区的 50%（不套会话抽屉的最小高度）；`font-inc` 的底边与 sheet 底边之间 ≥ 16px；点遮罩关闭
+1. Start a command with continuous output (300 lines, 20ms apart, ending with `REEXEC-DONE`), and send `SIGUSR2` midway
+2. The browser sees exactly one reconnect: `conn-text` briefly leaves "Online" and comes back; after the reconnect `welcome.resumed[0].status == "ok"` (`instance_id` didn't change)
+3. When the command finishes, each of the 300 lines appears **exactly once, in order** (nothing lost or duplicated), and `REEXEC-DONE` is there
+4. The shell is still alive: submitting another command produces output; `webterm reload --probe` returns 0 against the new process, and `generation` in `status` is 1
+5. **Emulator state was handed off**: after the output finishes and the session is idle, hot-upgrade again; open a new browser tab before and after this upgrade (`out_seq == 0`, snapshot path) and serialize the terminal; the two match line by line
+6. Preflight failure path: injections like `--handoff-check-fail` are left to the Go integration test (IT-handoff-1); E2E doesn't simulate them
 
 ---
 
-## E2E-30 切走 → 积压超过 ring_bytes → 切回（AC-2.6 / AC-2.15）
+## E2E-28 Sheets and the phone session drawer
 
-> 用 `--ring-bytes 65536` 的实例。`web/e2e/subscribe-reset.spec.ts`。
+> AC-4.10, AC-5.11, AC-4.8. `web/e2e/drawer.spec.ts`, Pixel 5. The touch drawer has a ~170ms `sheet-up` enter animation: wait for it to finish (`animationend`, or two identical rect readings) before measuring "at the bottom" or long-pressing a row in the drawer, or you get a mid-animation position.
+
+1. **Shape**: the number in the session button `open-sessions` equals the session count (`1`); tap it → `session-drawer` sits at the bottom (bottom edge within 1px of the visible area's bottom), full width, with a grab handle `.drawer-grab` and a ✕ in the header; the pinned bottom row is `new-session` and `open-settings`, each with an SVG icon; after creating a session from the drawer the button shows `2`; swipe that row left in the drawer → `row-close` → `close-confirm` is a bottom sheet **stacked on the drawer** (two `.drawer`s); `Esc` closes only the confirmation and the drawer stays; close again and click `close-ok` → the row disappears, the drawer stays open, and the button goes back to `1` (AC-4.11)
+2. **Focus moves into the sheet**: on every open, `document.activeElement.closest('.drawer')` is non-null
+3. **Ways to close** (session drawer): close it once each by tapping the backdrop, `Esc`, ✕, picking a session, and `page.goBack()` (system back button); after `goBack` the page is still at `/`; after five open/close cycles `history.length` is at most 1 more than at the start
+4. **Doesn't squeeze the terminal**: the `.term` rect is identical field by field before and after opening/closing the drawer, and `__webterm.size()` and `resizes()` don't change
+5. **Focus restore** (AC-4.8): click the terminal so it has focus → open the drawer → pick another session → focus is on the new session's helper textarea; blur the terminal first → open the drawer → pick a session → focus is **not** in the terminal
+6. **Row actions** (AC-4.12, ADR-0039): two sessions. Swipe the second row left by 120px with touch → on release it stays open (row content shifted 216px left), and `row-pin` `row-rename` `row-close` are visible; swipe only 60px → springs back; swipe right on an open row → closes; dragging the list vertically opens no row. Long-press a row → it opens the same way and `session-menu` **doesn't** appear; then swipe another row left → the first one closes; tap the open row's body → it closes and the current session doesn't change. `row-pin` → a pin appears before the name (an SVG inside `.pin-mark`) and the row closes. `row-rename` → `rename-sheet` stacks on the drawer (two `.drawer`s), `rename-input` has focus, its content is all selected, and its font size is 16px; type `RENAMED` and press `Enter` → the sheet disappears, the drawer stays, and the row shows `RENAMED`; open rename again, clear it, and click Save → automatic naming is restored; open rename again and press `Esc` → only the rename sheet closes
+9. **Sheets follow the visible area** (ADR-0039 §3): with the rename sheet open, reduce the viewport height by 300px (simulating the visual viewport being squeezed by the keyboard: `.app`'s height follows) → `rename-sheet`'s bottom edge is within 1px of `.app`'s bottom edge, `rename-input` is entirely inside `.app`'s rect; `session-drawer`'s height is ≤ 80% of `.app`'s height
+7. **Height and spacing** (AC-5.11, ADR-0037 §5): open the drawer with only 1 session → `session-drawer`'s height is ≥ 50% of the visible area (within 1px); the bottom row sits at the bottom of the sheet; ≥ 16px between `new-session`'s bottom edge and the sheet's bottom edge, 16px between its left edge and the sheet's left edge, 16px between `open-settings`'s right edge and the sheet's right edge, 12px between the two buttons, and both buttons are the same height (48px)
+10. **Paths and names** (ADR-0042 §3): three sessions, `cd`'d to `/usr/local/share`, `e2e/fixtures` (absolute path, usually under home, shown as `~/…`), and `/` respectively; open the drawer → in each row's path text node, **the first character is drawn left of the last character** (measure actual character rects with a `Range`; comparing `textContent` alone can't detect reversal), and the last character lies entirely inside the `.sl-meta` rect; the name in the `fixtures` row is fully visible (`.sl-text` has `scrollWidth ≤ clientWidth`)
+8. **Settings from the drawer**: click `open-settings` → `session-drawer` disappears and `settings` appears, at the bottom, full width, with a grab handle; its height is under 50% of the visible area (the session drawer's minimum height doesn't apply); ≥ 16px between `font-inc`'s bottom edge and the sheet's bottom edge; tap the backdrop to close
+
+---
+
+## E2E-30 Switch away → backlog exceeds ring_bytes → switch back (AC-2.6 / AC-2.15)
+
+> Uses the `--ring-bytes 65536` instance. `web/e2e/subscribe-reset.spec.ts`.
 >
-> E2E-2c / E2E-4 走的是重连（`welcome.resumed[].status`），这条走切回（`subscribe`），是另一条代码路径。
+> E2E-2c / E2E-4 go through reconnect (`welcome.resumed[].status`); this one goes through switching back (`subscribe`), a different code path.
 
-**后台产出必须先 `sleep` 几秒再开始**（`(sleep 3; for …; done; printf '\033[6n'; touch <done>) &`）：那几秒用来切到别的会话，保证整段输出都落在「未订阅」期间。完成信号走**文件**（测试进程直接 `existsSync`）—— 会话已经切走，屏幕上看不到它跑完没有。
+**Background output must `sleep` a few seconds before starting** (`(sleep 3; for …; done; printf '\033[6n'; touch <done>) &`): those seconds are for switching to another session, so all the output lands while the session is unsubscribed. Completion is signaled through a **file** (the test process checks `existsSync` directly): the session has been switched away from, so you can't see on screen whether it finished.
 
-### ① 积压超过 ring_bytes → 快照
+### ① Backlog exceeds ring_bytes → snapshot
 
-1. 建会话 A。A 里 `printf 'MARK-%s\n' ONE`，等它显示
-2. A 里起后台输出：2500 行 × 70 B ≈ 175 KiB，末尾一个 CPR 查询（`\033[6n`）
-3. 新建 B 切过去，等完成文件出现
-4. 切回 A，断言：
-   - 客户端发出的 `subscribe` **自带 `cols`/`rows`**，并且**没有任何 `resize` 排在它前面**（hook `WebSocket.send`）
-   - 收到的是 SNAPSHOT 帧，不是从旧位置接着的 OUTPUT
-   - **`MARK-ONE` 在终端里出现 0 次** —— 快照只带最后 2000 行，它早已超出。还在就说明没清屏，快照被接在了旧屏幕后面
-   - 客户端**没有**把 CPR 应答（`ESC[<行>;<列>R`）作为 INPUT 发出去
-5. 再来一轮（切走、再产出一轮、切回），断言**缓冲区行数与上一轮相差不到一屏**：每轮都是重建，不是往后追加
+1. Create session A. In A, `printf 'MARK-%s\n' ONE` and wait for it to show
+2. Start background output in A: 2500 lines × 70 B ≈ 175 KiB, ending with a CPR query (`\033[6n`)
+3. Create B and switch to it; wait for the completion file
+4. Switch back to A and assert:
+   - The `subscribe` the client sends **carries `cols`/`rows` itself**, and **no `resize` precedes it** (hook `WebSocket.send`)
+   - A SNAPSHOT frame arrives, not OUTPUT continuing from the old position
+   - **`MARK-ONE` appears 0 times in the terminal**: the snapshot only carries the last 2000 lines, and it's long gone. If it's still there, the screen wasn't cleared and the snapshot was appended after the old screen
+   - The client **didn't** send the CPR reply (`ESC[<row>;<col>R`) as INPUT
+5. Do another round (switch away, produce another batch, switch back) and assert **the buffer's line count differs from the previous round by less than one screen**: each round rebuilds, it doesn't append
 
-### ② 积压没超过 ring_bytes → 增量补齐
+### ② Backlog within ring_bytes → incremental catch-up
 
-同样的流程，但只产 200 行（≈ 14 KiB，远小于 64 KiB），末尾同样带一个 CPR。切回后断言：
+Same flow, but produce only 200 lines (≈ 14 KiB, well under 64 KiB), again ending with a CPR. After switching back, assert:
 
-- 收到的是 OUTPUT 帧（增量），没有 SNAPSHOT；`MARK-ONE` 还在 —— 增量补齐不该清屏
-- 切走期间的输出补齐了（`few 0200` 可见）
-- 客户端**没有**发出 CPR 应答
+- OUTPUT frames arrive (incremental), no SNAPSHOT; `MARK-ONE` is still there — incremental catch-up must not clear the screen
+- The output produced while away was caught up (`few 0200` is visible)
+- The client **didn't** send a CPR reply
 
-### ③ 重连补课同样不应答（对照）
+### ③ Reconnect catch-up doesn't reply either (control)
 
-`web/e2e/replay-echo.spec.ts`。② 测的是切回（`subscribe`）路径的增量补课，这条是同一规则在**重连**（`welcome.resumed[].status == "ok"`）路径上的对照：
+`web/e2e/replay-echo.spec.ts`. ② tests incremental catch-up on the switch-back (`subscribe`) path; this is the control for the same rule on the **reconnect** (`welcome.resumed[].status == "ok"`) path:
 
-1. 提交 `sleep 2; printf '\033[6n'; sleep 30`，立刻断开，让这个 DSR 查询落在离线窗口里
-2. 3 秒后恢复，断言走的是增量（`status == "ok"`）
-3. 等补课写进 xterm，断言客户端**没有**把 CPR 应答作为 INPUT 发出去
+1. Submit `sleep 2; printf '\033[6n'; sleep 30` and disconnect immediately, so the DSR query falls inside the offline window
+2. Restore after 3 seconds, and assert the incremental path was taken (`status == "ok"`)
+3. Wait for the catch-up to be written into xterm, and assert the client **didn't** send the CPR reply as INPUT
 
-> ② 是 AC-2.15 真正的看门人：增量路径上**没有任何线上信号说"这段是历史"**，全靠客户端自己记 `catchup_to`。漏了它，每切回一次会话，前台程序就收到一串乱码按键。
+> ② is the real gatekeeper for AC-2.15: on the incremental path **nothing on the wire says "this part is history"**; it all depends on the client tracking `catchup_to`. Miss it, and every switch back to a session sends the foreground program a string of garbage keystrokes.
 
 ---
 
-## E2E-31 备用屏会话切回 = 当前屏（AC-2.6 / AC-2.21）
+## E2E-31 Switching back to an alternate-screen session = current screen (AC-2.6 / AC-2.21)
 
-> 用 `--ring-bytes 65536` 的实例。`web/e2e/redraw.spec.ts`。
+> Uses the `--ring-bytes 65536` instance. `web/e2e/redraw.spec.ts`.
 >
-> 字节窗口拼不出备用屏程序的当前屏（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §背景），快照可以：模拟器手里就是那一屏。
+> A byte window can't reconstruct the current screen of an alternate-screen program ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md#context)); a snapshot can: the emulator holds exactly that screen.
 
-夹具 `e2e/fixtures/altscreen.sh <快跑秒数> <完成标记文件>` —— 一个假的全屏 TUI，行为对齐实测到的 claude：
+Fixture `e2e/fixtures/altscreen.sh <seconds of fast output> <completion marker file>`: a fake full-screen TUI that behaves like measured claude:
 
-- 启动就 `ESC[?1049h` 进备用屏，**整个生命周期只发这一次**
-- 画一屏（含一行 `FRAME <n>` 标记），之后只重画内容行（差分、绝对定位、**不清屏**），约 30 KB/s
-- 快跑到点之后 `touch` 标记文件并**转入空闲，一个字节都不产**
-- 收到 `SIGWINCH` 整屏重画，`FRAME` 计数加一；收到 `SIGINT` / `SIGTERM` 时 `ESC[?1049l` 退回主屏
+- Enters the alternate screen with `ESC[?1049h` at startup, **only once in its whole lifetime**
+- Draws one screen (including a `FRAME <n>` marker line), then only redraws content lines (diffs, absolute positioning, **no clear screen**), about 30 KB/s
+- After the fast-output period it `touch`es the marker file and **goes idle, producing no bytes at all**
+- On `SIGWINCH` it redraws the whole screen and increments the `FRAME` counter; on `SIGINT` / `SIGTERM` it returns to the main screen with `ESC[?1049l`
 
-1. 建会话 A，跑 `altscreen.sh`，等屏幕出现 `FRAME`
-2. 新建 B 切过去；等标记文件出现（= A 的积压已经顶过 64 KiB 且已转入空闲）
-3. 切回 A，断言：
-   - 收到 SNAPSHOT 帧，且 **SNAPSHOT 的字节数 < 8 KiB**（当前屏是 KB 量级，不是整个 `ring_bytes`）
-   - `__webterm.altScreen()` 为 `true`：快照把客户端带回了备用屏
-   - 屏幕上 `FRAME` 只出现 **1 次**，scrollback 里没有这个程序界面的任何副本
-   - 切回时 agent **没有**改窗口尺寸（`altscreen.sh` 的 `FRAME` 计数没有因为 SIGWINCH 增加）
-4. 让 `altscreen.sh` 退出（回到主屏），再在 A 里积压一轮超过 `ring_bytes` 的输出，切走 / 切回一次：仍走快照，主屏是 shell 的内容，没有残影。不积压的话退出后会话空闲，切回走的是增量，测不到快照
-
----
-
-## E2E-33 僵尸连接：回到前台立刻戳穿（AC-2.20，ADR-0020）
-
-> `web/e2e/zombie.spec.ts`。
-
-**僵尸连接 = 线路断了但没有 `onclose`。** 手机息屏、切 App、Wi-Fi 切蜂窝、NAT / 反向代理静默回收，TCP 上都没有 FIN，浏览器那边 `readyState` 一直是 OPEN。页面自认在线，打字全写进一条死 socket，屏幕上什么都不变。
-
-夹具：`installWSControl` 的第三种状态 `goZombie()` —— **已建立的那条连接两个方向都不再转发，但不关闭**；新连接像线路断了一样直接 `close(1006)`。这比 CDP 的 offline 精确：CDP 那条路对 `routeWebSocket` 代理过的连接不成立，而"不关闭"正是要测的要害。
-
-1. 配对、打开、等「在线」
-2. `net.goZombie()`。断言状态条**还是**「在线」—— 这就是问题的样子，页面根本不知道线断了
-3. 派发一次 `visibilitychange`（页面回到前台）
-4. 断言 **5 秒内**状态条离开「在线」（变成「重连中」/「连接中」）。改之前这里要等 40 秒（30s 心跳 + 10s pong 超时）
-5. `net.goOnline()`，断言回到「在线」
-6. 断言僵尸期间敲进去的那行命令**最终执行了**（按 `in_ack` 重发，AC-2.4）—— 探活不能把输入弄丢
+1. Create session A, run `altscreen.sh`, wait for `FRAME` to appear
+2. Create B and switch to it; wait for the marker file (= A's backlog has passed 64 KiB and it's gone idle)
+3. Switch back to A and assert:
+   - A SNAPSHOT frame arrives, and **the SNAPSHOT is < 8 KiB** (the current screen is KB-sized, not all of `ring_bytes`)
+   - `__webterm.altScreen()` is `true`: the snapshot put the client back on the alternate screen
+   - `FRAME` appears **once** on screen, and scrollback holds no copy of the program's UI
+   - The agent **didn't** change the window size on switch-back (`altscreen.sh`'s `FRAME` counter didn't increase from a SIGWINCH)
+4. Make `altscreen.sh` exit (back to the main screen), then build up another backlog in A larger than `ring_bytes` and switch away / back once: still a snapshot, the main screen shows the shell's content, with no residue. Without the backlog the session is idle after exiting, switching back takes the incremental path, and the snapshot isn't tested
 
 ---
 
-## E2E-34 打字不该消失（AC-4.8 / AC-2.15 / AC-3.3，ADR-0020）
+## E2E-33 Zombie connections: exposed immediately on returning to the foreground (AC-2.20, ADR-0020)
 
-> `web/e2e/inputalive.spec.ts`。三个用例，三条互相独立、症状完全相同的路：敲下去没反应。
+> `web/e2e/zombie.spec.ts`.
 
-### ① 切会话之后直接打字（AC-4.8）
+**Zombie connection = the line is dead but there's no `onclose`.** Phone screen off, switching apps, Wi-Fi to cellular, NAT / reverse proxy silently reclaiming the connection: none of these send a FIN over TCP, so the browser's `readyState` stays OPEN. The page believes it's online, all typing goes into a dead socket, and nothing on screen changes.
 
-1. 建会话 A，点一下终端，打一行 `echo ONE`，确认回显
-2. `Ctrl+Shift+Enter` 新建会话 B（焦点在终端上）
-3. **不点终端**，直接 `keyboard.type('echo TWO')` + 回车 → `TWO` 必须出现
-4. `Ctrl+Shift+↑` 切回 A，同样不点终端，打 `echo THREE` → 必须出现
+Fixture: `installWSControl`'s third state, `goZombie()`: **the established connection stops forwarding in both directions but isn't closed**; new connections get `close(1006)` immediately, as if the line were down. This is more precise than CDP offline: the CDP route doesn't apply to connections proxied by `routeWebSocket`, and "not closed" is exactly the point being tested.
 
-> `activate()` 的 `prev.host.remove()` 把焦点丢回 `body`，改之前第 3 步起键全落在 `body` 上。
-
-### ② 回放期间打字（AC-2.15）
-
-1. 会话 A 里起后台输出，产 **1 MiB**（默认 ring 256 KiB，保证切回时走快照）
-2. 切到 B，等完成文件出现
-3. 切回 A，**不等任何东西**，立刻 `keyboard.type('echo REPLAYKEY')` + 回车
-4. 断言 `REPLAYKEY` 的回显出现
-
-> 回放门要按来源区分，不能按"此刻是否在回放"一刀切。这一步和 E2E-30 ② 是一对：那条断言自动应答**不**进 PTY，这条断言用户按键**要**进 PTY。
-
-### ③ `compositionend` 没来（AC-3.3）
-
-1. 在终端的隐藏 `textarea` 上派发 `compositionstart` + `compositionupdate`，**不派发 `compositionend`**
-2. 断言此时打字确实不进 PTY（组字期间一个字节都不发，AC-3.3 的原有语义不能破）
-3. 派发 `blur` → 再打字 → 必须进得去
-4. 再来一轮，这次用一个 `isComposing === false` 的普通 `keydown` 兜底 → 必须进得去
-
-> 改之前 `composing` 只有 `compositionend` 一个出口，它不来就永久卡住，该会话的终端输入到刷新为止都是死的。
-
-### ④ 输入路径可观测（AC-3.17）
-
-1. 点终端打一个字符并确认回显 → `__webterm.inputStats()` 的 `keydown` / `toTerm` / `data` / `sent` **四段都涨**，`gated` 为 0，`verdict` 说四段都通
-2. **焦点丢掉的指纹**：`activeElement.blur()` 之后再敲一个键 → `keydown` **涨**，`toTerm` **不涨**，`focus` 字段写着焦点已经不在终端，`verdict` 指向"焦点不在终端"
-3. 上一步同时证明了**计数按最近一次发生判、不按总量判**：第 1 步已经让四段的总量都大于 0，拿总量做断言的话这条场景恒绿
-
-> 不测"组字卡住"的指纹：真实事件下它复现不了 —— 一个 `isComposing === false` 的 `keydown` 就会触发兜底复位（③ 的修复），组字状态立刻解开。那一段的判定逻辑由 UT-inputstats-1 覆盖。
-
-> 这条不测"输入能不能进去"（那是 ①②③ 的事），测的是**卡住时能不能一眼看出断在哪一段**。ADR-0020 的原则本身需要可观测性，否则下次还是从猜开始。
+1. Pair, open, wait for "Online"
+2. `net.goZombie()`. Assert the status bar **still** says "Online" — that's what the problem looks like: the page has no idea the line is dead
+3. Dispatch a `visibilitychange` (page back in the foreground)
+4. Assert the status bar leaves "Online" **within 5 seconds** (to "Reconnecting" / "Connecting"). Before the fix this took 40 seconds (30s heartbeat + 10s pong timeout)
+5. `net.goOnline()`, assert it's back to "Online"
+6. Assert the command typed during the zombie period **eventually ran** (resent from `in_ack`, AC-2.4): the liveness probe must not lose input
 
 ---
 
----
+## E2E-34 Typing must not vanish (AC-4.8 / AC-2.15 / AC-3.3, ADR-0020)
 
-## E2E-35 当前会话一眼可辨（AC-4.9）
+> `web/e2e/inputalive.spec.ts`. Three independent paths with the exact same symptom: you type and nothing happens.
 
-> `web/e2e/sessionactive.spec.ts`，1440×900（标签栏）与 Pixel 5（抽屉）。**断言的是"看得出来"，所以量计算样式，不量 class 名。**
+### ① Type right after switching sessions (AC-4.8)
 
-1. 建三个会话
-2. **只有一个当前**：`tabbar` 里 `[aria-current="true"]` 恰好一个，且 `data-sid` = `__webterm.sid()`
-3. **当前 ≠ hover ≠ 普通**：鼠标悬到某个非当前标签上，取三处 `backgroundColor` —— 当前、hover、两者都不是的标签，**两两不相等**；当前标签有强调色下划线
-4. **跟着切换搬家**：`Ctrl+Shift+↓` → `aria-current` 落到相邻标签，原来那个不再有
-5. **已经可见时不滚**：标签都看得见时来回切两次，`tabbar` 的 `scrollLeft` 始终是 0
-6. **滚进可视区**：`screen` 1440×900、`viewport` 600×900，建到 5 个会话（标签最窄 120px，5 个放不下），`Ctrl+Shift+↓` 切到最后一个 → 该标签的矩形**完全落在** `tabbar` 的矩形内且 `scrollLeft > 0`；再切回第一个 → 同样完全可见
-7. **抽屉里同一套**（Pixel 5）：打开抽屉，当前行 `aria-current="true"` 恰好一条，且有强调色左条（`box-shadow` 含 inset）
+1. Create session A, click the terminal once, type `echo ONE`, confirm the echo
+2. `Ctrl+Shift+Enter` creates session B (focus is on the terminal)
+3. **Without clicking the terminal**, `keyboard.type('echo TWO')` + Enter → `TWO` must appear
+4. `Ctrl+Shift+↑` back to A, again without clicking the terminal, type `echo THREE` → must appear
 
----
+> `activate()`'s `prev.host.remove()` dropped focus to `body`; before the fix, every key from step 3 on landed on `body`.
 
-## E2E-36 刷新之后仍能往回拖（AC-5.14）
+### ② Typing during replay (AC-2.15)
 
-> `web/e2e/refresh-scrollback.spec.ts`。默认 `--ring-bytes`。
+1. Start background output in session A, producing **1 MiB** (the default ring is 256 KiB, so switching back takes the snapshot path)
+2. Switch to B, wait for the completion file
+3. Switch back to A and, **without waiting for anything**, immediately `keyboard.type('echo REPLAYKEY')` + Enter
+4. Assert the echo of `REPLAYKEY` appears
 
-1. 起会话，`emit.sh 3000 0`，等 `EMIT-DONE`
-2. `page.reload()`，等重新连上：订阅走快照（`out_seq == 0`）
-3. **能滚回去**：序列化结果里 `line 01500` 仍在（最后 2000 行之内），`line 00100` 不在（超出 2000 行）。视口要够宽（1440×900，≥ 147 列）：一行折成两行的话，2000 行只装得下约 1000 条，`line 01500` 会掉出去
-4. **只有一份**：`line 01500` 在整个缓冲里出现次数 **== 1**
-5. **接得上**：刷新后再跑一次 `printf 'AFTER-%s\n' RELOAD`，它出现且前面的内容不重排
-6. **agent 重启则没有旧会话**：杀掉 agent 重新起（`instance_id` 变，会话全部销毁 —— [ADR-0003](../20-architecture/adr/0003-no-tmux.md)），刷新后新建会话 → 终端里**不出现任何 `line 0…`**
-7. **备用屏会话刷新后是当前屏**：`fixtures/altscreen.sh` 的会话刷新后，`FRAME` 只出现一次，scrollback 里没有它界面的副本
+> The replay gate must distinguish by origin, not gate on "is it replaying right now". This step pairs with E2E-30 ②: that one asserts automatic replies **don't** reach the PTY, this one asserts user keystrokes **do**.
 
----
+### ③ `compositionend` never arrives (AC-3.3)
 
-## E2E-37 滚动与写入的基线测量（只记录，不断言）
+1. Dispatch `compositionstart` + `compositionupdate` on the terminal's hidden `textarea`, **without `compositionend`**
+2. Assert that typing really doesn't reach the PTY at this point (not a byte is sent during composition; AC-3.3's original semantics must hold)
+3. Dispatch `blur` → type again → must get through
+4. Another round, this time recovering with a plain `keydown` whose `isComposing === false` → must get through
 
-> `web/e2e/scrollperf.spec.ts`，phone 视口。[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §7：输出链路先用原生，这条场景量出原生的表现，作为将来"要不要加优化"的依据。**这台机器没 GPU，只看主线程毫秒数。**
+> Before the fix, `composing` had only one exit, `compositionend`; if it never came, the state stuck forever and that session's terminal input stayed dead until a reload.
 
-记录并打印（写进测试报告，不做断言）：
+### ④ The input path is observable (AC-3.17)
 
-1. `emit.sh 4000 0` 期间，主线程 `duration > 50` 的长任务个数与最长一次
-2. 输出跑完后，合成 20 帧的单指纵向拖（每帧 12px），拖动期间的长任务个数
-3. 切回一个积压 1 MiB 的会话（走快照）时，从按下切换键到快照写完的耗时与长任务个数
+1. Click the terminal, type a character, and confirm the echo → in `__webterm.inputStats()`, `keydown` / `toTerm` / `data` / `sent` **all four rise**, `gated` is 0, and `verdict` says all four stages are OK
+2. **Fingerprint of lost focus**: after `activeElement.blur()`, type another key → `keydown` **rises**, `toTerm` **doesn't**, the `focus` field shows focus is no longer on the terminal, and `verdict` points to "focus is not in the terminal"
+3. The previous step also proves that **stages are judged by the most recent event, not by totals**: step 1 already made all four totals > 0, so an assertion on totals would always pass
 
-要加回任何一项优化（按帧合并、回看暂停、写入预算、WebGL、自写滚动），先拿这几个数对比，带着数据写 ADR。
+> The "stuck composition" fingerprint isn't tested: it can't be reproduced with real events, because a `keydown` with `isComposing === false` triggers the fallback reset (the fix in ③) and clears the composition state at once. That branch of the verdict logic is covered by UT-inputstats-1.
 
----
-
-## E2E-39 形态（AC-5.18）
-
-> `web/e2e/form.spec.ts`。形态按屏幕短边判，所以 context 要同时给 `viewport` 与 `screen`。
-
-1. Pixel 5（`screen` 393×851）→ `data-form=compact`：有 `open-sessions`，没有 `tabbar`
-2. `viewport` 与 `screen` 都是 851×393（手机横屏）→ 仍是 `compact`
-3. iPad Mini 设备描述（`screen` 768×1024，触屏）→ `wide`：有 `tabbar`（高 40px），没有 `open-sessions`；附加键在，左列只有 `toggle-text`
-4. 1440×900 鼠标 → `wide`：`tabbar` 高 36px，没有附加键
-5. **键盘弹出不改形态**：在 3 的 context 里把视口高度缩到 344（模拟平板横屏弹键盘）→ `data-form` 仍是 `wide`、`tabbar` 仍在
-6. **旋转不改形态**：3 的 context 把视口换成横屏 → 仍是 `wide`
+> This doesn't test "does input get through" (that's ①②③); it tests **whether, when input is stuck, you can see at a glance which stage broke**. ADR-0020's principle needs observability; otherwise next time you start from guessing again.
 
 ---
 
-## E2E-40 文本输入页（AC-3.19, AC-3.10, AC-3.22）
+## E2E-35 The current session is obvious at a glance (AC-4.9)
 
-> `web/e2e/textinput.spec.ts`，Pixel 5。hook `WebSocket.send` 记 INPUT 帧，断言时把这一步的帧拼起来比（粘贴与回车是两次 `onData`，分不分帧不重要）。E2E 的 bash 开了括号粘贴。
+> `web/e2e/sessionactive.spec.ts`, 1440×900 (tab bar) and Pixel 5 (drawer). **The assertion is "you can see it", so measure computed styles, not class names.**
 
-1. **切换不动几何**：点 `toggle-text` → `textinput` 可见且有焦点；前后 `__webterm.size()` 与 `resizes()` 不变；**文本框四边的 `border-*-width` 都 ≥ 1px，整个框（含边框）落在 `extrakeys` 的矩形内、四边都留出空隙**；再点 `toggle-text` → 回键位页
-2. **滑动也能切**：在键区上横向拖 80px → 文本页；反向拖回 → 键位页
-3. **attribute**：`textinput` 的 `autocorrect` / `autocapitalize` / `spellcheck` 的 attribute 实际值分别是 `off` / `off` / `false`，`enterkeyhint` 是 `send`
-4. **有内容回车 = 发送并回车**：填 `echo TEXT-ONE` 回车 → 这一步的 INPUT 帧拼起来是 `ESC[200~echo TEXT-ONEESC[201~` + `0d`；命令执行、输出里出现 `TEXT-ONE` 一行；文本框已清空、焦点仍在文本框；`inputStats().data.n` 与 `sent.n` 都涨
-5. **空回车**：再回车 → INPUT 帧是 `0d`
-6. **组字**：派发 `compositionstart` → `compositionupdate`（`ni`）→ 按 `Enter`（`isComposing: true`）→ **没有 INPUT 帧**；`compositionend`（`你好`）后回车 → INPUT 帧拼起来是括号包好的 `你好` + `0d`
-7. **多行内容整块粘贴再回车**：往文本框粘贴 `echo L1⏎echo L2` 后回车 → INPUT 帧拼起来以 `1b5b3230307e` 开头、以 `1b5b3230317e0d` 结尾，中间的换行已转成 `0d`；两行都执行，输出里出现 `L1` 与 `L2`
-8. **回车不插换行**：以上每一步之后，`textinput.value` 里都没有 `\n`
-9. **跟着会话走**（AC-3.22 / AC-4.8，[ADR-0036](../20-architecture/adr/0036-text-page-per-session.md)）：会话 A 在文本页，框里填 `echo DRAFT-A`（不回车）；从会话抽屉新建会话 B → B 是键位页（`extrakeys[data-page=keys]`、`textinput` 不可见），焦点在 B 的终端里。B 里点 `toggle-text`，填 `echo DRAFT-B`。从抽屉切回 A → 文本页，`textinput.value` 是 `echo DRAFT-A`，焦点在文本框；回车 → 只有 A 的输出里出现 `DRAFT-A`。从抽屉切到 B → 文本页，值是 `echo DRAFT-B`；点 `toggle-text` 回键位页，切到 A → A 仍是文本页、框是空的（刚才发掉了）；再切回 B → 键位页，焦点在终端；整个过程没有任何一次把 `DRAFT-B` 发出去
+1. Create three sessions
+2. **Exactly one current**: `tabbar` has exactly one `[aria-current="true"]`, and its `data-sid` = `__webterm.sid()`
+3. **Current ≠ hover ≠ plain**: hover the mouse over a non-current tab and read `backgroundColor` in three places — the current tab, the hovered tab, and a tab that's neither — **all three differ pairwise**; the current tab has an accent underline
+4. **Moves with switching**: `Ctrl+Shift+↓` → `aria-current` moves to the adjacent tab, and the old one no longer has it
+5. **No scrolling when already visible**: with all tabs visible, switch back and forth twice; `tabbar`'s `scrollLeft` stays 0
+6. **Scrolls into view**: `screen` 1440×900, `viewport` 600×900, create up to 5 sessions (tabs are at least 120px, so 5 don't fit), `Ctrl+Shift+↓` to the last one → that tab's rect lies **entirely inside** `tabbar`'s rect and `scrollLeft > 0`; switch back to the first → also fully visible
+7. **Same rules in the drawer** (Pixel 5): open the drawer; exactly one row has `aria-current="true"`, with an accent left bar (`box-shadow` includes inset)
 
 ---
 
-## E2E-41 宽屏标签栏（AC-4.10）
+## E2E-36 You can still scroll back after a refresh (AC-5.14)
 
-> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述，第 8 步中途把窗口改窄。`open-settings` 与设置浮层见 [ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)。`+` 的位置见 [ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)。
+> `web/e2e/refresh-scrollback.spec.ts`. Default `--ring-bytes`.
 
-1. **结构**：顶栏在终端上方；`tabbar`（标签条）里只有一个标签，`new-session` 在顶栏里、**不在** `tabbar` 里，位于标签条右边、左边缘距标签条右边缘 12px（ADR-0035）；右侧钉住 `conn-dot` 与 `open-settings`，`open-settings` 在最右、`conn-dot` 紧挨在它左边；`new-session` 里的 SVG、`open-settings` 里的 SVG 与 `conn-dot` 三者的垂直中心两两相差 ≤ 0.5px，两个 SVG 一样大；没有 `open-sessions`，没有附加键
-2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
-3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹 `close-confirm`（居中浮窗，不是浏览器对话框），点 `close-ok` 后标签消失；中键点标签同样先确认；焦点在终端里时按 `Ctrl+Shift+W` → 确认浮层，按 `Enter` → 关闭，焦点回到新的当前会话的终端（AC-4.11）
-4. **改名**：标签有 `tab-<sid>-idx`，内容是 `[n]`（它在顺序里的位置）；双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`，`tab-<sid>-idx` 仍是 `[n]`（改过名的也带编号，ADR-0041）；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
-5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现图钉（`.pin-mark` 里是 SVG）；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
-6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点，颜色是强调色（与当前标签的文字同色，不是 `--err`，ADR-0042）；切回 A → 消失
-7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签后原地松手 → `session-menu`；附加键在，左列只有 `toggle-text`；`new-session` 与 `tabbar` 右边缘相距 16px
-8. **等宽与滚动**（ADR-0031 / ADR-0035）：建到 3 个会话 → 三个标签等宽（差 ≤ 1px）、都是 240px，`tabbar` 正好是三个标签的宽度、不横向滚动（`scrollWidth` = `clientWidth`），`new-session` 的左边缘 = 最后一个标签的右边缘 + 12px；把窗口改成 600×900（`screen` 不变，仍是 `wide`）、建到 5 个 → 每个标签 120px（差 ≤ 1px），`tabbar` 放不下（`scrollWidth > clientWidth`），当前（最后建的）整个可见；**`new-session` 整个落在顶栏里、可点（`elementFromPoint` 命中它），左边缘 = `tabbar` 右边缘 + 12px**；把 `tabbar` 滚到最左（`scrollLeft = 0`）→ `new-session` 的位置不变；（此时 `scrollLeft` 为 0）鼠标悬在标签条上纵向滚轮向下再向上 → `scrollLeft` 先变大后变小；窗口改回 1440 → 5 个都是 240px，不再横向滚动
-9. **间隔不可点**（ADR-0035 §2）：两个会话，焦点在终端里；在最后一个标签右边缘与 `new-session` 左边缘之间那 12px 的正中点击 → 会话数不变、当前会话不变、焦点仍在终端里
-10. **设置是居中浮窗**（AC-5.11，ADR-0037 §4）：焦点在终端里，点 `open-settings` → `settings` 水平、垂直都居中（中心与可视区中心差 ≤ 1px），宽 420px，没有抓手；`.term` 的矩形与 `__webterm.size()` 不变；按 `Esc` → 浮层消失，焦点回到终端的 helper textarea（打字有回显）
-11. **终端标题作名字**（AC-4.4，ADR-0043）：harness 的 shell 读用户的 `.bashrc`，提示符可能设 `user@host: dir` 标题 —— 等两秒，标签名仍是 `~`（shell 设的不用）；跑 `bash -c 'printf "\033]0;E2E TITLE\007"; sleep 3'` → 标签名变成 `E2E TITLE`、编号仍在；它退出回到提示符 → 标签名回到 `~`
+1. Start a session, `emit.sh 3000 0`, wait for `EMIT-DONE`
+2. `page.reload()`, wait for the reconnect: the subscription takes the snapshot path (`out_seq == 0`)
+3. **Can scroll back**: the serialized result still contains `line 01500` (within the last 2000 lines), and not `line 00100` (beyond 2000 lines). The viewport must be wide enough (1440×900, ≥ 147 columns): if each line wrapped into two, 2000 rows would hold only about 1000 lines and `line 01500` would fall out
+4. **Only one copy**: `line 01500` occurs **exactly once** in the whole buffer
+5. **Continues correctly**: after the refresh, run `printf 'AFTER-%s\n' RELOAD`; it appears, and the content before it doesn't reflow
+6. **No old sessions after an agent restart**: kill the agent and start it again (`instance_id` changes, every session is destroyed — [ADR-0003](../20-architecture/adr/0003-no-tmux.md)); after a refresh, create a session → **no `line 0…` at all** in the terminal
+7. **An alternate-screen session shows its current screen after a refresh**: after refreshing a session running `fixtures/altscreen.sh`, `FRAME` appears only once and scrollback holds no copy of its UI
 
 ---
 
-## E2E-42 列数变了重发快照（AC-2.22）
+## E2E-37 Baseline measurements for scrolling and writing (record only, no assertions)
 
-> `web/e2e/resync.spec.ts`。hook `WebSocket` 的 message 与 send。
+> `web/e2e/scrollperf.spec.ts`, phone viewport. [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §7: the output path is native first; this scenario measures how native performs, as the basis for any future "should we optimize" decision. **This machine has no GPU; only main-thread milliseconds count.**
 
-1. 起会话，`emit.sh 300 0`，等完成
-2. 把窗口从 1280 宽改到 1000 宽（列数变少）→ 客户端发出 `resize`，随后收到一份 SNAPSHOT
-3. 断言：快照之后终端的列数等于新的 `cols`；`line 00300` 仍在且只出现一次
-4. 只改高度（`page.setViewportSize` 只改 height，模拟软键盘）→ 发出 `resize`，**不**收到 SNAPSHOT
-5. **列数稳定**（AC-3.11，[ADR-0033](../20-architecture/adr/0033-own-fit.md)）：窗口宽度从 860 到 940 每次加 4px；每个宽度上等行列落定，再只把高度减 200 → 每一次 `__webterm.size().cols` 都和改高度之前相同（FitAddon 时代在 900px 上会 104 → 103）
+Record and print (into the test report, no assertions):
 
-## E2E-43 切开的 UTF-8 不丢字（AC-2.23）
+1. During `emit.sh 4000 0`, the number of main-thread long tasks with `duration > 50` and the longest one
+2. After the output finishes, a synthetic 20-frame single-finger vertical drag (12px per frame): the number of long tasks during the drag
+3. Switching back to a session with a 1 MiB backlog (snapshot path): time from pressing the switch key until the snapshot is written, and the number of long tasks
 
-> `web/e2e/utf8split.spec.ts`。
+To add back any optimization (per-frame batching, scrollback pause, write budget, WebGL, custom scrolling), first compare against these numbers, and write the ADR with the data.
 
-1. 在终端里跑 `printf '\xe3\x80'; sleep 0.3; printf '\x82\xe2\x80'; sleep 0.3; printf '\xa6\xe2\x80'; sleep 0.3; printf '\x94END\n'` —— `。`、`…`、`—` 各被切在第 2 字节之后，分别落在不同的 OUTPUT 帧里
-2. 断言终端那一行是 `。…—END`
-3. 刷新页面（走快照）后同一行仍是 `。…—END`
+---
 
-## E2E-44 触屏纵向拖转滚轮（AC-3.21）
+## E2E-39 Form (AC-5.18)
 
-> `web/e2e/touchwheel.spec.ts`，Pixel 5，CDP 发真实触摸（每步隔 30ms，像人手）。hook `WebSocket.send` 记 INPUT 帧。夹具 `e2e/fixtures/scroller.py N`：备用屏 + 鼠标跟踪（SGR），显示 `L001`…`L300` 里的一屏，每收到一次滚轮按 N 行滚动。
+> `web/e2e/form.spec.ts`. The form is decided by the screen's short side, so each context must set both `viewport` and `screen`.
 
-1. 跑 `scroller.py 5`（tmux copy-mode 的步长），等底部出现 `L300`
-2. **一行高一次**：手指向下拖 10 行高 → 发出 10 ± 1 个滚轮，屏幕顶行的编号减少约 50（10 × 5，±5）；发出的都是 SGR 滚轮向上（`ESC[<64;列;行M`），行号在 1…`rows` 之内；焦点不变（不是点）
-3. 手指向上拖 6 行高 → 发出 6 ± 1 个滚轮，都是滚轮向下（`ESC[<65;…M`），顶行编号增加约 30（±5）
-4. 退出，换 `scroller.py 1` 再向下拖 10 行高 → 顶行编号减少 10 ± 2（步长 1 时逐行跟着手指）
-5. **横向拖 120px** → 没有 INPUT 帧
-6. 退出，跑 `printf '\033[?1049h\033[?1000h\033[?1006h'; sleep 60` 再 `Ctrl+C`、`printf '\033[?1000l'` 关掉鼠标跟踪（仍在备用屏）→ 向下拖 → 没有 INPUT 帧（不发方向键，ADR-0024 §4）
+1. Pixel 5 (`screen` 393×851) → `data-form=compact`: has `open-sessions`, no `tabbar`
+2. `viewport` and `screen` both 851×393 (phone landscape) → still `compact`
+3. iPad Mini device descriptor (`screen` 768×1024, touch) → `wide`: has `tabbar` (40px tall), no `open-sessions`; extra keys present, with only `toggle-text` in the left column
+4. 1440×900 with a mouse → `wide`: `tabbar` is 36px tall, no extra keys
+5. **The keyboard opening doesn't change the form**: in context 3, shrink the viewport height to 344 (simulating a landscape tablet's keyboard) → `data-form` is still `wide` and `tabbar` is still there
+6. **Rotation doesn't change the form**: switch context 3's viewport to landscape → still `wide`
 
-## 不在 E2E 覆盖范围（放手工清单）
+---
 
-- 真机中文输入法的实际候选框行为
-- 真实软键盘的弹出动画与布局
-- 真实网络切换（Wi-Fi ↔ 4G ↔ 隧道）
-- 真实 Let's Encrypt 签发
-- PWA 真机安装
-- Android 系统返回键（E2E 用 `page.goBack()` 模拟）
-- 触觉反馈
+## E2E-40 Text page (AC-3.19, AC-3.10, AC-3.22)
 
-## E2E-45 拖动排序（AC-4.13）
+> `web/e2e/textinput.spec.ts`, Pixel 5. Hook `WebSocket.send` to record INPUT frames; when asserting, concatenate the frames from that step (paste and Enter are two `onData` calls; whether they share a frame doesn't matter). The E2E bash has bracketed paste enabled.
 
-> `web/e2e/order.spec.ts`。[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)。
+1. **Switching doesn't move geometry**: click `toggle-text` → `textinput` is visible and focused; `__webterm.size()` and `resizes()` are unchanged; **the textarea's `border-*-width` is ≥ 1px on all four sides, and the whole box (border included) lies inside the `extrakeys` rect, with a gap on every side**; click `toggle-text` again → back to the keys page
+2. **Swiping also switches**: drag 80px horizontally over the keys → text page; drag back the other way → keys page
+3. **Attributes**: the actual attribute values of `autocorrect` / `autocapitalize` / `spellcheck` on `textinput` are `off` / `off` / `false`, and `enterkeyhint` is `send`
+4. **Enter with text = send and press Enter**: fill in `echo TEXT-ONE` and press Enter → this step's INPUT frames concatenate to `ESC[200~echo TEXT-ONEESC[201~` + `0d`; the command runs and a `TEXT-ONE` line appears in the output; the textarea is cleared and still focused; `inputStats().data.n` and `sent.n` both rise
+5. **Empty Enter**: press Enter again → the INPUT frame is `0d`
+6. **Composition**: dispatch `compositionstart` → `compositionupdate` (`ni`) → press `Enter` (`isComposing: true`) → **no INPUT frame**; after `compositionend` (`你好`), press Enter → the INPUT frames concatenate to bracketed `你好` + `0d`
+7. **Multi-line text is pasted as one block, then Enter**: paste `echo L1⏎echo L2` into the textarea and press Enter → the INPUT frames concatenate to something starting with `1b5b3230307e` and ending with `1b5b3230317e0d`, with the newline in between already turned into `0d`; both lines run, and `L1` and `L2` appear in the output
+8. **Enter never inserts a newline**: after every step above, `textinput.value` contains no `\n`
+9. **Follows the session** (AC-3.22 / AC-4.8, [ADR-0036](../20-architecture/adr/0036-text-page-per-session.md)): session A is on the text page with `echo DRAFT-A` in the box (no Enter); create session B from the session drawer → B is on the keys page (`extrakeys[data-page=keys]`, `textinput` not visible), with focus in B's terminal. In B, click `toggle-text` and fill in `echo DRAFT-B`. Switch back to A from the drawer → text page, `textinput.value` is `echo DRAFT-A`, focus is in the textarea; press Enter → `DRAFT-A` appears only in A's output. Switch to B from the drawer → text page, value `echo DRAFT-B`; click `toggle-text` back to the keys page, switch to A → A is still on the text page with an empty box (it was just sent); switch back to B → keys page, focus in the terminal; `DRAFT-B` is never sent at any point
 
-1. **wide 鼠标**（1440×900）：建到 3 个会话 A B C → 鼠标按住 C 的标签往左拖过 A 的中线松手 → 标签顺序是 C A B，编号（`tab-<sid>-idx`）依次是 `[1] [2] [3]`，当前会话不变（拖完不切换）；发出一条 `session.move{sid: C, before: A}`，随后收到 `session.order{sids: [C, A, B]}`；按住 B 横移 3px 松手 → 只是点击（切到 B），不发 `session.move`
-2. **拖到一半按 Esc**：按住 A 往右拖过 B，不松手按 `Esc` → 回到原位，松手后不发 `session.move`
-3. **顺序在 agent 上**：刷新页面 → 仍是 C A B；再开第二个 browser context（第二台设备）→ 它的标签顺序也是 C A B；在第一个里再拖一次（A 拖到最后）→ 第二个不刷新就变成 C B A
-4. **compact 拖动柄**（Pixel 5）：同一个 agent 上，打开抽屉 → 每行右端有 `session-<sid>-grip`；触摸按住最后一行的柄往上拖到第一行上方松手 → 它成为第一行、编号 `[1]`；按住一行的正文纵向拖 → 是滚动列表，顺序不变
-5. **触屏 Pad**（iPad Mini）：长按一个标签 500ms 后不松手横移过相邻标签再松手 → 顺序变了、不出现 `session-menu`；长按后原地松手 → 出现 `session-menu`
-6. **键盘切换按新顺序**：顺序是 C B A、当前是 C → `Ctrl+Shift+↓` 到 B
+---
+
+## E2E-41 Wide tab bar (AC-4.10)
+
+> `web/e2e/tabs.spec.ts`, 1440×900 with a mouse; step 7 uses the iPad Mini device descriptor, step 8 narrows the window midway. `open-settings` and the settings sheet: [ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md). Placement of `+`: [ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md).
+
+1. **Structure**: the top bar is above the terminal; `tabbar` (the tab strip) holds a single tab; `new-session` is in the top bar and **not** in `tabbar`, to the right of the strip, its left edge 12px from the strip's right edge (ADR-0035); `conn-dot` and `open-settings` are pinned at the right, `open-settings` rightmost with `conn-dot` right next to it on the left; the vertical centers of the SVG in `new-session`, the SVG in `open-settings`, and `conn-dot` differ pairwise by ≤ 0.5px, and the two SVGs are the same size; no `open-sessions`, no extra keys
+2. **New and switch**: click `new-session` → one more tab, and it's current; click the first tab → `__webterm.sid()` switches back; throughout, the `.term` rect and `__webterm.size()` don't change
+3. **Close**: hovering a non-current tab shows ✕; click it → if the session is running, `close-confirm` appears first (a centered dialog, not a browser dialog), and after clicking `close-ok` the tab disappears; middle-clicking a tab also confirms first; with focus in the terminal, `Ctrl+Shift+W` → the confirmation sheet; `Enter` → closed, and focus goes to the terminal of the new current session (AC-4.11)
+4. **Rename**: the tab has `tab-<sid>-idx` containing `[n]` (its position in the order); double-click the tab → `rename-input` appears; type `RENAMED` and press Enter → the tab text is `RENAMED` and `tab-<sid>-idx` is still `[n]` (renamed tabs keep their index too, ADR-0041); double-click again, clear it, press Enter → automatic naming is restored (the CWD's basename)
+5. **Session menu**: right-click a tab → `session-menu` has `session-rename` `session-pin` `session-close`; click `session-pin` → a pin appears before the tab name (an SVG inside `.pin-mark`); after switching away, OUTPUT frames for that session keep arriving with rising `seq`, and it gets no unread dot (`__webterm.outSeq()` only reports the current session, so check the frames)
+6. **Unread**: A has continuous output; switch to B → A's tab shows an unread dot in the accent color (the same color as the current tab's text, not `--err`, ADR-0042); switch back to A → it's gone
+7. **Touch** (iPad Mini): ✕ only on the current tab; long-press a tab and release in place → `session-menu`; extra keys present, with only `toggle-text` in the left column; `new-session` is 16px from `tabbar`'s right edge
+8. **Equal width and scrolling** (ADR-0031 / ADR-0035): with 3 sessions → the three tabs are equal width (within 1px), all 240px; `tabbar` is exactly as wide as the three tabs and doesn't scroll horizontally (`scrollWidth` = `clientWidth`); `new-session`'s left edge = the last tab's right edge + 12px; resize the window to 600×900 (`screen` unchanged, still `wide`) and create up to 5 → each tab is 120px (within 1px), `tabbar` overflows (`scrollWidth > clientWidth`), and the current (most recently created) tab is fully visible; **`new-session` lies entirely inside the top bar and is clickable (`elementFromPoint` hits it), its left edge = `tabbar`'s right edge + 12px**; scroll `tabbar` all the way left (`scrollLeft = 0`) → `new-session` doesn't move; (with `scrollLeft` at 0) mouse wheel down then up over the strip → `scrollLeft` first grows, then shrinks; resize the window back to 1440 → all 5 are 240px and nothing scrolls horizontally
+9. **The gap isn't clickable** (ADR-0035 §2): two sessions, focus in the terminal; click the midpoint of the 12px between the last tab's right edge and `new-session`'s left edge → the session count doesn't change, the current session doesn't change, and focus stays in the terminal
+10. **Settings is a centered dialog** (AC-5.11, ADR-0037 §4): with focus in the terminal, click `open-settings` → `settings` is centered horizontally and vertically (center within 1px of the visible area's center), 420px wide, with no grab handle; the `.term` rect and `__webterm.size()` don't change; press `Esc` → the sheet disappears and focus returns to the terminal's helper textarea (typing echoes)
+11. **Terminal title as the name** (AC-4.4, ADR-0043): the harness shell reads the user's `.bashrc`, whose prompt may set a `user@host: dir` title — wait two seconds; the tab name is still `~` (titles set by the shell are ignored); run `bash -c 'printf "\033]0;E2E TITLE\007"; sleep 3'` → the tab name becomes `E2E TITLE`, with the index still there; when it exits back to the prompt → the tab name goes back to `~`
+
+---
+
+## E2E-42 A column change resends the snapshot (AC-2.22)
+
+> `web/e2e/resync.spec.ts`. Hook `WebSocket` message and send.
+
+1. Start a session, `emit.sh 300 0`, wait for it to finish
+2. Resize the window from 1280 wide to 1000 wide (fewer columns) → the client sends `resize`, then receives a SNAPSHOT
+3. Assert: after the snapshot, the terminal's column count equals the new `cols`; `line 00300` is still there, exactly once
+4. Change only the height (`page.setViewportSize` with only height changed, simulating the on-screen keyboard) → a `resize` is sent, and **no** SNAPSHOT arrives
+5. **Stable column count** (AC-3.11, [ADR-0033](../20-architecture/adr/0033-own-fit.md)): step the window width from 860 to 940 by 4px; at each width, wait for rows/cols to settle, then reduce only the height by 200 → each time `__webterm.size().cols` is the same as before the height change (with FitAddon it went 104 → 103 at 900px)
+
+## E2E-43 Split UTF-8 loses no characters (AC-2.23)
+
+> `web/e2e/utf8split.spec.ts`.
+
+1. In the terminal, run `printf '\xe3\x80'; sleep 0.3; printf '\x82\xe2\x80'; sleep 0.3; printf '\xa6\xe2\x80'; sleep 0.3; printf '\x94END\n'` — `。`, `…`, and `—` are each split after their second byte, landing in different OUTPUT frames
+2. Assert that terminal line reads `。…—END`
+3. After a page refresh (snapshot path), the same line still reads `。…—END`
+
+## E2E-44 Touch vertical drag becomes the wheel (AC-3.21)
+
+> `web/e2e/touchwheel.spec.ts`, Pixel 5, real touch events via CDP (30ms per step, like a human hand). Hook `WebSocket.send` to record INPUT frames. Fixture `e2e/fixtures/scroller.py N`: alternate screen + mouse tracking (SGR), showing one screen of `L001`…`L300`, scrolling N lines per wheel event.
+
+1. Run `scroller.py 5` (tmux copy-mode's step), wait for `L300` at the bottom
+2. **One per row height**: drag the finger down 10 row heights → 10 ± 1 wheel events are sent, and the top line's number drops by about 50 (10 × 5, ±5); all are SGR wheel-up (`ESC[<64;col;rowM`) with row numbers within 1…`rows`; focus is unchanged (not a tap)
+3. Drag the finger up 6 row heights → 6 ± 1 wheel events, all wheel-down (`ESC[<65;…M`), and the top line's number rises by about 30 (±5)
+4. Quit, switch to `scroller.py 1`, and drag down 10 row heights → the top line's number drops by 10 ± 2 (with step 1, it follows the finger line by line)
+5. **Horizontal drag of 120px** → no INPUT frames
+6. Quit, run `printf '\033[?1049h\033[?1000h\033[?1006h'; sleep 60`, then `Ctrl+C` and `printf '\033[?1000l'` to turn off mouse tracking (still on the alternate screen) → drag down → no INPUT frames (no arrow keys sent, ADR-0024 §4)
+
+## Out of E2E scope (in the manual checklist)
+
+- How a real CJK IME's candidate window behaves on a real device
+- The real on-screen keyboard's open animation and layout
+- Real network switches (Wi-Fi ↔ 4G ↔ tunnel)
+- Real Let's Encrypt issuance
+- Installing the PWA on a real device
+- The Android system back button (E2E simulates it with `page.goBack()`)
+- Haptic feedback
+
+## E2E-45 Drag to reorder (AC-4.13)
+
+> `web/e2e/order.spec.ts`. [ADR-0040](../20-architecture/adr/0040-session-order-drag.md).
+
+1. **wide, mouse** (1440×900): create 3 sessions A B C → press C's tab with the mouse, drag it left past A's midline, and release → the tab order is C A B, the indexes (`tab-<sid>-idx`) read `[1] [2] [3]` in order, and the current session doesn't change (dragging doesn't switch); one `session.move{sid: C, before: A}` is sent, followed by `session.order{sids: [C, A, B]}`; press B, move 3px horizontally, release → just a click (switches to B), no `session.move`
+2. **Esc mid-drag**: press A and drag right past B, press `Esc` without releasing → back in place; releasing sends no `session.move`
+3. **The order lives on the agent**: reload the page → still C A B; open a second browser context (a second device) → its tab order is also C A B; drag again in the first (A to the end) → the second becomes C B A without reloading
+4. **compact drag handle** (Pixel 5): on the same agent, open the drawer → each row has `session-<sid>-grip` at its right end; touch-press the last row's handle, drag it above the first row, and release → it becomes the first row, index `[1]`; press a row's body and drag vertically → the list scrolls and the order doesn't change
+5. **Touch tablet** (iPad Mini): long-press a tab for 500ms, then without releasing move it past the adjacent tab and release → the order changed and `session-menu` doesn't appear; long-press and release in place → `session-menu` appears
+6. **Keyboard switching follows the new order**: with order C B A and C current → `Ctrl+Shift+↓` goes to B

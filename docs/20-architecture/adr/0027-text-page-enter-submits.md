@@ -1,51 +1,51 @@
-# ADR-0027 文本输入页：回车 = 发送并提交
+# ADR-0027 Text page: Enter sends and submits
 
-状态：已接受（2026-10-31）。**修订 [ADR-0025](0025-termux-style-ui.md) §3 的「回车做什么」与「怎么发」两条**，改写 AC-3.19 / US-3.1。文本页的切换方式、高度、输入框属性、组字处理、发完留在文本页这些都不变。
+Status: Accepted (2026-10-31). **Revises [ADR-0025](0025-termux-style-ui.md) §3** on what Enter does and how content is sent; rewrites AC-3.19 / US-3.1. How the text page is opened, its height, the field's attributes, IME handling, and staying on the text page after sending are unchanged.
 
-## 背景
+## Context
 
-ADR-0025 照搬了 Termux 的回车语义：有内容只发内容、不追加回车；空回车才发 `\r`。设想是先把一段中文送进 claude 的输入框，在那边改完再空按一次回车提交。
+ADR-0025 copied Termux's Enter semantics: with content, send only the content, no carriage return; an empty Enter sends `\r`. The idea was to drop a paragraph of Chinese into claude's input box, finish editing it there, and submit with an empty Enter.
 
-m8 上线后用户的反馈是「输出到终端没有自动回车」。文本页最主要的用途是给 claude / codex 写 prompt，写完就是要提交；每段都多按一次空回车，是多出来的一步，而且容易忘。
+After m8 shipped, the feedback was that sending to the terminal didn't press Enter. The text page is mostly used to write prompts for claude / codex, and a finished prompt is meant to be submitted. An extra empty Enter after every chunk is one more step, and an easy one to forget.
 
-## 决策
+## Decision
 
-### 1. 回车做什么
+### 1. What Enter does
 
-| 情形 | 行为 |
+| Situation | Behavior |
 |---|---|
-| 正在组字（`isComposing` 或 `keyCode === 229`） | 不处理，交给输入法选词（不变） |
-| 有内容 | **`term.paste(内容)`，紧接着 `term.input('\r', true)`**；清空文本框 |
-| 没有内容 | 发一个 `\r`（不变） |
+| IME composition in progress (`isComposing` or `keyCode === 229`) | Ignore; the IME uses it to pick a candidate (unchanged) |
+| Field has content | **`term.paste(content)`, immediately followed by `term.input('\r', true)`**; clear the field |
+| Field is empty | Send `\r` (unchanged) |
 
-回车永远不在文本框里插入换行，发完留在文本页、焦点不动（都不变）。
+Enter never inserts a newline into the field, and after sending you stay on the text page with focus where it was (both unchanged).
 
-### 2. 内容一律走 `term.paste()`，再单独键入 `\r`
+### 2. Content always goes through `term.paste()`, then `\r` is typed separately
 
-`term.paste()` 做两件事：换行转 `CR`；对端开了括号粘贴（`?2004h`）就包上 `ESC[200~ … ESC[201~`，没开就原样发。之后的 `\r` 是另一次 `onData`。两次都发生在回车 `keydown` 的派发里，走同一个出口，`inputStats` 照常计数，回放门照常判定（[ADR-0020](0020-input-never-silently-dropped.md)）。
+`term.paste()` does two things: it converts newlines to `CR`, and if the remote side enabled bracketed paste (`?2004h`) it wraps the content in `ESC[200~ … ESC[201~`; otherwise it sends it as is. The `\r` that follows is a separate `onData`. Both happen inside the Enter `keydown` dispatch and leave through the same exit, so `inputStats` counts them and the replay gate judges them as usual ([ADR-0020](0020-input-never-silently-dropped.md)).
 
-**为什么不能把 `\r` 拼在内容后面一起键入**：2026-10-31 用 pty 实测 claude 2.1.316。330 字的中文 prompt，换几种方式送进去：
+**Why `\r` can't be appended to the content in one write**: measured on 2026-10-31 with a pty against claude 2.1.316, sending a 330-character Chinese prompt several ways:
 
-| 送法 | 提交了吗 |
+| How it was sent | Submitted? |
 |---|---|
-| `内容\r` 一次写入（老 Composer 单行就是这么发的） | **没有**：整块被当成粘贴，`\r` 被吞，内容留在输入框里 |
-| `内容`，隔 15 / 50 / 150 ms 再写 `\r` | 提交了 |
-| `ESC[200~内容ESC[201~\r` 一次写入 | 提交了 |
-| 括号粘贴，隔 50 ms 再写 `\r` | 提交了 |
+| `content\r` in one write (how the old Composer sent a single line) | **No**: the whole block is treated as a paste, the `\r` is swallowed, and the text stays in the input box |
+| `content`, then `\r` after 15 / 50 / 150 ms | Yes |
+| `ESC[200~contentESC[201~\r` in one write | Yes |
+| Bracketed paste, then `\r` after 50 ms | Yes |
 
-短内容（`PROBE hello`）一次写入也能提交，所以这个坑只在长 prompt 上出现，而长 prompt 正是文本页的主要用途。
+Short content (`PROBE hello`) submits even in one write, so the problem only shows up with long prompts, which is exactly what the text page is for.
 
-括号粘贴的结束标记把「内容」和「回车」在字节上分开了，程序不用靠时间间隔去猜，所以不需要定时器。claude、codex、bash 5.1+ 的 readline、zsh 都开了括号粘贴。没开的程序收到的就是原样的内容加 `\r`：cooked 模式由内核的行规程逐字节处理，readline 也逐字节读，`内容\r` 照样就是「输入一行并回车」。
+The bracketed-paste end marker separates "content" from "Enter" at the byte level, so the program doesn't have to guess from timing and we need no timer. claude, codex, bash 5.1+ readline and zsh all enable bracketed paste. A program that doesn't receives the raw content plus `\r`: in cooked mode the kernel line discipline processes it byte by byte, and readline also reads byte by byte, so `content\r` still means "type a line and press Enter".
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **逐字键入内容，隔一段时间再发 `\r`。** 能工作，但正确性押在时间上：断线重发会把两帧合成一次写入（又回到「一次写入」那一行）；网络抖动会压缩间隔；codex 的 paste-burst 判定窗口有多宽，我们没量过（离线时它启动不了）。括号粘贴不需要这些前提。
-- **保留「只发不回车」，另加一个「发送并回车」按钮。** 文本页的键区只有一个 textarea，再塞按钮就要挤它的宽度；两种发送方式还得让用户记住哪个是哪个。真想先送进去再改，可以点终端直接打字。
-- **长按回车 = 不回车。** 老界面就是这条隐藏手势，[ADR-0025](0025-termux-style-ui.md) 已经把它删了：主入口要看得见，手势只当加速。
+- **Type the content, wait, then send `\r`.** It works, but correctness rests on timing. A resend after reconnect merges the two frames into one write (back to the failing row above); network jitter shrinks the gap; and we never measured codex's paste-burst window (it won't start offline). Bracketed paste needs none of these assumptions.
+- **Keep "send without Enter" and add a "send and Enter" button.** The text page is a single textarea; another button would squeeze it, and users would have to remember which button does what. To edit before submitting, tap the terminal and type there.
+- **Long-press Enter = no carriage return.** That was the old hidden gesture, which [ADR-0025](0025-termux-style-ui.md) removed: primary entry points must be visible, gestures are only shortcuts.
 
-## 后果
+## Consequences
 
-- 「先送进 claude 的输入框、在那边接着改、再空按回车提交」这条路没有了。要改就在文本页里改完再发。
-- 对端开了括号粘贴时，单行内容也以**粘贴**的身份到达，而不是一串按键。少数按单个按键响应的界面（`y/n` 确认、数字选项菜单）可能不把粘贴当按键。这类输入点终端直接按，或用附加键。
-- 已退出的会话：内容照旧丢弃，紧跟的 `\r` 关闭会话。这和「按 Enter 关闭」的提示一致（AC-4.5）。
-- AC-3.19、US-3.1、input.md §文本输入页、E2E-40 ④⑤⑦、UT-textinput-1 随之改写。
+- The flow "send into claude's input box, keep editing there, then submit with an empty Enter" is gone. Finish editing on the text page, then send.
+- With bracketed paste enabled, even single-line content arrives as a **paste**, not a series of key presses. A few interfaces that react to single keys (`y/n` prompts, numbered menus) may not treat a paste as a key press. Type those directly in the terminal or use the extra keys.
+- Exited session: the content is discarded as before, and the following `\r` closes the session, consistent with the "press Enter to close" line (AC-4.5).
+- AC-3.19, US-3.1, the text page section of input.md, E2E-40 ④⑤⑦ and UT-textinput-1 are rewritten.

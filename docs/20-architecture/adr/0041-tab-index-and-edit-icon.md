@@ -1,37 +1,37 @@
-# ADR-0041 标签带编号，同抽屉；文本页按钮换成线条图标
+# ADR-0041 Tabs carry the session number, as in the drawer; the text page button becomes a line icon
 
-状态：已接受（2026-10-31）。补充 [ADR-0031](0031-tabs-equal-width.md)（标签的内容）与 [ADR-0037](0037-settings-theme-and-font-size.md) §3（图标画法）。
+Status: Accepted (2026-10-31). Extends [ADR-0031](0031-tabs-equal-width.md) (tab content) and [ADR-0037](0037-settings-theme-and-font-size.md) §3 (icon style).
 
-## 背景
+## Context
 
-用户试用后提了两条：
+After trying the UI, the user raised two points:
 
-1. **`wide` 上同名的标签分不开。** 自动命名取的是 CWD 的 basename，开在同一个目录里的几个会话（常见：一个跑 claude、一个跑构建、一个看日志）标签上都写着同一个名字，只能靠位置记。手机上的会话抽屉每行前面有编号 `[n]`，同名的也分得开；标签上没有。
-2. **附加键左列的 ✎ 单薄。** 它是一个 Unicode 字符，18px 的字号下笔画只有 1px 上下，紧挨着上面会话按钮那个 2px 粗边的圆角方框，看起来轻飘飘的；字形还随平台字体变（ADR-0037 §3 当初就是为这个把 ⚙ 换成了 SVG，✎ 漏掉了）。
+1. **Tabs with the same name can't be told apart on `wide`.** The automatic name is the CWD's basename, so several sessions opened in the same directory (typically one running claude, one building, one tailing logs) all show the same name and can only be told apart by position. The phone's session drawer prefixes each row with its number `[n]`, so same-named sessions are distinguishable there; tabs had no number.
+2. **The ✎ in the extra keys' left column looks flimsy.** It's a Unicode character; at 18px its strokes are about 1px, right below the session button's rounded square with its 2px border, so it looks weightless. Its glyph also varies with the platform font (ADR-0037 §3 replaced ⚙ with an SVG for exactly this reason and missed ✎).
 
-## 决策
+## Decision
 
-### 1. 每个标签名前都带 `[n]`，与抽屉一致
+### 1. Every tab name is prefixed with `[n]`, as in the drawer
 
-- `[n]` 与抽屉里的是同一个编号：当前显示顺序里的第几个，从 1 开始，拖动排序、关掉中间的会话后跟着变（[ADR-0040](0040-session-order-drag.md)）。
-- **改过名的也带。** 两种形态显示同一套编号，用户在手机上记住的「3 号」到了大屏上还是 3 号；编号常在，标签的内容和宽度也不会因为改名多出、少掉一截。
-- 样式同抽屉：等宽字体、`--muted` 色、不加粗；当前标签里跟着用强调色。编号不截断，名字过长时截的是名字。
+- `[n]` is the same number as in the drawer: the position in the current display order, starting at 1, updated by drag reordering and by closing a session in the middle ([ADR-0040](0040-session-order-drag.md)).
+- **Renamed sessions get it too.** Both forms show the same numbering, so "number 3" on the phone is still number 3 on the big screen; with the number always present, a tab's content and width don't jump when it's renamed.
+- Styled as in the drawer: monospace, `--muted`, not bold; in the current tab it takes the accent color. The number is never truncated; an overlong name is truncated instead.
 
-### 2. 文本页按钮画成「铅笔斜出圆角方框」
+### 2. The text page button is drawn as "a pencil coming out of a rounded square"
 
-- 内联 SVG，22×22，线宽 2px，与上面会话按钮的方框（22px、2px 边框、圆角）同大、同粗：左列两个按钮看起来是一套。
-- 画法：圆角方框缺掉右上角，一支铅笔从框中间斜向右上伸出缺口。铅笔是「编辑」的通用写法，方框和会话按钮呼应。
-- 其余照 ADR-0037 §3：只描边、`currentColor`、圆头圆角。颜色跟按钮走：平时 `--fg`，文本页开着（`aria-pressed=true`）时强调色。
-- 比顶栏的 14px / 1.75px 图标大一号：顶栏按钮 36px 高，这里的按钮是 44×40、和会话数方框并排，14px 的图标在这里会比它旁边的方框小一圈。
+- Inline SVG, 22×22, 2px stroke, the same size and weight as the session button's square above it (22px, 2px border, rounded), so the two buttons in the left column look like a set.
+- The drawing: a rounded square with its top-right corner open, and a pencil running diagonally from the middle of the square out through the gap. A pencil is the common symbol for "edit", and the square echoes the session button.
+- Otherwise as ADR-0037 §3: stroke only, `currentColor`, round caps and joins. Color follows the button: `--fg` normally, the accent color while the text page is open (`aria-pressed=true`).
+- One size larger than the top bar's 14px / 1.75px icons: top bar buttons are 36px tall, while this one is 44×40 and sits next to the session count square; a 14px icon here would be noticeably smaller than its neighbor.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **改过名的标签不带编号。** 最初就是这么做的（理由：改名就是为了区分，编号成了噪音）。用户看过之后要求与手机一致、始终显示：两种形态的编号对得上更重要，编号时有时无反而要多想一步。
-- **只在同名的标签上带编号。** 编号时有时无，同一个标签会因为别的会话改了目录而忽然多出、少掉一截，宽度和位置跟着跳。
-- **键盘图标**（表示「打字」）。文本页的主用途是写一段话再发出去（给 claude 写 prompt），铅笔更贴；键盘图标还容易被理解成「弹出软键盘」。
+- **No number on renamed tabs.** That was the first version (the rename already distinguishes them, so the number is noise). After seeing it, the user asked for consistency with the phone and an always-visible number: matching numbers across forms matter more, and a number that comes and goes makes people think twice.
+- **Number only same-named tabs.** The number would come and go, and a tab would suddenly grow or shrink because another session changed directory, shifting widths and positions.
+- **A keyboard icon** ("typing"). The text page is mainly for writing a paragraph and sending it (prompts for claude), which a pencil fits better; a keyboard icon also reads as "show the on-screen keyboard".
 
-## 后果
+## Consequences
 
-- AC-4.10：标签上的内容加一条「标签名前有 `[n]`，同抽屉」。
-- session-ux.md §wide、input.md、layout.md §图标 同步。
-- E2E-41 ④ 改名一步加断言：改名前后 `tab-<sid>-idx` 都是 `[n]`；E2E-45 ① 拖完之后编号跟着新顺序。
+- AC-4.10: tab content adds "the tab name is prefixed with `[n]`, as in the drawer".
+- session-ux.md (`wide`), input.md, and layout.md (icons) are updated to match.
+- E2E-41 ④'s rename step asserts `tab-<sid>-idx` is `[n]` before and after renaming; E2E-45 ① checks numbers follow the new order after dragging.

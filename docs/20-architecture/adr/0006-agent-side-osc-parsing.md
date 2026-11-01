@@ -1,64 +1,42 @@
-# ADR-0006 OSC 由 agent 解析并剥离
+# ADR-0006 The agent parses and strips OSC sequences
 
-> **已被 [ADR-0026](0026-agent-holds-terminal-state.md) 取代**：agent 不再解析、不再剥离任何 OSC，输出流原样计数；工作目录改读 `/proc`。以下保留作历史记录。
+Status: Accepted (2026-09-06). Superseded by [ADR-0026](0026-agent-holds-terminal-state.md): the agent no longer parses or strips any OSC sequence, the output stream is counted as-is, and the working directory is read from `/proc`.
 
-> 状态：Accepted · 2026-09-06
+## Context
 
-## 背景
+Shell integration reported the command line, exit code, CWD and prompt state through OSC escape sequences mixed into the PTY output. Someone had to parse them.
 
-shell 集成通过 OSC 转义序列上报命令原文、退出码、CWD、prompt 状态。这些序列混在 PTY 的输出流里。问题是：**谁来解析它们？**
+## Decision
 
-## 决策
-
-**agent 侧解析并从输出流中剥离。client 收到的字节流不含任何 webterm 相关的 OSC 序列。** 结构化信息以 JSON 控制消息单独下发。
+**The agent parses them and strips them from the output stream.** Clients never see webterm's OSC sequences; the structured data goes out as separate JSON control messages.
 
 ```
-PTY.Read() → OSC 剥离器 ─┬─→ 剥离后的字节 → 环形缓冲(out_seq) → client 二进制帧
-                          └─→ 控制事件 → Store 落库 + client JSON 控制消息
+PTY.Read() → OSC stripper ─┬─→ stripped bytes → ring buffer (out_seq) → client binary frames
+                           └─→ control events → store + client JSON control messages
 ```
 
-## 备选方案与否决理由
+Key invariant: **`out_seq` advances after stripping.** `out_seq` is the cumulative number of bytes sent to the client. Counting before stripping would misalign resume slices and garble the screen. So stripping finishes before the ring buffer `append`, and nothing else in between rewrites the stream. This was added to the invariants in [CLAUDE.md](../../../CLAUDE.md).
 
-### A. client 侧解析（xterm.js 的 `registerOscHandler`）
+Only the sequences webterm cares about (OSC 133, 7, 1701) were stripped. Everything else (titles, hyperlinks, clipboard) passed through untouched; stripping them would break terminal features.
 
-xterm.js 提供了 OSC handler 注册接口，客户端可以直接消费。
+`command.start` / `command.end` carried an `out_seq` field marking where the command's output started and ended in the stream. v0.1 didn't use it; it reserved room for a command-block view (fold, jump, copy a block) without a protocol change.
 
-**否决**：
-- agent 也必须解析（命令历史要落库、CWD 要用于会话命名、prompt 状态要驱动 `unread` 逻辑）→ **两侧重复实现同一个状态机**，必然漂移
-- 历史落库依赖客户端 = 客户端不在线时命令不被记录，刷新页面就丢
-- 客户端要处理跨帧分片的 OSC，而帧边界由网络决定 → 更难测
+Rejected alternatives:
 
-### B. 两侧都解析，各取所需
+- **Parse in the client** (xterm.js `registerOscHandler`). The agent had to parse anyway: history goes to the database, CWD names sessions, prompt state drives `unread`. Two copies of one state machine would drift. History would also depend on a client being online (reload the page and commands go unrecorded), and OSC sequences split across network-determined frame boundaries are harder to test.
+- **Parse on both sides.** Two sources of truth for the same data.
 
-**否决**：同一份数据两个真相来源。
+## Consequences
 
-### C. agent 解析并剥离（采纳）
+Positive:
 
-## 关键不变式
+- One source of truth; the client stays simple.
+- History doesn't depend on a client being online.
+- The parser is a pure streaming state machine and easy to test with arbitrary splits, malformed input and oversized payloads.
 
-> **`out_seq` 在剥离之后递增。**
+Negative: the agent needs a correct streaming OSC state machine. It must handle:
 
-这条极其重要。`out_seq` 的定义是"agent 已发给 client 的累计字节数"。如果先计数再剥离，续传时按 `out_seq` 切片就会错位，屏幕会花。
-
-因此代码里 OSC 剥离必须在环形缓冲 `append` **之前**完成，且这一段没有任何其它会改写字节流的逻辑。这条写进 [CLAUDE.md](../../../CLAUDE.md) 的不变式清单。
-
-## 后果
-
-**正面**：
-- 单一真相来源，client 保持简单
-- 命令历史与客户端在线状态解耦，刷新/关页面不丢记录
-- OSC 解析器是纯函数式的流式状态机，**非常好测**（喂任意分片、畸形输入、超长负载）
-
-**负面**：
-- agent 需要一个正确的流式 OSC 状态机。要处理：
-  - 跨 `Read()` 边界的任意分片（序列可能被切在任何一个字节上）
-  - 两种终止符：`BEL`（`0x07`）和 `ST`（`ESC \`）
-  - 超长负载 → 必须有上限并在超限时放弃（防内存放大）
-  - 畸形负载 → 忽略但不能崩溃，也不能吞掉后续正常输出
-- 只剥离 **webterm 关心的** OSC（133 / 7 / 1701）。其它 OSC（标题设置、超链接、剪贴板）必须**原样透传**给 client，否则会破坏终端功能。
-
-## 前向兼容：为 v0.2 的命令块预留
-
-`command.start` / `command.end` 控制消息携带 `out_seq` 字段，标记该命令的输出在流中的起止偏移。
-
-v0.1 不用这个字段，但它让 v0.2 的命令块视图（折叠、跳转、块内复制）可以把块映射到缓冲区范围，**不需要改协议**。现在加上，成本为零。
+- splits at any byte across `Read()` calls;
+- both terminators, `BEL` (`0x07`) and `ST` (`ESC \`);
+- oversized payloads: cap them and give up past the cap, to bound memory;
+- malformed payloads: ignore them without crashing or swallowing the output that follows.

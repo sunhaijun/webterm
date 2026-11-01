@@ -1,47 +1,42 @@
-# ADR-0009 WebSocket 混合帧：二进制数据 + JSON 控制
+# ADR-0009 Hybrid WebSocket framing: binary data, JSON control
 
-> **被 [ADR-0026](0026-agent-holds-terminal-state.md) 修订**：新增 `SNAPSHOT` 帧类型（`0x03`，`flags` bit0 = `MORE`），删除 `ATTR_PREFIX`；协议版本 1 → 2。帧布局的其余部分不变。
+Status: Accepted (2026-09-06). Amended by [ADR-0026](0026-agent-holds-terminal-state.md): adds the `SNAPSHOT` frame type (`0x03`, `flags` bit 0 = `MORE`), removes `ATTR_PREFIX`, and bumps the protocol version from 1 to 2. The rest of the frame layout is unchanged.
 
-> 状态：Accepted · 2026-09-06
+## Context
 
-## 背景
+One WebSocket carries two very different kinds of traffic:
 
-需要在一条 WebSocket 上传输两类完全不同的东西：
+1. **Terminal bytes**: frequent, small, binary (UTF-8 may be split at any point), high volume.
+2. **Control messages**: infrequent, structured, need to be readable and evolvable.
 
-1. **终端字节流** —— 高频、小包、二进制（UTF-8 可能在任意位置被切断）、量大
-2. **控制消息** —— 低频、结构化、需要可读性和可演进性
+## Decision
 
-## 决策一：一条 WebSocket 多路复用所有会话
+### One WebSocket multiplexes all sessions
 
-每个数据帧头部携带 `sid`。不为每个会话开独立连接。
+Each data frame header carries a `sid`. Sessions don't get their own connections, because:
 
-**理由**：
-- 移动端连接数越少越好（省电、少握手、少 TLS 会话）
-- **一套重连逻辑**，而不是 N 套
-- 控制消息与数据消息的顺序在单连接内天然有序
-- 续传只需要一次 `hello` 往返就能恢复所有会话
+- fewer connections are better on mobile (battery, handshakes, TLS sessions);
+- there is **one reconnect path**, not N;
+- control and data messages are naturally ordered within one connection;
+- a single `hello` round trip resumes every session.
 
-## 决策二：数据用二进制帧，控制用 JSON 文本帧
+### Binary frames for data, JSON text frames for control
 
-| 帧类型 | 用途 | 格式 |
+| WebSocket frame | Use | Format |
 |---|---|---|
-| WebSocket **binary** | 终端输入/输出字节 | 12 字节定长头 + 原始负载 |
-| WebSocket **text** | 控制消息 | JSON，带 `t` 字段标识类型 |
+| **binary** | Terminal input/output bytes | 12-byte fixed header + raw payload |
+| **text** | Control messages | JSON with a `t` field naming the type |
 
-区分方式就是 WebSocket 帧自带的 opcode，不需要额外的判别字节。
+The WebSocket opcode tells them apart; no extra discriminator byte is needed.
 
-### 为什么数据不用 JSON
+Data isn't JSON because terminal output must carry arbitrary byte sequences, and JSON offers only two options:
 
-终端输出必须原样传输任意字节序列。放进 JSON 只有两条路：
+- **base64**: 33% larger, plus encode/decode CPU on both sides. Bad for mobile data and battery.
+- **JSON string escaping**: can't represent invalid UTF-8. PTY reads split multi-byte characters, and those half characters must pass through intact for the client's xterm to reassemble; otherwise the output is garbled.
 
-- **base64** → 体积 +33%，且两侧都要付编解码 CPU。移动网络和电量都吃亏。
-- **JSON 字符串转义** → 无法表示非法 UTF-8 序列。而 PTY 的读取边界会把多字节 UTF-8 字符切开，这种"半个字符"必须能原样传过去（由 client 的 xterm 缓冲拼接），否则会出现乱码。
+Control messages aren't binary because they're infrequent (a handful per second). Readability, debugging from a packet capture, and adding fields without breaking compatibility are worth far more than a few dozen bytes.
 
-### 为什么控制消息不用二进制
-
-控制消息低频（每秒个位数），JSON 带来的可读性、抓包可调试性、加字段不破坏兼容的演进能力，价值远大于那几十字节。
-
-## 二进制帧格式
+### Binary frame layout
 
 ```
  0        1        2        3        4  ...  11    12 ...
@@ -52,42 +47,44 @@
                     big-endian         big-endian
 ```
 
-- `type`：`0x01` = OUTPUT（agent→client），`0x02` = INPUT（client→agent）
-- `flags`：保留，必须为 0（接收方忽略未知位，便于将来扩展）
-- `sid`：`uint16`。单机会话数上限 20（可配），`uint16` 极大充裕
-- `seq`：OUTPUT 帧填该帧**首字节**的 `out_seq`；INPUT 帧填该帧**首字节**的 `in_seq`
-- 头部固定 12 字节。相对终端输出的典型包大小（几百字节到几 KB）开销可忽略
+- `type`: `0x01` = OUTPUT (agent → client), `0x02` = INPUT (client → agent).
+- `flags`: reserved, must be 0. Receivers ignore unknown bits so they can be used later.
+- `sid`: `uint16`. The per-machine session cap is 20 (configurable), so `uint16` is plenty.
+- `seq`: for OUTPUT, the `out_seq` of the frame's **first** byte; for INPUT, the `in_seq` of its first byte.
+- The header is a fixed 12 bytes, negligible next to typical output chunks of a few hundred bytes to a few KB.
 
-### 为什么 seq 是"累计字节数"而不是"消息序号"
+### `seq` counts bytes, not messages
 
-因为续传需要的是**字节级切片**，不是消息级重放。
+Resume needs **byte-level slicing**, not message replay:
 
 ```
-client: "我收到 12345 字节了"
-agent:  buf.Slice(from: 12345)  →  精确、无重叠、无空洞
+client: "I have received 12345 bytes"
+agent:  buf.Slice(from: 12345)  →  exact, no overlap, no gap
 ```
 
-如果 seq 是消息序号，agent 就必须保存"消息边界"这个纯粹由网络读取时机决定的偶然信息，而且重连后重新分片会导致边界不一致。用字节数则完全消除了这个概念 —— **消息边界变成无关信息**。
+With message numbers, the agent would have to keep message boundaries, which are an accident of when the network happened to read. Re-chunking after a reconnect would also make boundaries inconsistent. Counting bytes removes the concept entirely: **message boundaries become irrelevant.**
 
-这也让 AC-2.1 那条"字节级连续性"的测试可以严格成立。
+This is also what lets the byte-level continuity test (AC-2.1) hold strictly.
 
-## 后果
+### No compression (v0.1)
 
-**正面**：
-- 零编码开销，任意字节可原样传输
-- 续传逻辑退化为一次字节切片，简单到几乎不可能写错
-- 控制协议可读、可抓包、可加字段
+WebSocket `permessage-deflate` should compress terminal output well (lots of repeated escape sequences), but:
 
-**负面**：
-- 前后端各需要一份帧编解码实现（`internal/protocol` 与 `web/src/protocol`），必须严格对应。缓解：两侧都对同一组测试向量做单测（同一份 fixture JSON 定义"输入字节 → 期望帧"），保证不漂移。
-- 需要在 client 侧自己维护 `sid → 终端实例` 的路由
+- it adds significant CPU and memory on both sides (a deflate context per connection);
+- terminal output is mostly small packets, and flush boundaries eat most of the gain;
+- it gets in the way of debugging byte-level continuity.
 
-## 不做压缩（v0.1）
+Off for now. If measurements show bandwidth is the bottleneck on mobile networks, evaluate it separately in a new ADR.
 
-WebSocket 的 `permessage-deflate` 对终端输出理论上很有效（大量重复的转义序列）。但：
+## Consequences
 
-- 它会显著增加两侧的 CPU 和内存（每连接一个 deflate 上下文）
-- 终端流是大量小包，压缩收益被 flush 边界吃掉
-- 会干扰"字节级连续性"的调试
+Positive:
 
-先不开。如果实测发现移动网络下带宽是瓶颈，再单独评估并写新 ADR。
+- Zero encoding overhead; any byte goes through as-is.
+- Resume reduces to one byte slice, simple enough to be hard to get wrong.
+- The control protocol is readable, capturable and extensible.
+
+Negative:
+
+- The frontend and backend each need a frame codec (`internal/protocol` and `web/src/protocol`), and they must match exactly. Mitigation: both are unit-tested against the same fixture JSON of "input bytes → expected frame" vectors, so they can't drift.
+- The client maintains its own `sid` → terminal instance routing.

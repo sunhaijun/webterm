@@ -1,54 +1,52 @@
-# ADR-0029 触屏纵向拖：程序开了鼠标跟踪时转成滚轮
+# ADR-0029 Touch vertical drag: convert to wheel events when the program tracks the mouse
 
-> **§1「跟手靠自动标定」被 [ADR-0032](0032-drag-wheel-per-row.md) 去掉**：用户试用后觉得太慢，改成手指每移动一行高发一次滚轮，程序一次滚几行由程序自己定。§2 的转换条件、方向、发法、节流不变。「后果」里的实测表不再成立。
+Status: Accepted (2026-10-31). **Revises the "vertical drag" row of the gesture table in [ADR-0025](0025-termux-style-ui.md) §5**; adds AC-3.21. Main-screen touch scrolling, doing nothing on the alternate screen without mouse tracking ([ADR-0024](0024-scrollback-layered-model.md) §4), and the meaning of a tap are unchanged.
 
-状态：已接受（2026-10-31）。**修订 [ADR-0025](0025-termux-style-ui.md) §5 手势表里「纵向拖」一行**，新增 AC-3.21。主屏的触摸滚动、备用屏没开鼠标跟踪时不动（[ADR-0024](0024-scrollback-layered-model.md) §4）、「点一下」的语义都不变。
+Later: **§1 (auto-calibration) was removed by [ADR-0032](0032-drag-wheel-per-row.md)** because it felt too slow. Now one wheel event is sent per row of finger movement, and the program decides how many lines each one scrolls. §2's conditions, direction, dispatch and throttling are unchanged. The measurement table under Consequences no longer applies.
 
-## 背景
+## Context
 
-ADR-0025 §5 写的是：纵向拖用 xterm 自带的触摸滚动，「备用屏程序开了鼠标跟踪时由 xterm 按它的规则上报」。
+ADR-0025 §5 said vertical drag uses xterm's built-in touch scrolling, and "on the alternate screen with mouse tracking, xterm reports per its own rules".
 
-这条假设不成立。xterm 5.5 的触摸处理在 `areMouseEventsActive` 时直接返回，什么都不做（`Terminal.ts` 的 `touchstart` / `touchmove`）。浏览器只会把「点一下」合成为鼠标事件，拖动既不合成 `mousemove`，也不合成 `wheel`。
+That assumption was wrong. xterm 5.5's touch handlers return immediately when `areMouseEventsActive` (`touchstart` / `touchmove` in `Terminal.ts`). The browser only synthesizes mouse events for a tap; a drag produces neither `mousemove` nor `wheel`.
 
-结果是：程序一开鼠标跟踪，手机上纵向拖就**完全没反应**。用户的 claude / codex 跑在 tmux 里，`~/.tmux.conf` 里是 `set -g mouse on`，tmux 就会开鼠标跟踪；claude 自己也开（2.1.316 实测：1000 / 1002 / 1003 / 1006）。tmux 和 claude 都在备用屏，历史在它们自己手里，网页终端里没有可翻的东西，唯一的翻法就是把滚轮交给它们。
+So as soon as a program enables mouse tracking, a vertical drag on a phone **does nothing at all**. Users run claude / codex inside tmux with `set -g mouse on` in `~/.tmux.conf`, which makes tmux enable mouse tracking; claude enables it too (2.1.316: 1000 / 1002 / 1003 / 1006). Both tmux and claude run on the alternate screen and keep their history to themselves. The web terminal has nothing to scroll, and the only way to scroll is to hand the wheel to them.
 
-[ADR-0024](0024-scrollback-layered-model.md) §4 规划过同一个机制（按行累积、合成 `WheelEvent` 交给 xterm 编码），但从没落地，后来随 [ADR-0026](0026-agent-holds-terminal-state.md) 一起被取代；m8 之前的界面在手机上同样翻不动。
+[ADR-0024](0024-scrollback-layered-model.md) §4 planned the same mechanism (accumulate by line, synthesize a `WheelEvent` for xterm to encode) but it never shipped, and [ADR-0026](0026-agent-holds-terminal-state.md) superseded it. The UI before m8 couldn't scroll these programs on a phone either.
 
-2026-10-31 实测（Pixel 5 设备描述，真 tmux 开 `mouse on`）：手指纵向拖 300px，发出的 INPUT 帧 **0 个**，tmux 没进 copy-mode。同样的 tmux 在桌面上用滚轮，xterm 发出 `ESC[<64;…M`，tmux 进 copy-mode、往回翻。
+Measured on 2026-10-31 (Pixel 5 device profile, real tmux with `mouse on`): a 300px vertical drag sent **zero** INPUT frames and tmux stayed out of copy-mode. The same tmux with a desktop mouse wheel: xterm sends `ESC[<64;…M`, tmux enters copy-mode and scrolls back.
 
-## 决策
+## Decision
 
-**前台程序开了鼠标跟踪时，终端上的纵向拖由 webterm 转成滚轮，并且跟手：手指移动多少行，内容就移动多少行。**
+**When the foreground program has mouse tracking on, webterm converts vertical drags on the terminal into wheel events, and tracks the finger: content moves as many lines as the finger does.**
 
-### 1. 跟手靠自动标定
+### 1. Track the finger by auto-calibration
 
-一次滚轮滚几行由程序决定：tmux 的 copy-mode 5 行，vim 3 行（`mousescroll`），claude 随渲染器而变。webterm 事先不知道，所以每次拖动先量一下：
+How many lines one wheel event scrolls is up to the program: 5 in tmux copy-mode, 3 in vim (`mousescroll`), and it varies with claude's renderer. webterm can't know in advance, so each drag measures first:
 
-1. 拖动成立的那一刻发**第一次**滚轮，同时记下屏幕上的各行；
-2. 之后每次写入解析完（`onWriteParsed`），比较屏幕：在发之前只出现过一次的非空行，统计它们各自挪了几行，票数最多、且至少 2 行对得上的位移就是**步长**；
-3. 量到之前（最多 300ms），手指的位移先攒着不发，免得几次滚轮叠在一起量错；
-4. 量到之后，手指每移动「步长 × 行高」发一次滚轮。量到的那一下已经挪走的一步从攒着的位移里扣掉。
+1. When the drag is recognized, send the **first** wheel event and record the screen lines.
+2. After each write is parsed (`onWriteParsed`), compare the screen: for non-empty lines that appeared exactly once before, count how far each moved. The offset with the most votes, agreed by at least 2 lines, is the **step**.
+3. Until a step is measured (up to 300ms), accumulate the finger's movement without sending, so several wheel events don't overlap and spoil the measurement.
+4. Once measured, send one wheel event per "step × row height" of finger movement, subtracting the step already scrolled by the measured event.
 
-**量不到的那一下当作没挪，下一下再量。** tmux 开着 `mouse on` 时，第一次滚轮只是把 pane 推进 copy-mode，屏幕不挪（实测 3.5a 的根绑定：`copy-mode -e`）；真正滚动从第二下开始。一次拖动最多量 2 次，还量不到（到顶了没得滚、程序不按行滚）就按已知步长走，不再等。
+**A measurement that sees no movement counts as zero, and the next event measures again.** With tmux `mouse on`, the first wheel only puts the pane into copy-mode (tmux 3.5a's root binding is `copy-mode -e`) and the screen doesn't move; real scrolling starts with the second. A drag measures at most twice; if that still finds nothing (already at the top, or the program doesn't scroll by lines), it continues with the known step without waiting.
 
-步长记在会话的终端上，下一次拖动照样先量。从没量到过时按 3 行算。
+The step is remembered on the session's terminal, and the next drag measures again. If it has never been measured, assume 3 lines. If the program changes its step (another tmux pane, a changed `mousescroll` in vim), the next drag picks it up.
 
-程序换了步长（切到另一个 tmux pane、vim 里改了 `mousescroll`），下一次拖动就量到新值。
+### 2. Everything else
 
-### 2. 其余
+- **Direction** matches touch scrolling: dragging the finger down shows earlier content, i.e. wheel up (`deltaY < 0`).
+- **Dispatch**: each event is a synthetic `WheelEvent` on xterm's root element with `deltaMode = DOM_DELTA_LINE`, `deltaY = ±1`, and the finger's current coordinates. In xterm's mouse-tracking path one wheel event is one report, and xterm computes the encoding (X10 / SGR / URXVT) and row/column for the program's protocol. tmux uses the coordinates to pick the pane.
+- **Throttle** (from ADR-0024 §4): at most 3 events per `touchmove`; the excess is dropped, not carried to the next frame. Browsers coalesce `touchmove` to one per frame, so this is roughly 3 per frame, which keeps a fast flick from flooding the PTY with reports.
+- **What counts as a drag**: movement of at least 10px (the same threshold as a tap) with the vertical component dominant. Horizontal drags still do nothing.
+- **No second scroll by the browser**: call `preventDefault` on `touchmove` while converting.
+- **User input**: the synthetic `wheel` is `window.event` while it's dispatched, and it's in the user-input event list (`userinput.ts`), so it passes the replay gate as usual.
 
-- **方向**跟触摸滚动一致：手指往下拖 = 看更早的内容 = 滚轮向上（`deltaY < 0`）。
-- **怎么发**：每一次给 xterm 的根元素派发一个合成的 `WheelEvent`，带 `deltaMode = DOM_DELTA_LINE`、`deltaY = ±1`，坐标取手指当前位置。xterm 的鼠标跟踪路径里，一个滚轮事件就是一次上报，编码（X10 / SGR / URXVT）和行列都由 xterm 按程序要的协议算。tmux 按坐标决定滚哪个 pane。
-- **节流**（取自 ADR-0024 §4）：一次 `touchmove` 最多发 3 次，超出的丢掉，不攒到下一帧。浏览器把 `touchmove` 合并到每帧一个，所以约等于每帧最多 3 次，防止快速一甩往 PTY 灌一串上报。
-- **什么时候算拖**：位移满 10px（和「点一下」的门槛一致），并且纵向占优。横向拖不做任何事（不变）。
-- **不让浏览器再滚一次**：转换期间对 `touchmove` 调 `preventDefault`。
-- **用户输入**：合成的 `wheel` 在派发期间就是 `window.event`，它在用户输入事件表里（`userinput.ts`），回放期间照常放行。
+Without mouse tracking nothing changes: on the main screen, xterm's built-in touch scrolling moves through scrollback; on the alternate screen nothing moves, and **no** arrow keys are sent (ADR-0024 §4).
 
-没开鼠标跟踪时一切照旧：主屏走 xterm 自带的触摸滚动翻 scrollback；备用屏不动，**不**发方向键（ADR-0024 §4）。
+### 3. Limits
 
-### 3. 做不到的
-
-- **不会像素级平滑。** 全屏程序的屏幕是程序一帧一帧画的，最细一行一跳；步长是 5 的程序就是 5 行一跳，只是平均速度和手指一致。tmux 里想逐行动，把 copy-mode 的滚轮改成一次 1 行，标定自动跟上：
+- **Not pixel-smooth.** A full-screen program draws frame by frame, so the finest movement is one line; a program with a step of 5 jumps 5 lines at a time, only the average speed matches the finger. To scroll line by line in tmux, make the copy-mode wheel scroll 1 line, and calibration follows:
 
   ```
   bind -T copy-mode    WheelUpPane   select-pane \; send -X -N 1 scroll-up
@@ -57,29 +55,29 @@ ADR-0025 §5 写的是：纵向拖用 xterm 自带的触摸滚动，「备用屏
   bind -T copy-mode-vi WheelDownPane select-pane \; send -X -N 1 scroll-down
   ```
 
-  代价是桌面滚轮在 tmux 里也变成一格 1 行。
-- **慢一个网络往返。** 每一步都要等服务器上的程序重画回来，内容比手指晚一个 RTT。
+  The cost: a desktop wheel notch in tmux also scrolls only 1 line.
+- **One network round trip behind.** Every step waits for the program on the server to redraw, so the content trails the finger by one RTT.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **自己按协议编码滚轮上报。** 要处理 X10 / SGR / URXVT 三种编码、1000 / 1002 / 1003 三种模式，还要算行列，xterm 里全都有。合成 `WheelEvent` 交给它，以后 xterm 改了编码细节也跟着走。
-- **照 Termux 手指每移动一行高发一次。** 程序一次滚 N 行，内容就比手指快 N 倍：tmux 里拖一行高走 5 行，拖一下就滚出去一大截，不跟手。
-- **固定按 3 行一次换算**（多数程序的默认值）。tmux 默认 5 行，还是快 1.7 倍；claude 换渲染器步长就变。
-- **每一次滚轮都量。** 量一次要等一个往返，期间不能发下一次，滚动速度就被网络延迟卡死（一个往返一行）。每次拖动量一次就够：拖动过程中程序不会变。
-- **惯性滑动（fling）。** ADR-0026 §7 删掉了自写的惯性，量过实际效果再说。
-- **ADR-0024 §4 的「滚动交给了程序，打不进字就按 Esc / q」提示。** 它的判据是「转发过滚轮之后，用户打字而屏幕 1.5 秒内一个字节都没变」。可是 tmux 的 copy-mode 里按键会移动光标、重画屏幕，判据恰恰在最需要它的 tmux 里不触发。tmux 进 copy-mode 时右上角本来就有 `[12/340]` 位置指示。界面上也不再加说明文字（[ADR-0028](0028-settings-without-notes.md)）。
+- **Encode wheel reports ourselves.** That means handling three encodings (X10 / SGR / URXVT), three modes (1000 / 1002 / 1003) and the row/column math, all of which xterm already has. Handing it a synthetic `WheelEvent` also keeps us in step if xterm changes encoding details.
+- **One wheel event per row of finger movement, as Termux does.** With a program that scrolls N lines per event, content moves N times faster than the finger: one row of drag in tmux scrolls 5 lines, and a single swipe flies far past. (ADR-0032 later chose exactly this.)
+- **Assume 3 lines per event** (the common default). tmux's default is 5, still 1.7× too fast, and claude's step changes with its renderer.
+- **Measure every wheel event.** Each measurement waits a round trip with no event in flight, so scrolling speed would be capped by network latency (one line per round trip). Once per drag is enough: the program doesn't change mid-drag.
+- **Fling (inertial scrolling).** ADR-0026 §7 removed our custom inertia until measurements justify it.
+- **ADR-0024 §4's hint ("scrolling went to the program; if you can't type, press Esc or q").** Its trigger is "after a forwarded wheel, the user types and the screen doesn't change for 1.5 s". But in tmux copy-mode keys move the cursor and redraw the screen, so the trigger never fires in tmux, where it's needed most. tmux already shows a `[12/340]` position indicator in the top right while in copy-mode. And the UI no longer carries explanatory text ([ADR-0028](0028-settings-without-notes.md)).
 
-## 后果
+## Consequences
 
-实测（Pixel 5 设备描述，真 tmux 3.5a 开 `mouse on`，`seq 1 300` 之后读 copy-mode 的 `[N/300]`，手指每步隔 30ms）：
+Measured with the Pixel 5 profile and real tmux 3.5a with `mouse on`, after `seq 1 300`, reading copy-mode's `[N/300]`, with 30ms between finger steps:
 
-| | 手指向下拖 10 行 | 再拖两次 | 往回拖 6 行 |
+| | Drag down 10 rows | Two more drags | Drag back 6 rows |
 |---|---|---|---|
-| tmux 默认（一次 5 行） | 翻 10 行（第一下进 copy-mode，第二下量到 5） | 各 10 行 | 回 5 行 |
-| 绑定改成 `-N 1` | 翻 10 行 | 各 10 行 | 回 6 行 |
-| 对照：每行一次（Termux） | 50 行 | | |
+| tmux default (5 lines per event) | 10 lines (first event enters copy-mode, second measures 5) | 10 lines each | back 5 lines |
+| Binding changed to `-N 1` | 10 lines | 10 lines each | back 6 lines |
+| For comparison: one event per row (Termux) | 50 lines | | |
 
-- 手机上 tmux（`mouse on`）、claude、htop、`less --mouse` 这类程序能用手指翻了。
-- tmux 的 copy-mode 坑（[troubleshooting.md](../../80-ops/troubleshooting.md) §在 tmux 里突然打不进字）在手机上也会出现：pane 里的程序没开鼠标跟踪时，拖一下就把 pane 推进 copy-mode。出口照旧是 `q` / `Esc`。这和桌面滚轮是同一件事。
-- 每次拖动开头有一次标定：第一次滚轮立刻发，第二次要等程序重画回来（一个往返，最多 300ms）。
-- 新增 AC-3.21、E2E-44、UT-touch-1，手工清单加真机 tmux / claude 两条。
+- tmux (`mouse on`), claude, htop, `less --mouse` and similar programs can now be scrolled with a finger on phones.
+- The tmux copy-mode trap ([troubleshooting.md, Stuck after scrolling inside tmux](../../80-ops/troubleshooting.md#stuck-after-scrolling-inside-tmux)) can now happen on phones too: if the program in the pane doesn't track the mouse, one drag pushes the pane into copy-mode. The way out is still `q` / `Esc`. It's the same thing a desktop wheel does.
+- Each drag starts with a calibration: the first wheel event goes out immediately, the second waits for the program to redraw (one round trip, at most 300ms).
+- Adds AC-3.21, E2E-44, UT-touch-1, and two manual checklist items (real-device tmux and claude).

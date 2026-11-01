@@ -1,250 +1,190 @@
-# ADR-0024 回滚历史的分层模型：先把内容留在追加流里
+# ADR-0024 Layered scrollback model: keep content in the append stream
 
-> **§2–§4 已被 [ADR-0026](0026-agent-holds-terminal-state.md) 取代**（预算写入与回看暂停改用 xterm 原生；刷新后的历史由 agent 快照提供；备用屏滚动转滚轮不做）。§1（注入环境变量把 claude 拉回主屏）保留。
+Status: Accepted (2026-09-14). **§2–§4 are superseded by [ADR-0026](0026-agent-holds-terminal-state.md)**: output writes and touch scrolling are native xterm again, the agent's snapshot provides history after a reload, and alternate-screen drag-to-wheel was dropped (and later reintroduced differently by [ADR-0029](0029-touch-drag-to-wheel.md)). §1 (inject an environment variable to keep claude on the main screen) still holds.
 
-状态：已接受（2026-09-14）· **待落地**（四步，独立可交付、独立可回退，见[§决定](#决定)）
+## Context
 
-**不新增协议消息**：四步加起来一条 `t` 都不加，`out_seq` 记账口径（[CLAUDE.md](../../../CLAUDE.md) 不变式 ④）、增量续传（`resumed[].status == "ok"`）、[ADR-0019](0019-altscreen-redraw-not-replay.md) 的两类模型（主屏 = 追加流 / 备用屏 = 状态）全部原样保留。本 ADR 是在那两类模型之上回答一个新问题：**怎么让用户真的有东西可以往回拖。**
+### Requirements
 
-## 背景
-
-### 诉求拆成四条
-
-| | 要求 |
+| | Requirement |
 |---|---|
-| **R1 能回滚** | 往上拖能看到更早的内容，**刷新之后仍然能** |
-| **R2 不重复** | 同一段内容只出现一份 |
-| **R3 不错乱** | 折行与对齐和产出时一致，不出现被差分帧打歪的画面 |
-| **R4 不卡顿** | 拖动跟手，回放 / 恢复不把主线程占死 |
+| **R1 Scrollback** | Scrolling up shows earlier output, **including after a page reload** |
+| **R2 No duplicates** | Each piece of output appears once |
+| **R3 No corruption** | Wrapping and alignment match what was produced; no screens mangled by diff frames |
+| **R4 No jank** | Dragging follows the finger; replay and restore don't monopolize the main thread |
 
-### 症状
+### Symptoms
 
-- 刷新页面后终端**只剩最后一屏**，往上拖是空的 —— 哪怕刷新前 xterm 缓冲里有几千行。
-- 手机上在 claude 里纵向拖**什么都不会发生**（死手势）。
-- 桌面上滚轮在 claude 里"能动"，但那是 claude 自己在滚它的对话，不是终端的 scrollback；刷新一下就没了。
+- After a reload the terminal shows only the last screen and scrolling up shows nothing, even if xterm held thousands of lines before.
+- On phones, a vertical drag inside claude does nothing.
+- On desktop the wheel "works" in claude, but that's claude scrolling its own conversation, not terminal scrollback. A reload loses it.
 
-刷新为什么只剩一屏：刷新把前端状态清空，每会话的 `outSeq` 回到 0（`web/src/conn/connection.ts:464`），`subscribe{out_seq: 0}` 让 agent 把环形缓冲里**全部**字节发过来；这些字节里有一次 `ESC[?1049h`，之后的所有内容都画在**备用缓冲**上 —— 它没有 scrollback，几千帧绝对定位的差分重绘互相覆盖，**重放 1 MiB 的终态与只画最后一帧的终态逐字节相同**。不是加载完又丢掉，是本来就全画在同一屏上。
+Why a reload leaves one screen: the reload resets each session's `outSeq` to 0, so `subscribe{out_seq: 0}` makes the agent send the entire ring buffer. That window contains an `ESC[?1049h`, so everything after it is drawn on the **alternate buffer**, which has no scrollback. Thousands of absolutely positioned diff frames overwrite each other, and replaying 1 MiB ends in exactly the same state as drawing only the last frame. Nothing is lost after loading; it was all drawn on one screen.
 
-### 判据：能不能回滚，取决于内容是不是追加流
+### Scrollback exists only for append-stream content
 
-[ADR-0019](0019-altscreen-redraw-not-replay.md) 把会话输出分成两类。这条分类同样决定"有没有历史可回滚"：
+[ADR-0019](0019-altscreen-redraw-not-replay.md) splits session output into two kinds, and the same split decides whether there is history to scroll:
 
-- **追加流**（主屏、有 LF）：行会滚出屏幕进 scrollback，"往回拖"这件事才存在，回放与恢复也才有正确的模型。
-- **状态**（备用屏差分帧）：终端从来没见过历史，只见过一屏屏覆盖。scrollback 里没有，环形缓冲里那堆字节也拼不出来。**tmux / mosh / iTerm 一样做不到** —— 备用屏程序的历史在程序自己的进程里。
+- **Append stream** (main screen, with line feeds): lines scroll off into scrollback. Scrolling back makes sense, and replay and restore have a correct model.
+- **State** (alternate-screen diff frames): the terminal never sees history, only screens overwriting each other. Neither scrollback nor the ring buffer can reconstruct it. **tmux, mosh and iTerm can't either**: an alternate-screen program's history lives inside that program.
 
-所以"可靠地做到 R1–R3"不是找一个更聪明的回放算法，而是**先让想回滚的内容待在追加流里**，再补上刷新时的重建纪律。R4 与这一切正交，得单独做。
+So R1–R3 don't need a smarter replay algorithm. They need the content to **stay in the append stream**, plus a rebuild discipline for reloads. R4 is orthogonal and needs its own work.
 
-### 实测：claude 2.1.270 的两种渲染器
+### Measured: claude 2.1.270 renderers
 
-pty 100×30，`TERM=xterm-256color`，cwd 为仓库根，**清掉从父进程继承的 `CLAUDE_*` / `AI_AGENT` 变量**（不清的话它会进"嵌套会话"降级态，测出来的不是真实形状）。
+pty 100×30, `TERM=xterm-256color`, cwd at the repo root, with inherited `CLAUDE_*` / `AI_AGENT` variables cleared (otherwise claude runs in a degraded "nested session" mode and the numbers are wrong).
 
-| | 默认（fullscreen） | `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` |
+| | Default (fullscreen) | `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` |
 |---|---|---|
-| 启动字节 | 1383 B | 1430 B |
-| `ESC[?1049h` | **1 次**（启动头 20 B 内） | **0 次** |
-| LF（`0x0a`） | **0** | **10** |
-| DECSET 模式 | 1000 · 1002 · 1003 · 1004 · 1006 · 2004 · 2031 · 25 | 1004 · 2004 · 2031 · 25（**不开鼠标跟踪**） |
-| 按键稳态 | 差分帧、绝对定位（[ADR-0019](0019-altscreen-redraw-not-replay.md) 实测 ~40 B） | 45–66 B，`ESC[A`/`ESC[B` + `ESC[K`：**相对**光标移动的就地重绘 |
-| 改 winsize | 1.2 KB 整屏重画 | 1402 B 整屏重画 |
-| 一次 SGR 滚轮上报 | 52 B 重画（它自己在滚） | — |
+| Startup bytes | 1383 B | 1430 B |
+| `ESC[?1049h` | **once** (within the first 20 B) | **never** |
+| LF (`0x0a`) | **0** | **10** |
+| DECSET modes | 1000 · 1002 · 1003 · 1004 · 1006 · 2004 · 2031 · 25 | 1004 · 2004 · 2031 · 25 (**no mouse tracking**) |
+| Per keystroke | diff frame, absolute positioning (~40 B, see ADR-0019) | 45–66 B, `ESC[A`/`ESC[B` + `ESC[K`: in-place redraw with **relative** cursor moves |
+| Window resize | 1.2 KB full redraw | 1402 B full redraw |
+| One SGR wheel report | 52 B redraw (claude scrolls itself) | — |
 
-三条结论：
+1. With the default renderer claude's output is **state**. There is no terminal-level history to scroll. That's not a webterm defect; a local terminal behaves the same.
+2. `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` turns it back into an **append stream**, and in-place redraws use **relative** cursor moves, so replaying from any clean starting point converges. That is the assumption webterm's replay model relies on.
+3. The classic renderer still handles SIGWINCH (1402 B redraw), so the fallback in [ADR-0019](0019-altscreen-redraw-not-replay.md) §6 still works.
 
-1. 默认渲染器下 claude 的输出是**状态**，终端层面没有历史可回滚 —— 这不是 webterm 的缺陷，本机终端里也一样。
-2. `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` 把它变回**追加流**，而且就地重绘用的是**相对**光标移动而不是绝对定位 —— 从任意干净起点重放都会自洽收敛，这正是 webterm 现有回放模型成立的前提。
-3. classic 渲染器仍然响应 SIGWINCH（1402 B 整屏重画），[ADR-0019](0019-altscreen-redraw-not-replay.md) §6 的兜底路径照常有效。
+Two limits on these conclusions:
 
-两条边界要写在这里，免得后人把结论用过头：
+- The probe used an empty session. The 52 B wheel response only proves claude received the wheel and redrew, not how far it can scroll. The binary contains `CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL` / `CLAUDE_CODE_SCROLL_SPEED`, so alternate-screen scrolling is claude's own virtual scroll.
+- `CLAUDE_CODE_*` are **private upstream switches** with no compatibility promise (the binary says: "the next launch will use the classic renderer (`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` forces that any time)"). So the injection must be possible to turn off and possible to verify (see [Verifying step 1](#verifying-step-1)).
 
-- 探测用的是**空会话**。"默认渲染器下滚轮回 52 B"只能证明它**收到了**滚轮并重画，**不能**证明它能回滚多远。二进制里有 `CLAUDE_CODE_DISABLE_VIRTUAL_SCROLL` / `CLAUDE_CODE_SCROLL_SPEED`，说明备用屏下的回滚是它自己实现的 virtual scroll。
-- `CLAUDE_CODE_*` 是**上游私有开关**，没有兼容承诺（二进制里的原话：the next launch will use the classic renderer (`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` forces that any time)）。所以它必须**可关**、必须**可验证**（见[§排障口径](#排障口径)）。
+### Measured: xterm.js 5.5
 
-### 实测：xterm.js 5.5 这一侧
+- In xterm's mouse protocol table, bit 4 (16) is WHEEL in `VT200` (19), `DRAG` (23) and `ANY` (31). **Once a program enables `?1000` or higher, the wheel belongs to the program** and local scrollback doesn't move. claude enables 1000+1002+1003+1006.
+- The alternate buffer has no scrollback, so `.xterm-viewport` has nothing to scroll. That's the mechanical reason the drag does nothing: our touch handler set `scrollTop`, which stays 0 on the alternate screen.
 
-- 鼠标协议表里 `VT200 events:19`、`DRAG events:23`、`ANY events:31`，bit4（=16）是 WHEEL。**只要程序开了 `?1000` 以上的跟踪，滚轮就归程序**，本地 scrollback 不动。claude 开的是 1000+1002+1003+1006。
-- 备用缓冲没有 scrollback，`.xterm-viewport` 没有可滚内容 —— 这就是那个死手势的机械原因：`web/src/term/pinch.ts:249` 的纵向拖直接改 `scrollTop`，而备用屏下它恒为 0。
+### Sources of jank (independent of the history model)
 
-### 卡顿的三处来源（与历史模型无关，单独存在）
+1. **Touch drag runs as main-thread JS.** `.term` has `touch-action: none` (touches land on `.xterm-screen`, a sibling of the scroll container, so native touch scrolling can't move it). Every `touchmove` set `scrollTop` synchronously and ran a `querySelector`. The compositor isn't involved, and scrolling stops dead on release, with no inertia.
+2. **Forced writes interrupt reading.** While follow is paused, the output queue drained everything at once after 2 MiB or 4000 lines, interrupting whoever was reading old output. Step 1 makes claude a real line stream, so this happens more often.
+3. **Replay is written in one go.** The replay path bypassed the queue and wrote up to 1 MiB at once. xterm parses in ~12 ms slices so the page doesn't freeze, but it takes dozens of frames, and scrolling stutters meanwhile.
 
-1. **触屏纵向拖是纯主线程 JS。** `web/src/style.css:132` 给 `.term` 设了 `touch-action: none`（触点落在 `.xterm-screen` 上，它和滚动容器是兄弟节点，原生触摸滚不动它），`pinch.ts:249` 每个 `touchmove` 同步改一次 `scrollTop`，还每次 `querySelector` 一次。合成器完全不参与，**松手即停、没有惯性**。
-2. **回看期间的强制写入会打断滚动。** `web/src/term/outputqueue.ts:29-33`：暂停跟随时攒到 2 MiB 或 4000 行就**一次性** drain。正在读旧输出时被一次大 write 打断。第 1 步之后 claude 输出变成真正的行流，触发概率变高。
-3. **回放一次写完。** `web/src/sessions/store.ts:278-283` 的回放路径绕开队列直接 `write`，最多 1 MiB。xterm 的 WriteBuffer 按 ~12 ms 预算分片解析，所以页面不会冻住，但会占掉几十帧，期间滚动就是卡的。
+## Decision
 
-## 决定
+Four steps, **shipped in this order**. Steps 1–2 fix everyday use; steps 3–4 cover the edges.
 
-四步，**按此顺序落地**。前两步就能兑现日常体感，后两步补齐边角。
+**No step adds a protocol message.** `out_seq` accounting (invariant 4 in [CLAUDE.md](../../../CLAUDE.md)), incremental resume (`resumed[].status == "ok"`), and ADR-0019's two models (main screen = append stream, alternate screen = state) stay exactly as they are.
 
-### 1. 内容层：把全屏 TUI 拉回主屏
+### 1. Content: keep full-screen TUIs on the main screen
 
-新增两个开关：
+Two new flags:
 
 ```
---session-env KEY=VAL     # 可重复。注入会话 PTY 的环境变量
---no-altscreen-compat     # 关掉下面这份内置清单
+--session-env KEY=VAL     # repeatable; environment variable injected into session PTYs
+--no-altscreen-compat     # disable the built-in list below
 ```
 
-内置清单（会话创建时注入，`internal/session/manager.go` 的 `cmd.Env`）：
+Built-in list, injected when a session is created (`cmd.Env` in `internal/session/manager.go`):
 
-| 变量 | 值 | 为什么 |
+| Variable | Value | Why |
 |---|---|---|
-| `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` | `1` | 让 claude 走 classic 渲染器，输出回到追加流 |
+| `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` | `1` | claude uses its classic renderer, so output is an append stream again |
 
-三条规则：
+- **Never override what the user already set.** If the agent's own environment (or `--session-env`) already has the key, the user's value wins. It's their machine.
+- **`--session-env` takes precedence over the built-in list**, and `--no-altscreen-compat` disables the list entirely. Both are in `configKeys`, so they can go in the config file.
+- **The list only holds variables that keep full-screen TUIs on the main screen.** Nothing that changes what a program does (model, permissions, telemetry).
 
-- **用户已经设过的不覆盖。** agent 自己的环境里（或 `--session-env`）已有同名键时，以用户的为准 —— 这是他的机器，不是我们的。
-- **`--session-env` 优先于内置清单**，`--no-altscreen-compat` 整份关掉。两者都进 `configKeys`，可以写进配置文件。
-- **清单只放"把全屏 TUI 拉回主屏"这一类变量**，不放任何改变程序行为的东西（模型、权限、遥测一概不碰）。
+On by default because webterm exists to [run AI CLIs from a phone](0012-ai-cli-conversation-first.md), where the alternate screen is pure loss: no scrollback, nothing to drag, one screen after a reload, a forced redraw on every switch back. It must be possible to turn off because upstream promises nothing, and some people prefer the input box pinned to the bottom.
 
-为什么默认开：webterm 的定位就是[手机上用 AI CLI](0012-ai-cli-conversation-first.md)，而备用屏在这个场景里是**纯损失** —— 没有 scrollback、拖不动、刷新只剩一屏、切回还要靠 `redraw` 重画一遍。为什么必须能关：上游开关没有兼容承诺；也有人就是喜欢钉在底部的输入框。
-
-代价（要写进[install.md](../../80-ops/install.md)，不能让用户自己撞上）：**输入框从"钉在屏幕底部"变成"输出流的最后几行"**。
-
-实测把它说清楚（classic 渲染器，100×30，跑一条产出 60 行的命令，把字节流喂进一个最小 VT 渲染器复原）：
+The cost, which [install.md](../../80-ops/install.md) must state: **claude's input box is no longer pinned to the bottom of the screen; it's the last few lines of the output stream.** Measured with the classic renderer at 100×30, running a command that prints 60 lines and feeding the bytes into a minimal VT renderer:
 
 ```
-scrollback  ……  40  41                    ← 滚出屏幕的 47 行，全是真实输出
-屏幕 0-18   42 … 60                        ← 剩下的输出
-屏幕 20     ● 助手消息
-屏幕 24-26  ───────  ❯ hi  ───────          ← 输入框：贴底时就在屏幕底部
-屏幕 27-28  ⏵⏵ auto mode on · 状态提示
+scrollback  ……  40  41                    ← the 47 lines that scrolled off: all real output
+screen 0-18   42 … 60                     ← the rest of the output
+screen 20     ● assistant message
+screen 24-26  ───────  ❯ hi  ───────      ← input box: at the bottom while following
+screen 27-28  ⏵⏵ auto mode on · status hints
 ```
 
-三条结论：
+- **While following output, the input box is still at the bottom of the screen**, visible and usable. No change from before.
+- **It scrolls out of view only when you scroll back** (on the alternate screen you couldn't scroll, so it was always there). Scroll to the bottom and it's back. On phones, typing goes through webterm's own [bottom key row and edit panel](0015-bottom-keyrow.md), which is page UI pinned to the bottom and doesn't depend on claude's box.
+- **No stale copies of the input box ended up in scrollback in this run.** The classic renderer erases its active area before appending (the `ESC[K` in each 45–66 B keystroke update), and all 47 scrolled-off lines were real output. That makes R2 cleaner than expected, but it's one observation, not a guarantee; step 5 of E2E-36 asserts it.
 
-- **贴底时输入框照样在屏幕底部**，看得见、能打字 —— 与今天没有区别。
-- **只有滚上去回看时它会跟着滚出视野**（备用屏下滚不动，所以它"永远在"）。回到底部就回来；而且手机上真正打字用的是 webterm 自己的[底部键条与编辑面板](0015-bottom-keyrow.md)，那是网页 UI，永远在屏幕底部，不依赖终端里那个框。
-- **这一轮实测里 scrollback 没有旧输入框的残影**：classic 渲染器在追加新内容前会擦掉自己的活动区（每次按键那 45–66 B 里的 `ESC[K` 就是干这个），滚出去的 47 行全是命令的真实输出。所以 R2 在这条路上比预期还干净 —— 但这是一次观测，不是承诺，E2E-36 第 5 步会把它钉成断言。
+### 2. Gestures and rendering: make scrolling follow the finger
 
-### 2. 手势与渲染层：让滚动跟手
+Superseded by ADR-0026 §7. Three independent frontend changes:
 
-三处，都在前端，互不依赖：
+- **Apply the drag once per frame** in a `requestAnimationFrame` callback, with inertia on release (none under `prefers-reduced-motion`).
+- **Drain forced writes in slices**, one budgeted slice per frame, so a reader isn't interrupted by one huge write.
+- **Route all large writes through one budgeted writer** (replay, snapshot restore, forced drains; 64 KiB per frame to start). **Order never changes**: xterm can't prepend, so "draw the last screen first, then backfill history" is wrong.
 
-- **拖动落地改成每帧一次。** 手势开始时缓存 `.xterm-viewport` 元素（别每个 `touchmove` 都 `querySelector`）；`touchmove` 只累加位移，`requestAnimationFrame` 里统一落一次 `scrollTop`；`touchend` 按末速度做**惯性衰减**（速度算法复用 `web/src/term/hswipe.ts` 的那套），碰到边界或下一次 `touchstart` 立刻停。`prefers-reduced-motion` 下不做惯性（直接停），与横滑切会话的处理一致。
-- **回看期间的强制写入改成分片慢写。** 攒到上限后不再一次 drain，而是每帧写一小块（预算见下），队列继续接收。视口位置由 xterm 维持，用户不会被拽到底部 —— 这条不变。
-- **所有大块写入都走同一个带预算的写入器。** 回放、快照恢复、强制写入共用：每帧最多写 `WRITE_BUDGET`（初值 64 KiB，按实测调），排完为止。**顺序绝不改**：xterm 不能前插，"先写最后一屏再补历史"是错的，只会把顺序搞乱。
+Gate: **no long task over 50 ms** while dragging, at most one `scrollTop` write per frame. This dev machine has no GPU, so only main-thread milliseconds are trustworthy; real-device numbers go in the [manual checklist](../../70-testing/manual-checklist.md).
 
-门槛（进验收标准）：拖动期间**没有 > 50 ms 的长任务**，每帧至多一次 `scrollTop` 写入。这台开发机没有 GPU，**只信主线程毫秒数**，掉帧数只能横向比；真机数值另外记进[手工清单](../../70-testing/manual-checklist.md)。
+### 3. Persistence: scrollback survives a reload
 
-### 3. 持久层：刷新之后仍有历史可滚
+Superseded by ADR-0026 §3 (the agent sends a snapshot instead); never merged. The plan was a client-side `SerializeAddon` snapshot of the last 2000 lines, saved to IndexedDB on `pagehide` together with the session's `outSeq` and keyed by `instance_id:sid`, then restored before `subscribe{out_seq}`. The rules that made it safe still explain the snapshot design that replaced it:
 
-客户端快照，**纯前端，不动协议**。`SerializeAddon` 已经加载在 `web/src/term/terminal.ts:63`，今天只在测试里用。
+- **The snapshot and `outSeq` must come from the same instant**, or nothing is stored. Using a snapshot while reporting `out_seq: 0` makes the agent **append the whole history again**, which is the real source of duplicates (R2).
+- **Discard on `instance_id` mismatch**: the agent restarted and sids are reused (same reason as AC-2.13).
+- **Don't snapshot alternate-screen sessions.** State isn't a stream; storing it produces ADR-0019-style ghosts.
+- **2000 lines, not 5000.** 5000 lines with SGR attributes can reach several MB, too much to serialize in `pagehide`.
 
-**存**（`pagehide`，外加 `visibilitychange:hidden` 兜底 —— iOS 只保证前者）：
+### 4. Alternate screen: hand scrolling to the program
 
-```
-1. 先 queue.drain()          // 攒着的字节必须先落进缓冲，否则快照与 outSeq 对不上
-2. serialize.serialize({scrollback: SNAPSHOT_LINES})
-3. 读 connection.outSeqOf(sid)
-4. 一起写 IndexedDB：{ key: `${instance_id}:${sid}`, data, outSeq, cols, savedAt }
-```
+Superseded by ADR-0026; the drag-to-wheel part was later reintroduced by [ADR-0029](0029-touch-drag-to-wheel.md). This step serves vim, less, htop, and people who keep the alternate screen.
 
-**取**（页面加载、`welcome` 到达之后、`subscribe` 之前）：
+- When the buffer is alternate **and** `term.modes.mouseTrackingMode !== 'none'`, a vertical drag no longer sets `scrollTop`. It accumulates by line height and dispatches synthetic `WheelEvent`s to `.xterm-screen`, **letting xterm encode the report in whatever protocol is active** (x10 / vt200 / 1006 / 1015). We don't build SGR sequences ourselves; that would re-implement protocol selection.
+- **Throttle** to at most 3 lines per 16 ms. One swipe can be dozens of lines; unthrottled, it floods the PTY.
+- **Alternate-screen programs without mouse tracking stay as they are** (no drag). **Never** fall back to PageUp or arrow keys: that changes program state (vim moves the cursor), which is worse than doing nothing.
 
-```
-instance_id 不匹配 → 丢弃（agent 重启过，sid 会张冠李戴 —— 与 AC-2.13 同一条理由）
-超过 24h / 超过体积上限 → 丢弃
-命中 → terminal.reset() → 分片写入快照 → outSeq = 快照里的值 → subscribe{out_seq}
-```
+This path satisfies R2/R3 by construction (every screen is a full frame drawn by the program) but **can't satisfy R4**: each scroll costs a round trip plus a redraw (52 B to 1.2 KB measured), so it feels like paging. Only step 1 gives smooth scrolling.
 
-四条纪律：
+#### Wheel reports can change program state, not just scroll (measured 2026-09-19)
 
-- **快照与 `outSeq` 必须来自同一时刻**，任何一步失败就整条不存（宁可退回今天的行为）。这是 R2 的命门：一旦出现"用了快照却报 `out_seq: 0`"，agent 会把整段历史**再追加一遍** —— 那才是真正的重复来源。
-- **备用屏会话不存快照**（`term.buffer.active.type === 'alternate'`）。状态不是流，存下来就是 [ADR-0019](0019-altscreen-redraw-not-replay.md) 那种残影。第 1 步之后 claude 不在这条路上，vim / less 仍在。
-- **`SNAPSHOT_LINES` 取 2000，不是 5000。** 序列化 5000 行带 SGR 属性可能几 MB，`pagehide` 里做不完；2000 行已经覆盖"往回翻一翻"的真实需求。
-- **只存活动会话 + 最近 K 个**（K 取 3），其余丢弃；IndexedDB 不是无限的。
-
-ring 已经翻轮时照旧走 `ATTR_PREFIX`：清屏重建，快照被覆盖 —— 协议里已有的语义，不需要改。
-
-### 4. 备用屏层：把回滚交给程序
-
-只服务 vim / less / htop，以及不愿关备用屏的人。
-
-- 备用缓冲 **且** `term.modes.mouseTrackingMode !== 'none'` 时，纵向拖不再改 `scrollTop`，而是按行步长累积、合成 `WheelEvent` 派发到 `.xterm-screen`，**让 xterm 按它当前的协议（x10 / vt200 / 1006 / 1015）自己编码上报** —— 我们不自己拼 SGR 序列，那等于把协议选择重写一遍。
-- **有节流上限**（每 16 ms 最多 3 行）：一次滑动可能对应几十行，不节流就是往 PTY 灌。
-- **没开鼠标跟踪的备用屏程序保持现状**（拖不动）。**绝不**退化成发 PageUp / 方向键 —— 那会改程序状态（vim 会移动光标），比没反应更糟。
-
-这条路天然满足 R2/R3（每一屏都是程序自己画的完整帧），但**天然做不到 R4**：每次滚动是一个 RTT + 程序重画（实测 52 B ~ 1.2 KB），只能是"翻页"手感。要跟手只有第 1 步。
-
-#### 滚轮上报可能**改变程序状态**，而不只是"滚动"（2026-09-19 实测）
-
-tmux 3.5a 的默认根绑定：
+tmux 3.5a's default root binding:
 
 ```
 WheelUpPane → if -F "#{||:#{pane_in_mode},#{mouse_any_flag}}"
-                 { send-keys -M }   # pane 里的程序自己开了鼠标跟踪 → 转发给它
-                 { copy-mode -e }   # 否则 → 进 copy-mode
+                 { send-keys -M }   # the program in the pane enabled mouse tracking → forward to it
+                 { copy-mode -e }   # otherwise → enter copy-mode
 ```
 
-于是「tmux 开了 `mouse on`（所以它向外层终端请求了鼠标跟踪，webterm 照 §4 的判据把滚轮转发给它），而 pane 里的前台程序那一刻**没**开鼠标跟踪」时，一次滚轮上报就把那个 pane 推进了 **copy-mode**：**之后的键盘输入全部变成 copy-mode 命令，不再进程序**。
+With `mouse on`, tmux asks the outer terminal for mouse tracking, so webterm forwards the wheel to it. If the pane's foreground program has **no** mouse tracking at that moment, one wheel report puts the pane into **copy-mode**, and **every keystroke after that is a copy-mode command instead of input to the program**.
 
-用户看到的是「字打不进去」，而且 **webterm 这边做什么都没用** —— 点终端、切会话、刷新、重连全不行，状态在 tmux 服务器里。出口是 `q` / `Esc`。这不是 tmux 独有：任何"滚轮 = 进入某种模式"的程序都一样。
+The user sees "I can't type", and **nothing on the webterm side helps**: clicking the terminal, switching sessions, reloading, reconnecting. The state is in the tmux server. The way out is `q` / `Esc`. This isn't tmux-specific; any program where the wheel enters a mode behaves the same.
 
-**这个坑今天就存在**，不是第 4 步引入的：桌面滚轮走的是 xterm.js 自己的鼠标上报（程序开了 `?1000` 以上的跟踪，滚轮就归程序，见[§实测：xterm.js 5.5 这一侧](#实测xtermjs-55-这一侧)）。第 4 步只是把它**扩展到触屏拖动**。
+**The trap already exists** on desktop, because the wheel there goes through xterm.js's own mouse reporting (see [Measured: xterm.js 5.5](#measured-xtermjs-55)). This step only extends it to touch drags. [Step 1](#1-content-keep-full-screen-tuis-on-the-main-screen) makes it **more frequent**: classic-renderer claude doesn't enable mouse tracking, so with claude inside tmux, every wheel that claude used to consume now pushes tmux into copy-mode.
 
-而且[第 1 步](#1-内容层把全屏-tui-拉回主屏)会让它**变密**：classic 渲染器的 claude **不开鼠标跟踪**（见 §实测表）。在 tmux 里跑 claude，原来滚轮被 claude 自己接走（它开了 1000/1002/1003/1006），之后每一次滚轮都会把 tmux 推进 copy-mode。
+**Decision: after forwarding the wheel, give the user a visible way out.** This follows directly from [ADR-0020](0020-input-never-silently-dropped.md): nothing may go dead silently.
 
-**决定：转发滚轮之后必须给一个看得见的出口。** 这是 [ADR-0020](0020-input-never-silently-dropped.md)「不允许静默失活」的直接后果 —— 滚轮改变了程序状态这件事，用户得有线索。
+- After the first time a session's scroll is forwarded as wheel reports, if the user starts typing and **the screen's byte stream doesn't change at all for ~1.5 s**, show one line in the hint slot (bottom right, reusing the "back to bottom" hint): "Scrolling went to the program. If you can't type, press `Esc` or `q` to leave its scroll mode." At most once per session; dismissing it is permanent.
+- **A heuristic rather than always showing it:** for vim and less, where the wheel only scrolls, an unconditional hint is noise. "Keys were typed and the screen didn't change by a byte" is itself evidence the input wasn't taken; a TUI always redraws on a keystroke.
+- **Never press `Esc` / `q` for the user.** That changes program state (`q` can mean something else elsewhere), the same rule as "never fall back to PageUp or arrows".
 
-- 会话里**第一次**把滚动转成滚轮上报之后，若用户开始打字而**屏幕字节流在 ~1.5s 内一个字节都没变**，在提示条位置（右下角，复用「回到底部」那条）写一行：**「滚动交给了程序。如果打不进字，按 `Esc` 或 `q` 退出它的滚动模式」**。一次会话最多出现一次，点掉不再来。
-- **为什么用这个启发式而不是无条件提示**：对 vim / less（滚轮只是滚、不改状态）无条件提示是纯噪音；而"敲了键、屏幕一个字节都没动"这件事本身就说明输入没被接住 —— TUI 收到键一定会重画。
-- **绝不替用户按 `Esc` / `q`**：那是改程序状态（`q` 在别的程序里可能是别的意思），与本节"绝不退化成 PageUp / 方向键"同一条纪律。
+### Not doing
 
-### 不做的
+- **Server-side headless VT / line-level history.** The thorough fix: it makes scrollback depth a predictable line count instead of a byte count, and also fixes two known limits (hard trimming cutting escape sequences, replay re-wrapping at the client's width). But it adds a dependency, tens of KB of resident state per session, an extra parse of every byte, and the handoff must carry screen plus history. Kept as a v0.2 candidate (already noted in ADR-0019 §7); [ADR-0026](0026-agent-holds-terminal-state.md) later adopted it.
+- **Don't change replay width semantics.** On reload, `subscribe` carries the size after the client's `fit()`, and the agent decides the resume branch before applying it (protocol §4.1). Those bytes were produced at the **old** width and re-wrap at the **new** one: rotate, then reload, and box drawing is skewed for one screen until the next full redraw. **Accepted**: no duplicates, self-healing, and eliminating it costs the previous item.
+- **Don't touch incremental resume.** The `status == "ok"` path stays byte-for-byte; AC-2.1 is this ADR's regression line.
+- **Don't fabricate scrollback for the alternate screen.** Guessing which lines scrolled off from accumulated diff frames means writing half a terminal emulator in the client; one mistake is permanent misalignment.
 
-- **不做服务端 headless VT / 行级历史。** 它是彻底方案（能把回滚深度从"字节"变成"可预期的行数"，还能顺带解决硬裁剪切断转义序列、回放按客户端宽度重排两条已知限制），但要引入新依赖、每会话几十 KB 起步的常驻状态、每字节多一次解析，且热升级要交接整屏 + 历史。**仍是 v0.2 候选**（[ADR-0019](0019-altscreen-redraw-not-replay.md) §7 已记），等这四步的实际效果再决定。
-- **不改回放的宽度语义。** 刷新时 `subscribe` 带的是客户端 `fit()` 之后的尺寸，agent 先算分支再应用尺寸（协议 §4.1），所以那段字节是按**旧宽度**产出、在**新宽度**里重新折行的 —— 横竖屏切换后刷新，框线会歪一屏，直到下一次整屏重画自愈。**接受**：它不产生重复、会自愈，消灭它的成本是上一条。
-- **不动增量续传。** `status == "ok"` 那条路一个字节都不碰，AC-2.1 是本 ADR 的回归红线。
-- **不给备用屏合成假的 scrollback。** 把差分帧攒起来"猜"哪些行滚出去了，等于在客户端做半个终端模拟器，错一次就是永久错位。
+## Consequences
 
-## 代价与取舍
+- **Depends on a private upstream variable** (step 1). If it stops working, claude goes back to the alternate screen; nothing crashes. `--no-altscreen-compat` and the [checks below](#verifying-step-1) are the escape hatches.
+- **claude's input box becomes the last lines of the stream** instead of being pinned (step 1). While following it's visible and usable; it only scrolls away when reading back. This is the biggest user-visible change and must be documented.
+- **One more client-side store** (step 3, never shipped): up to 2000 serialized lines per session in the browser. Invariant 3 (no output on disk) is about the agent, but a browser-side copy would have had to be stated in the [privacy doc](../../60-security/privacy-history.md).
+- **Inertial scrolling feels different** (step 2) from the old stop-on-release. `prefers-reduced-motion` keeps the old behavior.
+- **Alternate-screen scrolling still feels like paging** (step 4), and the depth is up to the program. That's the floor of the terminal model, not a shortcut.
 
-- **依赖一个上游私有变量**（第 1 步）。它失效时表现为"claude 又回到备用屏"，不是崩溃；`--no-altscreen-compat` 与[排障口径](#排障口径)是退路。
-- **输入框从钉底变成流的最后几行**（第 1 步）。贴底时看得见、能打字，只有回看时会滚出视野（实测见 §1）。这是用户能看见的最大变化，必须写进文档。
-- **多一份客户端存储**（第 3 步）：每会话最多 2000 行序列化内容躺在 IndexedDB 里。终端输出**仍然不落 agent 的盘**（不变式 ③ 说的是 agent 侧），但"浏览器本地留了一份"要写进[隐私文档](../../60-security/privacy-history.md)。
-- **惯性滚动是新手感**（第 2 步），跟今天"松手即停"不一样。`prefers-reduced-motion` 下保持旧行为。
-- **备用屏的回滚仍然是翻页手感**（第 4 步），且深度由程序决定。这是终端模型的下限，不是实现偷懒。
+### Verifying step 1
 
-## 影响
+Both questions must be answerable in a live session:
 
-### 排障口径
+1. **Was the variable injected?** Run `env | grep CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` in the session.
+2. **Did the program actually stay on the main screen?** Run `__webterm.altScreen()` in the browser console (a debug hook that ships in production builds). `false` means it worked.
 
-判断第 1 步有没有生效，两问，都要能在真会话里当场回答：
+**Don't verify by capturing `ESC[?1049h` with `script -c claude`.** When `script` provides no window size, claude falls back to the classic renderer on its own (zero `?1049h`), regardless of the injection. This also shows the classic renderer is a normal, supported upstream path: it's the fallback for limited terminals, not a back door we pried open.
 
-1. **变量注入到位了吗** —— 会话里 `env | grep CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN`。
-2. **程序真的留在主屏了吗** —— 浏览器控制台 `__webterm.altScreen()`（`web/src/ui/app.tsx` 的调试钩子，生产构建里也在），`false` = 生效。UI 上的等价信号：键条控态（`data-context`）不再切成 TUI 那一档。
+### Docs, criteria and tests
 
-**不要用 `script -c claude` 抓 `ESC[?1049h` 来验。** 实测：`script` 拿不到 winsize 时 claude **自己**就退回 classic 渲染器（`?1049h` 0 次），这个 0 与注入无关。顺带说明 classic 渲染器是上游支持的正常路径 —— 它本来就是终端能力不足时的降级目标，不是我们撬出来的旁门。
-
-### 要改的文档
-
-| 文档 | 改动 |
-|---|---|
-| `10-requirements/acceptance-criteria.md` | 新增 AC-5.14 ~ AC-5.17、AC-7.8；AC-5.9 的"强制写入"改成分片慢写 |
-| `40-frontend/session-ux.md` | 手势仲裁表加备用屏那一行；§回看时暂停跟随 改写入策略；新增 §刷新后的回滚 |
-| `40-frontend/layout-responsive.md` | §渲染 加滚动与大块写入的预算规则 |
-| `50-backend/session-manager.md` | §创建 的环境那一行加 `--session-env` 与内置清单 |
-| `80-ops/install.md` | 参数表加两个开关 + 写清 claude 观感变化 |
-| `80-ops/troubleshooting.md` | 加"往回拖不动 / 刷新只剩一屏"的排查条目 |
-| `60-security/privacy-history.md` | 浏览器本地会留一份终端快照 |
-| `70-testing/e2e-scenarios.md` | 新增 E2E-36 / 37 / 38 |
-| `90-roadmap/milestones.md` | v0.2 清单置顶本 ADR 的四步 |
-| `20-architecture/overview.md` | 决策记录表加 0024 |
-
-### 新增验收标准
-
-- **AC-5.14**：刷新页面后能往回滚到刷新前缓冲的**最后 2000 行**（不足则全部）；恢复内容与刷新前逐行一致；整段内容**只出现一份**；`instance_id` 变了时快照被丢弃。
-- **AC-5.15**：触屏纵向拖每帧至多一次 `scrollTop` 写入，拖动期间**无 > 50 ms 长任务**；松手有惯性，碰边界或再次触摸即停；`prefers-reduced-motion` 下不做惯性。
-- **AC-5.16**：回放 / 快照恢复 / 强制写入共用带预算的写入器，每帧 ≤ 64 KiB，**顺序不变、不丢不重**；期间输入不被丢。
-- **AC-5.17**：备用屏且程序开了鼠标跟踪时，纵向拖转成滚轮上报（按行步长、有节流上限）；**没开鼠标跟踪时不发任何按键**。
-- **AC-7.8**：`--session-env` 注入到会话 PTY；内置清单可用 `--no-altscreen-compat` 关掉；**用户已设过的同名变量不被覆盖**。
-
-### 测试要求
-
-- **UT**：快照存取（原子性 —— 序列化失败 / 写库失败时整条不存；`instance_id` 不匹配即丢弃；备用屏不存）；带预算的写入器（顺序、边界、预算耗尽后继续）；惯性衰减函数。
-- **UT/IT**（Go）：`--session-env` 解析与优先级（用户 > 内置清单）、`--no-altscreen-compat`、不覆盖已有值。
-- **E2E**：见下面三条场景。
-- **回归红线**：`TestByteLevelContinuity` / E2E-2（字节级连续性，AC-2.1）与 `TestHandoffByteLevelContinuity` 必须原样通过 —— 这四步都没碰增量路径，一旦它们红了就是碰到了不该碰的地方。
-
-### 代码落点
-
-`cmd/webterm/flags.go` · `cmd/webterm/config.go`（两个开关，进 `configKeys`）· `internal/session/manager.go`（`cmd.Env`）· `web/src/term/pinch.ts`（rAF + 惯性 + 备用屏转滚轮）· `web/src/term/outputqueue.ts`（分片慢写）· `web/src/sessions/store.ts`（带预算的写入器、快照存取）· `web/src/term/snapshot.ts`（新，IndexedDB）· `web/src/ui/app.tsx`（`pagehide` / 恢复时机）
+- **Docs updated**: acceptance criteria, session UX, responsive layout, session manager (environment), install (two flags plus the claude change), troubleshooting ("can't scroll back / only one screen after reload"), privacy, E2E scenarios, milestones, architecture overview.
+- **New acceptance criteria**: AC-5.14–AC-5.17 and AC-7.8. ADR-0026 later deleted AC-5.15–5.17 (drag per frame, budgeted writer, alternate-screen wheel) and rewrote AC-5.14 (scrollback after reload, now served by the agent). The two that remain:
+  - **AC-5.14**: after a reload the user can scroll back through the last 2000 lines (or everything, if shorter); content matches line for line and **appears once**.
+  - **AC-7.8**: `--session-env` is injected into session PTYs; `--no-altscreen-compat` disables the built-in list; **a variable the user already set is never overridden**.
+- **Tests**: Go UT/IT for `--session-env` parsing and precedence (user over built-in), `--no-altscreen-compat`, and not overriding existing values; E2E-36 / 37 / 38. **Regression lines**: `TestByteLevelContinuity` / E2E-2 (AC-2.1) and `TestHandoffByteLevelContinuity` must pass unchanged. None of the steps touch the incremental path; if those go red, something touched what it shouldn't.
+- **Code**: `cmd/webterm/flags.go` and `cmd/webterm/config.go` (flags, `configKeys`); `internal/session/manager.go` (`cmd.Env`). The frontend parts were removed by ADR-0026.

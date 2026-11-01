@@ -1,66 +1,52 @@
-# ADR-0008 快捷命令 = 置顶的历史
+# ADR-0008 Snippets are pinned history
 
-> **已被 [ADR-0025](0025-termux-style-ui.md) §10 取代**：历史面板与快捷命令随老界面删除，`commands` 表与 `/api/commands` 在第 2 步删除。以下保留作历史记录。
+Status: Accepted (2026-09-06). Superseded by [ADR-0025](0025-termux-style-ui.md) §10: the history panel and snippets went away with the old UI, and the `commands` table and `/api/commands` were removed in step 2.
 
-> 状态：Accepted · 2026-09-06
+## Context
 
-## 背景
+The requirement was snippets plus command history, with "add from history" as the default way to create a snippet, and the design and experience kept simple.
 
-需求要"支持快捷命令添加和使用，以及命令历史"，并明确：**默认创建路径是从历史里选择添加**，且"设计和使用体验都要简化和优化"。
+The first design made snippets a separate entity with parameterized templates (`docker logs -f {{container}}`; clicking opens a form to fill in parameters).
 
-初始设计把快捷命令做成独立实体，带参数化模板（`docker logs -f {{container}}`，点击时弹表单填参数）。
+## Decision
 
-## 决策
-
-**快捷命令不是独立实体，就是 `commands` 表上的一个 `pinned` 布尔标记。**
+**A snippet is not a separate entity. It is a `pinned` flag on the `commands` table.**
 
 ```sql
 commands(
   id, text, session_name, cwd, exit_code, started_at, duration_ms,
-  pinned    INTEGER DEFAULT 0,   -- 置顶 = 快捷命令
-  label     TEXT,                -- 可选短名，如 "重启服务"
-  pin_order INTEGER              -- 置顶排序
+  pinned    INTEGER DEFAULT 0,   -- pinned = snippet
+  label     TEXT,                -- optional short name, e.g. "restart service"
+  pin_order INTEGER              -- order among pinned rows
 )
 ```
 
-**并且：取消参数化模板。点击行为统一为「填入 Composer 待编辑」。**
+**No parameterized templates. Clicking a snippet always fills the Composer for editing.**
 
-## 为什么取消参数化模板
-
-因为**"选一条相近的历史命令，改两个字，回车"已经完整覆盖了模板参数的场景**，而且更快、更自由。
+"Pick a similar command from history, change two characters, press Enter" already covers what template parameters do, faster and more flexibly:
 
 ```
-弹表单填参数：  点击 → 弹窗 → 找到字段 → 输入 → 确认 → 执行     （5 步，且只能改预设的位置）
-填入 Composer： 点击 → 改两个字 → 回车                          （3 步，任意位置任意改法）
+Template form:  click → dialog → find field → type → confirm → run   (5 steps, only preset slots editable)
+Fill Composer:  click → edit → Enter                                 (3 steps, edit anything anywhere)
 ```
 
-模板参数是在**没有好的编辑入口**时才需要的补偿机制。而 Composer 模式恰好提供了一个极好的编辑入口（[ADR-0007](0007-dual-mode-input.md)）—— 于是模板参数就没有存在理由了。
+Template parameters compensate for the lack of a good editor. The Composer ([ADR-0007](0007-dual-mode-input.md)) is a good editor, so templates have no reason to exist.
 
-## 这个设计省掉了什么
+Interaction:
 
-| 独立实体方案 | 置顶标记方案 |
-|---|---|
-| `snippets` 表 + `commands` 表 | 一张 `commands` 表 |
-| snippets 的增删改查 REST | `PATCH /api/commands/:id { pinned }` |
-| "快捷命令"和"历史"两个列表、两个搜索框 | 一个列表两个视图，搜索一次搜全部 |
-| 模板参数解析、表单渲染、参数校验 | 无 |
-| "创建快捷命令"的表单页 | 历史条目右侧一个 ☆ |
-| 用户要理解两个概念 | 一个概念 + 一个标记 |
+- **Create**: a ☆ on the right of each history row; one tap pins it. This is the only main path.
+- **One list, two views**: pinned rows float to the top as the snippet section, history follows in reverse time order. One search covers both.
+- **Click** fills the Composer with the cursor at the end. **Nothing runs automatically.**
+- **Run directly**: `Shift+click` on desktop, long press on mobile. One less option, one less setting.
+- **Mobile**: a horizontally scrolling row of buttons above the Composer, the `pinned` rows in `pin_order`. Long press to reorder or unpin.
+- **Optional label**: a pinned row can be named. The button shows the `label` if set, otherwise the truncated command.
+- **Secondary path**: creating a command that has never run lives in the snippet panel, off the main path.
 
-## 交互设计
+## Consequences
 
-- **创建**：历史列表里每条右侧一个 ☆，点一下即成快捷命令。这是唯一的主路径。
-- **一个列表两个视图**：置顶的浮在顶部（快捷命令区），下面是时间倒序的历史。搜索同时搜两者。
-- **点击 = 填入 Composer**，光标置于末尾，**不自动执行**。
-- **直接执行**：桌面 `Shift+点击`，移动端长按。少一个选项、少一个设置项。
-- **移动端**：Composer 上方一排横滑按钮，就是 `pinned` 列表按 `pin_order` 排。长按拖动排序 / 取消置顶。
-- **可选短名**（`label`）：置顶后可以给它起个名字。有 `label` 时按钮显示 label，没有时显示命令原文的截断。
-- **次要入口**：手动新建一条没跑过的命令，藏在快捷命令面板里，不放在主路径上。
+Positive: one table instead of two (`snippets` + `commands`), `PATCH /api/commands/:id { pinned }` instead of a snippet CRUD API, one list and one search instead of two, no template parsing, form rendering or parameter validation, a ☆ instead of a creation form, and one concept plus a flag for users instead of two concepts.
 
-## 后果
+Negative:
 
-**正面**：少一张表、少一套 CRUD、少一个心智模型、少一个 UI 页面。
-
-**负面**：
-- 快捷命令的生命周期跟历史记录绑定 → **历史淘汰策略必须保护置顶记录**。规则：历史超过上限（默认 50000）时按时间淘汰最旧的**非置顶**记录，置顶记录永不淘汰（AC-6.10）。
-- "手动新建一条从未执行的命令"需要往 `commands` 表插一条 `started_at = 现在, exit_code = NULL, duration_ms = NULL` 的行。语义上稍微别扭（它不是"历史"），但换来的简化值得。这类记录用 `exit_code IS NULL AND duration_ms IS NULL` 可以识别出来。
+- Snippets share history's lifecycle, so **eviction must protect pinned rows**: past the history cap (default 50,000), the oldest **unpinned** rows are evicted; pinned rows never are (AC-6.10).
+- A manually created, never-run command is a `commands` row with `started_at = now` and `exit_code` and `duration_ms` NULL. Semantically awkward (it isn't history), but the simplification is worth it. Such rows are identifiable by `exit_code IS NULL AND duration_ms IS NULL`.

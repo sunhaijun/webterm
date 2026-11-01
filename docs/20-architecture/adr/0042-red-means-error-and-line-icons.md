@@ -1,49 +1,49 @@
-# ADR-0042 红色只表示出错；剩下的字符图标换成线条图标；抽屉路径不颠倒、名字优先
+# ADR-0042 Red means error only; the remaining character icons become line icons; drawer paths read left to right and names come first
 
-状态：已接受（2026-10-31）。修订 [ADR-0030](0030-no-settings.md) §3 与 AC-4.10 里「未读带红点」的颜色；把 [ADR-0037](0037-settings-theme-and-font-size.md) §3 的图标画法推到标签的 ✕、浮层的 ✕ 与保持接收标记。
+Status: Accepted (2026-10-31). Revises the color of the unread dot in [ADR-0030](0030-no-settings.md) §3 and AC-4.10. Extends [ADR-0037](0037-settings-theme-and-font-size.md) §3's icon style to the tab ✕, the overlay ✕ and the pin marker.
 
-## 背景
+## Context
 
-一轮体验走查（大屏、手机、Pad，深浅两套，造出同名、改名、已退出、未读、保持接收几种状态截图）发现：
+A UX review (desktop, phone and tablet; light and dark; screenshots with duplicate names, renamed, exited, unread and pinned sessions) found:
 
-1. **红色一色多义。** 未读点、会话按钮角上的未读点、`exit 1`、「关闭」按钮、断线状态点都是 `--err`。抽屉里三个未读红点挨着一个红色 `exit 1`，一眼分不出「有新输出」和「出事了」。
-2. **还有四处字符图标**：标签上的 ✕、浮层标题栏的 ✕、保持接收的 `⇵`、会话菜单里的 `✓`。ADR-0037 §3 说过不用 Unicode 符号当图标（字形随平台变、上下位置随字体度量变），这几处漏了。`⇵` 还又细又看不出意思。
-3. **抽屉里的路径前后颠倒**（bug）。路径那一列为了从左边截断（保住最有用的末尾）设了 `direction: rtl`，路径开头的 `~` 与 `/` 是方向中性字符，在 rtl 段落里被排到了右边：`~/github/webterm` 显示成 `github/webterm/~`，`/tmp` 显示成 `tmp/`。会话大多开在家目录下，手机上几乎每一行都是错的。
-4. **路径一长，名字被挤成一个字。** 名字与路径按各自宽度等比例收缩，路径长时名字只剩 `a…`。名字才是主要信息。
+1. **Red means too many things.** Unread dots, the unread dot on the session button, `exit 1`, the Close button and the disconnected status dot all used `--err`. In the drawer, three red unread dots next to a red `exit 1` made "new output" indistinguishable from "something went wrong".
+2. **Four character icons remained**: the ✕ on tabs, the ✕ in overlay title bars, the `⇵` pin marker, and the `✓` in the session menu. ADR-0037 §3 said not to use Unicode symbols as icons (glyphs vary by platform, vertical position by font metrics); these were missed. `⇵` was also thin and meaningless to users.
+3. **Drawer paths were reversed** (a bug). The path column used `direction: rtl` so overflow truncates from the left (keeping the useful end). The leading `~` and `/` are direction-neutral, so in an rtl paragraph they were moved to the right: `~/github/webterm` displayed as `github/webterm/~`, and `/tmp` as `tmp/`. Most sessions start under the home directory, so on phones nearly every row was wrong.
+4. **With a long path, the name was squeezed to one character.** Name and path shrank in proportion to their widths, so a long path left the name as `a…`. The name is the primary information.
 
-## 决策
+## Decision
 
-### 1. 红色只表示出错或破坏性操作
+### 1. Red only for errors and destructive actions
 
-- **未读点用强调色**（`--accent`）：标签、抽屉行、`compact` 会话按钮角上的那一个都是。
-- 红色（`--err`）留给：非零退出码、「关闭」类按钮、断线 / 致命状态、错误 toast。
-- 未读点不出现在当前会话上（当前会话没有未读），所以不会和当前项的强调色底色撞在一起。
+- **Unread dots use the accent color** (`--accent`): on tabs, drawer rows, and the corner of the `compact` session button.
+- Red (`--err`) is reserved for non-zero exit codes, Close-type buttons, disconnected / fatal states, and error toasts.
+- The current session never has an unread dot (it has no unread output), so it never collides with the current item's accent background.
 
-### 2. 剩下的字符图标换成线条图标
+### 2. The remaining character icons become line icons
 
-画法照 ADR-0037 §3（14×14 框、1.75px、圆头圆角、`currentColor`），尺寸按位置缩放：
+Drawn as in ADR-0037 §3 (14×14 box, 1.75px stroke, round caps and joins, `currentColor`), scaled for each place:
 
-| 位置 | 原来 | 现在 |
+| Where | Before | After |
 |---|---|---|
-| 标签上的关闭（`tab-<sid>-close`） | `✕` | 两笔交叉的线条 ✕，12px |
-| 浮层标题栏的关闭（`drawer-close`） | `✕` | 同一个 ✕，16px |
-| 保持接收标记（`.pin-mark`） | `⇵` | 图钉：顶上一横、钉身、钉尖，12px |
-| 会话菜单「保持接收」开着时的勾（`.menu-check`） | `✓` | 线条勾，12px |
+| Close on a tab (`tab-<sid>-close`) | `✕` | Two crossed strokes, 12px |
+| Close in an overlay title bar (`drawer-close`) | `✕` | The same ✕, 16px |
+| Pin marker (`.pin-mark`) | `⇵` | A pushpin: a bar on top, the body, the point, 12px |
+| Pin check in the session menu (`.menu-check`) | `✓` | A line check mark, 12px |
 
-图钉是「钉住」的通用写法，代码里这个状态本来就叫 `pinned`；`⇵` 想表达「双向收发」，用户看不出来。
+A pushpin is the common symbol for "pinned", and the code already calls this state `pinned`; `⇵` tried to say "receives both ways" and nobody could tell.
 
-### 3. 抽屉行：路径按原样从左往右排，名字优先占地方
+### 3. Drawer rows: paths read left to right, names get space first
 
-- 路径包在 `<bdi dir="ltr">` 里：外层仍是 `direction: rtl`（溢出时从左边截、省略号在左），里面按从左到右排，`~` 和 `/` 留在原位。
-- 收缩时**路径先让**：路径的收缩权重远大于名字，名字放得下就整个显示；路径最少保留 `min(6em, 25%)`，看得到最后一段目录。名字长到连这点都放不下时，名字才截断。
+- The path is wrapped in `<bdi dir="ltr">`: the outer element stays `direction: rtl` (truncate from the left, ellipsis on the left), and the content inside is laid out left to right, so `~` and `/` stay put.
+- When shrinking, **the path gives way first**: its shrink weight is far larger than the name's, so the name is shown whole when it fits. The path keeps at least `min(6em, 25%)`, enough to see the last directory. Only when the name doesn't fit even then is it truncated.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **未读点换成灰色。** 太弱，抽屉里和 CWD 的灰色混在一起。强调色本来就表示「这里有东西」。
-- **路径改成从右边截断（去掉 rtl）。** 留下的是 `~/github/web…`，最有用的末尾目录被截掉。
-- **路径前后各插一个 LRM（U+200E）。** 效果一样，但文本内容里多了看不见的字符，复制、测试比对都要绕开它；`<bdi>` 只是标签。
+- **Gray unread dots.** Too weak, and they blend into the gray CWD in the drawer. The accent color already means "something here".
+- **Truncate paths from the right (drop rtl).** That keeps `~/github/web…` and cuts off the most useful part, the last directory.
+- **Insert an LRM (U+200E) on each side of the path.** Same effect, but invisible characters end up in the text, which copying and test comparisons then have to work around; `<bdi>` is just markup.
 
-## 后果
+## Consequences
 
-- AC-4.10、session-ux.md（未读标记、行布局、标签）、layout.md §图标、glossary、user-stories、devices-and-layout 里的「红点」改成「未读点」。
-- E2E-28 加两步：路径的第一个字符显示在最后一个字符左边（量字符的实际位置，只比文字内容测不出颠倒）；长路径时名字整个可见。E2E-41 ⑤ 的保持接收标记改为断言图钉 SVG；⑥ 断言未读点的颜色是强调色。
+- "Red dot" becomes "unread dot" in AC-4.10, session-ux.md (unread marker, row layout, tabs), layout.md (icons), the glossary, user stories, and devices-and-layout.
+- E2E-28 gains two steps: the first character of the path renders to the left of the last (measuring character positions; comparing text content can't detect the reversal), and with a long path the name is fully visible. E2E-41 ⑤ asserts the pin marker is the pushpin SVG; ⑥ asserts the unread dot uses the accent color.

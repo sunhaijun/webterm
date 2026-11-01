@@ -1,81 +1,81 @@
-# 愿景
+# Vision
 
-> 状态：Accepted
+> Status: Accepted
 
-## 一句话
+## In one sentence
 
-**一个 Go 单二进制，把远程服务器的 shell 变成一个在手机、平板、电脑上都好用、且永远不会因为网络抖动而丢失现场的 Web 应用。**
+**A single Go binary that turns a remote server's shell into a web app that works well on phone, tablet and desktop, and never loses your place when the network drops.**
 
-## 起点：三个真实痛点
+## The problem
 
-webterm 来自一个具体的工作流：本地终端 → SSH → 远程服务器 → 长时间跑着编辑器或 AI agent。这个工作流有三个每天都在发生的问题。
+webterm comes from one workflow: local terminal → SSH → remote server → an editor or AI agent running for hours. That workflow has three problems, every day.
 
-### 1. 连接会断
+### 1. Connections drop
 
-切网、地铁、合盖、Wi-Fi 抖一下 —— SSH 就断了。断了之后要么现场没了，要么得重新 attach 再重画屏幕。这不是"偶尔"，是每天好几次。
+Switching networks, the subway, closing the laptop lid, a Wi-Fi hiccup — SSH drops. Either your place is gone, or you re-attach and wait for a redraw. Several times a day.
 
-### 2. 输入体验差，尤其是中文
+### 2. Input is painful, especially CJK
 
-终端里用输入法是一件反人类的事：候选框位置错乱、光标跳、宽字符对不齐、多行文本没法编辑、误触快捷键。想写一段稍长的中文（commit message、给 AI agent 的 prompt）基本不可能。
+IME in a terminal is miserable: the candidate window is misplaced, the cursor jumps, wide characters misalign, multi-line text can't be edited, shortcuts fire by accident. Writing a longer passage in Chinese (a commit message, a prompt for an AI agent) is close to impossible.
 
-### 3. 阅读体验差
+### 3. Reading is painful
 
-回看输出要进 tmux copy-mode，反人类。手机上可视面积小到没法用，横竖屏切换一团糟。
+Scrolling back means tmux copy-mode. On a phone the visible area is too small to use, and rotating the screen makes a mess.
 
-## 目标：不是"网页版终端"
+## Goal: not "a terminal in a web page"
 
-`ttyd` / `wetty` / `Shell In A Box` 这类工具的做法是：把 xterm.js 塞进网页，把 PTY 接到 WebSocket，完事。**它们解决的是"能不能在浏览器里开终端"，而 webterm 解决的是"终端本身好不好用"。**
+`ttyd`, `wetty` and Shell In A Box put xterm.js in a page and pipe the PTY over a WebSocket. They answer "can I open a terminal in a browser?". **webterm answers "is the terminal pleasant to use?".**
 
-webterm 把终端当成**数据源**，而不是要还原的 UI。基于这个数据源重新设计交互：
+webterm treats the terminal as a **data source**, not a UI to reproduce, and designs the interaction around it:
 
-| 维度 | 传统 Web 终端 | webterm |
+| | Typical web terminal | webterm |
 |---|---|---|
-| 断线 | 重连 = 重开会话 / 重画屏幕 | 短断线**只补增量**，屏幕接着长；断得久、刷新页面也不丢画面 —— agent 自己持有终端状态，随时能给出完整快照 |
-| 输入 | 按键直通 PTY，IME 靠 xterm.js 硬扛 | 直通 PTY 但**组字有兜底、输入不静默丢失**；长段中文切到**文本输入页**用原生输入框打完再送 |
-| 会话 | 一个连接一个终端 | agent 管理多会话，后台继续跑，带未读指示 |
-| 移动端 | 缩放后凑合用 | **Termux 式界面**：全屏终端 + 两行固定附加键、软键盘适配、PWA；手机用底部会话抽屉，PC / Pad 用顶部标签栏 |
+| Disconnects | Reconnect = new session / full redraw | Short drops **replay only the missing bytes** and the screen keeps growing; long drops and page reloads keep the screen too — the agent holds the terminal state and can produce a full snapshot at any time |
+| Input | Keys go straight to the PTY; IME is left to xterm.js | Keys go straight to the PTY, but **IME composition has fallbacks and input is never silently dropped**; for long CJK text, switch to the **text page**, type in a native text box, send once |
+| Sessions | One connection, one terminal | The agent manages many sessions; they keep running in the background and show unread indicators |
+| Mobile | Pinch-zoom and cope | **Termux-style UI**: full-screen terminal + two fixed rows of extra keys, on-screen keyboard aware, PWA; session drawer at the bottom on phones, tab bar on top on desktop and tablet |
 
-## 三条设计原则
+## Design principles
 
-### 原则一：一个二进制就是完整的服务
+### 1. One binary is the whole service
 
-没有反向代理、没有数据库服务、没有外部隧道进程、没有 SSH、没有 tmux。
+No reverse proxy, no database server, no tunnel process, no SSH, no tmux.
 
 ```
 scp webterm user@server:
 ./webterm serve --domain term.example.com
-# 终端打印二维码 → 手机扫码 → 可用
+# the terminal prints a QR code → scan it with your phone → done
 ```
 
-这不只是"部署方便"。它意味着**整个系统可以在 CI 里完整跑起来做端到端测试**，包括掐断网络验证重连 —— 只要链路上有任何一个外部组件，这套测试就做不完整。
+This is about more than easy deployment. It means **the whole system can run end-to-end in CI**, including cutting the network to test reconnects. Any external component in the path would make that test incomplete.
 
-### 原则二：断线是常态，不是异常
+### 2. Disconnects are normal, not exceptional
 
-网络会断。设计不能建立在"连接是稳定的"这个假设上。所以：
+The design does not assume a stable connection:
 
-- 服务端会话的存活**不依赖**客户端连接
-- 输出流有序列号，重连时按序列号续传，不是重画
-- 输入有 ack，未确认的按键在重连后重发
-- 客户端断开时，会话不暂停、缓冲不停
+- Server-side sessions **do not depend** on a client connection.
+- Output carries sequence numbers; a reconnect resumes from a sequence number instead of redrawing.
+- Input is acked; unacked keystrokes are resent after reconnecting.
+- While the client is away, sessions keep running and buffers keep filling.
 
-**用户对断线的唯一感知应该是状态指示器闪了一下。**
+**The only thing the user should notice about a disconnect is the status indicator blinking.**
 
-### 原则三：界面少而固定
+### 3. Few, fixed controls
 
-终端本身就是界面。界面元素只做软键盘和触屏做不到的事 —— `ESC`、`CTRL`、方向键、切会话、整段输入中文 —— 而且**位置固定、不随上下文变**：按过几次就记住了，不用每次先看一眼再按。
+The terminal is the interface. UI elements exist only for what the on-screen keyboard and touch can't do — `ESC`, `CTRL`, arrow keys, switching sessions, entering a whole paragraph of CJK text — and they **stay in fixed positions regardless of context**. After a few presses you know where they are and stop looking before you tap.
 
-这是 Termux 好用的原因，也是 webterm 走过八轮「按上下文变」的界面之后的结论（[ADR-0025](../20-architecture/adr/0025-termux-style-ui.md)）。
+This is why Termux works, and it is what webterm concluded after eight iterations of context-dependent UI ([ADR-0025](../20-architecture/adr/0025-termux-style-ui.md)).
 
-## 成功的样子
+## What success looks like
 
-一年后回头看，如果这三件事成立，webterm 就成功了：
+A year from now, webterm has succeeded if:
 
-1. **手机成了合法的开发终端。** 通勤路上能真的改点东西、看日志、重启服务，而不是"应急能凑合"。
-2. **不再意识到"连接"的存在。** 打开浏览器就在那儿，跟本地应用没区别。
-3. **中文输入比本地终端还顺。** 写长 prompt、写 commit message 不再需要切到编辑器再粘回来。
+1. **A phone is a real development terminal.** On a commute you can actually change code, read logs and restart services — not just get by in an emergency.
+2. **You stop noticing the connection.** Open the browser and it's there, like a local app.
+3. **CJK input is smoother than in a local terminal.** Long prompts and commit messages no longer need an editor and a paste.
 
-## 相关文档
+## Related
 
-- 明确不做的事：[`non-goals.md`](non-goals.md)
-- 术语：[`glossary.md`](glossary.md)
-- 需求落地：[`../10-requirements/user-stories.md`](../10-requirements/user-stories.md)
+- What we deliberately don't do: [`non-goals.md`](non-goals.md)
+- Terms: [`glossary.md`](glossary.md)
+- Requirements: [`../10-requirements/user-stories.md`](../10-requirements/user-stories.md)

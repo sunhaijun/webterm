@@ -1,87 +1,63 @@
-# ADR-0007 双模输入（Composer / Raw）
+# ADR-0007 Dual-mode input (Composer / Raw)
 
-> **用户可见的「Composer / Raw 模式」及手动切换/锁定已被 [ADR-0013](0013-terminal-only.md) 取代**（改为按触摸位置自动判定：点终端=直送，用输入条=编辑后发送）。内部的「命令是否在跑」状态机保留，只驱动功能键条的出现，不再对用户显示。
+Status: Accepted (2026-09-06). User-visible Composer/Raw modes and manual switching/locking superseded by [ADR-0013](0013-terminal-only.md) (input is routed by where you touch: tapping the terminal sends keystrokes, the input bar sends edited text). The internal "is a command running" state machine that remained, used only to show the key bar, was removed by [ADR-0025](0025-termux-style-ui.md) once the key rows became static.
 
-> **其余部分（内部的「命令是否在跑」状态机）已被 [ADR-0025](0025-termux-style-ui.md) 取代并删除**：键行静态化之后它没有消费者。
+## Context
 
-> 状态：Accepted · 2026-09-06
+The top complaint was typing in the terminal, especially non-English text.
 
-## 背景
+The root cause: terminal input is pass-through. Every keystroke becomes bytes written to the PTY immediately. An IME needs a composition buffer that produces nothing until a candidate is chosen. The two are architecturally at odds.
 
-需求里排第一的痛点是"在终端中输入文字，特别是非英文，体验很糟糕"。
+xterm.js bridges this with a hidden `textarea` and composition events, but candidate window placement, wide-character cursor alignment and screen state during composition have been chronic problems. **IME can't be fixed within the pass-through model.**
 
-根本原因：终端的输入范式是**按键直通** —— 每个按键立刻变成字节写进 PTY。而 IME（输入法）需要一个**组字缓冲区**，在用户选定候选词之前不该产生任何输入。这两件事在架构上冲突。
+## Decision
 
-xterm.js 用隐藏的 `textarea` + composition 事件尽力弥合，但候选框定位、宽字符光标对齐、组字期间的屏幕状态，长期都是老大难。**在直通范式内修 IME 是修不好的。**
+**Two input modes, switched automatically from the shell's prompt state.**
 
-## 决策
+**Composer (default).** The terminal becomes a read-only output view with a separate multi-line `textarea` below.
 
-**做两个输入模式，并根据 shell 的 prompt 状态自动切换。**
+- IME composition happens entirely in a native `textarea`, so the candidate window is placed correctly and text can be edited, pasted, spread across lines and undone.
+- Submit writes the whole text wrapped in bracketed paste, plus `\r`.
+- The input box can offer history, snippets and completion like any web form.
 
-### Composer 模式（默认）
+This sidesteps the IME problem instead of patching it.
 
-终端区变成**只读的输出视图**，底部是一个独立的多行 `textarea`。
+**Raw.** Keystrokes go straight to the PTY, for vim, htop and interactive prompts. IME still gets care here: hidden textarea plus composition events, committed **once on `compositionend`**, with an inline preview overlay at the cursor during composition.
 
-- IME 组字完全发生在原生 `textarea` 里 → 候选框位置正确、可任意修改、可粘贴、可多行、有撤销
-- 提交时整段以 bracketed paste 包裹 + `\r` 写入 PTY
-- 输入框可以有历史、快捷命令、补全等 Web 原生的交互
+**Automatic switching** from OSC 133 marks:
 
-**这直接绕过了 IME 问题，而不是修补它。**
-
-### Raw 模式
-
-按键直通 PTY，用于 vim / htop / 交互式 prompt。这里仍然认真处理 IME：隐藏 textarea + composition 事件，**只在 `compositionend` 时一次性提交**，组字期间在光标位置渲染内联预览浮层。
-
-### 自动切换
-
-依据 shell 集成的 OSC 133 标记：
-
-| 收到 | 含义 | 目标模式 |
+| Received | Meaning | Mode |
 |---|---|---|
-| `133;B` | prompt 画完，等用户输入 | **Composer** |
-| `133;C` | 命令开始执行 | **Raw** |
-| `133;D` | 命令结束，回到 prompt | **Composer** |
+| `133;B` | Prompt drawn, waiting for input | **Composer** |
+| `133;C` | Command started | **Raw** |
+| `133;D` | Command finished, back at the prompt | **Composer** |
 
-用户手动切换后进入"锁定"，自动切换暂停直到解锁。
+A manual switch locks the mode; automatic switching pauses until unlocked.
 
-## 为什么"命令在跑时切 Raw"是对的
+Why "Raw while a command runs" is right: there's no need to detect whether the foreground program is a TUI. Any running command may need `Ctrl+C`, a `y/n` answer, paging in `less` or editing in vim, and all of those need pass-through. At a prompt the user can **only** be typing a command, which is what the Composer is best at. So the rule needs no program names: **at a prompt → Composer; running a command → Raw.**
 
-不需要判断前台程序是不是 TUI。只要有命令在跑，用户就可能需要：`Ctrl+C` 打断、回答 `y/n` 提示、在 `less` 里翻页、在 vim 里编辑。这些都需要直通。
+Rejected alternatives:
 
-反过来，停在 prompt 时用户**只可能**是在输入一条命令 —— 那正是 Composer 最擅长的。
+- **Raw only, and fix xterm.js IME.** Upstream hasn't fully solved it in years. Even with IME fixed there would be no multi-line editing, undo or mid-text edits, which a 300-character prompt needs.
+- **Composer only.** vim, htop and `Ctrl+C` stop working.
+- **Dual mode with manual switching.** Users would have to understand and manage a "mode", switching dozens of times a day. Automatic switching is what makes the design work, and it is also what made shell integration a v0.1 requirement.
 
-所以规则简单到不需要程序名：**在 prompt → Composer；在跑命令 → Raw。**
+## Consequences
 
-## 备选方案与否决理由
+Positive:
 
-### A. 只做 Raw，努力修好 xterm.js 的 IME
+- CJK and long-text input goes from unusable to better than a local terminal.
+- The Composer avoids per-keystroke round trips on high-latency links: one round trip per line.
+- The input box is plain DOM, so history, snippets and completion aren't constrained by the terminal grid.
 
-**否决**：这是 xterm.js 上游多年未彻底解决的问题。而且即便 IME 修好了，仍然没有"多行编辑、撤销、改中间的字"这些能力 —— 而写 300 字的 prompt 恰恰需要这些。
+Negative:
 
-### B. 只做 Composer
+- Automatic switching **depends on shell integration**. Without it, fall back to "Composer by default, switch manually", and say so clearly in the UI (AC-3.7 / US-7.1).
+- Two input code paths, two test suites.
+- The mode state machine has edge cases:
+  - `133;C` immediately followed by `133;D` (an instant command) shouldn't flash Raw; debounce it.
+  - A manual switch while a command prints output locks the mode.
+  - Mode state follows the session being switched to; it is not global.
+  - Integration going inactive (e.g. the user runs `exec zsh`) stops automatic switching.
 
-**否决**：vim、htop、`Ctrl+C` 全废。
-
-### C. 双模但手动切换
-
-**否决**：用户要理解并管理"模式"这个概念，每天切几十次。自动切换是这个方案能不能成立的关键 —— 也正是它让 shell 集成从"锦上添花"变成 v0.1 的必需项。
-
-### D. 双模 + 自动切换（采纳）
-
-## 后果
-
-**正面**：
-- 中文/长文本输入体验从"不可用"变成"比本地终端更好"
-- Composer 模式天然规避了高延迟下逐键往返的卡顿（整行提交，一次往返）
-- 输入框是普通 DOM，可以叠加历史、快捷命令、补全，不受终端网格限制
-
-**负面**：
-- **强依赖 shell 集成**才能自动切换。集成失效时降级为"默认 Composer + 手动切换"，UI 需要明确提示（AC-3.7 / US-7.1）
-- 两套输入代码路径，两套测试
-- 模式状态机需要处理边缘情况：
-  - `133;C` 后立刻 `133;D`（命令瞬间结束）→ 不应该闪一下 Raw，需要短延迟去抖
-  - 命令输出中途用户手动切换 → 进入锁定
-  - 会话切换时模式状态跟随目标会话，不是全局的
-  - 集成从 active 变 inactive（比如用户 `exec zsh`）→ 停止自动切换
-
-状态机细节见 [`../../40-frontend/input.md`](../../40-frontend/input.md)。
+State machine details are in [`../../40-frontend/input.md`](../../40-frontend/input.md).

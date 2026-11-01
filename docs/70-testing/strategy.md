@@ -1,273 +1,265 @@
-# 测试策略
+# Test strategy
 
-> 状态：Accepted
+> Status: Accepted
 
-## 原则
+## Principles
 
-**可测性是架构属性。** [ADR-0002](../20-architecture/adr/0002-self-contained-binary.md) 否决 Cloudflare 方案的决定性理由就是它让完整链路的测试变得不可能。所以：
+**Testability is an architectural property.** The deciding reason [ADR-0002](../20-architecture/adr/0002-self-contained-binary.md) rejected the Cloudflare approach was that it made end-to-end testing impossible. So:
 
-- 整个系统能在 CI 里一条命令启动（单二进制 + `--dev`）
-- 核心功能（断线续传）的测试能**精确控制断开时机**
-- `Session` 不知道 WebSocket 的存在，可以无网络单测
+- The whole system starts in CI with one command (single binary + `--dev`).
+- Tests of the core feature (resume after disconnect) can **control exactly when the connection drops**.
+- `Session` knows nothing about WebSockets and can be unit-tested without a network.
 
-## 分层
+## Layers
 
-| 层 | 工具 | 覆盖 | 运行时间目标 |
+| Layer | Tool | Covers | Target runtime |
 |---|---|---|---|
-| Go 单测 | `go test` | 环形缓冲、终端模拟器封装（`internal/vterm`）、协议编解码、存储、认证逻辑 | < 10s |
-| Go 集成 | `go test -tags=integration` | 真 PTY、真 SQLite、真 HTTP、真 WebSocket（进程内） | < 60s |
-| 前端单测 | Vitest | seq 记账、重发队列、快照帧拼接、回放门、keymap 与附加键、文本输入页、退避；快照的屏幕级一致性（`@xterm/headless` 当裁判） | < 30s |
-| E2E | Playwright | 真二进制 + 真浏览器，完整用户流程 | < 5min |
+| Go unit | `go test` | Ring buffer, terminal emulator wrapper (`internal/vterm`), protocol encoding, storage, auth logic | < 10s |
+| Go integration | `go test -tags=integration` | Real PTY, real SQLite, real HTTP, real WebSocket (in-process) | < 60s |
+| Frontend unit | Vitest | seq accounting, resend queue, snapshot frame assembly, replay gate, keymap and extra keys, text page, backoff; screen-level consistency of snapshots (`@xterm/headless` as the judge) | < 30s |
+| E2E | Playwright | Real binary + real browser, full user flows | < 5min |
 
-## 两条口径（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §10）
+## Two standards ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §10)
 
-输出只有两条路，各有各的口径：
+Output takes one of two paths, and each has its own standard:
 
-| 路径 | 口径 | 测试 |
+| Path | Standard | Tests |
 |---|---|---|
-| **增量**（断线短、切走短） | **字节级**：断开重连后的序列化结果与不断开逐字节一致 | 下面这一节、E2E-2 |
-| **快照**（第一次打开、刷新、落出窗口、改列数） | **屏幕级**：xterm 先吃快照再吃之后的字节，逐格等于直接吃全部字节（字符、宽度、颜色、属性、光标、模式；软换行标记与 ADR-0026 列出的三处已知差异除外） | 下面的「屏幕级一致性」、E2E-30 / 31 / 36 |
+| **Incremental** (short disconnect, short time away) | **Byte-level**: the serialized terminal after a disconnect and reconnect is byte-identical to one that never disconnected | The next section, E2E-2 |
+| **Snapshot** (first open, refresh, fell out of the window, column change) | **Screen-level**: xterm fed the snapshot and then the later bytes matches, cell by cell, xterm fed all the bytes (characters, widths, colors, attributes, cursor, modes; except soft-wrap flags and the three known differences listed in ADR-0026) | "Screen-level consistency" below, E2E-30 / 31 / 36 |
 
-## 关键测试：字节级连续性（AC-2.1）★
+## Key test: byte-level continuity (AC-2.1) ★
 
-这是整个项目最重要的一个测试。它验证"永不断线"这个核心承诺。
+The single most important test in the project. It verifies the core "never disconnects" promise.
 
-### 做法
+### How
 
 ```
-1. 启动 agent（--dev），配对，建立 WebSocket
-2. 创建会话，跑一个确定性的输出脚本
-   （固定内容、固定顺序、含 ANSI 颜色、含 CJK、含长行、总量 ~2 MB）
-3. 记录结束时 xterm 缓冲区的序列化结果（@xterm/addon-serialize）→ 基准
-4. 重跑同一脚本，但在输出进行到 30% / 60% 时各强制断开一次 WebSocket
-5. 等重连完成、输出跑完
-6. 序列化 → 与基准【逐字节比较】
+1. Start the agent (--dev), pair, open a WebSocket
+2. Create a session and run a deterministic output script
+   (fixed content, fixed order, with ANSI colors, CJK, long lines; ~2 MB total)
+3. Serialize the xterm buffer at the end (@xterm/addon-serialize) → baseline
+4. Run the same script again, but force-drop the WebSocket at 30% and again at 60% of the output
+5. Wait for the reconnect and for the output to finish
+6. Serialize → compare BYTE FOR BYTE with the baseline
 ```
 
-### 为什么这个测试有效
+### Why it works
 
-它不测"重连能不能连上"（那太弱），而是测**最终屏幕状态是否与从未断线时完全一致**。任何 seq 记账错误、切片偏移、重复回放、丢帧，都会让两次结果不同。
+It doesn't test "can it reconnect" (too weak); it tests **whether the final screen state is identical to never having disconnected**. Any seq accounting error, slice offset, duplicate replay, or dropped frame makes the two results differ.
 
-### 变体
+### Variants
 
-| 变体 | 断开方式 | 验证 |
+| Variant | How it disconnects | Verifies |
 |---|---|---|
-| E2E-2a | Playwright 路由拦截切断 WS | 基本续传 |
-| E2E-2b | 断开 5 秒（缓冲不溢出） | 增量回放正确 |
-| E2E-2c | 断开期间输出 > `ring_bytes` | 走快照路径：**屏幕级**一致（不要求字节级），后续输出正确 |
-| E2E-2d | 连续快速断开 10 次 | 无累积错位 |
-| E2E-3 | 断开期间在终端里输入 | 输入不丢、不重、顺序正确 |
+| E2E-2a | Playwright route interception cuts the WS | Basic resume |
+| E2E-2b | Disconnected for 5 seconds (buffer doesn't overflow) | Incremental replay is correct |
+| E2E-2c | Output during the disconnect > `ring_bytes` | Snapshot path: **screen-level** match (not byte-level), later output correct |
+| E2E-2d | 10 quick disconnects in a row | No accumulated drift |
+| E2E-3 | Typing in the terminal while disconnected | Input not lost, not duplicated, in order |
 
-E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画出来的画面，不是原始字节。它要求的是**画面**一致，且之后的输出接得上。
+E2E-2c is the only variant that doesn't require a byte-level match: a snapshot is a picture the agent redraws, not the original bytes. It requires the **picture** to match, and later output to continue correctly.
 
-## 关键测试：屏幕级一致性（AC-2.21）★
+## Key test: screen-level consistency (AC-2.21) ★
 
-快照那条路的看门人。做法照搬 2026-10-30 的离线试验：
+The gatekeeper for the snapshot path. It reuses the method of the [offline experiment](../20-architecture/adr/0026-agent-holds-terminal-state.md#offline-experiment-2026-10-30) behind ADR-0026:
 
 ```
-1. 录制夹具：在伪终端里跑真实程序（claude 两种渲染方式、codex、vim、tmux、less、top、
-   python、长日志、中文彩色输出），把原始输出字节录成 internal/vterm/testdata/rec/*.bin
-2. Go 测试：对每段录制取一组截断点（均匀的 + 随机的，随机的会落在转义序列与多字节字符中间），
-   在每个截断点用 internal/vterm 生成快照，写成 testdata 下的快照文件
-3. Vitest：@xterm/headless（unicode11）当裁判
-     参照 = 直接吃全部原始字节
-     对照 = 新终端先吃截断点的快照、再吃截断点之后的原始字节
-   逐格比较；写入前都先过流式 TextDecoder（xterm 写 Uint8Array 会在切开的 UTF-8 上丢字）
+1. Record fixtures: run real programs in a pseudo-terminal (claude in both render modes, codex, vim, tmux,
+   less, top, python, long logs, colored CJK output) and record the raw output bytes as
+   internal/vterm/testdata/rec/*.bin
+2. Go test: for each recording, pick a set of cut points (evenly spaced + random; the random ones land
+   inside escape sequences and multibyte characters), build a snapshot with internal/vterm at each cut
+   point, and write it to a snapshot file under testdata
+3. Vitest: @xterm/headless (unicode11) as the judge
+     reference = feed all the raw bytes
+     candidate = a fresh terminal fed the snapshot at the cut point, then the raw bytes after it
+   compare cell by cell; every write goes through a streaming TextDecoder first (xterm drops characters
+   from split UTF-8 when written a Uint8Array)
 ```
 
-只比「看得见」的东西：空格的前景色归一、备用屏的软换行标记不比。ADR-0026 列出的三处已知差异（top 末格反白、SGR 53、关闭自动换行时光标 x 的记法）以白名单的形式写在测试里，新增差异必须先改 ADR。
+Only what's visible is compared: the foreground color of blank cells is normalized, and soft-wrap flags on the alternate screen aren't compared. The three known differences listed in ADR-0026 (top's reversed last cell, SGR 53, how the cursor x is recorded with autowrap off) are an allowlist in the test; any new difference requires changing the ADR first.
 
-## Go 单测清单
+## Go unit tests
 
-### `internal/ringbuf`（见 [`../50-backend/ring-buffer.md`](../50-backend/ring-buffer.md#必测用例)）
+### `internal/ringbuf` (see [`../50-backend/ring-buffer.md`](../50-backend/ring-buffer.md#required-tests))
 
-`UT-ring-1、2、5–10`。其中 `UT-ring-8`（模糊测试，随机 Append/Slice 序列断言不变式）是这个模块最有价值的测试 —— 环形缓冲的 bug 几乎全在边界。
+`UT-ring-1, 2, 5–10`. `UT-ring-8` (fuzzing random Append/Slice sequences against the invariants) is the most valuable test in this module: ring buffer bugs live almost entirely at the edges.
 
 ### `internal/vterm`
 
-- 同一段字节按任意分片喂入，快照逐字节相等（分片无关）
-- `导出状态 → 导入` 前后快照逐字节相等（热升级用）
-- 改列数后快照里的行宽等于新列数；只改行数时历史行不变
-- 模拟器的查询应答被丢弃，不会写进 PTY
+- The same bytes fed in any chunking produce byte-identical snapshots (chunking-independent)
+- `export state → import` produces byte-identical snapshots before and after (for hot upgrade)
+- After a column change, snapshot rows are as wide as the new column count; a row-only change leaves history rows alone
+- The emulator's query replies are dropped and never written to the PTY
 
 ### `internal/protocol`
 
-- 二进制帧编解码往返（含边界：`seq = 0`、`seq = MaxUint64`、`sid = 0`、`payload` 1 字节）
-- 非法帧检测（长度不足、空 payload、超大 payload）
-- 控制消息 JSON 往返
-- **测试向量**：跑 `testdata/vectors.json`，与前端共用同一份 fixture（防实现漂移，协议 §9）
+- Binary frame encode/decode round trips (including edges: `seq = 0`, `seq = MaxUint64`, `sid = 0`, a 1-byte `payload`)
+- Invalid frame detection (too short, empty payload, oversized payload)
+- Control message JSON round trips
+- **Test vectors**: run `testdata/vectors.json`, the same fixture the frontend uses (guards against implementation drift, protocol §9)
 
 ### `internal/store`
 
-- 迁移幂等性：连续跑两次迁移，结果一致；`0003` 把老库里的 `commands` 表删掉
-- 设备与配对的查询
-- 权限：创建后文件是 `0600`
+- Migration idempotence: running migrations twice gives the same result; `0003` drops the `commands` table from old databases
+- Device and pairing queries
+- Permissions: the file is `0600` after creation
 
 ### `internal/auth`
 
-- `UT-pair-1..4`：一次性、过期、熵、常数时间比较
-- `UT-auth-1`：DB 存的是哈希不是原文
+- `UT-pair-1..4`: single use, expiry, entropy, constant-time comparison
+- `UT-auth-1`: the database stores the hash, not the raw token
 
-### `internal/session`：起 shell 时的 OOM 优先级（[ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md) §3）
+### `internal/session`: OOM priority when starting a shell ([ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md) §3)
 
-- `UT-oom-1`：注入 `oom_score_adj` 的读写。self < 0 时顺序是「写 0 → 起 shell → 写回 self」，而且起 shell 时读到的是 0；self ≥ 0 时一次都不写；写 0 失败照样起 shell；写回失败只记日志，不报错
+- `UT-oom-1`: inject the `oom_score_adj` reads and writes. With self < 0 the order is "write 0 → start shell → write self back", and the shell sees 0 when it starts; with self ≥ 0 nothing is written; a failed write of 0 still starts the shell; a failed write-back only logs, without returning an error
 
 ### `scripts/install.sh`
 
-- `UT-install-unit`：`install.sh --print-unit` 打印的系统单元里有 `User=` / `Group=`（当前用户）、`OOMScoreAdjust=-900`、`OOMPolicy=continue`、`XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS` 里的**字面 UID**（不是 `%U`）、`Wants=` / `After=user@<uid>.service`，`ExecStart` 带着端口参数；不联网、不需要 sudo
-- `UT-install-embed`：二进制里嵌的就是 `scripts/install.sh`（逐字节相等）；`webterm install --help` 跑的是它（打出 install.sh 的用法）
-- `UT-install-handover`：`--base-url file://…` 指向一个假二进制 + `SHA256SUMS`，install.sh 下载、校验之后调用 `<假二进制> install <原参数>`；假二进制不认 `install` 时脚本以「版本太旧」中止、不往下装。不联网、不需要 sudo
-- `UT-install-default-addr`：不给 `--domain` 时，有 `install-state` 就沿用它（命令行参数覆盖同名项），没有就用公网 IP（`WEBTERM_PUBLIC_IP` 注入，不联网）；用 `--print-unit` 看 `ExecStart`
-- `UT-install-config-sync`：已有配置文件时，重装改写 `domain` / 端口、端口回到默认值时删掉那一行，其它键原样保留
+- `UT-install-unit`: the system unit printed by `install.sh --print-unit` has `User=` / `Group=` (the current user), `OOMScoreAdjust=-900`, `OOMPolicy=continue`, a **literal UID** (not `%U`) in `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS`, `Wants=` / `After=user@<uid>.service`, and an `ExecStart` with the port flags; no network, no sudo
+- `UT-install-embed`: the script embedded in the binary is exactly `scripts/install.sh` (byte-identical); `webterm install --help` runs it (prints install.sh's usage)
+- `UT-install-handover`: with `--base-url file://…` pointing at a fake binary + `SHA256SUMS`, install.sh downloads and verifies it, then runs `<fake binary> install <original args>`; when the fake binary doesn't know `install`, the script aborts with "version too old" and installs nothing. No network, no sudo
+- `UT-install-default-addr`: without `--domain`, an existing `install-state` is reused (command-line flags override matching keys); otherwise the public IP is used (injected via `WEBTERM_PUBLIC_IP`, no network); checked through `ExecStart` in `--print-unit`
+- `UT-install-config-sync`: with an existing config file, reinstalling rewrites `domain` / the ports, deletes the port line when the port goes back to its default, and leaves other keys untouched
 
-### `internal/agent`：IP 证书（[ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md)）
+### `internal/agent`: IP certificates ([ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md))
 
-- `UT-ipcert-1`：续期时刻 = `NotAfter - 有效期/3`；失败后一小时重试
-- `UT-ipcert-2`：IPv6 字面量、非 IP 的地址不进 IP 模式 / 被拒绝；`IsIPAddress` 判定
-- `UT-ipcert-3`：CA 目录里没有 `shortlived` → 报错里说清楚「这个 CA 不签 IP 证书」
-- `UT-config-removed-key`：配置文件里的 `acme-staging` 报「已删除」并给出行号，而不是笼统的「没有这个选项」
-- `UT-status-cert`：到期阈值 `min(10 天, 有效期/4)` —— 90 天证书剩 11 天不标黄、剩 9 天标黄；160 小时证书刚签下来不标黄、剩 30 小时标黄
-- `UT-doctor-ip`：IP 模式不做 DNS 检查，公网 IP 不等于 `--domain` 时给出 NAT / 换 IP 的说明
-- `UT-pair-wait`：`--wait` 在探针成功前不打印配对码；超时后提示看日志并照常打印
+- `UT-ipcert-1`: renewal time = `NotAfter - lifetime/3`; retry an hour after a failure
+- `UT-ipcert-2`: IPv6 literals and non-IP addresses don't enter IP mode / are rejected; `IsIPAddress` classification
+- `UT-ipcert-3`: no `shortlived` in the CA directory → the error says plainly that this CA doesn't issue IP certificates
+- `UT-config-removed-key`: `acme-staging` in the config file is reported as removed, with its line number, rather than a generic "unknown option"
+- `UT-status-cert`: expiry warning threshold `min(10 days, lifetime/4)` — a 90-day certificate with 11 days left isn't flagged, with 9 days left it is; a freshly issued 160-hour certificate isn't flagged, with 30 hours left it is
+- `UT-doctor-ip`: IP mode skips the DNS check; when the public IP differs from `--domain`, the output explains NAT / IP change
+- `UT-pair-wait`: `--wait` prints no pairing code before the probe succeeds; on timeout it points to the logs and prints the code anyway
+- `UT-doctor-guide-1..4` (ADR-0046): an unreachable CA leads to firewall instructions, a wait for Enter, staging probes in a temp directory, then one production request into `certs/`; EOF on the terminal gives up with the diagnosis; `--guide` without a terminal never prompts; a missing `A` record shows the record and polls until it resolves
+- `UT-issue-unreachable`: `IssueCheck` flags a challenge that can't get in as unreachable, and a CA without IP support as not
 
-## Go 集成测试清单
+## Go integration tests
 
-用真 PTY + 真 SQLite + 进程内 HTTP server。
+Real PTY + real SQLite + in-process HTTP server.
 
-| ID | 内容 |
+| ID | Covers |
 |---|---|
-| `IT-session-1..6` | 多会话独立性、上限、自动命名（CWD 读 `/proc`）、退出保留缓冲与模拟器、关闭杀进程组、终端标题作自动名（归属前台进程组，ADR-0043） |
-| `IT-resume-1..4` | 断线期间会话不暂停、增量回放不重发、输入重发不丢不重（`in_ack` 跨重连存活）、`instance_id` 不符判 `gone` |
-| `IT-snapshot-1..3` | 落出窗口 / `out_seq == 0` 走快照且之后的 OUTPUT 从快照的 `seq` 接上；改列数向每个订阅者重发快照、只改行数不发；快照超过单帧上限时按 `MORE` 拆帧 |
-| `IT-auth-1..4` | 路由认证矩阵（**含 `/ws`**）、Origin 校验、Cookie 属性、吊销即时生效 |
-| `IT-pair-1..3` | 二维码输出、配对码不进日志、限速 |
-| `IT-tls-1..3` | 用本地假 ACME CA（`internal/acmetest`）验证：真的签出证书并能握手；`--dev` 一次都不找 CA；挑战打不进来时给可读诊断（AC-1.13）。见下方「为什么不用 pebble」 |
-| `IT-tls-4..6` | IP 模式（AC-1.16）：假 CA 收到的订单是 `ip` 标识 + `shortlived` profile，签出的证书带 IP SAN，**不带 SNI 的握手**能用 CA 根校验通过；重启读缓存、不再找 CA；有效期短到触发续期时会换一张新证书 |
-| `IT-doctor-acme-1..2` | `doctor --acme` 的签发核心：假 CA 能验证时签出证书、存进给定的证书目录、端口释放；**再跑一次直接用缓存、CA 收不到新订单**；挑战打不进来时给可读诊断。域名与 IP 两种模式都跑 |
-| `IT-privacy-1..2` | canary 字符串不出现在数据目录 / 日志中 |
-| `IT-embed-1` | 删掉 `web/dist` 后二进制仍能提供前端（证明真的嵌入了） |
-| `IT-resize-1` | `resize` 消息导致 PTY 的 `TIOCSWINSZ` 生效（在会话内跑 `stty size` 验证） |
-| `IT-hb-1` | 60 秒无帧的连接被关闭 |
-| `IT-queue-1` | 会话输入队列满 → `input_stalled`，入队非阻塞，其它会话不受影响（m1） |
-| `IT-queue-2` | 连接写队列满 → 关闭该连接而不是阻塞 Session（m2，需要连接层） |
-| `IT-sub-1` | 未订阅会话继续缓冲、继续喂给模拟器，`subscribe{out_seq}` 按增量或快照补齐 |
-| `IT-handoff-1` | 热升级前后：增量路径字节级连续、同一会话的快照逐字节相等（`TestHandoffByteLevelContinuity`） |
-| `IT-order-1` | 会话顺序（AC-4.13）：新建排最后、关闭去掉；`session.move` 挪到 `before` 前 / `null` 放最后、`before` 不存在当最后、`sid` 不存在回 `unknown_session`；成功后向所有连接广播 `session.order`（`req_id` 只在发起方）；`welcome.sessions[]` 按顺序；热升级后顺序不变 |
-| `IT-oom-1` | 真 `/proc`、真 PTY、不需要 root：把子进程目标值调成「self + 100」（调高不需要特权，调回 self 不低于下限），并发起多个会话，每个 shell 的 `oom_score_adj` 都是目标值，agent 最后回到 self（ADR-0034 §3） |
+| `IT-session-1..6` | Session independence, limits, auto naming (CWD from `/proc`), buffer and emulator kept after exit, close kills the process group, terminal title as auto name (owned by the foreground process group, ADR-0043) |
+| `IT-resume-1..4` | Sessions keep running while disconnected, incremental replay doesn't resend, input resend neither loses nor duplicates (`in_ack` survives reconnects), mismatched `instance_id` → `gone` |
+| `IT-snapshot-1..3` | Falling out of the window / `out_seq == 0` takes the snapshot path and later OUTPUT continues from the snapshot's `seq`; a column change resends a snapshot to every subscriber, a row-only change doesn't; a snapshot over the frame size limit is split with `MORE` |
+| `IT-auth-1..4` | Route auth matrix (**including `/ws`**), Origin check, cookie attributes, revocation takes effect immediately |
+| `IT-pair-1..3` | QR code output, pairing codes never in logs, rate limiting |
+| `IT-tls-1..3` | Against a local fake ACME CA (`internal/acmetest`): a certificate really is issued and completes a handshake; `--dev` never contacts the CA; a challenge that can't get in gives a readable diagnosis (AC-1.13). See [Why not pebble](#why-not-pebble) below |
+| `IT-tls-4..6` | IP mode (AC-1.16): the fake CA receives an order with an `ip` identifier + the `shortlived` profile, the issued certificate has an IP SAN, and a **handshake without SNI** verifies against the CA root; a restart reads the cache and doesn't contact the CA; a lifetime short enough to trigger renewal gets a new certificate |
+| `IT-doctor-acme-1..2` | Issuance core of `doctor --acme`: when the fake CA can validate, a certificate is issued, stored in the given cert directory, and the port is released; **a second run uses the cache and the CA gets no new order**; a challenge that can't get in gives a readable diagnosis. Both domain and IP modes |
+| `IT-privacy-1..2` | A canary string never appears in the data directory / logs |
+| `IT-embed-1` | With `web/dist` deleted, the binary still serves the frontend (proves it's really embedded) |
+| `IT-resize-1` | A `resize` message takes effect via the PTY's `TIOCSWINSZ` (verified with `stty size` in the session) |
+| `IT-hb-1` | A connection with no frames for 60 seconds is closed |
+| `IT-queue-1` | Session input queue full → `input_stalled`, enqueueing doesn't block, other sessions are unaffected (m1) |
+| `IT-queue-2` | Connection write queue full → that connection is closed instead of blocking the Session (m2, needs the connection layer) |
+| `IT-sub-1` | Unsubscribed sessions keep buffering and feeding the emulator; `subscribe{out_seq}` catches up incrementally or with a snapshot |
+| `IT-handoff-1` | Across a hot upgrade: the incremental path is byte-continuous and a session's snapshot is byte-identical (`TestHandoffByteLevelContinuity`) |
+| `IT-order-1` | Session order (AC-4.13): new sessions go last, closed ones are removed; `session.move` moves before `before` / to the end for `null`, an unknown `before` means last, an unknown `sid` returns `unknown_session`; on success `session.order` is broadcast to every connection (`req_id` only to the requester); `welcome.sessions[]` is in order; order survives a hot upgrade |
+| `IT-oom-1` | Real `/proc`, real PTY, no root: set the child target to "self + 100" (raising needs no privilege, and writing self back doesn't go below the floor) and start several sessions concurrently; every shell's `oom_score_adj` is the target, and the agent ends up back at self (ADR-0034 §3) |
 
-### 为什么不用 pebble
+### Why not pebble
 
-这一条原本写的是用 [pebble](https://github.com/letsencrypt/pebble)。实际动手时有两个障碍：
+The original plan was [pebble](https://github.com/letsencrypt/pebble). Two problems came up:
 
-1. pebble 会带进来一整棵新的模块依赖（gorilla/mux、miekg/dns…）。它是测试专用的，但仍然进 `go.sum`。
-2. **pebble 的 VA 会做真实 DNS 解析**去验证 HTTP-01。测试域名得能解析到本机，绕它要么改 `/etc/hosts`、要么给 pebble 挂自定义 DNS —— 两条都依赖 CI 环境。
+1. pebble pulls in a whole new tree of module dependencies (gorilla/mux, miekg/dns…). It's test-only, but it still lands in `go.sum`.
+2. **pebble's VA does real DNS resolution** to validate HTTP-01. The test domain would have to resolve to localhost, which means editing `/etc/hosts` or giving pebble a custom DNS server — both depend on the CI environment.
 
-`internal/acmetest` 是一个约 300 行的进程内 RFC 8555 服务器：零新依赖、不碰网络、不需要 DNS（验证目标地址由测试直接指定），三条测试合计跑 1 秒出头。
+`internal/acmetest` is an in-process RFC 8555 server of about 300 lines: no new dependencies, no network, no DNS (the test supplies the validation target address directly). The three tests together take just over a second.
 
-它**刻意不校验 JWS 签名** —— 那对下面要证明的东西没有贡献。
+It **deliberately doesn't verify JWS signatures**; that contributes nothing to what these tests prove.
 
-它证明的是**我们这边的接线**：autocert 配置正确、`:80` 上的挑战 handler 真的能被取到（包括 `HostPolicy` 对 `Host` 头的校验）、启动预热真的拿到证书并落盘 0700、证书真的能用来完成 TLS 握手、失败时给出可读诊断。
+What they prove is **our wiring**: autocert is configured correctly, the challenge handler on `:80` really is reachable (including `HostPolicy`'s check of the `Host` header), warm-up at startup really obtains a certificate and stores it under 0700, the certificate really completes a TLS handshake, and failures produce a readable diagnosis.
 
-它**不**证明我们与 Let's Encrypt 的协议兼容性 —— 那是 `golang.org/x/crypto/acme` 的职责，上游有自己的测试。真实签发仍然只能靠 [手动检查清单](manual-checklist.md)。
+They do **not** prove protocol compatibility with Let's Encrypt — that's `golang.org/x/crypto/acme`'s job, and upstream has its own tests. Real issuance can still only be checked with the [manual checklist](manual-checklist.md).
 
-> 这三条测试上线当天就抓到一个真 bug：autocert 会把挑战类型逐个试完，最终抛的是
-> `no viable challenge type found`，而诊断只匹配 `Invalid response` ——
-> 也就是说**最常见的真实故障（安全组没放行）根本走不到那段诊断**。
-> 这正是"只有手动验证"覆盖不到的东西。
+> These tests caught a real bug the day they landed: autocert tries every challenge type and finally
+> returns `no viable challenge type found`, but the diagnosis only matched `Invalid response`, so
+> **the most common real failure (a security group blocking the port) never reached it**.
+> Manual checks alone would never have covered that.
 
-**会话集成测试需要一个真 shell。** 测试跑一个受控的 `.bashrc`（通过 `HOME` 指向临时目录）以获得确定性。
+**Session integration tests need a real shell.** They run a controlled `.bashrc` (by pointing `HOME` at a temp directory) for determinism.
 
-## 前端单测清单（Vitest）
+## Frontend unit tests (Vitest)
 
-| ID | 内容 |
+| ID | Covers |
 |---|---|
-| `UT-seq-1` | `out_seq` 记账：连续帧、空洞检测、重复检测；SNAPSHOT 后 `out_seq` 跳到快照的 `seq` |
-| `UT-snapshot-1` | SNAPSHOT 帧：`MORE` 拼接、收齐才应用、应用时 `reset` 并换新的 UTF-8 解码器 |
-| `UT-utf8-1` | 输出按任意字节切开写入，中文标点（。…—“”）一个不丢（AC-2.23） |
-| `UT-touch-1` | 触屏纵向拖转滚轮：每满一行高发一次、零头留到下一帧、方向、每次 touchmove 最多 3 次且超出的丢掉、10px 门槛与纵向占优、只在鼠标跟踪时转换并 `preventDefault`（AC-3.21） |
-| `UT-input-1..3` | 文本输入页：回车语义（有内容 = 粘贴内容再回车 / 空回车发 `\r`）、composition 期间不发送、输入框属性 |
-| `UT-textinput-2` | 文本页跟着会话走：每个会话各记页与草稿、新会话是键位页空草稿、关掉的会话被忘掉；切换会话时换草稿、焦点落到新会话的输入处、组字中先失焦再换（AC-3.22 / AC-4.8） |
-| `UT-keymap-1` | 控制键映射表（对照 [`../40-frontend/keymap.md`](../40-frontend/keymap.md)） |
-| `UT-look-1` | 外观默认值：xterm 默认字号 14px、字体是系统等宽栈；`Ctrl+Shift+,` 不是应用快捷键（AC-5.3） |
-| `UT-close-1` | 关闭确认（AC-4.11，ADR-0038）：`running` 会话进 `closing` 而不发 `session.close`、`exited` 直接发；确认才发、取消不发；确认前先把焦点还给输入处；会话从列表里消失时 `closing` 清掉；关闭中的会话不发输入与 `resize`，它的 `unknown_session` 不弹 toast，本地没有的 sid 也不弹 |
-| `UT-order-1` | 排序（AC-4.13，ADR-0040）：`moveBefore` 挪到某项前 / 最后、`before` 不存在当作最后；按指针位置算插入下标（越过中线才换位）；store 按 agent 给的顺序列出、新建排最后、`session.order` 整个替换（不认识的 sid 占位，晚到的会话落在那里）、`[n]` 跟着变 |
-| `UT-swipe-1` | 行左滑（AC-4.12，ADR-0039）：10px 门槛与横向占优、位移夹在 0 到 −216、过半松手打开否则弹回、打开后右滑关上；下滑关 sheet 只在纵向占优时接管 |
-| `UT-prefs-1` | 两项偏好（AC-5.3，ADR-0037）：主题默认跟随系统、`light` / `dark` 打上 `data-theme` 与 `color-scheme`、跟随系统时去掉；字号默认 14、只收 10–24 的整数、不合法回默认；`localStorage` 抛异常时用默认值且不抛；控制器改字号时所有实例一起换并补发 `resize`（容器没变也发），改主题时 xterm 主题跟着换 |
-| `UT-reconnect-1` | 指数退避序列、抖动范围、`online` 事件立即重试 |
-| `UT-hb-1` | 心跳间隔、pong 超时判死 |
-| `UT-hb-2` | 自认在线时的即时探活：`online` / 页面可见 → 发 `ping`，2 秒无 `pong` → 关连接；`pong` 来了就不关（AC-2.20） |
-| `UT-replay-2` | 回放门：用户输入事件派发期间的 `onData` 放行，`message` / 定时器里产生的在回放（增量补课、快照）中丢弃（AC-2.15） |
-| `UT-raw-2` | 组字兜底复位：`blur` / `isComposing === false` 的 `keydown` 都把 `composing` 置回 false（AC-3.3） |
-| `UT-resize-1` | resize 防抖 |
-| `UT-fit-1` | 行列 = 可用尺寸 ÷ 稳定字符格尺寸，向下取整、最少 2 列 1 行；900px 宽的实测数（字符宽 8.4287px、可用 877px）得 104 列，与当前列数无关（AC-3.11） |
-| `UT-name-1` | 会话自动命名规则（home → `~`、`/` → `/`、手动名优先） |
-| `UT-name-2` | 终端标题清洗（控制字符、首尾空白、64 个字符）；模拟器报告标题与写入次数（同样的标题再写一次也计数） |
-| 协议向量 | 跑 `internal/protocol/testdata/vectors.json`（与 Go 侧同一份） |
+| `UT-seq-1` | `out_seq` accounting: consecutive frames, gap detection, duplicate detection; after a SNAPSHOT `out_seq` jumps to the snapshot's `seq` |
+| `UT-snapshot-1` | SNAPSHOT frames: `MORE` assembly, applied only when complete, applying resets and switches to a fresh UTF-8 decoder |
+| `UT-utf8-1` | Output split at arbitrary bytes and written loses no CJK punctuation (。…—“”) (AC-2.23) |
+| `UT-touch-1` | Touch vertical drag to wheel: one event per full row height, remainder carried to the next frame, direction, at most 3 per touchmove with the excess dropped, 10px threshold and vertical dominance, converts and calls `preventDefault` only with mouse tracking on (AC-3.21) |
+| `UT-input-1..3` | Text page: Enter semantics (with text = paste the text then Enter / empty Enter sends `\r`), nothing sent during composition, textarea attributes |
+| `UT-textinput-2` | Text page follows the session: each session keeps its own page and draft, new sessions get the keys page and an empty draft, closed sessions are forgotten; switching sessions swaps drafts, focus lands on the new session's input, blur first when switching mid-composition (AC-3.22 / AC-4.8) |
+| `UT-keymap-1` | Control key mapping table (checked against [`../40-frontend/keymap.md`](../40-frontend/keymap.md)) |
+| `UT-look-1` | Appearance defaults: xterm font size 14px, font is the system monospace stack; `Ctrl+Shift+,` isn't an app shortcut (AC-5.3) |
+| `UT-close-1` | Close confirmation (AC-4.11, ADR-0038): a `running` session enters `closing` without sending `session.close`, an `exited` one sends it directly; confirm sends, cancel doesn't; focus returns to the input before confirming; `closing` clears when the session leaves the list; a closing session sends no input or `resize`, its `unknown_session` shows no toast, and neither does one for a sid the client doesn't have |
+| `UT-order-1` | Ordering (AC-4.13, ADR-0040): `moveBefore` moves before an item / to the end, an unknown `before` means last; insertion index from the pointer position (swap only past the midline); the store lists sessions in the agent's order, new sessions go last, `session.order` replaces the whole order (unknown sids hold their slot, and a late-arriving session lands there), `[n]` follows |
+| `UT-swipe-1` | Row swipe (AC-4.12, ADR-0039): 10px threshold and horizontal dominance, offset clamped to 0…−216, release past halfway opens otherwise springs back, swipe right closes an open row; swipe-down-to-close only takes over when vertical dominates |
+| `UT-prefs-1` | The two preferences (AC-5.3, ADR-0037): theme defaults to system, `light` / `dark` set `data-theme` and `color-scheme`, system removes them; font size defaults to 14, accepts only integers 10–24, falls back to the default otherwise; when `localStorage` throws, defaults are used and nothing throws; changing font size via the controller switches every instance and sends a `resize` (even if the container didn't change), changing theme updates the xterm theme |
+| `UT-reconnect-1` | Exponential backoff sequence, jitter range, immediate retry on the `online` event |
+| `UT-hb-1` | Heartbeat interval, pong timeout declares the connection dead |
+| `UT-hb-2` | Immediate liveness probe while believing it's online: `online` / page becomes visible → send `ping`; no `pong` within 2 seconds → close the connection; a `pong` keeps it open (AC-2.20) |
+| `UT-replay-2` | Replay gate: `onData` during the dispatch of a user input event passes; `onData` from `message` / timers during replay (incremental catch-up, snapshot) is dropped (AC-2.15) |
+| `UT-raw-2` | Fallback composition reset: `blur` and a `keydown` with `isComposing === false` both set `composing` back to false (AC-3.3) |
+| `UT-resize-1` | resize debounce |
+| `UT-fit-1` | Rows/cols = available size ÷ stable cell size, rounded down, minimum 2 columns × 1 row; measured numbers at 900px wide (cell width 8.4287px, 877px available) give 104 columns regardless of the current column count (AC-3.11) |
+| `UT-name-1` | Session auto naming rules (home → `~`, `/` → `/`, manual name wins) |
+| `UT-name-2` | Terminal title cleanup (control characters, surrounding whitespace, 64 characters); the emulator reports the title and the write count (writing the same title again still counts) |
+| Protocol vectors | Run `internal/protocol/testdata/vectors.json` (the same file as the Go side) |
 
-## E2E 清单
+## E2E
 
-场景详情见 [`e2e-scenarios.md`](e2e-scenarios.md)。
+Scenario details are in [`e2e-scenarios.md`](e2e-scenarios.md).
 
 ## CI
 
-两个 workflow（`.github/workflows/`）：
+Two workflows (`.github/workflows/`):
 
 ```yaml
-ci.yml   # 【只在 PR 上跑】，一个 job：
-  check:   gofmt · 文档链接 · go vet · 前端类型检查与单测
-           · npm run build · go test ./... -race · 单二进制断言（AC-8.1/8.2）
+ci.yml   # PULL REQUESTS ONLY, one job:
+  check:   gofmt · doc links · go vet · frontend typecheck and unit tests
+           · npm run build · go test ./... -race · single-binary assertions (AC-8.1/8.2)
 
-e2e.yml  # 【CI 上不自动跑】：只留手动触发，见下
+e2e.yml  # NOT run automatically in CI: manual trigger only, see below
 ```
 
-### 为什么是一个 job、为什么只在 PR 上跑
+### Why one job, and why only on pull requests
 
-**Actions 按 job 分别向上取整计费。** 原来拆成五个 job（`go` / `web` / `static` /
-`fmt` / `docs`），实测耗时 3.6 / 0.7 / 1.9 / 0.3 / 0.1 分钟 —— 光取整就白花两分钟，
-而 `go` 与 `static` 还各自跑了一遍 `npm ci && npm run build`。合成一个 job 之后
-构建一次，后面全部复用。
+**Actions bills each job rounded up to the minute.** Five separate jobs (`go` / `web` / `static` / `fmt` / `docs`) measured 3.6 / 0.7 / 1.9 / 0.3 / 0.1 minutes, so rounding alone wasted two minutes, and `go` and `static` each ran `npm ci && npm run build`. One job builds once and reuses the result.
 
-三条省法，都不换掉覆盖面：
+Three savings, none of which reduce coverage:
 
-1. **五个 job 合成一个**（取整浪费 + 重复构建）。便宜的检查排在前面 ——
-   gofmt / 坏链 / 类型检查失败得越早，这一轮花掉的分钟数越少。
-2. **只跑带 `-race` 的那一遍 `go test`**。原先普通跑一遍、带 race 再跑一遍，
-   等于把整套测试跑了两次；`-race` 本来就把所有测试都跑了。这个项目 goroutine 很重
-   （`session` / `wsconn` / `ringbuf`），该丢的是那遍重复，不是竞态检测。
-3. **合并进 main 不再重跑**。`pull_request` 事件跑的本来就是 **merge ref**
-   （main 与 PR 合并之后的树），main 上那一轮是同一棵树跑第二遍。
-   `Release` 仍在 main 上照跑（dev 预发布不受影响），它自己也会做完整构建与嵌入断言。
+1. **Five jobs merged into one** (no rounding waste, no duplicate builds). Cheap checks run first: the earlier gofmt / broken links / typecheck fail, the fewer minutes a run burns.
+2. **Only the `-race` run of `go test`.** Running once plain and once with `-race` ran the whole suite twice; `-race` already runs every test. This project is goroutine-heavy (`session` / `wsconn` / `ringbuf`), so the duplicate run is what goes, not race detection.
+3. **No rerun after merging to main.** The `pull_request` event already runs the **merge ref** (main with the PR merged), so a run on main would test the same tree a second time. `Release` still runs on main (dev prereleases are unaffected) and does its own full build and embed assertions.
 
-另外两条防漏：`concurrency` 让同一分支上被顶掉的旧 run 立刻取消（连推几个 commit 时
-不再并排烧）；`timeout-minutes` 给 job 封顶 —— Actions 的默认上限是 **360 分钟**，
-一个卡住的 job 能把一个月的额度烧掉。
+Two more guards against waste: `concurrency` cancels superseded runs on the same branch immediately (several quick pushes don't burn in parallel), and `timeout-minutes` caps the job — the Actions default is **360 minutes**, and one stuck job can burn a month's quota.
 
-代价：**main 上没有独立的 CI 结论**。前提是 [CLAUDE.md](../../CLAUDE.md) 的
-「不在 `main` 上直接开发」—— 所有改动都经 PR，PR 上跑的就是合并后的树。
+The cost: **main has no CI result of its own**. This relies on the [CLAUDE.md](../../CLAUDE.md) rule of never developing directly on `main`: every change goes through a PR, and the PR run tests the merged tree.
 
-**E2E 在 CI 上不跑，本地跑。** 一次约 6 分钟（装浏览器 + 构建 + 90 条用例），而 Actions 额度有限；
-自动触发（合并进 main、PR 打标签）被取消，`e2e.yml` 只保留 `workflow_dispatch`：想要 CI 上的结论时
-手动 `gh workflow run E2E --ref <分支>`，不点就一分钟都不花。
+**E2E doesn't run in CI; it runs locally.** One run takes about 6 minutes (install browsers + build + 90 cases), and Actions minutes are limited. The automatic triggers (merge to main, PR label) were removed; `e2e.yml` keeps only `workflow_dispatch`. When you want a CI result, run `gh workflow run E2E --ref <branch>` by hand; otherwise it costs nothing.
 
-于是**本地 `make e2e` 全绿是每个 PR 的硬门槛**（[CLAUDE.md](../../CLAUDE.md)），没有 CI 兜底：
+So **a green local `make e2e` is a hard gate for every PR** ([CLAUDE.md](../../CLAUDE.md)), with no CI safety net:
 
-- 本地跑不动 E2E（缺库、没浏览器）就**不要提 PR**，先把环境修好 —— 见 [development.md §E2E 的两个坑](../80-ops/development.md#e2e-的两个坑)
-- E2E 的前置是完整构建（`npm run build` → `go build`），这保证 `go:embed` 的路径是真的通的；本地跑的正是同一条路
-- 放弃的是「只在 CI 环境才暴露的差异」这张安全网。历史上它抓到过两次：Go job 不构建前端 → `go:embed` 空目录 → `GET /` 503；浮层刚打开时焦点还在 body → Esc 关不掉（[ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)）。**代价是知情的**：往后这类差异要靠手动触发那一次去抓 —— 改动触及协议 / 重连 / 输入 / 布局、或改了 E2E 与构建本身时，值得手动跑一次再合
-- `ci.yml` 的覆盖面不变：`go vet` / `go test -race` / 前端类型检查与单测 / 单二进制断言 / gofmt / 文档链接，每个 PR 的每次 push 都跑（合进 main 不重跑，理由见上）
+- If E2E won't run locally (missing libraries, no browser), **don't open the PR**; fix the environment first — see [development.md §E2E setup](../80-ops/development.md#e2e-setup)
+- E2E requires a full build first (`npm run build` → `go build`), which proves the `go:embed` paths really work; the local run takes exactly that path
+- What we give up is the net for "differences that only show up in the CI environment". It caught two in the past: the Go job didn't build the frontend → `go:embed` of an empty directory → `GET /` returned 503; and focus still on body right after a sheet opened → Esc couldn't close it ([ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)). **This is an informed trade-off**: from now on such differences are caught only by a manual run, which is worth doing before merging when a change touches the protocol / reconnect / input / layout, or changes the E2E suite or the build itself
+- `ci.yml` coverage is unchanged: `go vet` / `go test -race` / frontend typecheck and unit tests / single-binary assertions / gofmt / doc links run on every push to every PR (not again after merging to main, for the reasons above)
 
-## 覆盖率
+## Coverage
 
-不设硬性覆盖率门槛（会诱导写无意义的测试）。但以下模块**必须有近乎完全的分支覆盖**，review 时人工确认：
+No hard coverage threshold (it encourages meaningless tests). But these modules **must have near-complete branch coverage**, checked by hand in review:
 
 - `internal/ringbuf`
-- `internal/vterm`（快照与状态导出）
+- `internal/vterm` (snapshots and state export)
 - `internal/protocol`
-- `web/src/conn`（seq 记账、快照帧、重发队列）
+- `web/src/conn` (seq accounting, snapshot frames, resend queue)
 
-这四个是"断线续传"的全部实现。它们错了，产品的核心承诺就是假的。
+Together these four are the entire implementation of resume. If they're wrong, the product's core promise is false.
 
-## 手工测试清单
+## Manual tests
 
-有些东西自动化不了 —— 真实输入法、真实软键盘、真实网络切换、真实证书签发。
-完整清单见 [`manual-checklist.md`](manual-checklist.md)，**每次发布前跑一遍**。
+Some things can't be automated: real IMEs, real on-screen keyboards, real network switches, real certificate issuance.
+The full list is in [`manual-checklist.md`](manual-checklist.md); **run it before every release**.

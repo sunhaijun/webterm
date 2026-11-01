@@ -1,61 +1,42 @@
-# ADR-0001 Agent-first，链路上不用 SSH
+# ADR-0001 Agent-first, no SSH in the path
 
-> 状态：Accepted · 2026-09-06
+Status: Accepted (2026-09-06).
 
-## 背景
+## Context
 
-原始需求描述为"通过浏览器 SSH 到远程服务器"。但 SSH 是**现有手段**，不是需求本身。真实需求是"在浏览器里拿到远端的一个 shell"。
+The original request was "SSH into a remote server from the browser". SSH is an existing tool, not the requirement. The requirement is a shell on the remote machine, in a browser.
 
-## 决策
+## Decision
 
-**目标机器上运行 webterm agent，agent 直接 `fork` PTY。链路上没有 SSH。**
-
-```
-浏览器 ──WSS──> agent ──PTY──> bash
-```
-
-## 备选方案与否决理由
-
-### A. 浏览器 / Cloudflare Worker 内实现 SSH 客户端
-
-Workers 有 `cloudflare:sockets` 的 TCP 出站能力，理论可行。
-
-**否决**：
-- 需要在 JS/WASM 里实现完整的 SSH 传输层加密与认证 —— 代码量和攻击面都不可接受
-- Worker 有 CPU 时间限制和按时长计费，不适合承载长时间、高频小包的终端流
-- 违背"极简技术栈"
-
-### B. 一台 hub 装 agent，通过 SSH 连其它机器
-
-目标机器零改动。
-
-**否决**：
-- 引入"在 hub 上管理所有目标机器凭据"这个大问题（存哪、怎么加密、泄露后果）
-- 多一跳延迟
-- 环境隔离更复杂：hub 上的 CWD/环境变量与目标机器不一致，shell 集成要跨 SSH 传递 OSC
-- 单点故障
-
-### C. Agent-first（采纳）
-
-## 后果
-
-**正面**：
-- 延迟最低（浏览器到 PTY 只有一跳）
-- 不需要在任何地方存储 SSH 私钥或密码 —— 整个凭据管理问题消失
-- dotfiles、环境变量、CWD 天然就是目标机器上的真实状态
-- shell 集成的 OSC 序列不需要跨 SSH 通道传递
-- 整个系统可以在 CI 里完整启动做端到端测试
-
-**负面**：
-- **每台想访问的机器都要装一个二进制**。这是主要代价，已接受 —— 因为"scp 一个静态二进制 + 跑起来"的成本本身很低。
-- 没有中心化的机器清单/发现能力（v0.1 的单用户单机场景不需要）
-
-## 未来的分层
-
-如果确实需要访问没装 agent 的机器，正确的做法是**在 agent 内部加 SSH 出站能力**（`golang.org/x/crypto/ssh`），把 agent 当作跳板：
+Run the webterm agent on the target machine. The agent forks the PTY itself; there is no SSH hop.
 
 ```
-浏览器 ──WSS──> agent ──SSH──> 无 agent 的机器
+browser ──WSS──> agent ──PTY──> bash
 ```
 
-Go 侧实现这个只需要把 `session.PTY` 抽象成接口，本地 PTY 和 SSH channel 各实现一份。**架构上是干净的分层，不需要推翻本 ADR。** 不在 v0.1 范围。
+Rejected alternatives:
+
+- **An SSH client in the browser or in a Cloudflare Worker** (Workers can open TCP via `cloudflare:sockets`). This means implementing the SSH transport, encryption and auth in JS/WASM: too much code and attack surface. Workers also have CPU-time limits and per-duration billing, a poor fit for long-lived streams of small packets. And it goes against a minimal stack.
+- **One hub running the agent, SSH from there to other machines.** Target machines stay untouched, but the hub must store and protect credentials for every target (where, how encrypted, what a leak costs). It adds a hop of latency and a single point of failure, and the hub's CWD and environment differ from the target's, so shell integration would have to carry OSC sequences across SSH.
+
+## Consequences
+
+Positive:
+
+- Lowest latency: one hop from browser to PTY.
+- No SSH keys or passwords stored anywhere. Credential management disappears.
+- Dotfiles, environment variables and CWD are the target machine's real state.
+- The whole system can start inside CI for end-to-end tests.
+
+Negative:
+
+- **Every machine you want to reach needs the binary.** This is the main cost, and it is accepted: copying one static binary and running it is cheap.
+- No central inventory or discovery of machines. Single-user, single-machine v0.1 doesn't need it.
+
+Future: to reach machines without an agent, add outbound SSH inside the agent (`golang.org/x/crypto/ssh`) and use it as a jump host:
+
+```
+browser ──WSS──> agent ──SSH──> machine without an agent
+```
+
+On the Go side this only requires turning `session.PTY` into an interface with a local-PTY and an SSH-channel implementation. It layers cleanly on top of this ADR without overturning it. Not in v0.1.

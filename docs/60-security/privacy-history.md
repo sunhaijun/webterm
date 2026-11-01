@@ -1,64 +1,64 @@
-# 隐私
+# Privacy
 
-> 状态：Accepted
+> Status: Accepted
 
-webterm 不记命令历史（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) 已整体删除），不存终端输出。这篇定义边界。
+webterm keeps no command history (removed entirely by [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)) and stores no terminal output. This page defines the boundary.
 
-## 铁律：终端输出不落盘
+## The rule: terminal output never touches disk
 
-**终端输出只在内存里：每会话的环形缓冲与终端模拟器。任何情况下都不写入磁盘，浏览器也不存。**
+**Terminal output lives only in memory: each session's ring buffer and terminal emulator. It is never written to disk under any circumstances, and the browser doesn't store it either.**
 
-为什么：终端输出里有
+Why: terminal output contains
 
-- `cat .env`、`env`、`kubectl get secret -o yaml` 的结果
-- 日志里的 token、session id、连接字符串
-- `git push` 时打印的 URL（可能含 token）
-- AI agent 的对话内容
+- the results of `cat .env`, `env`, `kubectl get secret -o yaml`
+- tokens, session ids and connection strings in logs
+- URLs printed by `git push` (which may include a token)
+- conversations with AI agents
 
-这些东西一旦落盘就成了长期的泄露面。所以选择：**要么在内存里，要么不存在。**
+Once on disk, all of this becomes a long-lived leak. So the choice is: **in memory, or nowhere.**
 
-对应不变式（[CLAUDE.md](../../CLAUDE.md)）：`3. 输出不落盘`。
-验证：`IT-privacy-1` 跑一个会话输出特征字符串 `WEBTERM_CANARY_<随机>`，然后 grep 整个数据目录 + 日志，断言零命中。
+This is invariant 3 in [CLAUDE.md](../../CLAUDE.md) (output never touches disk).
+Verified by `IT-privacy-1`: a session prints a marker string `WEBTERM_CANARY_<random>`, then the test greps the whole data directory and the logs and asserts zero hits.
 
-### 后果
+### Consequences
 
-- **agent 重启后看不到之前的输出**。这是 [ADR-0003](../20-architecture/adr/0003-no-tmux.md) 会话不持久化的必然结果，两件事互相印证。
-- **热升级不算重启**：模拟器状态经内存文件交给新进程（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)），不经过磁盘。
-- **刷新页面后的回看来自 agent 的快照**（至多 2000 行），浏览器本地不留任何终端内容。
-- 没有"会话录像"功能。如果将来要做，必须是显式开关 + 明确的界面告知 + 独立的文件权限，且默认关闭。
+- **After an agent restart, earlier output is gone.** That follows directly from sessions not being persisted ([ADR-0003](../20-architecture/adr/0003-no-tmux.md)); the two decisions reinforce each other.
+- **A hot upgrade isn't a restart**: emulator state reaches the new process through an in-memory file ([ADR-0016](../20-architecture/adr/0016-hot-reexec.md)), never through the disk.
+- **Scrollback after a page reload comes from the agent's snapshot** (up to 2000 lines); the browser keeps no terminal content locally.
+- There is no session recording. If one is ever built, it must be an explicit opt-in with clear disclosure in the UI and its own file permissions, and off by default.
 
-## 落盘的是什么
+## What is stored on disk
 
-`webterm.db` 里只有设备与配对（token 与配对码只存哈希）、设置项（[storage-schema.md](../50-backend/storage-schema.md)）。不存命令原文、不存 CWD、不存输出。
+`webterm.db` holds only devices and pairings (tokens and pairing codes stored as hashes only) and settings ([storage-schema.md](../50-backend/storage-schema.md)). No command text, no CWD, no output.
 
-## 日志（AC-8.5）
+## Logs (AC-8.5)
 
-agent 的日志**不得包含**：
+Agent logs **must not contain**:
 
-- 配对码（任何形式，包括前缀）
-- 会话 Cookie token
-- 用户的输入（INPUT 帧的内容）
-- 终端输出
+- pairing codes (in any form, including prefixes)
+- session cookie tokens
+- user input (the contents of INPUT frames)
+- terminal output
 
-**可以包含**（刻意保留）：
+**May contain** (on purpose):
 
-- IP 与 User-Agent —— 设备列表和限速需要
-- 会话 sid、字节计数、seq —— 排障必需
-- 错误码与堆栈
+- IP and User-Agent — needed for the device list and rate limiting
+- session sid, byte counts, seq — essential for troubleshooting
+- error codes and stack traces
 
-日志级别默认 `info`。`--log-level debug` 会输出更多协议细节，但**仍然不输出上面禁止的内容** —— debug 模式不是安全旁路。
+The log level defaults to `info`. `--log-level debug` prints more protocol detail, but **still never prints anything forbidden above** — debug mode is not a security bypass.
 
-## 数据目录权限
+## Data directory permissions
 
 ```
 $XDG_DATA_HOME/webterm/    0700
 ├── webterm.db             0600
 ├── certs/                 0700
-└── run/                   0700   （控制 socket agent.sock 0600）
+└── run/                   0700   (control socket agent.sock 0600)
 ```
 
-同机的其它本地用户不在信任边界内（[`threat-model.md`](threat-model.md#信任边界)）。
+Other local users on the same machine are outside the trust boundary ([`threat-model.md`](threat-model.md#trust-boundaries)).
 
-## 备份的责任在用户
+## Backups are up to the user
 
-webterm 不做自动备份。`webterm.db` 是单文件，用户可以自己 `cp`（建议先 `sqlite3 webterm.db ".backup"` 或停服，避免 WAL 状态不一致）。里面只有设备与配对的哈希，丢了的代价是所有设备重新配对一次。
+webterm doesn't back anything up. `webterm.db` is a single file you can `cp` yourself (preferably run `sqlite3 webterm.db ".backup"` first, or stop the service, to avoid an inconsistent WAL state). It only holds device and pairing hashes; losing it means pairing every device again.

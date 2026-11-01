@@ -1,61 +1,53 @@
-# ADR-0011 读态优先的三态布局（读 / 写 / 控）
+# ADR-0011 Read-first layout with three states (read / write / control)
 
-> **移动端显示面部分已被 [ADR-0013](0013-terminal-only.md) 取代**（终端成为唯一显示面，块流 / 转录视图 / 视图切换均已移除）。以下保留作历史记录。
+Status: Accepted (2026-09-08). Mobile display surface superseded by [ADR-0013](0013-terminal-only.md): the terminal became the only display surface, and the block stream, transcript view and view switching were removed. The bottom bar and auto-control rules were revised earlier by [ADR-0012](0012-ai-cli-conversation-first.md).
 
-> 状态：Accepted · 2026-09-08 · 分片实施中（本 ADR 记录整体决策，① 已落地）
+## Context
 
-## 背景
+On a 390×664 phone the classic terminal layout packed four things into one screen: terminal grid, mode bar, Composer and key bar. Measured heights were `28 / 520 / 26 / 38 / 53` px. **The area for writing a command was 38 px (one line)**, and with the on-screen keyboard up the viewport dropped to ~360 px, leaving the terminal about 200 px.
 
-手机上 390×664 的屏幕，传统终端布局把四样东西挤在一屏：终端网格、模式条、Composer、功能键条。实测分配是 `28 / 520 / 26 / 38 / 53` —— **写命令的区域只有 38px（一行）**，而软键盘一弹，可视高度掉到 ~360px，终端能看的也只剩 200px 左右。
+So reading had 520 px when nobody was reading, and writing had 38 px when someone was writing. Each got in the other's way and neither worked well.
 
-也就是说：**读的时候有 520px 但没在读；写的时候只有 38px 却正在写。** 两件事互相收租，谁都没干好。这是用户的原话，也是量出来的事实。
+More fundamentally, a terminal grid is designed for a person watching one continuous scroll region. Scrolling 5,000 lines of canvas on a phone to find where the last command ended, or which one failed, was the product's worst experience. Shell integration (ADR-0007 / OSC 133) already delivered command boundaries, exit codes and durations to the client; the main view just threw them away.
 
-更根本的：终端网格是为"人盯着一个连续滚动区"设计的。手机上翻 5000 行 canvas 找"上一条命令在哪儿结束、失败的是哪一条"，是这个产品最差的体验。而 shell 集成（ADR-0007 / OSC 133）早就把命令边界、退出码、时长送到了客户端 —— 只是主视图把它们扔了。
+## Decision
 
-## 决策
+**Split the screen into three states, each optimized for one job. The system already knows which state it should be in.**
 
-**把一屏拆成三态，每一态只为一件事优化；系统已经知道自己该在哪一态。**
-
-| 态 | 什么时候 | 主体 | 判定信号 |
+| State | When | Main surface | Signal |
 |---|---|---|---|
-| **读** | 停在 prompt；命令在跑但没占屏 | 命令块流（DOM，原生滚动，最新在下） | `prompt_state` = input / running 且主缓冲 |
-| **写** | 要敲下一条命令 | 底部 sheet：收起（一行）/ 半屏 / 全屏 | 用户碰输入区 |
-| **控** | 有程序占屏：vim / top / less / htop，**以及 claude / codex 这类主屏全屏的 CLI** | xterm 全屏 + 上下文键条 | 备用缓冲激活，**或程序进入全屏输入模式**：富键盘（Kitty `\e[>…u` / modifyOtherKeys `\e[>…m`）、应用光标键（DECCKM `\e[?1h`，top）、鼠标跟踪，或同步输出 2026 |
+| **Read** | At a prompt; a command running without taking over the screen | Command block stream (DOM, native scrolling, newest at the bottom) | `prompt_state` = input / running, on the main buffer |
+| **Write** | About to type the next command | Bottom sheet: collapsed (one line) / half / full | User touches the input area |
+| **Control** | A program owns the screen: vim / top / less / htop, **and main-screen full-screen CLIs like claude / codex** | Full-screen xterm + context key bar | Alternate buffer active, **or the program enters a full-screen input mode**: rich keyboard (Kitty `\e[>…u` / modifyOtherKeys `\e[>…m`), application cursor keys (DECCKM `\e[?1h`, top), mouse tracking, or synchronized output 2026 |
 
-三条设计约束：
+Three constraints:
 
-1. **读是唯一常驻画布，写是升起的 sheet，不翻屏。** 三个全屏互切每敲一条命令要翻两次屏，比现在更重。sheet 半屏时上一个块仍在视野里（原型在真机上验证过可行）。
-2. **控的触发是"有程序在占屏"，不是"命令在跑"。** `sleep 100` 和 `top` 都是 running，但只有占屏的程序该进控。占屏的机械签名：**备用缓冲**（vim / top / less 的 `\e[?1049h`），或**程序建立了富键盘输入** —— claude（Ink）、codex（ratatui）这类主屏 CLI 会主动设置键盘协议来接管按键：Kitty 键盘入栈 `\e[>…u`、modifyOtherKeys `\e[>…m`，或用同步输出 2026 整帧重绘。`top` 不切备用缓冲、也不发键盘协议，但会设**应用光标键**（DECCKM `\e[?1h`）想接管方向键 —— 这也算全屏输入模式，一并识别（还有鼠标跟踪）。**不能用"藏光标 + 光标上移"当信号** —— npm / pnpm / cargo / docker 的多行进度条也藏光标、也上移重绘，会被误判、把用户莫名甩进终端打断输入（实测复现）；而进度条工具从不进入这些输入模式。重连 / 切会话后从 xterm 当前模式（`term.modes`）补判，`top` 运行中刷新页面也不会卡在坏块。保留手动进入「终端」的入口 —— 块承载不了的场景（对齐表格、彩色 diff）需要门。
-   **修订（[ADR-0012](0012-ai-cli-conversation-first.md) γ）**：占屏程序是 claude / codex 时**不自动进控** —— 它们的主场是读视图里的转录 + Composer；vim / less / top 照旧。
-3. **xterm 不销毁，只是不可见。** 它仍是 PTY 尺寸的来源（`FitAddon` 要真实容器尺寸）、`在终端里看` 的目标、控态的画布。读态下它保持真实尺寸、`visibility: hidden`，不用 `display: none`。
+1. **Read is the only persistent canvas; write is a sheet that rises over it, not a page flip.** Three full-screen pages would flip twice per command, which is heavier than before. At half height the previous block stays in view (validated with a prototype on a real device).
+2. **Control triggers when a program owns the screen, not when a command is running.** `sleep 100` and `top` are both running; only the one owning the screen belongs in control. The mechanical signatures: the **alternate buffer** (`\e[?1049h` from vim / top / less), or a program **setting up rich keyboard input**. Main-screen CLIs like claude (Ink) and codex (ratatui) take over keys by pushing Kitty keyboard flags `\e[>…u` or modifyOtherKeys `\e[>…m`, or redraw whole frames with synchronized output 2026. `top` neither switches to the alternate buffer nor sends a keyboard protocol, but it sets **application cursor keys** (DECCKM `\e[?1h`) to take the arrow keys; that counts as a full-screen input mode too, as does mouse tracking. **"Hidden cursor + cursor moving up" is not a signal**: npm / pnpm / cargo / docker multi-line progress bars hide the cursor and redraw upward too, and would throw the user into the terminal mid-typing (reproduced); progress bars never enter these input modes. After a reconnect or session switch, detection re-reads xterm's current modes (`term.modes`), so reloading the page while `top` runs doesn't leave a broken block. A manual way into the terminal stays, for what blocks can't show (aligned tables, colored diffs).
+   **Revised by [ADR-0012](0012-ai-cli-conversation-first.md) γ**: when the program is claude / codex, don't enter control automatically; their home is the transcript in the read view plus the Composer. vim / less / top still enter control.
+3. **xterm is never destroyed, only hidden.** It still determines the PTY size (`FitAddon` needs the real container size), is the target of "view in terminal", and is the control canvas. In read state it keeps its real size with `visibility: hidden`, not `display: none`.
 
-**底栏双态**（已被 [ADR-0012](0012-ai-cli-conversation-first.md) 修订）：停在 prompt 时点它进「写」；命令在跑时**仍是同一个 Composer**，发送 = 整段粘贴 + 回车（原先的逐键直发输入行在慢网下回显不可用，已移除；`[Y/n]`、密码同样从 Composer 发）。
+**Bottom bar** (revised by [ADR-0012](0012-ai-cli-conversation-first.md)): at a prompt, tapping it enters write. While a command runs it is **still the same Composer**, and sending pastes the whole text and presses Enter. The old per-keystroke input line was removed because its echo was unusable on slow networks; `[Y/n]` answers and passwords go through the Composer too.
 
-**降级 = 块流退化成一个块。** 没有 OSC 133 标记时（ssh 出去、集成不可用），最后一个块之后的所有输出作为一个"尾块"live-tail。标记回来从那儿重新切块。不需要"降级模式"这个概念，是同一套渲染在处理边界数量为零的情形。
+**Degradation = the block stream collapses to one block.** Without OSC 133 marks (ssh to another host, integration unavailable), all output after the last block is one live-tailed "tail block". When marks return, block splitting resumes from there. There is no "degraded mode" concept; the same renderer handles zero boundaries.
 
-## 分片
+On desktop (`≥ 1024px`) the terminal view stays the default, since the screen is large enough that the problem doesn't exist; the read view remains an option.
 
-| | 内容 | 状态 |
+Rollout:
+
+| | Scope | Notes |
 |---|---|---|
-| ① | 块流成为手机/平板默认主视图；xterm 保活隐藏；底栏双态；live-tail；尾块降级；手动「终端」入口 | **本 ADR 落地的部分** |
-| ② | 占屏检测 → 自动进控 / 退出回读；按前台程序变的上下文键条 | **已落地**（备用缓冲来自 `buffer.onBufferChange`；主屏就地重绘来自 `parser.registerCsiHandler` 观察光标上移/定位/同步输出，见 `term/interactive.ts`；命令边界 `reset()` 清判定；自动切换不写偏好，手动切过就不再自动回；键条按 `programOf(运行中块的命令)` 选 pager / top / vim / nano / 通用 TUI，claude / codex 走通用 TUI 键并显示程序名） |
-| ③ | sheet 三档高度；面向"写"的编辑键条；同 cwd 历史建议 + 真实路径 chip | **已落地**（sheet 盖在块流上不挤画布 —— 三档之间 PTY 尺寸不变；提交即收起；chips：空输入 = 快捷命令 + 同目录历史，有输入 = 路径补全 + 前缀历史；`GET /api/fs` 与 shell 同权限；模式条的次要入口收进 ⋯ 菜单；手机 / 平板的终端视图也用同一个 56px 槽 —— 停在 prompt 一行输入 +「读」+ ⋯，命令在跑键条独占 —— 两种视图画布几何一致，切换不 resize；桌面保留经典底栏） |
-| ④ | 块动作完善（重跑 / 复制 / 在终端里看 定位到该块；块最大化 / 恢复） | **已落地**（重跑 / 填入 / 复制随 ①；「在终端里看」定位：agent 先发 `command.*` 再推帧，client 写入时按 `out_seq` 切帧、切口处登记 xterm marker，切视图后滚到块首行并高亮 1.6s，marker 滚出 scrollback 退回按命令原文搜索；**块最大化**：展开的块可铺满整屏细看、可滚动、点「恢复」回内联；「块」面板同样支持这些） |
+| ① | Block stream as the phone/tablet default; xterm kept alive and hidden; dual-state bottom bar; live tail; tail-block degradation; manual terminal entry | Shipped with this ADR |
+| ② | Screen-ownership detection → enter control / return to read automatically; context key bar per foreground program | Shipped. Alternate buffer via `buffer.onBufferChange`; in-place main-screen redraws via `parser.registerCsiHandler` watching cursor-up / positioning / synchronized output (`term/interactive.ts`); command boundaries `reset()` detection; automatic switches don't write preferences, and after a manual switch there is no automatic return; the key bar is chosen by `programOf(running block's command)`: pager / top / vim / nano / generic TUI, with claude / codex getting the generic TUI keys plus the program name |
+| ③ | Three sheet heights; write-oriented edit key row; same-CWD history suggestions + real path chips | Shipped. The sheet overlays the block stream without squeezing the canvas, so the PTY size doesn't change between heights; submitting collapses it; chips: empty input = snippets + same-directory history, typed input = path completion + prefix history; `GET /api/fs` runs with the shell's permissions; the mode bar's secondary entries moved into the ⋯ menu; the phone/tablet terminal view uses the same 56 px slot, so switching views never resizes; desktop keeps the classic bottom bar |
+| ④ | Block actions (rerun / copy / view in terminal at that block; maximize / restore) | Shipped. "View in terminal": the agent sends `command.*` before the frames, the client splits frames at `out_seq` and registers an xterm marker at the cut, scrolls to the block's first line and highlights it for 1.6 s, falling back to searching for the command text once the marker has left scrollback. Maximize fills the screen and scrolls; "Restore" returns it inline |
 
-桌面（`≥ 1024px`）默认仍是终端视图 —— 那里屏幕够大，问题不存在；读视图作为可切换的选项保留。
+Prerequisites, done first because the read state is built on command boundaries and is only as solid as they are: #27 stamps `command.start/end` `out_seq` at each mark's exact position (C and D in the same PTY read each get their own); #28 two-stage handshake (early hello) plus per-command liveness probing (`unmarked_input`); #26 fixed false integration-idle detection and added a direct `^C` key.
 
-## 前置
+## Consequences
 
-读态整个建在命令边界上，边界不可靠上面盖什么都是晃的。所以先做了：
-
-- #27 `command.start/end` 的 `out_seq` 用标记的精确位置盖戳（同一次 PTY 读里的 C/D 各有各的位置）
-- #28 握手两级判定（hello 提前）+ 按命令的活性探测（`unmarked_input`）
-- #26 集成空闲误判修复 + `^C` 直发键
-
-## 后果
-
-- 手机上读输出从"canvas 上甩 5000 行"变成"原生滚动的块列表，500 行折叠成一行，失败一眼可见"
-- 多一层视图状态（读 / 终端），E2E 要按视口区分默认态；`__webterm.view()` 供测试读取
-- 运行中的块用纯文本渲染（每 120ms 一次），结束后用离屏 xterm 精确渲染一次 —— 保真度与流畅度各取所需
-- 设计语言：采用 shadcn 的 token 逻辑（中性色阶、1px 细边、6/10px 圆角、44px 命中区、focus ring）落成 CSS 变量，**不引入 React / Radix / Tailwind**（项目是 Preact + 手写 CSS，少依赖是明确取向）。补充 token：`--font-ui`（chrome 用比例字体，命令 / 输出保持 `--font-mono`）、`--code-bg`（块输出是内嵌圆角深色代码面板，两个主题都用深底 —— ANSI 配色按深底校准）、`--card-shadow`（卡片极淡阴影做层次）
-- 块动作是浅色页脚里拉开间距的**文字链接**（不是黑底上挤成一排的按钮），`在终端里看` 为主色主动作；块头部的最大化 / 恢复是内联 SVG 图标（不用字体里可能缺字的字形）
+- Reading output on a phone goes from flinging 5,000 lines of canvas to a natively scrolling block list, with 500 lines collapsed to one and failures visible at a glance.
+- One more layer of view state (read / terminal). E2E tests distinguish the default state by viewport; `__webterm.view()` exposes it.
+- Running blocks render as plain text (every 120 ms); finished blocks render once through an offscreen xterm for exact output. Fidelity and smoothness each where they matter.
+- Design language: shadcn's token logic (neutral scale, 1 px borders, 6/10 px radii, 44 px hit targets, focus ring) as CSS variables, **without React / Radix / Tailwind** (the project is Preact plus hand-written CSS; fewer dependencies is deliberate). Extra tokens: `--font-ui` (proportional font for chrome; commands and output stay `--font-mono`), `--code-bg` (block output is an inset, rounded dark code panel in both themes, since ANSI colors are tuned for dark backgrounds), `--card-shadow` (a very light card shadow for depth).
+- Block actions are spaced **text links** in a light footer, not a row of buttons crammed onto black; "view in terminal" is the primary action. Maximize / restore in the block header are inline SVG icons, not font glyphs that may be missing.

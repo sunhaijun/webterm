@@ -1,57 +1,55 @@
-# ADR-0036 文本输入页跟着会话走
+# ADR-0036 The text page follows the session
 
-状态：已接受（2026-10-31）。**修订 [ADR-0025](0025-termux-style-ui.md) §3 与 [session-ux.md](../../40-frontend/session-ux.md) §焦点跟着会话走 的最后一条**（原来是：文本输入页不属于任何会话，切换后焦点留在文本页，内容跟着当前会话发）。文本页怎么切换、回车做什么、怎么发（[ADR-0027](0027-text-page-enter-submits.md)），都不变。
+Status: Accepted (2026-10-31). **Revises [ADR-0025](0025-termux-style-ui.md) §3 and the last rule in [session-ux.md, Focus follows the session](../../40-frontend/session-ux.md#focus-follows-the-session-ac-48)** (which said the text page belongs to no session: after switching, focus stays on the text page and its content goes to the current session). How the text page is opened, what Enter does and how content is sent ([ADR-0027](0027-text-page-enter-submits.md)) are unchanged.
 
-## 背景
+## Context
 
-ADR-0025 把文本输入页做成附加键区的「另一页」，整个界面只有一份：停在哪一页、文本框里写了什么，与当前是哪个会话无关。用户的反馈是：
+ADR-0025 made the text page "the other page" of the extra-key area, with a single instance for the whole UI: which page is showing and what's in the field had nothing to do with the current session. The user reported that the text input didn't follow the session, and that switching sessions while editing left it showing in a way that made no sense.
 
-> 输入编辑没有跟随会话，编辑时切换到别的会话时仍然显示不合理
+The real scenario: in session A you're writing a prompt for claude, and halfway through you switch to session B to glance at build output. The text page is still open with A's half-written prompt in it; press Enter now and it goes to B. When you write a prompt, you have a target session in mind.
 
-实际场景：在会话 A 里给 claude 写一段 prompt，写到一半切到会话 B 看一眼构建输出。切过去之后文本页还开着，A 的半段 prompt 还在框里；这时按回车，它就被送进了 B。写 prompt 的时候，心里是有目标会话的。
+## Decision
 
-## 决策
+### 1. Each session has its own page and draft
 
-### 1. 每个会话各有一份「在哪一页」和「草稿」
+- **Page**: the key page or the text page. Tapping ✎ or swiping on the key area changes only the current session's page.
+- **Draft**: what's in the field and not yet sent. Sending with Enter clears only the current session's draft.
+- **Switching sessions** (tab, drawer, `Ctrl+Shift+↑/↓`, or the automatic switch to a neighbor after closing the current one) swaps the extra-key slot to the new session's page and the field to its draft; switching back restores them exactly.
+- **New sessions** start on the key page with an empty draft. A closed session's draft is discarded. When the agent restarts (all sessions invalidated), all drafts are discarded.
+- Drafts live **only in memory**: a page reload loses them, as before. They aren't stored in `localStorage`: sids are reused after an agent restart, so a stored draft could land in an unrelated new session.
 
-- **页**：键位页或文本页。点 ✎ / 在键区左右滑动，只改当前会话的页。
-- **草稿**：文本框里还没发出去的内容。回车发出后清空的也只是当前会话的。
-- **切换会话**（标签、抽屉、`Ctrl+Shift+↑/↓`、关掉当前会话后自动切到相邻的）时，附加键槽换成新会话的页，文本框换成新会话的草稿；切回来时原样恢复。
-- **新会话**从键位页、空草稿开始。会话关掉，它的草稿随之丢弃。agent 重启（会话全部作废）时全部丢弃。
-- 草稿**只在内存里**：刷新页面就没了，和改之前一样。不存 `localStorage`：agent 重启后 `sid` 会复用，存下来的草稿可能落到一个毫不相干的新会话上。
+### 2. Focus follows the session to its input
 
-### 2. 焦点跟着会话走，落到新会话的「输入处」
-
-[AC-4.8](../../10-requirements/acceptance-criteria.md) 的规则推广到文本页：
+The [AC-4.8](../../10-requirements/acceptance-criteria.md) rule extends to the text page:
 
 ```
-typing = 切换前（从抽屉切换时以打开抽屉之前为准）焦点在终端里或文本框里
-切换后：typing || 非触摸设备  →  新会话停在文本页：聚焦文本框
-                                  新会话停在键位页：聚焦终端
+typing = before the switch (or, when switching from the drawer, before the drawer opened) focus was in the terminal or in the text field
+after the switch: typing || non-touch device  →  new session on the text page: focus the text field
+                                                 new session on the key page:  focus the terminal
 ```
 
-- 在 A 的文本页里打字、切到停在键位页的 B：焦点进 B 的终端，软键盘不收起。
-- 在 A 的终端里打字、切到停在文本页的 B：焦点进文本框，B 的草稿就在里面。
-- 触摸设备上切换前没有焦点：仍然不凭空聚焦（不弹键盘）。
+- Typing on A's text page, switching to B on its key page: focus goes to B's terminal and the on-screen keyboard stays up.
+- Typing in A's terminal, switching to B on its text page: focus goes to the field, with B's draft in it.
+- On touch devices with no focus before the switch: still don't focus anything (don't pop the keyboard).
 
-聚焦发生在这次点击 / 按键的处理函数里，iOS 才会保持键盘。
+Focusing happens inside the click / key handler, so iOS keeps the keyboard.
 
-### 3. 组字中切换：先提交，再换
+### 3. Switching during IME composition: commit first, then swap
 
-文本框正在组字（输入法候选还没选）时切会话（iPad 上点标签不会让文本框失焦，所以这是可能的），先让文本框失焦，让输入法把正在组的字提交进去，再存成旧会话的草稿，然后才换内容。直接改 `value` 会让输入法把组到一半的字丢掉，或者在某些输入法上把它补进新会话的草稿里。
+If the field is mid-composition (IME candidates not yet chosen) when the session switches (possible on an iPad, where tapping a tab doesn't blur the field), first blur the field so the IME commits the composed text into it, save that as the old session's draft, then swap the content. Setting `value` directly makes the IME drop the half-composed text, or with some IMEs insert it into the new session's draft.
 
-### 实现
+### Implementation
 
-仍然只有一个 `textarea`，切换时换它的 `value`；不为每个会话建一个。理由：附加键槽只有一个，文本框的 attribute（AC-3.10）与几何也只需要设一次。页与草稿记在 `AppController` 里（`TextPages`，按 `sid` 存），附加键组件只负责显示当前会话的那一页。
+Still one `textarea`; switching swaps its `value` rather than creating one per session. There's only one extra-key slot, and the field's attributes (AC-3.10) and geometry only need setting once. Pages and drafts are kept in `AppController` (`TextPages`, keyed by `sid`); the extra-key component only displays the current session's page.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **切换会话时把文本页收起，草稿清空。** 简单，但写到一半的长 prompt 被一次切换清掉，用户要重写。
-- **切换会话时收起文本页、草稿留在原会话。** 回到 A 还得再点一次 ✎ 才能接着写；A 停在文本页本来就是用户自己的选择。
-- **草稿全局共享，只在发送时提示「目标会话已变」。** 多一个提示和一次确认，用户要的是不用想这件事。
+- **Close the text page and clear the draft on switch.** Simple, but one switch wipes a half-written long prompt and the user has to rewrite it.
+- **Close the text page on switch but keep the draft with its session.** Returning to A then needs another tap on ✎ to continue; A being on the text page was the user's own choice.
+- **Share one draft globally and warn on send that the target session changed.** One more warning and confirmation; the user wants not to have to think about it.
 
-## 后果
+## Consequences
 
-- 新增 AC-3.22；AC-4.8 改写（焦点落到新会话的输入处）。
-- E2E-40 新增 ⑨（Pixel 5，两个会话之间切换，页与草稿各归各的，回车只发到当前会话）。
-- 组字中切换会话（§3）只能真机验证，进手工清单。
+- Adds AC-3.22; rewrites AC-4.8 (focus goes to the new session's input).
+- E2E-40 adds ⑨ (Pixel 5, switching between two sessions: pages and drafts stay with their sessions, Enter sends only to the current one).
+- Switching during composition (§3) can only be verified on a real device; it goes in the manual checklist.

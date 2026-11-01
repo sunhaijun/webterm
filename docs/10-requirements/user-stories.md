@@ -1,84 +1,86 @@
-# 用户故事
+# User stories
 
-> 状态：Accepted
+> Status: Accepted
 
-单用户工具，"我"指唯一使用者。每条故事标注所属里程碑（见 [`../90-roadmap/milestones.md`](../90-roadmap/milestones.md)）。
-每条故事都有对应的验收标准，见 [`acceptance-criteria.md`](acceptance-criteria.md)。
-
----
-
-## US-1 部署与访问
-
-**US-1.1**（m2）作为使用者，我把一个二进制拷到服务器上执行，就能得到一个带合法 HTTPS 证书的可访问服务，不需要装 nginx、不需要手动申请证书、不需要改 DNS 以外的任何东西。
-
-**US-1.2**（m2）第一次访问时，我在服务器终端上看到一个二维码，用手机扫一下就完成了授权，之后这台手机再也不用登录。
-
-**US-1.3**（m2）我能看到所有已授权设备的列表，能单独吊销某一台（比如手机丢了），也能一键吊销全部。
-
-**US-1.4**（m6）我能把 webterm 添加到手机主屏，打开后没有浏览器地址栏，跟原生 App 一样。
-
-**US-1.5**（m11）我没有域名，或者懒得为一台临时服务器配 DNS：直接用这台机器的公网 IP 也能拿到合法 HTTPS 证书，手机照样能扫码、能装 PWA（[ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md)）。
-
-**US-1.6**（m11）上一台新服务器，我只做一件机器外的事（云安全组放行 80/443），然后 `scp` 一个二进制、跑一条 `./webterm install`，最后看到的就是配对二维码。服务器上不需要留 GitHub 凭据；哪一步不通（尤其是安全组），在启动服务**之前**就告诉我（[ADR-0045](../20-architecture/adr/0045-install-from-the-binary.md)）。
+A single-user tool; "I" is the one user. Each story is tagged with its milestone (see [`../90-roadmap/milestones.md`](../90-roadmap/milestones.md)).
+Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-criteria.md).
 
 ---
 
-## US-2 永不断线
+## US-1 Deployment and access
 
-**US-2.1**（m1/m3）我在地铁里网络断了 20 秒，恢复后终端画面**接着原来的位置继续长**，不是重画、不是空白、不是要我按回车刷新。
+**US-1.1** (m2) I copy one binary to a server, run it, and get a reachable service with a valid HTTPS certificate — no nginx, no manual certificate request, nothing to change beyond DNS.
 
-**US-2.2**（m1/m3）网络断的那两秒我正在打字，恢复后我打的字**没有丢**，全部按顺序进入了终端。
+**US-1.2** (m2) On first visit I see a QR code in the server terminal. Scanning it with my phone authorizes the phone, and it never has to log in again.
 
-**US-2.3**（m3）我合上笔记本，两小时后打开，会话还在，中间跑完的构建输出还在（刷新或断得久时由快照带回最近 2000 行）。
+**US-1.3** (m2) I can see every authorized device, revoke any one of them (say, a lost phone), or revoke all of them at once.
 
-**US-2.4**（m8）断开得再久、或者我刷新了页面，回来看到的也是会话**当前完整的画面**（包括 vim、claude 这类全屏程序），还能往回翻一段历史 —— 不是一屏乱码，也不是空白。
+**US-1.4** (m6) I can add webterm to my phone's home screen. It opens without the browser address bar, like a native app.
 
-**US-2.5**（m3）我能随时看到当前连接状态：在线 / 重连中 / 已恢复。恢复时告诉我补了多少内容。
+**US-1.5** (m11) I have no domain, or don't want to set up DNS for a throwaway server: the machine's public IP is enough to get a valid HTTPS certificate, and my phone can still scan the code and install the PWA ([ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md)).
 
----
+**US-1.6** (m11) On a new server I do exactly one thing outside the machine (open 80/443 in the cloud security group), then `scp` one binary and run `./webterm install`. The last thing I see is the pairing QR code. The server needs no GitHub credentials. If any step fails — especially the security group — I'm told **before** the service starts ([ADR-0045](../20-architecture/adr/0045-install-from-the-binary.md)).
 
-## US-3 输入体验
-
-**US-3.1**（m8）我要给终端里的 AI agent 写一段 300 字的中文 prompt。我把附加键区翻到文本输入页，在一个**正常的输入框**里写，输入法候选框位置正确，可以随意修改、粘贴，写完按一次回车，整段送进终端并提交。
-
-**US-3.2**（m4）我在 vim 里按 `:wq`、在 htop 里按方向键、用 Ctrl+C 打断命令 —— 点一下终端就能直接打字，按键都正常直通。
-
-**US-3.3**（m8）我不需要理解任何"模式"：点终端就是打字，再点一下键盘收起；要写长段落就点 ✎ 翻到文本输入页。界面不会因为前台程序变了而变样。
-
-**US-3.4**（m4）在手机上，软键盘弹出时布局不会乱跳，终端内容不会被键盘盖住。
-
-**US-3.5**（m8）在手机上我能按到 `Esc`、`Tab`、`Ctrl`、`Alt`、方向键、`Home` `End` `PgUp` `PgDn` 和 `/` `-` 这些软键盘上没有或不好按的键。它们排成两行、位置永远不变，跟 Termux 一样，按几次就记住了。
-
-**US-3.6**（m4）我粘贴一段多行文本进去，不会被 shell 当成多条命令逐条执行（bracketed paste）。
+**US-1.7** (m12) I run one command on a fresh server and the installer walks me through whatever it can't do itself: it tells me which DNS record or cloud firewall rule to add, waits while I do it, checks that it worked, and continues to the QR code — no restarting from scratch ([ADR-0046](../20-architecture/adr/0046-guided-install.md)).
 
 ---
 
-## US-4 多会话
+## US-2 Never lose the connection
 
-**US-4.1**（m6）我能同时开多个会话：一个跑构建、一个看日志、一个改代码，互不干扰。
+**US-2.1** (m1/m3) My network drops for 20 seconds on the subway. When it comes back, the terminal **continues from where it was** — no redraw, no blank screen, no pressing Enter to refresh.
 
-**US-4.2**（m8）切换会话在手机上是点会话按钮再点一下的事，按钮就在拇指边，上面写着开了几个会话；在 PC 和 Pad 上是顶部标签栏点一下。
+**US-2.2** (m1/m3) I was typing during the two seconds the network was down. After it recovers, **nothing I typed is lost**; all of it reaches the terminal in order.
 
-**US-4.3**（m6）我切走的会话继续在后台跑。如果它产生了新输出，我能看到未读标记：手机上会话按钮带未读点，PC 和 Pad 上标签带点。
+**US-2.3** (m3) I close my laptop and open it two hours later. The session is still there, and so is the output of the build that finished in the meantime (after a reload or a long disconnect, the snapshot brings back the last 2000 lines).
 
-**US-4.4**（m6）会话名字自动是它当前所在目录的名字（比如 `webterm`），不是 `Session 1/2/3`。我也能手动改名。
+**US-2.4** (m8) However long I was gone, or if I reloaded the page, I come back to the session's **current full screen** (including full-screen programs like vim and claude) and can scroll back through some history — not a screen of garbage, not a blank.
 
-**US-4.5**（m6）会话里的 shell 退出后，我还能看到它最后的输出，而不是标签直接消失。
-
----
-
-## US-5 阅读输出
-
-**US-5.1**（m3）我能直接用滚动手势回看历史输出，不需要进入任何"模式"。
-
-**US-5.3**（m8）默认我什么都不用调：深浅色跟着系统走，字号是合适的默认值。想改的话，设置里只有两项：主题（跟随系统 / 浅色 / 深色）和终端字号（[ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)）。
-
-**US-5.4**（m6）我能选中并复制输出里的文本，长选择不会因为自动滚动而丢失。
+**US-2.5** (m3) I can always see the connection state: online / reconnecting / restored. On restore it tells me how much was caught up.
 
 ---
 
-## US-7 可诊断
+## US-3 Input
 
-**US-7.2**（m2）证书申请失败时，我在服务器终端上看到的是"为什么失败 + 怎么修"，不是一行 Go 的 error 堆栈。
+**US-3.1** (m8) I want to write a 300-character Chinese prompt for the AI agent running in the terminal. I flip the extra-keys area to the text page and write in a **normal text box**: the IME candidate window is in the right place, and I can edit and paste freely. One Enter sends the whole thing to the terminal and submits it.
 
-**US-7.3**（m6）会话数达到上限时，我看到明确提示，而不是新建按钮点了没反应。
+**US-3.2** (m4) `:wq` in vim, arrow keys in htop, Ctrl+C to interrupt a command — I tap the terminal, type, and the keys pass straight through.
+
+**US-3.3** (m8) There are no "modes" to understand: tap the terminal to type, tap again to hide the keyboard; for a long paragraph, tap ✎ to flip to the text page. The UI doesn't change when the foreground program changes.
+
+**US-3.4** (m4) On a phone, the layout doesn't jump when the on-screen keyboard opens, and the keyboard doesn't cover the terminal content.
+
+**US-3.5** (m8) On a phone I can press `Esc`, `Tab`, `Ctrl`, `Alt`, the arrow keys, `Home` `End` `PgUp` `PgDn`, and `/` `-` — keys the on-screen keyboard lacks or buries. They sit in two rows in fixed positions, like Termux, so I learn them after a few presses.
+
+**US-3.6** (m4) Pasting multi-line text doesn't make the shell run each line as a separate command (bracketed paste).
+
+---
+
+## US-4 Multiple sessions
+
+**US-4.1** (m6) I can run several sessions at once — one building, one tailing logs, one editing code — without them interfering.
+
+**US-4.2** (m8) On a phone, switching sessions is: tap the session button, then tap a session. The button sits under my thumb and shows how many sessions are open. On desktop and tablet it's one tap on the tab bar.
+
+**US-4.3** (m6) Sessions I switch away from keep running in the background. When one produces new output I see an unread marker: an unread dot on the session button on phones, a dot on the tab on desktop and tablet.
+
+**US-4.4** (m6) A session is automatically named after its current directory (e.g. `webterm`), not `Session 1/2/3`. I can also rename it by hand.
+
+**US-4.5** (m6) When a session's shell exits, I can still see its last output; the tab doesn't just vanish.
+
+---
+
+## US-5 Reading output
+
+**US-5.1** (m3) I scroll back through output with a normal scroll gesture, without entering any "mode".
+
+**US-5.3** (m8) By default there's nothing to tune: light/dark follows the system and the font size is a sensible default. If I want to change something, settings have exactly two options: theme (system / light / dark) and terminal font size ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)).
+
+**US-5.4** (m6) I can select and copy output text, and long selections aren't lost to auto-scroll.
+
+---
+
+## US-7 Diagnosability
+
+**US-7.2** (m2) When certificate issuance fails, the server terminal tells me why and how to fix it — not a raw Go error.
+
+**US-7.3** (m6) When I hit the session limit I get a clear message, not a new-session button that does nothing.
