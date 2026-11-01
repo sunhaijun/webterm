@@ -98,9 +98,38 @@ func TestRenderStatus(t *testing.T) {
 			[]string{"用户服务", "迁移"},
 		},
 		{
-			"还没配域名（连 --dev 都没跑过）",
+			"还没配地址（连 --dev 都没跑过）",
 			status{running: false},
-			[]string{"还没配域名", "install.sh"},
+			[]string{"还没配地址", "webterm install"},
+			nil,
+		},
+		{
+			// UT-status-cert：6 天期的 IP 证书刚签下来不标黄（ADR-0042 §4）
+			"IP 证书刚签下来",
+			status{running: true, url: "https://203.0.113.7", ipMode: true, certOK: true,
+				certStart: now.Add(-time.Hour), certExpiry: now.Add(159 * time.Hour), devices: 1},
+			[]string{"有效", "6 天", "自动续期"},
+			[]string{"只剩"},
+		},
+		{
+			"IP 证书剩 30 小时还没续上",
+			status{running: true, url: "https://203.0.113.7", ipMode: true, certOK: true,
+				certStart: now.Add(-130 * time.Hour), certExpiry: now.Add(30 * time.Hour), devices: 1},
+			[]string{"只剩 30 小时", "80 从公网可达", "journalctl"},
+			[]string{"80 或 443"},
+		},
+		{
+			"90 天证书剩 11 天不标黄",
+			status{running: true, url: "https://x.example.com", certOK: true,
+				certStart: now.AddDate(0, 0, -79), certExpiry: now.AddDate(0, 0, 11), devices: 1},
+			[]string{"有效", "11 天"},
+			[]string{"只剩"},
+		},
+		{
+			"90 天证书剩 9 天标黄",
+			status{running: true, url: "https://x.example.com", certOK: true,
+				certStart: now.AddDate(0, 0, -81), certExpiry: now.AddDate(0, 0, 9), devices: 1},
+			[]string{"只剩 9 天", "80 或 443"},
 			nil,
 		},
 	}

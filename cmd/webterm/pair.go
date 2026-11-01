@@ -1,8 +1,15 @@
 package main
 
 import (
+	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -18,6 +25,7 @@ func runPair(args []string) error {
 	// pair 是独立进程，不知道 serve 用了哪个端口 —— 换了就得自己带上同一个值，
 	// 否则拼出来的 URL 会漏掉端口，扫码打不开。
 	httpsPort := fs.Int("https-port", 443, "HTTPS 端口（默认从配置文件读）")
+	wait := fs.Bool("wait", false, "先等本机 HTTPS 用受信任的证书能打开再打印（最多 90 秒；安装脚本用）")
 	if err := applyConfig(fs, args); err != nil {
 		return err
 	}
@@ -26,6 +34,13 @@ func runPair(args []string) error {
 	}
 	if !c.dev && c.domain == "" {
 		return fmt.Errorf("需要 --domain 来拼出配对 URL（本地开发用 --dev）")
+	}
+
+	// 先等证书，再生成配对码：码的 5 分钟从真正能用的那一刻开始算（ADR-0043 §6）
+	if *wait && !c.dev {
+		waitCertReady(os.Stdout, 90*time.Second, time.Second, func() error {
+			return probeTrustedHTTPS(c.domain, *httpsPort)
+		})
 	}
 
 	// webterm pair 是【独立进程】，和 serve 共享同一个 SQLite。
@@ -73,4 +88,55 @@ func qrART(url string) (string, error) {
 	}
 	q.DisableBorder = false
 	return q.ToSmallString(false), nil
+}
+
+// waitCertReady 每隔 interval 探一次，直到成功或超时。
+//
+// 不等的话，首次安装刚启动服务、正式证书还在签，扫码打开看到的是证书错误 ——
+// 用户会以为装坏了。超时也照样往下走：配对码 5 分钟有效，证书随后签下来还来得及。
+func waitCertReady(w io.Writer, timeout, interval time.Duration, probe func() error) bool {
+	deadline := time.Now().Add(timeout)
+	announced := false
+	for {
+		err := probe()
+		if err == nil {
+			return true
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(w, "\n  ⚠ %d 秒内本机 HTTPS 还没拿到受信任的证书（%v）。\n"+
+				"    先把配对码打出来；扫码打不开的话看：journalctl -u webterm -n 30\n\n",
+				int(timeout/time.Second), err)
+			return false
+		}
+		if !announced {
+			fmt.Fprintln(w, "等正式证书签下来……")
+			announced = true
+		}
+		time.Sleep(interval)
+	}
+}
+
+// probeTrustedHTTPS 连本机的 HTTPS 端口，按 --domain 校验证书（系统信任库），取 /healthz。
+//
+// 连 127.0.0.1 而不是公网地址：不少云的 NAT 不自反，从机器内部连自己的公网 IP 是不通的。
+// ServerName 是 IP 时 Go 不发 SNI、按 IP SAN 校验 —— 和浏览器连 IP 一样。
+func probeTrustedHTTPS(domain string, port int) error {
+	c := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			ServerName: domain,
+			MinVersion: tls.VersionTLS12,
+		}},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := c.Get("https://127.0.0.1:" + strconv.Itoa(port) + "/healthz")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "ok" {
+		return errors.New("/healthz 没有返回 ok")
+	}
+	return nil
 }

@@ -33,7 +33,9 @@ type status struct {
 	unit       unitKind // 装的是哪种 systemd 单元：决定提示里的命令，以及要不要提示迁移
 	url        string
 	certOK     bool
+	certStart  time.Time // NotBefore：「快到期」的阈值随有效期缩放（ADR-0042 §4）
 	certExpiry time.Time
+	ipMode     bool // IP 证书只走 HTTP-01，续期要 80 一直可达
 	devices    int
 	configPath string
 }
@@ -83,8 +85,9 @@ func collectStatus() status {
 	st.running, st.runningVia = probeRunning(st.unit, c.domain, *httpPort, *httpsPort)
 
 	if c.domain != "" {
-		if exp, ok := certExpiryFromCache(agent.CertDirDefault(c.dataDir), c.domain); ok {
-			st.certOK, st.certExpiry = true, exp
+		st.ipMode = agent.IsIPAddress(c.domain)
+		if leaf, ok := certFromCache(agent.CertDirDefault(c.dataDir), c.domain); ok {
+			st.certOK, st.certStart, st.certExpiry = true, leaf.NotBefore, leaf.NotAfter
 		}
 	}
 	if db, err := store.Open(c.dataDir); err == nil {
@@ -157,14 +160,14 @@ func healthzOK(url, sni string) bool {
 	return err == nil && strings.TrimSpace(string(body)) == "ok"
 }
 
-// certExpiryFromCache 从 autocert 的缓存文件里读到期时间。
+// certFromCache 从证书缓存文件里读出叶子证书（IP 模式的缓存与 autocert 同格式）。
 //
 // 缓存是 PEM：先私钥、再证书链。只取第一张 CERTIFICATE（叶子）。
-// 【不做校验】—— 这里只为了显示，真正的有效性判断在 autocert 里。
-func certExpiryFromCache(certDir, domain string) (time.Time, bool) {
+// 【不做校验】—— 这里只为了显示，真正的有效性判断在 autocert / ipCertManager 里。
+func certFromCache(certDir, domain string) (*x509.Certificate, bool) {
 	raw, err := os.ReadFile(filepath.Join(certDir, domain))
 	if err != nil {
-		return time.Time{}, false
+		return nil, false
 	}
 	for rest := raw; len(rest) > 0; {
 		var blk *pem.Block
@@ -177,11 +180,34 @@ func certExpiryFromCache(certDir, domain string) (time.Time, bool) {
 		}
 		leaf, err := x509.ParseCertificate(blk.Bytes)
 		if err != nil {
-			return time.Time{}, false
+			return nil, false
 		}
-		return leaf.NotAfter, true
+		return leaf, true
 	}
-	return time.Time{}, false
+	return nil, false
+}
+
+// certWarnThreshold 是「快到期」的黄色阈值：min(10 天, 有效期/4)（ADR-0042 §4）。
+//
+// 写死 10 天的话，6 天期的 IP 证书刚签下来就是黄的。按有效期缩放后，
+// 90 天证书仍是 10 天；160 小时的 IP 证书是 40 小时 —— 它本该在剩 53 小时时续好，
+// 到 40 小时还没续上，就是续期真的出了问题。不知道 NotBefore 时按 10 天。
+func certWarnThreshold(start, expiry time.Time) time.Duration {
+	th := 10 * 24 * time.Hour
+	if !start.IsZero() {
+		if q := expiry.Sub(start) / 4; q < th {
+			th = q
+		}
+	}
+	return th
+}
+
+// remaining 把剩余时间说成人话：两天以上按天，以内按小时。
+func remaining(expiry, now time.Time) string {
+	if d := expiry.Sub(now); d < 48*time.Hour {
+		return fmt.Sprintf("%d 小时", int(d/time.Hour))
+	}
+	return fmt.Sprintf("%d 天", daysLeft(expiry, now))
 }
 
 // daysLeft 按自然日算剩余天数。已过期返回负数。
@@ -220,24 +246,30 @@ func renderStatus(st status, ver string, now time.Time, color bool) string {
 	if st.url != "" {
 		row("地址", st.url)
 	} else {
-		row("地址", "还没配域名 —— 用 scripts/install.sh --domain <域名> 装，或 webterm serve --dev 本地试")
+		row("地址", "还没配地址 —— 用 webterm install 装（不给 --domain 就用本机公网 IP），或 webterm serve --dev 本地试")
 	}
 
 	switch {
 	case !st.certOK && st.url != "":
 		row("证书", "还没有证书（服务启动时会自动申请）")
 	case st.certOK:
-		d := daysLeft(st.certExpiry, now)
 		date := st.certExpiry.Local().Format("2006-01-02")
-		switch {
-		case d < 0:
+		if !st.certStart.IsZero() && st.certExpiry.Sub(st.certStart) < 10*24*time.Hour {
+			date = st.certExpiry.Local().Format("2006-01-02 15:04") // 6 天期的证书，日期不够用
+		}
+		reach := "80 或 443"
+		if st.ipMode {
+			reach = "80"
+		}
+		switch left := st.certExpiry.Sub(now); {
+		case left < 0:
 			row("证书", fmt.Sprintf("%s（%s）—— 重启服务会重新申请", paint("31", "已过期"), date))
-		case d <= 10:
+		case left < certWarnThreshold(st.certStart, st.certExpiry):
 			// 到期是唯一会静默变成事故的东西，剩得少就说明白
-			row("证书", fmt.Sprintf("%s（%s）—— 自动续期需要 80 或 443 从公网可达",
-				paint("33", fmt.Sprintf("只剩 %d 天", d)), date))
+			row("证书", fmt.Sprintf("%s（%s）—— 自动续期需要 %s 从公网可达，看 journalctl -u webterm",
+				paint("33", "只剩 "+remaining(st.certExpiry, now)), date, reach))
 		default:
-			row("证书", fmt.Sprintf("有效，到 %s（还有 %d 天，自动续期）", date, d))
+			row("证书", fmt.Sprintf("有效，到 %s（还有 %s，自动续期）", date, remaining(st.certExpiry, now)))
 		}
 	}
 

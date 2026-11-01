@@ -20,7 +20,7 @@ type commonFlags struct {
 
 func (c *commonFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.dataDir, "data-dir", defaultDataDir(), "数据目录")
-	fs.StringVar(&c.domain, "domain", "", "域名（生产必填，ACME 与 Origin 校验都要用）")
+	fs.StringVar(&c.domain, "domain", "", "域名或公网 IPv4（生产必填，ACME 与 Origin 校验都要用）")
 	fs.BoolVar(&c.dev, "dev", false, "本地开发：127.0.0.1 明文，不申请证书")
 }
 

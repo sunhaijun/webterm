@@ -2,7 +2,15 @@
 #
 # webterm 一键安装
 #
-#   curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh | bash -s -- --domain term.example.com
+#   ./webterm install [--domain term.example.com]      手边有二进制：用它自己装（推荐，ADR-0043）
+#   curl -fsSL https://raw.githubusercontent.com/sunhaijun/webterm/main/scripts/install.sh | bash
+#
+# 不给 --domain：以前装过就沿用上次的参数，否则用本机公网 IPv4（ADR-0042）。
+#
+# 【从网上取的这份只负责下载】：下载、校验 SHA256 之后，交给下载来的那个二进制
+# 的 `webterm install`（它嵌着【自己那个版本】的本脚本）接着装。这样干活的脚本
+# 与二进制永远是同一个版本 —— 以前 main 上的脚本配 latest 的旧二进制，
+# 写出来的单元旧二进制根本不认（ADR-0043 §2）。
 #
 # 本地试用（不配 systemd、不动特权端口）：
 #
@@ -14,9 +22,10 @@
 #   gh api repos/sunhaijun/webterm/contents/scripts/install.sh \
 #     -H 'Accept: application/vnd.github.raw' | bash -s -- --domain term.example.com
 #
-# 脚本会：下载对应架构的二进制 → 校验 SHA256 → 装到 /usr/local/bin →
-# setcap 让普通用户能绑 443 → 生成以你的用户运行的 systemd 系统服务（ADR-0034）→
-# 启动并打出配对二维码。
+# 脚本会：取得二进制（下载 + 校验 SHA256，或 --binary 给的本地文件）→ 装到 /usr/local/bin →
+# setcap 让普通用户能绑 80/443 → 放行已启用的 ufw / firewalld → 首次安装先用
+# Let's Encrypt staging 实签一次（webterm doctor --acme）→ 生成以你的用户运行的
+# systemd 系统服务（ADR-0034）→ 启动 → 首次安装打出配对二维码。
 #
 # 部署前置条件见 docs/80-ops/install.md。
 
@@ -38,6 +47,10 @@ FORCE=0
 BASE_URL=""
 HTTPS_PORT=443
 HTTP_PORT=80
+BINARY=""
+ADDR_SOURCE=""
+# ORIG_ARGS 原样留着：交接给下载来的二进制、重放 install-state 时都要用
+ORIG_ARGS=("$@")
 
 die() { printf '\033[31m错误\033[0m %s\n' "$*" >&2; exit 1; }
 # needs_privileged_port 报告有没有用到 1024 以下的端口 —— 只有那时才需要 setcap
@@ -70,13 +83,19 @@ run() {
 }
 # done_msg 只在真的做了事的时候报告 —— dry-run 里说"已完成"是误导
 done_msg() { [ "$DRY_RUN" = 1 ] || info "$*"; }
+# run_quiet 同 run，但真跑时吞掉命令自己的输出（ufw / firewall-cmd 很啰嗦）
+run_quiet() {
+    if [ "$DRY_RUN" = 1 ]; then printf '    $ %s\n' "$*"; else "$@" >/dev/null; fi
+}
 
 usage() {
     cat <<'EOF'
 用法: install.sh [选项]
 
-  --domain <域名>    生产部署：配置域名并生成 systemd 服务
+  --domain <地址>    域名或公网 IPv4。不给：以前装过就沿用上次的参数，
+                     否则用本机公网 IPv4（IP 证书，ADR-0042）
   --dev              本地试用：只装二进制，不配 systemd、不 setcap
+  --binary <路径>    用这个本地二进制，不下载、不校验（webterm install 用的就是它）
   --channel <名字>   latest（默认）或 dev（main 的滚动构建）
   --version <tag>    指定版本，如 v0.1.0
   --prefix <目录>    安装位置，默认 /usr/local/bin
@@ -95,15 +114,20 @@ usage() {
 
 私有仓库：裸 curl 拿不到 release 产物。脚本会自动改用凭据 ——
 优先 gh（需要 gh auth login），否则读 GH_TOKEN / GITHUB_TOKEN。
+手边有二进制的话用 ./webterm install，不需要任何凭据。
 
-生产部署的硬前置：一个域名、A/AAAA 记录指向本机、80 与 443 可用。
-装好之后先跑 webterm doctor --domain <域名> 逐项检查。
+生产部署的硬前置：公网 IPv4（或解析到它的域名）、80 与 443 可用、云安全组放行。
+首次安装会先用 Let's Encrypt staging 实签一次，不通过就不启动服务。
 EOF
 }
 
+# parse_args 可以跑不止一次：重放 install-state 时先吃上次的参数、再吃这次的，
+# 后出现的覆盖先出现的 —— 和 update 重放的口径一样。
+parse_args() {
 while [ $# -gt 0 ]; do
     case "$1" in
         --domain) DOMAIN="${2:?--domain 需要一个值}"; shift 2 ;;
+        --binary) BINARY="${2:?--binary 需要一个值}"; shift 2 ;;
         --dev) DEV=1; SETUP_SERVICE=0; DO_SETCAP=0; shift ;;
         --channel) CHANNEL="${2:?--channel 需要一个值}"; shift 2 ;;
         --version) CHANNEL="${2:?--version 需要一个值}"; shift 2 ;;
@@ -123,15 +147,68 @@ while [ $# -gt 0 ]; do
         *) die "未知选项 $1（--help 看用法）" ;;
     esac
 done
+}
+parse_args "$@"
 
-check_port --https-port "$HTTPS_PORT"
-check_port --http-port "$HTTP_PORT"
-[ "$HTTPS_PORT" != "$HTTP_PORT" ] || die "--https-port 和 --http-port 不能相同（都是 $HTTPS_PORT）"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/webterm"
+STATE_FILE="$CONFIG_DIR/install-state"
 
-# PORT_ARGS 只在非默认端口时出现 —— 单元文件里写一串默认值是噪音
-PORT_ARGS=""
-[ "$HTTP_PORT" = 80 ] || PORT_ARGS="$PORT_ARGS --http-port $HTTP_PORT"
-[ "$HTTPS_PORT" = 443 ] || PORT_ARGS="$PORT_ARGS --https-port $HTTPS_PORT"
+# finish_args 在参数定下来之后做校验并算出派生值。地址可能是重放 / 探测出来的，
+# 所以它在 resolve_address 之后还要再跑一次。
+finish_args() {
+    check_port --https-port "$HTTPS_PORT"
+    check_port --http-port "$HTTP_PORT"
+    [ "$HTTPS_PORT" != "$HTTP_PORT" ] || die "--https-port 和 --http-port 不能相同（都是 $HTTPS_PORT）"
+    case "$DOMAIN" in
+        *:*) die "--domain $DOMAIN 是 IPv6 地址，暂只支持 IPv4（ADR-0042）。只有 IPv6 的机器请用域名（AAAA 记录）。" ;;
+    esac
+    # PORT_ARGS 只在非默认端口时出现 —— 单元文件里写一串默认值是噪音
+    PORT_ARGS=""
+    [ "$HTTP_PORT" = 80 ] || PORT_ARGS="$PORT_ARGS --http-port $HTTP_PORT"
+    [ "$HTTPS_PORT" = 443 ] || PORT_ARGS="$PORT_ARGS --https-port $HTTPS_PORT"
+    # EXT_URL 是用户实际要访问的地址。443 是默认端口，写出来是噪音；
+    # 不是 443 就必须带上，否则给出去的地址打不开。
+    if [ "$HTTPS_PORT" = 443 ]; then EXT_URL="https://$DOMAIN"; else EXT_URL="https://$DOMAIN:$HTTPS_PORT"; fi
+}
+finish_args
+
+# detect_public_ip 问两个公开服务要本机公网 IPv4。WEBTERM_PUBLIC_IP 可以直接给
+# （测试不联网；探测不准时也能手工指定 —— 不过那种时候直接 --domain 更直白）。
+detect_public_ip() {
+    local ip="${WEBTERM_PUBLIC_IP:-}" u
+    if [ -z "$ip" ]; then
+        command -v curl >/dev/null 2>&1 || return 1
+        for u in https://api.ipify.org https://ifconfig.me; do
+            ip=$(curl -4 -fsS --max-time 5 "$u" 2>/dev/null) && [ -n "$ip" ] && break
+            ip=""
+        done
+    fi
+    [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+    printf '%s' "$ip"
+}
+
+# resolve_address：不给 --domain 时用什么地址（ADR-0043 §3）。
+#   1. 以前装过（有 install-state）→ 整套沿用，命令行给的覆盖同名项
+#   2. 否则 → 本机公网 IPv4，走 IP 证书（ADR-0042）
+# --dev / --no-service 不需要地址。
+resolve_address() {
+    [ -z "$DOMAIN" ] && [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ] || return 0
+    if [ -f "$STATE_FILE" ]; then
+        local state=() line
+        while IFS= read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            state+=("$line")
+        done < "$STATE_FILE"
+        parse_args "${state[@]}" "${ORIG_ARGS[@]}"
+        ADDR_SOURCE="上次的安装参数（$STATE_FILE）"
+    fi
+    # 重放之后仍然可能没有地址（上次是 --dev / --no-service 装的）
+    [ -z "$DOMAIN" ] && [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ] || { finish_args; return 0; }
+    DOMAIN="$(detect_public_ip)" || die "没指定 --domain，也取不到本机公网 IPv4（问的是 api.ipify.org / ifconfig.me）。
+      有域名就加 --domain <域名>；IP 的话 --domain <公网 IPv4>"
+    ADDR_SOURCE="本机公网 IP —— 有域名就加 --domain <域名>"
+    finish_args
+}
 
 # ---------- systemd 单元（ADR-0034）----------
 #
@@ -199,7 +276,8 @@ EOF
 
 if [ "$PRINT_UNIT" = 1 ]; then
     [ "$(id -u)" != 0 ] || die "不要用 root 跑这个脚本 —— 单元里的 User= 就是运行脚本的用户。"
-    [ -n "$DOMAIN" ] || die "--print-unit 需要 --domain"
+    resolve_address
+    [ -n "$DOMAIN" ] || die "--print-unit 需要一个地址（--domain，或以前装过）"
     render_unit
     exit 0
 fi
@@ -233,6 +311,13 @@ EOF
 
 # ---------- 1. 前置检查 ----------
 
+resolve_address
+
+# FRESH = 这是一次全新安装（服务没在跑）：要放行防火墙、实签自检、最后打配对码。
+# 升级时端口正被运行中的自己占着，实签自检做不了也不需要；配对码也不该再打。
+FRESH=0
+if [ "$SETUP_SERVICE" = 1 ] && [ "$DEV" = 0 ] && ! service_active; then FRESH=1; fi
+
 step "1/6 检查环境"
 
 [ "$(uname -s)" = "Linux" ] || die "webterm 目前只支持 Linux（当前 $(uname -s)）"
@@ -243,8 +328,14 @@ case "$(uname -m)" in
     *) die "不支持的架构 $(uname -m)。可以自己从源码构建，见 docs/80-ops/install.md" ;;
 esac
 info "平台: linux/$ARCH"
+if [ -n "$DOMAIN" ]; then
+    if [ -n "$ADDR_SOURCE" ]; then info "地址: $DOMAIN（$ADDR_SOURCE）"; else info "地址: $DOMAIN"; fi
+fi
 
-for cmd in curl sha256sum install; do
+# curl / sha256sum 只在下载时要；--binary 的时候用不上
+NEED_CMDS="install"
+[ -n "$BINARY" ] || NEED_CMDS="curl sha256sum install"
+for cmd in $NEED_CMDS; do
     command -v "$cmd" >/dev/null 2>&1 || die "缺少 $cmd"
 done
 
@@ -261,12 +352,13 @@ if [ "$SETUP_SERVICE" = 1 ] && [ "$DEV" = 0 ]; then
     command -v sudo >/dev/null 2>&1 || die "装 systemd 系统服务需要 sudo（ADR-0034）。
       没有 sudo：加 --no-service 只装二进制，服务按 docs/80-ops/systemd.md 的
       「没有 sudo 时：用户服务」手写。"
+    # sudo 要问密码却没有终端（ssh 没加 -t）的话，会在装到一半时才失败。
+    # 看的是控制终端（/dev/tty），不是 stdin —— curl | bash 的 stdin 是管道，sudo 照样能问。
+    if [ "$DRY_RUN" != 1 ] && ! sudo -n true 2>/dev/null && ! ( : </dev/tty ) 2>/dev/null; then
+        die "后面要 sudo 输入密码，但这里没有终端。ssh 要加 -t：
+      ssh -t <服务器> ./webterm install …"
+    fi
     SVC_SUDO="sudo"
-fi
-
-if [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ] && [ -z "$DOMAIN" ]; then
-    die "生产部署必须指定 --domain（ACME 与 Origin 校验都要用它）。
-      本地试用请加 --dev。"
 fi
 
 if command -v bash >/dev/null 2>&1; then
@@ -277,77 +369,83 @@ if command -v bash >/dev/null 2>&1; then
     fi
 fi
 
-# ---------- 2. 下载 ----------
-
-step "2/6 下载"
-
-# EXT_URL 是用户实际要访问的地址。443 是默认端口，写出来是噪音；
-# 不是 443 就必须带上，否则给出去的地址打不开。
-if [ "$HTTPS_PORT" = 443 ]; then EXT_URL="https://$DOMAIN"; else EXT_URL="https://$DOMAIN:$HTTPS_PORT"; fi
-if [ -n "$BASE_URL" ]; then
-    URL_BASE="$BASE_URL"
-elif [ "$CHANNEL" = "latest" ]; then
-    URL_BASE="https://github.com/$REPO/releases/latest/download"
-else
-    URL_BASE="https://github.com/$REPO/releases/download/$CHANNEL"
-fi
+# ---------- 2. 取得二进制 ----------
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-
 BIN="webterm-linux-$ARCH"
-info "来源: $URL_BASE/$BIN"
 
-# gh_tag 把 --channel 翻成 release 的 tag（认证下载要指名 tag，没有
-# "latest/download" 这种便利写法）。
-gh_tag() {
-    if [ "$CHANNEL" = "latest" ]; then
-        gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null
-    else
-        printf '%s' "$CHANNEL"
-    fi
-}
-
-# fetch_auth 用凭据下一个 release 产物。
-#
-# 【私有仓库必须走这条】：releases/download 和 raw.githubusercontent 都不带
-# 凭据，私有仓库下一律 404 —— 哪怕这台机器本来有权限访问那个仓库。
-# 优先用 gh（凭据已经在它手里，脚本不碰 token）；没有 gh 就读环境变量里的
-# token，走 API 的 asset 端点。
-fetch_auth() {
-    local name="$1" out="$2" tag
-    tag=$(gh_tag) || true
-    [ -n "$tag" ] || return 1
-
-    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-        gh release download "$tag" --repo "$REPO" --pattern "$name" \
-            --output "$out" --clobber >/dev/null 2>&1 && return 0
-    fi
-
-    local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-    [ -n "$token" ] || return 1
-    local id
-    id=$(curl -fsSL -H "Authorization: Bearer $token" \
-        "https://api.github.com/repos/$REPO/releases/tags/$tag" 2>/dev/null \
-        | grep -B 3 "\"name\": *\"$name\"" | grep -m1 '"id":' \
-        | tr -dc '0-9') || return 1
-    [ -n "$id" ] || return 1
-    curl -fsSL -H "Authorization: Bearer $token" -H "Accept: application/octet-stream" \
-        "https://api.github.com/repos/$REPO/releases/assets/$id" -o "$out" 2>/dev/null
-}
-
-# fetch 先试匿名（公开仓库 / --base-url），失败再试凭据。
-fetch() {
-    local name="$1" out="$2"
-    curl -fsSL "$URL_BASE/$name" -o "$out" 2>/dev/null && return 0
-    # --base-url 是用户自己的下载源，跟 GitHub 凭据无关，不做回退
-    [ -z "$BASE_URL" ] || return 1
-    fetch_auth "$name" "$out"
-}
-
-if [ "$DRY_RUN" = 1 ]; then
-    info "(dry-run，跳过下载)"
+if [ -n "$BINARY" ]; then
+    step "2/6 使用本地二进制"
+    [ -f "$BINARY" ] || die "--binary $BINARY 不存在"
+    # 拷一份再用：$BINARY 可能就是 $PREFIX/webterm 自己（在装好的机器上跑 webterm install），
+    # install 不能把文件拷到它自己身上
+    cp "$BINARY" "$TMP/$BIN"
+    chmod +x "$TMP/$BIN"
+    "$TMP/$BIN" version >/dev/null 2>&1 || die "$BINARY 在本机跑不起来 —— 架构不对（本机 linux/$ARCH）或者文件坏了。"
+    info "$BINARY（$("$TMP/$BIN" version)）—— 不下载、不校验"
+elif [ "$DRY_RUN" = 1 ]; then
+    step "2/6 下载"
+    info "(dry-run，跳过下载；真跑时下载、校验之后交给下载来的二进制接着装)"
 else
+    step "2/6 下载"
+
+    if [ -n "$BASE_URL" ]; then
+        URL_BASE="$BASE_URL"
+    elif [ "$CHANNEL" = "latest" ]; then
+        URL_BASE="https://github.com/$REPO/releases/latest/download"
+    else
+        URL_BASE="https://github.com/$REPO/releases/download/$CHANNEL"
+    fi
+    info "来源: $URL_BASE/$BIN"
+
+    # gh_tag 把 --channel 翻成 release 的 tag（认证下载要指名 tag，没有
+    # "latest/download" 这种便利写法）。
+    gh_tag() {
+        if [ "$CHANNEL" = "latest" ]; then
+            gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null
+        else
+            printf '%s' "$CHANNEL"
+        fi
+    }
+
+    # fetch_auth 用凭据下一个 release 产物。
+    #
+    # 【私有仓库必须走这条】：releases/download 和 raw.githubusercontent 都不带
+    # 凭据，私有仓库下一律 404 —— 哪怕这台机器本来有权限访问那个仓库。
+    # 优先用 gh（凭据已经在它手里，脚本不碰 token）；没有 gh 就读环境变量里的
+    # token，走 API 的 asset 端点。
+    fetch_auth() {
+        local name="$1" out="$2" tag
+        tag=$(gh_tag) || true
+        [ -n "$tag" ] || return 1
+
+        if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+            gh release download "$tag" --repo "$REPO" --pattern "$name" \
+                --output "$out" --clobber >/dev/null 2>&1 && return 0
+        fi
+
+        local token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+        [ -n "$token" ] || return 1
+        local id
+        id=$(curl -fsSL -H "Authorization: Bearer $token" \
+            "https://api.github.com/repos/$REPO/releases/tags/$tag" 2>/dev/null \
+            | grep -B 3 "\"name\": *\"$name\"" | grep -m1 '"id":' \
+            | tr -dc '0-9') || return 1
+        [ -n "$id" ] || return 1
+        curl -fsSL -H "Authorization: Bearer $token" -H "Accept: application/octet-stream" \
+            "https://api.github.com/repos/$REPO/releases/assets/$id" -o "$out" 2>/dev/null
+    }
+
+    # fetch 先试匿名（公开仓库 / --base-url），失败再试凭据。
+    fetch() {
+        local name="$1" out="$2"
+        curl -fsSL "$URL_BASE/$name" -o "$out" 2>/dev/null && return 0
+        # --base-url 是用户自己的下载源，跟 GitHub 凭据无关，不做回退
+        [ -z "$BASE_URL" ] || return 1
+        fetch_auth "$name" "$out"
+    }
+
     fetch "$BIN" "$TMP/$BIN" || die "下载失败。按可能性排查：
       1. 仓库是私有的 —— 裸 curl 拿不到。装个 gh 并 gh auth login，
          或者 export GH_TOKEN=<有 repo 读权限的 token> 再重跑
@@ -356,7 +454,7 @@ else
       都不行就从源码构建：见 docs/80-ops/install.md"
 
     # ---------- 3. 校验 ----------
-    step "3/6 校验 SHA256"
+    step "校验 SHA256"
     if fetch SHA256SUMS "$TMP/SHA256SUMS"; then
         (cd "$TMP" && grep " $BIN\$" SHA256SUMS | sha256sum -c -) \
             || die "校验和不匹配。下载的文件可能被篡改或损坏，已中止。"
@@ -365,6 +463,24 @@ else
         # 装的是一个会暴露到公网的 shell，拿不到校验和就不该往下走
         die "取不到 SHA256SUMS，无法校验完整性，已中止。"
     fi
+
+    # ---------- 交接（ADR-0043 §2）----------
+    #
+    # 后面的事交给【下载来的这个二进制】自带的安装脚本做，这份到此为止。
+    # 不认 install 的旧二进制（v0.1.0 及更早）直接拒绝：拿这份新脚本去装它，
+    # 正是要消除的那种错位（新单元配旧二进制：会话全是 -900，ADR-0034）。
+    chmod +x "$TMP/$BIN"
+    NEW_VER="$("$TMP/$BIN" version 2>/dev/null)" || die "下载的二进制在本机跑不起来（本机 linux/$ARCH）。"
+    if ! "$TMP/$BIN" install --help >/dev/null 2>&1; then
+        die "$NEW_VER 早于这份安装脚本（它没有 webterm install），装上会和脚本写的服务单元对不上。
+      用 --channel dev（main 的滚动构建），或 --version 指定 v0.2.0 及以后的版本。"
+    fi
+    step "交给 $NEW_VER 自带的安装脚本继续"
+    # stdin 给 /dev/null：curl | bash 时 stdin 是脚本本身，子进程读了它就会吃掉
+    # 本脚本还没执行的部分。sudo 问密码走的是 /dev/tty，不受影响。
+    rc=0
+    "$TMP/$BIN" install "${ORIG_ARGS[@]}" </dev/null || rc=$?
+    exit "$rc"
 fi
 
 # ---------- 版本比对（--if-newer）----------
@@ -392,32 +508,6 @@ if [ "$IF_NEWER" = 1 ] && [ "$DRY_RUN" != 1 ] && [ -x "$PREFIX/webterm" ]; then
         info "当前  $OLD_VER"
         info "最新  $NEW_VER"
     fi
-fi
-
-# ---------- 4. 前置自检 ----------
-#
-# 【装之前就查】。以前只在装完提示"你可以跑一下 doctor"，等于没查 ——
-# 用户装完启动失败才发现 DNS 没配、端口被占。这里用刚下载下来的二进制
-# 直接跑，不通过就中止。
-step "4/6 前置自检"
-
-if [ "$DRY_RUN" = 1 ]; then
-    info "(dry-run，跳过)"
-elif [ "$DEV" = 1 ] || [ -z "$DOMAIN" ]; then
-    info "本地模式，无需检查域名与端口"
-elif service_active; then
-    # 升级路径：端口正被运行中的自己占着，doctor 的端口检查必然误报
-    info "webterm 已在运行（这是一次升级），跳过 —— 端口正被它自己占着"
-elif chmod +x "$TMP/$BIN" && "$TMP/$BIN" doctor --domain "$DOMAIN" $PORT_ARGS; then
-    :
-elif [ "$FORCE" = 1 ]; then
-    info "有检查未通过，但指定了 --force，继续"
-else
-    die "前置条件未满足（见上面标 ✗ 的项）。修好之后重跑，或用 --force 强行继续。
-
-      注意：「云安全组有没有放行 80」在机器内部【检查不出来】——
-      要在别的机器上跑：  curl -sI http://$DOMAIN/
-      超时就是没放行，那样证书签不下来。"
 fi
 
 # ---------- 热升级还是重启（ADR-0016）----------
@@ -479,9 +569,11 @@ fi
 
 # ---------- 5. 安装 ----------
 
-step "5/6 安装到 $PREFIX"
+step "3/6 安装到 $PREFIX"
 
 SUDO=""
+# --prefix ~/.local/bin 这类还不存在的目录，先试着用自己的身份建 —— 建得了就不需要 sudo
+[ -d "$PREFIX" ] || [ "$DRY_RUN" = 1 ] || mkdir -p "$PREFIX" 2>/dev/null || true
 if [ ! -w "$PREFIX" ]; then
     command -v sudo >/dev/null 2>&1 || die "$PREFIX 不可写且没有 sudo"
     SUDO="sudo"
@@ -523,26 +615,99 @@ fi
 
 [ "$DRY_RUN" = 1 ] || info "版本: $("$PREFIX/webterm" version)"
 
-# ---------- 写配置文件 ----------
+# ---------- 4. 防火墙 + 实签自检（ADR-0043 §4–5）----------
+#
+# 【放在 setcap 之后、启动服务之前】：用的是已经有绑定权限的那个二进制，
+# 端口也还空着。以前在装之前用刚下载、还没 setcap 的临时二进制跑静态检查，
+# 两件事都做不到，而且查不出最常见的故障 —— 云安全组没放行 80。
+# 现在 doctor --acme 用 Let's Encrypt staging 真的签一张，CA 连不进来当场就知道。
+
+# open_firewall 放行机器自己的防火墙。装的就是要监听这两个端口的服务，
+# 放行它们是安装的一部分。云安全组碰不到 —— 那个靠下面的实签测出来。
+open_firewall() {
+    local p opened=""
+    # ufw.conf 普通用户可读；ufw 本身在 sbin，sudo 的 secure_path 里有
+    if [ -r /etc/ufw/ufw.conf ] && grep -q '^ENABLED=yes' /etc/ufw/ufw.conf; then
+        for p in "$HTTP_PORT" "$HTTPS_PORT"; do
+            run_quiet sudo ufw allow "$p/tcp"
+        done
+        opened="ufw"
+    fi
+    if systemctl is-active --quiet firewalld 2>/dev/null; then
+        for p in "$HTTP_PORT" "$HTTPS_PORT"; do
+            run_quiet sudo firewall-cmd --permanent --add-port="$p/tcp"
+        done
+        run_quiet sudo firewall-cmd --reload
+        opened="${opened:+$opened、}firewalld"
+    fi
+    if [ -n "$opened" ]; then
+        done_msg "已在 $opened 里放行 TCP $HTTP_PORT、$HTTPS_PORT"
+    else
+        info "本机防火墙（ufw / firewalld）没开，不用放行"
+    fi
+}
+
+if [ "$FRESH" = 1 ]; then
+    step "4/6 放行防火墙 + 自检（用 Let's Encrypt staging 实签一次）"
+    open_firewall
+    if [ "$DRY_RUN" = 1 ]; then
+        run "$PREFIX/webterm" doctor --acme --domain "$DOMAIN" --http-port "$HTTP_PORT" --https-port "$HTTPS_PORT"
+    # 端口显式给全：旧配置文件里可能还是上次的端口，doctor 会读它
+    elif "$PREFIX/webterm" doctor --acme --domain "$DOMAIN" --http-port "$HTTP_PORT" --https-port "$HTTPS_PORT"; then
+        :
+    elif [ "$FORCE" = 1 ]; then
+        info "自检没通过，但指定了 --force，继续"
+    else
+        die "自检没通过（见上面标 ✗ 的项），服务没有装上。修好之后重跑同一条命令，或用 --force 强行继续。
+      最常见的是云安全组没放行入方向 TCP $HTTP_PORT / $HTTPS_PORT。"
+    fi
+elif [ "$SETUP_SERVICE" = 1 ] && [ "$DEV" = 0 ]; then
+    step "4/6 自检"
+    info "webterm 已在运行（这是一次升级），跳过 —— 端口正被它自己占着"
+fi
+
+# ---------- 5. 写配置文件 ----------
 #
 # 有了它，pair / doctor / devices 都不用再重复 --domain --https-port。
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/webterm"
+#
+# 【地址和端口每次都同步，其它键不动】（ADR-0043 §3）。以前是「文件在就整份不动」，
+# 从 IP 换到域名之后 pair / doctor / 状态总览还在用旧地址；而整份重写又会冲掉
+# 用户自己加的 session-env 之类。
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# config_set <键> <值>：有这一行就改写，值为空就删掉这一行，没有就追加。
+# 认得配置文件允许的写法：前面的空白、--、只写键名。
+config_set() {
+    local key="$1" val="$2" re
+    re="^[[:space:]]*-*$key[[:space:]]*(=.*)?\$"
+    if grep -qE "$re" "$CONFIG_FILE"; then
+        if [ -n "$val" ]; then
+            sed -i -E "s|$re|$key = $val|" "$CONFIG_FILE"
+        else
+            sed -i -E "/$re/d" "$CONFIG_FILE"
+        fi
+    elif [ -n "$val" ]; then
+        printf '%s = %s\n' "$key" "$val" >> "$CONFIG_FILE"
+    fi
+}
+
 if [ -n "$DOMAIN" ]; then
-    run mkdir -p "$CONFIG_DIR"
+    [ "$SETUP_SERVICE" = 1 ] && step "5/6 写配置"
     if [ "$DRY_RUN" = 1 ]; then
-        info "将写入 $CONFIG_DIR/config（domain=$DOMAIN$PORT_ARGS）"
-    elif [ -f "$CONFIG_DIR/config" ]; then
-        # 不覆盖用户改过的配置
-        info "已存在 $CONFIG_DIR/config，保留不动"
+        info "将同步 $CONFIG_FILE（domain=$DOMAIN$PORT_ARGS，其它键不动）"
     else
-        {
-            echo "# 由 scripts/install.sh 生成。键名就是 flag 名，去掉前面的 --。"
-            echo "# 完整可用键见：webterm serve --help"
-            echo "domain = $DOMAIN"
-            [ "$HTTP_PORT" = 80 ] || echo "http-port = $HTTP_PORT"
-            [ "$HTTPS_PORT" = 443 ] || echo "https-port = $HTTPS_PORT"
-        } > "$CONFIG_DIR/config"
-        info "已写入 $CONFIG_DIR/config"
+        mkdir -p "$CONFIG_DIR"
+        if [ ! -f "$CONFIG_FILE" ]; then
+            {
+                echo "# 由 scripts/install.sh 生成。键名就是 flag 名，去掉前面的 --。"
+                echo "# 完整可用键见：webterm serve --help"
+                echo "# domain / http-port / https-port 每次安装都会同步，其它键安装不动。"
+            } > "$CONFIG_FILE"
+        fi
+        config_set domain "$DOMAIN"
+        if [ "$HTTP_PORT" = 80 ]; then config_set http-port ""; else config_set http-port "$HTTP_PORT"; fi
+        if [ "$HTTPS_PORT" = 443 ]; then config_set https-port ""; else config_set https-port "$HTTPS_PORT"; fi
+        info "已同步 $CONFIG_FILE（domain=$DOMAIN$PORT_ARGS）"
     fi
 fi
 
@@ -559,7 +724,7 @@ fi
 #
 # 【在 DOMAIN 判断之外】：本地安装（没有域名）同样要能 update。
 if [ "$DRY_RUN" = 1 ]; then
-    info "将写入 $CONFIG_DIR/install-state（供 webterm update 用）"
+    info "将写入 $STATE_FILE（供 webterm update / 不带 --domain 的重装用）"
 else
     mkdir -p "$CONFIG_DIR"
     {
@@ -573,14 +738,28 @@ else
         [ "$SETUP_SERVICE" = 1 ] || echo "--no-service"
         [ "$DO_SETCAP" = 1 ] || echo "--no-setcap"
         true
-    } > "$CONFIG_DIR/install-state"
-    info "已写入 $CONFIG_DIR/install-state（webterm update 会用它）"
+    } > "$STATE_FILE"
+    info "已写入 $STATE_FILE（webterm update 会用它）"
 fi
 
 # ---------- 6. 服务 ----------
 
 if [ "$SETUP_SERVICE" = 0 ]; then
     step "6/6 完成"
+    if [ -n "$DOMAIN" ]; then
+        # --no-service 但给了地址：用户要自己起服务（地址已经在配置文件里）
+        cat <<EOF
+
+已安装: $PREFIX/webterm（没有配 systemd 服务）
+
+手工启动（地址从 $CONFIG_FILE 读）：
+
+    webterm doctor --acme     先用 staging 实签一次
+    webterm serve
+
+EOF
+        exit 0
+    fi
     cat <<EOF
 
 已安装: $PREFIX/webterm
@@ -688,7 +867,11 @@ fi # KEEP_USER_UNIT
 if [ "$DRY_RUN" = 1 ]; then
     step "完成（dry-run）"
     info "访问地址将是 $EXT_URL"
-    info "配对命令：webterm pair（参数从配置文件读）"
+    if [ "$FRESH" = 1 ]; then
+        info "最后会打出配对码：webterm pair --wait"
+    else
+        info "配对命令：webterm pair（参数从配置文件读）"
+    fi
     exit 0
 fi
 
@@ -705,16 +888,23 @@ fi
 step "完成"
 cat <<EOF
 
-服务已启动。接下来：
+服务已启动。访问地址：$EXT_URL
 
-  访问地址：$EXT_URL
-
-  webterm pair       拿配对码 + 二维码，手机扫一下完成授权
+  webterm            状态总览：服务、地址、证书、设备
+  webterm pair       再拿一个配对码（别的设备；也可以在已配对设备的会话里跑）
   webterm devices    看已授权的设备 / 吊销
-  webterm doctor     再查一遍前置条件
 
-  参数已写进 $CONFIG_DIR/config，上面的命令都不用带 --domain。
+  地址和端口在 $CONFIG_FILE 里，上面的命令都不用带 --domain。
   看日志： $JCTL -f
 
 $SETCAP_NOTE
 EOF
+
+# ---------- 首次安装：直接配对（ADR-0043 §6）----------
+#
+# pair --wait 先等本机 HTTPS 用受信任的证书能打开（最多 90 秒）再打码，
+# 免得扫码看到证书错误。二维码是最后一屏 —— 用户接下来要做的就是扫它。
+if [ "$FRESH" = 1 ]; then
+    "$PREFIX/webterm" pair --wait --domain "$DOMAIN" --https-port "$HTTPS_PORT" \
+        || info "配对码没打出来，手动跑一次：webterm pair"
+fi

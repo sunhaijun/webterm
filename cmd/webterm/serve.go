@@ -155,7 +155,7 @@ func runServe(args []string) error {
 		Bind:        o.bind,
 		HTTPPort:    o.httpPort,
 		HTTPSPort:   o.httpsPort,
-		CertDir:     agent.CertDirDefault(c.dataDir),
+		CertDir:     agent.CertDirFor(c.dataDir, o.acmeStaging), // staging 证书不进 certs/（ADR-0042 §3）
 		Inherited:   inheritedListeners(snap),
 	}, a.Handler())
 	if err != nil {
