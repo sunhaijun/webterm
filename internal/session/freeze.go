@@ -6,19 +6,22 @@ import (
 	"time"
 )
 
-// freezer 让一个会话的 readLoop / writeLoop 停在安全点（ADR-0016 热升级交接）。
+// freezer parks a session's readLoop and writeLoop at safe points for a
+// hot-upgrade handoff (ADR-0016).
 //
-// 两个循环平时阻塞在 ptmx.Read / ptmx.Write 里。冻结时给 ptmx 设一个已过期的
-// deadline 把它们打断，循环看到超时错误就来 park 报到、等解冻；解冻先清 deadline
-// 再放行，循环回去继续阻塞读写。停在安全点的含义：readLoop 在 consume 之后
-// （ring 与 out_seq 一致），writeLoop 在 pop 之前（inAck 与真正写进 PTY 的字节一致），
-// 于是 Export 拍到的是一个自洽的切面。
+// Both loops normally block in ptmx.Read / ptmx.Write. Freezing sets an
+// already-expired deadline on ptmx to interrupt them; on the timeout error each
+// loop checks in at park and waits for thaw. Thawing clears the deadline before
+// releasing them, and they go back to blocking I/O. The safe points are
+// readLoop after consume (ring and out_seq agree) and writeLoop before pop
+// (inAck matches the bytes actually written to the PTY), so Export captures a
+// consistent cut.
 type freezer struct {
 	mu     sync.Mutex
 	frozen bool
-	thaw   chan struct{} // 冻结时新建，解冻时 close
-	wake   chan struct{} // cap 1：把 writeLoop 从 select 里叫出来
-	parked chan struct{} // 循环停好了（或冻结期间退出了）就发一个
+	thaw   chan struct{} // created on freeze, closed on thaw
+	wake   chan struct{} // cap 1: wakes writeLoop out of its select
+	parked chan struct{} // one send per loop that parked (or exited while frozen)
 }
 
 func newFreezer() freezer {
@@ -31,7 +34,8 @@ func (f *freezer) isFrozen() bool {
 	return f.frozen
 }
 
-// park 由循环调用：没冻结直接返回；冻结了就报到并等解冻。
+// park is called by the loops. It returns at once unless frozen; when frozen
+// it checks in and waits for thaw.
 func (f *freezer) park() {
 	f.mu.Lock()
 	if !f.frozen {
@@ -44,7 +48,8 @@ func (f *freezer) park() {
 	<-ch
 }
 
-// exiting 由循环在退出前调用：冻结期间退出也算"停好了"，否则 freeze 会等到超时。
+// exiting is called by a loop before it exits. Exiting while frozen counts as
+// parked; otherwise freeze would wait until its timeout.
 func (f *freezer) exiting() {
 	f.mu.Lock()
 	frozen := f.frozen
@@ -57,7 +62,8 @@ func (f *freezer) exiting() {
 	}
 }
 
-// freeze 停住这个会话的两个循环。timeout 内没停好就解冻并报错。
+// freeze parks both loops of the session. If they don't park within timeout,
+// it thaws and returns an error.
 func (s *Session) freeze(timeout time.Duration) error {
 	f := &s.fz
 	f.mu.Lock()
@@ -96,13 +102,13 @@ func (s *Session) freeze(timeout time.Duration) error {
 			got++
 		case <-deadline:
 			s.thaw()
-			return fmt.Errorf("session %d: 冻结超时（%d/%d 个循环没停下来）", s.sid, got, need)
+			return fmt.Errorf("session %d: freeze timed out (%d of %d loops parked)", s.sid, got, need)
 		}
 	}
 	return nil
 }
 
-// thaw 放行两个循环。幂等。
+// thaw releases both loops. It is idempotent.
 func (s *Session) thaw() {
 	f := &s.fz
 	f.mu.Lock()

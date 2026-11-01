@@ -15,18 +15,21 @@ import (
 	"github.com/sunhaijun/webterm/internal/vterm"
 )
 
-// 热升级交接（ADR-0016）：Freeze → Export → （exec）→ Restore；出错走 Thaw。
-// 流程见 docs/50-backend/session-manager.md §热升级交接。
+// Hot-upgrade handoff (ADR-0016): Freeze, Export, exec, Restore; Thaw on
+// failure. The flow is described in docs/50-backend/session-manager.md
+// (hot-upgrade handoff section).
 
-// Generation 返回热升级代数（新进程从快照里读到的值；首次启动为 0）。
+// Generation returns the hot-upgrade generation: the value the new process read
+// from the snapshot, or 0 on first start.
 func (m *Manager) Generation() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.generation
 }
 
-// Freeze 停住所有会话的读写循环并拒绝新会话。任何一个会话在 timeout 内没停好，
-// 全部解冻并返回错误 —— 交接要么整体成立，要么什么都不动。
+// Freeze parks every session's read and write loops and refuses new sessions.
+// If any session fails to park within timeout, everything is thawed and an
+// error is returned: the handoff happens in full or not at all.
 func (m *Manager) Freeze(timeout time.Duration) error {
 	m.mu.Lock()
 	m.frozen = true
@@ -40,7 +43,7 @@ func (m *Manager) Freeze(timeout time.Duration) error {
 	return nil
 }
 
-// Thaw 放行所有会话并恢复接受新会话。幂等。
+// Thaw releases all sessions and accepts new ones again. It is idempotent.
 func (m *Manager) Thaw() {
 	for _, s := range m.List() {
 		s.thaw()
@@ -50,10 +53,12 @@ func (m *Manager) Thaw() {
 	m.mu.Unlock()
 }
 
-// Export 拍整份快照。【必须在 Freeze 成功之后】调用。代数 +1 是给新进程的。
-// 出错时已 dup 出来的 fd 都关掉，什么都不留。
+// Export captures the full snapshot. It must be called after a successful
+// Freeze. The generation is incremented for the new process. On error, every
+// fd dup'ed so far is closed.
 //
-// sessions[] 按显示顺序排（ADR-0040）：顺序不单独占字段，schema 不变。
+// sessions[] is in display order (ADR-0040); order has no field of its own, so
+// the schema is unchanged.
 func (m *Manager) Export(fromVersion string) (*handoff.Snapshot, error) {
 	m.mu.RLock()
 	snap := &handoff.Snapshot{
@@ -75,15 +80,18 @@ func (m *Manager) Export(fromVersion string) (*handoff.Snapshot, error) {
 	return snap, nil
 }
 
-// Restore 在新进程里用快照重建会话表。只能在 Manager 还没创建过任何会话时调用。
+// Restore rebuilds the session table from a snapshot in the new process. It
+// may be called only before the Manager has created any session.
 //
-// 显示顺序就是 sessions[] 的顺序（ADR-0040）。老快照是按 sid 排的，恢复出来
-// 就是按 sid 的顺序 —— 正是老版本给出的顺序。
+// Display order is the order of sessions[] (ADR-0040). Older snapshots are in
+// sid order, which is exactly the order older versions displayed.
 //
-// 全部成功才生效；任何一个会话接不回来就整体失败 —— 那时新进程应当把错误
-// 报出去退出，让 systemd 拉起一个干净的进程（会话丢失，但状态是明确的）。
-// 模拟器状态例外：导不回来就从环形缓冲尽力还原（见 restoreTerm），不为一屏画面
-// 牺牲会话。
+// It is all or nothing: if any session can't be reattached, Restore fails and
+// the new process should report the error and exit so systemd starts a clean
+// one (sessions are lost, but the state is well defined). Emulator state is
+// the exception: if it can't be imported, it is rebuilt best-effort from the
+// ring buffer (see restoreTerm) rather than losing the session over one
+// screen.
 func (m *Manager) Restore(snap *handoff.Snapshot) error {
 	if err := handoff.Validate(snap); err != nil {
 		return err
@@ -91,14 +99,14 @@ func (m *Manager) Restore(snap *handoff.Snapshot) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.sessions) != 0 {
-		return errors.New("session: Restore 必须在没有会话时调用")
+		return errors.New("session: Restore must be called before any session exists")
 	}
 	restored := make(map[uint16]*Session, len(snap.Sessions))
 	order := make([]uint16, 0, len(snap.Sessions))
 	for _, hs := range snap.Sessions {
 		s, err := m.restoreSession(hs)
 		if err != nil {
-			return fmt.Errorf("session: 接回会话 %d: %w", hs.SID, err)
+			return fmt.Errorf("session: reattach session %d: %w", hs.SID, err)
 		}
 		restored[hs.SID] = s
 		order = append(order, hs.SID)
@@ -145,23 +153,26 @@ func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
 		readDone:   make(chan struct{}),
 		fz:         newFreezer(),
 	}
-	// 从环形缓冲重放出来的模拟器（schema 1）数过一遍历史里的标题：那些不是「刚设的」
+	// An emulator replayed from the ring buffer (schema 1) has already counted
+	// the titles in that history; they were not just set.
 	_, s.titleSeen = s.term.Title()
 	if hs.Status != protocol.StatusRunning {
-		// 已退出：ring 与模拟器保留供回看（AC-4.5），没有 fd 也没有进程
+		// Exited: keep ring and emulator for scrollback (AC-4.5); there is no
+		// fd or process.
 		s.inputQ.close()
 		close(s.done)
 		return s, nil
 	}
-	// O_NONBLOCK 是 open file description 上的标志，随 exec 过来了；再置一次是防御，
-	// 保证 os.NewFile 把它当可轮询文件（否则 SetReadDeadline 失效，下次热升级就冻不住）
+	// O_NONBLOCK lives on the open file description and survives exec. Setting
+	// it again is defensive: os.NewFile must see a pollable file, or
+	// SetReadDeadline won't work and the next hot upgrade can't freeze.
 	if err := unix.SetNonblock(hs.PtmxFD, true); err != nil {
 		return nil, fmt.Errorf("ptmx fd %d: %w", hs.PtmxFD, err)
 	}
-	unix.CloseOnExec(hs.PtmxFD) // 交接时清掉的 CLOEXEC 置回来（见 pollable）
+	unix.CloseOnExec(hs.PtmxFD) // restore the CLOEXEC cleared for the handoff (see pollable)
 	f := os.NewFile(uintptr(hs.PtmxFD), "ptmx")
 	if f == nil {
-		return nil, fmt.Errorf("ptmx fd %d 无效", hs.PtmxFD)
+		return nil, fmt.Errorf("invalid ptmx fd %d", hs.PtmxFD)
 	}
 	s.ptmx, s.fd = f, hs.PtmxFD
 	proc, err := os.FindProcess(hs.ShellPID)
@@ -173,14 +184,18 @@ func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
 	return s, nil
 }
 
-// restoreTerm 把模拟器接回来（ADR-0026 §8）。
+// restoreTerm reattaches the emulator (ADR-0026 §8).
 //
-// 正常路径：导入交接来的完整状态，导入后的快照与导出前逐字节相等。
+// Normally it imports the handed-over state, and snapshots after the import
+// are byte-identical to those before export.
 //
-// 从旧版本升级上来（交接数据里没有模拟器状态），或状态导不回来：新建一个
-// 模拟器，把交接来的环形缓冲内容喂进去，尽力还原。缓冲窗口如果正好从备用屏
-// 程序的中间开始，那个会话的画面会错一次，下一次程序重画（或用户按一下键）
-// 就恢复 —— 不为此中止升级：会话活下来比这一次画面更重要。
+// When upgrading from an older version (no emulator state in the handoff) or
+// when the state can't be imported, it creates a new emulator and feeds it the
+// ring buffer contents as a best effort. If the window starts in the middle
+// of an alternate screen program, that session's screen is wrong once and
+// recovers on the program's next redraw (or the user's next keystroke). The
+// upgrade is not aborted for this; keeping the session alive matters more
+// than one screen.
 func restoreTerm(hs handoff.Session) *vterm.Terminal {
 	if len(hs.VTerm) > 0 {
 		t, err := vterm.Import(hs.VTerm)
@@ -190,7 +205,7 @@ func restoreTerm(hs handoff.Session) *vterm.Terminal {
 			}
 			return t
 		}
-		slog.Warn("交接来的模拟器状态导不回来，改用环形缓冲尽力还原", "sid", hs.SID, "err", err)
+		slog.Warn("cannot import handed-over emulator state; rebuilding best-effort from the ring buffer", "sid", hs.SID, "err", err)
 	}
 	t := vterm.New(int(hs.Cols), int(hs.Rows))
 	t.Write(hs.RingData)

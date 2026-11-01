@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""校验 docs/ 里的相对链接与锚点。
+"""Check relative links and anchors in every Markdown file.
 
-docs/ 是唯一事实来源（见 CLAUDE.md），坏链就是文档腐烂的第一个信号。
+docs/ is the source of truth (see CLAUDE.md); broken links are the first sign of rot.
 """
 import os
 import re
@@ -52,13 +52,13 @@ def main() -> int:
             path = f if target == '' else os.path.normpath(
                 os.path.join(os.path.dirname(f), urllib.parse.unquote(target)))
             if not os.path.exists(path):
-                bad.append((f, m.group(0), '文件不存在'))
+                bad.append((f, m.group(0), 'missing file'))
             elif frag and path.endswith('.md') and frag not in anchors(path):
-                bad.append((f, m.group(0), '锚点不存在'))
+                bad.append((f, m.group(0), 'missing anchor'))
 
     for path, link, why in bad:
         print(f'{path}: {why}\n    {link}')
-    print(f'检查了 {total} 条相对链接，{len(bad)} 条失效')
+    print(f'checked {total} relative links, {len(bad)} broken')
     return 1 if bad else 0
 
 

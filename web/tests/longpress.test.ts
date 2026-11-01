@@ -1,9 +1,9 @@
-/** 按下 → 点 / 长按 / 拖走（CTRL / ALT 锁定、会话菜单都靠它）。 */
+/** Press → tap / long-press / drag (used by CTRL / ALT locking and the session menu). */
 import { describe, expect, it } from 'vitest'
 
 import { LONG_PRESS_MS, PressTracker, TAP_SLOP_PX, type Timers } from '../src/ui/longpress'
 
-/** 手动推进的计时器。 */
+/** A manually advanced timer. */
 function fakeTimers() {
   let pending: { fn: () => void; at: number; id: number } | null = null
   let now = 0
@@ -29,12 +29,12 @@ function fakeTimers() {
 }
 
 describe('PressTracker', () => {
-  it('门槛是 500ms，拖动容差 10px', () => {
+  it('uses a 500ms threshold and 10px drag slop', () => {
     expect(LONG_PRESS_MS).toBe(500)
     expect(TAP_SLOP_PX).toBe(10)
   })
 
-  it('很快抬起 = 点', () => {
+  it('treats a quick release as a tap', () => {
     const t = fakeTimers()
     const p = new PressTracker(500, t.timers)
     let long = 0
@@ -45,7 +45,7 @@ describe('PressTracker', () => {
     expect(long).toBe(0)
   })
 
-  it('按满门槛 = 长按：手指还没抬起就触发，抬起报 long', () => {
+  it('fires long-press at the threshold while still pressed, and reports long on release', () => {
     const t = fakeTimers()
     const p = new PressTracker(500, t.timers)
     let long = 0
@@ -55,7 +55,7 @@ describe('PressTracker', () => {
     expect(p.up()).toBe('long')
   })
 
-  it('拖走了既不是点也不是长按', () => {
+  it('treats a drag as neither tap nor long-press', () => {
     const t = fakeTimers()
     const p = new PressTracker(500, t.timers)
     let long = 0
@@ -67,7 +67,7 @@ describe('PressTracker', () => {
     expect(p.up()).toBe('none')
   })
 
-  it('cancel 之后什么都不发生', () => {
+  it('does nothing after cancel', () => {
     const t = fakeTimers()
     const p = new PressTracker(500, t.timers)
     let long = 0

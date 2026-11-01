@@ -1,28 +1,30 @@
 /**
- * 盖在终端上的提示（layout.md §盖在终端上的东西，session-ux.md §连接状态指示）：
- * 连接横幅、toast、组字预览。全部绝对定位，出现与消失都不改终端几何、不发 resize。
- * 进程结束提示行不在这里 —— 它直接写进终端（AC-4.5）。
+ * Overlays on top of the terminal (layout.md, session-ux.md §Connection status): the
+ * connection banner, toasts and the IME composition preview. All absolutely positioned;
+ * showing or hiding them never changes terminal geometry or sends a resize. The
+ * process-exited line is not here; it is written into the terminal (AC-4.5).
  */
 import type { ConnState, StateInfo } from '../conn/connection'
 import type { ImePreviewState, Toast } from './controller'
 
-/** `conn-text` 的文字。在线就是「在线」（RTT 进 wide 状态点的 title）。 */
+/** Text for `conn-text`. Online is just "Online"; the RTT goes in the wide status dot's title. */
 export function connLabel(state: ConnState, info: StateInfo): string {
   switch (state) {
     case 'online':
-      return '在线'
+      return 'Online'
     case 'connecting':
-      return '连接中…'
+      return 'Connecting…'
     case 'reconnecting':
-      return info.retryInMs === undefined ? '重连中…' : `重连中 · ${Math.ceil(info.retryInMs / 1000)}s 后重试`
+      return info.retryInMs === undefined ? 'Reconnecting…' : `Reconnecting · retry in ${Math.ceil(info.retryInMs / 1000)}s`
     case 'closed':
-      return '已断开'
+      return 'Disconnected'
   }
 }
 
 /**
- * 连接横幅。`conn-text` **一直在 DOM 里**：在线时整条只是视觉隐藏，`aria-live` 照常播报，
- * E2E 的引用也不用变。致命错误（设备被吊销、协议不符）也走这条横幅。
+ * Connection banner. `conn-text` is always in the DOM: when online the banner is only
+ * visually hidden, so `aria-live` still announces and E2E locators stay valid. Fatal
+ * errors (device revoked, protocol mismatch) also show here.
  */
 export function ConnBanner({ state, info, fatal }: { state: ConnState; info: StateInfo; fatal: string | null }) {
   const show = fatal !== null || state !== 'online'
@@ -49,7 +51,7 @@ export function ToastView({ toast }: { toast: Toast | null }) {
   )
 }
 
-/** 组字预览：跟着终端光标走，显示未提交的组字内容。 */
+/** IME composition preview: follows the terminal cursor and shows the uncommitted text. */
 export function ImePreview({ preview, fontSize }: { preview: ImePreviewState | null; fontSize: number }) {
   if (!preview) return null
   return (

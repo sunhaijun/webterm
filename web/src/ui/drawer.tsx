@@ -1,12 +1,17 @@
 /**
- * 浮层原语 —— 手机上的会话抽屉与改名、设置、关闭确认（ADR-0018，layout.md §浮层）。
+ * Sheet primitive: the session drawer on phones plus rename, settings and close
+ * confirmation (ADR-0018, layout.md).
  *
- * 形态看 `.app[data-form]`（CSS 里分，ADR-0037 §4）：`compact` 是贴底整宽 sheet（抓手 + 下滑关闭），
- * `wide` 是居中浮窗。关法：点遮罩 · `Esc` · ✕ ·（sheet）下滑。`backButton` 时另加系统返回键。
+ * The shape follows `.app[data-form]` (decided in CSS, ADR-0037 §4): a full-width bottom
+ * sheet on `compact` (grab handle, swipe down to close), a centered dialog on `wide`.
+ * Closes via backdrop click · `Esc` · ✕ · swipe down (sheet), plus the system back button
+ * with `backButton`.
  *
- * 可以叠（关闭确认叠在会话抽屉上，ADR-0038 §2）：`Esc` 只归最上面那一层。
+ * Sheets can stack (close confirmation over the session drawer, ADR-0038 §2); `Esc` only
+ * goes to the top one.
  *
- * 【`position: fixed`，不参与 `.app` 的网格】—— 开关浮层不改终端几何、不发 resize。
+ * `position: fixed`, outside the `.app` grid, so opening or closing never changes terminal
+ * geometry or sends a resize.
  */
 import type { ComponentChildren } from 'preact'
 import { useLayoutEffect, useRef } from 'preact/hooks'
@@ -17,19 +22,19 @@ import { installSwipeDismiss } from './swipe'
 export interface DrawerProps {
   title: string
   onClose(): void
-  /** sheet 本体的 testid。 */
+  /** testid of the sheet itself. */
   testid?: string
-  /** 遮罩的 testid。 */
+  /** testid of the backdrop. */
   backdropTestid?: string
   /**
-   * 系统返回键关闭（session-ux.md）：打开时 `history.pushState` 一条记录，`popstate`
-   * 时关闭；用别的方式关闭时 `history.back()` 把那条记录消掉，不让记录越积越多 ——
-   * 否则 Android 的 PWA 里按返回键会直接退出应用。
+   * Close with the system back button (session-ux.md): push a history entry on open and
+   * close on `popstate`. When closed any other way, `history.back()` removes that entry so
+   * entries don't pile up; otherwise Back in an Android PWA would exit the app.
    */
   backButton?: boolean
-  /** 底部固定的一行按钮（会话抽屉的「+ 新会话 · ⚙」，确认与改名的「取消 · 确定」）。 */
+  /** A fixed row of buttons at the bottom ("+ New session · ⚙" in the session drawer, "Cancel · OK" in confirm and rename). */
   foot?: ComponentChildren
-  /** 哪一种浮层：CSS 按它挂各自的尺寸（会话抽屉有最小高度，ADR-0037 §5）。 */
+  /** Which kind of sheet; CSS sizes each one by it (the session drawer has a minimum height, ADR-0037 §5). */
   variant?: 'sessions' | 'settings' | 'confirm' | 'rename'
   children: ComponentChildren
 }
@@ -48,35 +53,36 @@ export function Drawer({
   const closeRef = useRef(onClose)
   closeRef.current = onClose
 
-  // 【useLayoutEffect 而不是 useEffect】：Preact 的 useEffect 排在绘制之后，
-  // 浮层已经能点了、手势与 Esc 还没挂上。
+  // useLayoutEffect, not useEffect: Preact runs useEffect after paint, when the sheet is
+  // already clickable but gestures and Esc aren't wired up yet.
   useLayoutEffect(() => {
     const el = sheetRef.current
     if (!el) return
-    // 只有 sheet（compact）下滑关；形态和 CSS 看的是同一个属性
+    // Only the compact sheet closes on swipe down; this checks the same attribute the CSS does
     return installSwipeDismiss(el, () => closeRef.current(), () => el.closest('.app[data-form="compact"]') !== null)
   }, [])
   useLayoutEffect(() => {
-    // 【焦点收进浮层】：它是模态，焦点留在外面的话 Esc 没有确定的接收者。
-    // 打开会话抽屉时这一步也让软键盘收起，抽屉拿到完整高度。
+    // Pull focus into the sheet: it is modal, and with focus outside Esc has no clear target.
+    // For the session drawer this also hides the on-screen keyboard so the drawer gets full height.
     const el = sheetRef.current
     if (!el) return
     const prev = document.activeElement as HTMLElement | null
     if (!el.contains(prev)) el.focus({ preventScroll: true })
-    // 叠在另一层浮层上的（关闭确认、改名叠在抽屉上）：关掉时焦点还给下面那层，不掉到 body。
-    // 别的情况不管：焦点该不该回终端由控制器决定
+    // Stacked on another sheet (close confirmation or rename over the drawer): on close, return
+    // focus to the sheet below instead of dropping it on body. Otherwise do nothing; the
+    // controller decides whether focus goes back to the terminal.
     return () => {
       if (prev?.isConnected && prev.closest('.drawer') && el.contains(document.activeElement)) prev.focus({ preventScroll: true })
     }
   }, [])
   useLayoutEffect(() => {
-    // 捕获阶段兜底：焦点万一不在浮层里，Esc 仍归浮层，不落到终端里。
-    // 例外是自己处理 Esc 的控件（改名输入框、会话菜单，标了 data-esc-local）：
-    // Esc 是取消它们，不是关浮层
+    // Capture-phase fallback: even if focus isn't in the sheet, Esc belongs to the sheet and
+    // never reaches the terminal. Controls that handle Esc themselves (rename input, session
+    // menu; marked data-esc-local) are exempt: there Esc cancels them, not the sheet.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if ((e.target as Element | null)?.closest?.('[data-esc-local]')) return
-      // 叠着两层时只关最上面那层（DOM 里最后一个 .drawer）
+      // With stacked sheets, close only the top one (the last .drawer in the DOM)
       const sheets = document.querySelectorAll('.drawer')
       if (sheets[sheets.length - 1] !== sheetRef.current) return
       e.preventDefault()
@@ -97,7 +103,7 @@ export function Drawer({
     window.addEventListener('popstate', onPop)
     return () => {
       window.removeEventListener('popstate', onPop)
-      // 不是返回键关的：把自己压的那条记录消掉
+      // Not closed by Back: remove the entry we pushed
       if (!popped) history.back()
     }
   }, [backButton])
@@ -116,8 +122,9 @@ export function Drawer({
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
-          // 按钮上的 Enter：浏览器在 keydown 上就触发 click，不拦的话随后的 keypress 会落到
-          // 焦点刚还回去的终端里，多出一个回车（关闭确认之后、新建会话之后）。自己点、吞掉默认动作
+          // Enter on a button: the browser clicks on keydown, and the following keypress would land
+          // in the terminal that just got focus back, adding a stray Enter (after close confirm or
+          // New session). Click it ourselves and suppress the default.
           const btn = (e.target as Element).closest?.('button')
           if (e.key !== 'Enter' || !btn || e.isComposing) return
           e.preventDefault()
@@ -127,7 +134,7 @@ export function Drawer({
         <div class="drawer-grab" />
         <div class="drawer-head">
           <h2 class="drawer-title">{title}</h2>
-          <button class="drawer-close" data-testid="drawer-close" aria-label="关闭" onClick={() => closeRef.current()}>
+          <button class="drawer-close" data-testid="drawer-close" aria-label="Close" onClick={() => closeRef.current()}>
             <CloseIcon size={16} />
           </button>
         </div>

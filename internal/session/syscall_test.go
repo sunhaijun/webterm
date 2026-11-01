@@ -7,10 +7,11 @@ import (
 	"syscall"
 )
 
-// processAlive 报告进程是否还在【运行】。
+// processAlive reports whether a process is still running.
 //
-// 不能只用 kill(pid, 0)：僵尸进程也会返回成功。僵尸已经不跑代码、不占资源，
-// 等它的新父进程收尸而已 —— 对"会话关掉后程序还在跑吗"这个问题应当算死。
+// kill(pid, 0) alone isn't enough because it succeeds for zombies. A zombie runs
+// no code and holds no resources while it waits to be reaped, so for "is the
+// program still running after the session closed" it counts as dead.
 func processAlive(pid int) bool {
 	if err := syscall.Kill(pid, 0); err != nil {
 		return false

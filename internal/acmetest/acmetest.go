@@ -1,30 +1,34 @@
-// Package acmetest 是一个极小的 RFC 8555 服务器，只为集成测试而存在。
+// Package acmetest is a tiny RFC 8555 server that exists only for
+// integration tests.
 //
-// # 为什么不用 pebble
+// # Why not pebble
 //
-// docs/70-testing/strategy.md 原本写的是「用 pebble 本地 ACME 验证签发」。
-// 实际动手时有两个障碍：
+//  1. pebble pulls in a whole tree of module dependencies (gorilla/mux,
+//     miekg/dns, …). Even as a test-only dependency it lands in go.sum and CI
+//     fetches it every run.
+//  2. pebble's VA does real DNS resolution to validate HTTP-01 challenges.
+//     Test domains would have to resolve to localhost, which means editing
+//     /etc/hosts or wiring a custom DNS server into pebble. Both depend on
+//     the CI environment and are brittle.
 //
-//  1. pebble 会带进来一整棵新的模块依赖（gorilla/mux、miekg/dns…）。
-//     它是测试专用的，但仍然进 go.sum，CI 每次都要拉。
-//  2. **pebble 的 VA 会做真实的 DNS 解析**去验证 HTTP-01 挑战。测试里的域名
-//     得能解析到本机，绕它要么改 /etc/hosts、要么给 pebble 挂自定义 DNS ——
-//     两条都依赖 CI 环境，脆。
+// Writing our own is simpler: no dependencies, no network, no DNS (the test
+// sets the address used for challenge validation), and it runs in under a
+// second.
 //
-// 自己写一个反而更简单：零依赖、不碰网络、不需要 DNS（挑战验证的目标地址
-// 由测试直接指定），跑完不到一秒。
+// # What it proves, and what it doesn't
 //
-// # 它证明什么、不证明什么
+// It proves our side is wired correctly: autocert is configured right, the
+// challenge handler on :80 is reachable, startup warm-up really obtains a
+// certificate and stores it, the certificate works for a handshake, and
+// failures produce readable diagnostics.
 //
-// 它证明【我们这边的接线是对的】：autocert 配置正确、:80 上的挑战 handler
-// 真的能被取到、启动预热真的拿到了证书并落盘、证书真的能用来握手、
-// 失败时给出可读诊断。
+// It does not prove protocol compatibility with Let's Encrypt; that is the
+// job of golang.org/x/crypto/acme and its own tests. This server only needs
+// to be good enough to drive that client, not to reproduce a real CA's
+// strictness.
 //
-// 它【不】证明我们与 Let's Encrypt 的协议兼容性 —— 那是
-// golang.org/x/crypto/acme 的职责，上游有自己的测试。这个服务器只需要
-// 「足以驱动那个客户端」，不需要复刻真 CA 的全部严格性。
-//
-// 所以它【刻意不校验 JWS 签名】：那对上面要证明的东西没有贡献。
+// That is why it deliberately does not verify JWS signatures: doing so adds
+// nothing to what the tests prove.
 package acmetest
 
 import (
@@ -49,39 +53,42 @@ import (
 	"time"
 )
 
-// Server 是一个跑在 httptest 上的假 ACME CA。
+// Server is a fake ACME CA running on httptest.
 type Server struct {
 	ts     *httptest.Server
 	caKey  *ecdsa.PrivateKey
 	caCert *x509.Certificate
 
 	mu sync.Mutex
-	// validateAddr 是验证 HTTP-01 挑战时要连的地址（host:port）。
-	// 真 CA 会去解析域名，这里由测试直接指定，绕开 DNS。
+	// validateAddr is the host:port dialed to validate HTTP-01 challenges.
+	// A real CA resolves the domain; here the test sets it, bypassing DNS.
 	validateAddr string
 	orders       map[string]*order
 	nextID       int
-	// issued 记录签发过的域名。
+	// issued records the names that were issued.
 	issued []string
-	// requests 是收到的请求总数。--dev 的断言用它 ——
-	// "没签发成功"太弱（可能是发起了但失败），"一次都没来找过 CA"才够强。
+	// requests counts all requests received. The --dev assertions use it:
+	// "nothing was issued" is too weak (issuance may have started and
+	// failed); "the CA was never contacted" is the strong form.
 	requests int
-	// certLifetime 让测试能造出短周期证书。
+	// certLifetime lets tests produce short-lived certificates.
 	certLifetime time.Duration
-	// logf 把内部事件（尤其是挑战验证失败的真实原因）交给测试。
-	// 没有它的话，ACME 失败在 autocert 里会被压成一句
-	// "no viable challenge type found"，查不动。
+	// logf hands internal events to the test, above all the real reason a
+	// challenge failed. Without it, autocert collapses ACME failures into
+	// "no viable challenge type found", which is impossible to debug.
 	logf func(string, ...any)
-	// profiles 是目录里 meta.profiles 声明的 profile（ADR-0044：IP 证书要 shortlived）。
-	// nil 表示这个 CA 不支持 profile —— 用来测「CA 不签 IP 证书」那条报错。
+	// profiles are the profiles declared in the directory's meta.profiles
+	// (ADR-0044: IP certificates need shortlived). nil means the CA does not
+	// support profiles; used to test the "CA won't issue IP certs" error.
 	profiles map[string]string
-	// orders 按到达顺序记下每个订单的标识类型与 profile，测试据此断言请求的形状。
+	// orderLog records each order's identifier type and profile in arrival
+	// order, so tests can assert on the shape of the request.
 	orderLog []OrderInfo
 }
 
-// OrderInfo 是一个订单在客户端那侧【请求了什么】。
+// OrderInfo is what the client requested in one order.
 type OrderInfo struct {
-	Type    string // "dns" 或 "ip"
+	Type    string // "dns" or "ip"
 	Value   string
 	Profile string
 }
@@ -96,7 +103,7 @@ type order struct {
 	problem string
 }
 
-// New 起一个假 CA。调用方负责 Close。
+// New starts a fake CA. The caller must Close it.
 func New() (*Server, error) {
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -124,8 +131,9 @@ func New() (*Server, error) {
 		caKey:        caKey,
 		caCert:       caCert,
 		orders:       map[string]*order{},
-		certLifetime: 90 * 24 * time.Hour, // 与 Let's Encrypt 一致
-		// 与 Let's Encrypt 一致：classic 是默认，shortlived 是 6 天期（IP 证书只能用它）
+		certLifetime: 90 * 24 * time.Hour, // same as Let's Encrypt
+		// Same as Let's Encrypt: classic is the default, shortlived is 6 days
+		// and the only option for IP certificates.
 		profiles: map[string]string{
 			"classic":    "https://example.invalid/classic",
 			"shortlived": "https://example.invalid/shortlived",
@@ -137,7 +145,7 @@ func New() (*Server, error) {
 
 func (s *Server) Close() { s.ts.Close() }
 
-// SetLogf 接一个日志函数（通常是 t.Logf）。
+// SetLogf sets a log function, usually t.Logf.
 func (s *Server) SetLogf(f func(string, ...any)) {
 	s.mu.Lock()
 	s.logf = f
@@ -153,46 +161,51 @@ func (s *Server) log(format string, args ...any) {
 	}
 }
 
-// DirectoryURL 是喂给 acme.Client 的目录地址。
+// DirectoryURL is the directory URL to give acme.Client.
 func (s *Server) DirectoryURL() string { return s.ts.URL + "/directory" }
 
-// RootPool 返回信任这个假 CA 的证书池，用来验证 agent 真的能握手。
+// RootPool returns a cert pool trusting this fake CA, for checking that the
+// agent really completes a handshake.
 func (s *Server) RootPool() *x509.CertPool {
 	p := x509.NewCertPool()
 	p.AddCert(s.caCert)
 	return p
 }
 
-// ValidateAgainst 指定验证 HTTP-01 挑战时要连的地址。
-// 留空则验证必然失败 —— 用来测「挑战打不进来」那条路径。
+// ValidateAgainst sets the address dialed to validate HTTP-01 challenges.
+// Empty makes validation always fail, for testing the "challenge can't reach
+// us" path.
 func (s *Server) ValidateAgainst(addr string) {
 	s.mu.Lock()
 	s.validateAddr = addr
 	s.mu.Unlock()
 }
 
-// SetCertLifetime 改签发出来的证书有效期（用来测续期规则随有效期缩放）。
+// SetCertLifetime changes the lifetime of issued certificates, for testing
+// that the renewal rule scales with lifetime.
 func (s *Server) SetCertLifetime(d time.Duration) {
 	s.mu.Lock()
 	s.certLifetime = d
 	s.mu.Unlock()
 }
 
-// SetProfiles 改目录里声明的 profile；nil = 这个 CA 不支持 profile。
+// SetProfiles changes the profiles declared in the directory. nil means the
+// CA does not support profiles.
 func (s *Server) SetProfiles(p map[string]string) {
 	s.mu.Lock()
 	s.profiles = p
 	s.mu.Unlock()
 }
 
-// Orders 返回收到的订单（按顺序）。
+// Orders returns the orders received, in order.
 func (s *Server) Orders() []OrderInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]OrderInfo(nil), s.orderLog...)
 }
 
-// Issued 返回签发过的域名 / IP。测试用它断言 --dev 下【根本没发起签发】。
+// Issued returns the domains / IPs that were issued. Tests use it to assert
+// that --dev never starts issuance at all.
 func (s *Server) Issued() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -210,7 +223,8 @@ func (s *Server) mux() http.Handler {
 	mux.HandleFunc("/finalize/", s.finalize)
 	mux.HandleFunc("/order/", s.orderStatus)
 	mux.HandleFunc("/cert/", s.certificate)
-	// 每个响应都带 Replay-Nonce，客户端从任何响应里取都能拿到
+	// Every response carries Replay-Nonce, so the client can take one from any
+	// response.
 	return s.count(withNonce(mux))
 }
 
@@ -223,7 +237,7 @@ func (s *Server) count(next http.Handler) http.Handler {
 	})
 }
 
-// Requests 返回收到的请求总数。
+// Requests returns the total number of requests received.
 func (s *Server) Requests() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -280,7 +294,7 @@ func (s *Server) newOrder(w http.ResponseWriter, r *http.Request) {
 		Profile string `json:"profile"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil || len(req.Identifiers) == 0 {
-		writeProblem(w, http.StatusBadRequest, "malformed", "订单里没有 identifiers")
+		writeProblem(w, http.StatusBadRequest, "malformed", "order has no identifiers")
 		return
 	}
 	id0 := req.Identifiers[0]
@@ -289,13 +303,13 @@ func (s *Server) newOrder(w http.ResponseWriter, r *http.Request) {
 	s.orderLog = append(s.orderLog, OrderInfo{Type: id0.Type, Value: id0.Value, Profile: req.Profile})
 	if req.Profile != "" && s.profiles[req.Profile] == "" {
 		s.mu.Unlock()
-		writeProblem(w, http.StatusBadRequest, "invalidProfile", "不认识的 profile "+req.Profile)
+		writeProblem(w, http.StatusBadRequest, "invalidProfile", "unknown profile "+req.Profile)
 		return
 	}
-	// 和 Let's Encrypt 一样：IP 证书只能是 shortlived
+	// Like Let's Encrypt: IP certificates must use shortlived.
 	if id0.Type == "ip" && req.Profile != "shortlived" {
 		s.mu.Unlock()
-		writeProblem(w, http.StatusBadRequest, "rejectedIdentifier", "IP 标识只能用 shortlived profile")
+		writeProblem(w, http.StatusBadRequest, "rejectedIdentifier", "IP identifiers require the shortlived profile")
 		return
 	}
 	s.nextID++
@@ -330,7 +344,7 @@ func (s *Server) authz(w http.ResponseWriter, r *http.Request) {
 	o := s.orders[id]
 	s.mu.Unlock()
 	if o == nil {
-		writeProblem(w, http.StatusNotFound, "malformed", "没有这个 authz")
+		writeProblem(w, http.StatusNotFound, "malformed", "no such authz")
 		return
 	}
 	body := map[string]any{
@@ -354,7 +368,8 @@ func (s *Server) authz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// challenge 收到 POST 之后【同步】做一次验证，省掉客户端轮询的等待。
+// challenge validates synchronously on POST so the client doesn't have to
+// poll.
 func (s *Server) challenge(w http.ResponseWriter, r *http.Request) {
 	id := lastSegment(r.URL.Path)
 	s.mu.Lock()
@@ -362,12 +377,12 @@ func (s *Server) challenge(w http.ResponseWriter, r *http.Request) {
 	addr := s.validateAddr
 	s.mu.Unlock()
 	if o == nil {
-		writeProblem(w, http.StatusNotFound, "malformed", "没有这个挑战")
+		writeProblem(w, http.StatusNotFound, "malformed", "no such challenge")
 		return
 	}
 
 	if err := s.validateHTTP01(addr, o.domain, o.token); err != nil {
-		s.log("acmetest: 挑战 %s 验证失败: %v", id, err)
+		s.log("acmetest: challenge %s failed validation: %v", id, err)
 		s.mu.Lock()
 		o.status = "invalid"
 		o.problem = err.Error()
@@ -389,16 +404,18 @@ func (s *Server) challenge(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// validateHTTP01 去取 .well-known 下的挑战响应。
+// validateHTTP01 fetches the challenge response under .well-known.
 //
-// 【连 addr、但发 Host: domain】—— 真 CA 就是这么干的：先把域名解析成 IP，
-// 连过去，Host 头里仍然是域名。这一点不能省：autocert 的挑战 handler 会用
-// HostPolicy 校验 Host，发错了会拿到 403。测试因此顺带证明了
-// 挑战路径上的 HostPolicy 是生效的。
+// It dials addr but sends Host: domain, as a real CA does: resolve the domain
+// to an IP, connect, keep the domain in the Host header. This matters:
+// autocert's challenge handler checks Host against HostPolicy and returns 403
+// on a mismatch, so the tests also prove HostPolicy is enforced on the
+// challenge path.
 //
-// 只校验响应以 "<token>." 开头 —— 那已经足以证明 autocert 的挑战 handler
-// 挂在了正确的路径上并给出了正确的 token。完整的 keyAuthorization 要算
-// 账号密钥的 thumbprint，对「我们这边接线对不对」没有额外贡献。
+// It only checks that the response starts with "<token>.". That is enough to
+// prove autocert's handler is mounted at the right path and returns the right
+// token. The full keyAuthorization needs the account key thumbprint and adds
+// nothing to checking our wiring.
 func (s *Server) validateHTTP01(addr, domain, token string) error {
 	if addr == "" {
 		return fmt.Errorf("Invalid response from http://%s/.well-known/acme-challenge/%s: connection refused", domain, token)
@@ -408,7 +425,7 @@ func (s *Server) validateHTTP01(addr, domain, token string) error {
 	if err != nil {
 		return err
 	}
-	req.Host = domain // 关键：真 CA 发的是域名，不是 IP
+	req.Host = domain // a real CA sends the domain, not the IP
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -423,7 +440,7 @@ func (s *Server) validateHTTP01(addr, domain, token string) error {
 		return err
 	}
 	if !strings.HasPrefix(string(body), token+".") {
-		return fmt.Errorf("Invalid response from %s: 挑战响应不是以 token 开头", url)
+		return fmt.Errorf("Invalid response from %s: challenge response does not start with the token", url)
 	}
 	return nil
 }
@@ -434,11 +451,11 @@ func (s *Server) finalize(w http.ResponseWriter, r *http.Request) {
 	o := s.orders[id]
 	s.mu.Unlock()
 	if o == nil {
-		writeProblem(w, http.StatusNotFound, "malformed", "没有这个订单")
+		writeProblem(w, http.StatusNotFound, "malformed", "no such order")
 		return
 	}
 	if o.status != "valid" {
-		writeProblem(w, http.StatusForbidden, "orderNotReady", "挑战还没通过")
+		writeProblem(w, http.StatusForbidden, "orderNotReady", "challenge not yet valid")
 		return
 	}
 
@@ -451,17 +468,17 @@ func (s *Server) finalize(w http.ResponseWriter, r *http.Request) {
 		CSR string `json:"csr"`
 	}
 	if err := json.Unmarshal(payload, &req); err != nil {
-		writeProblem(w, http.StatusBadRequest, "malformed", "finalize 载荷非法")
+		writeProblem(w, http.StatusBadRequest, "malformed", "invalid finalize payload")
 		return
 	}
 	der, err := base64.RawURLEncoding.DecodeString(req.CSR)
 	if err != nil {
-		writeProblem(w, http.StatusBadRequest, "badCSR", "CSR 不是 base64url")
+		writeProblem(w, http.StatusBadRequest, "badCSR", "CSR is not base64url")
 		return
 	}
 	csr, err := x509.ParseCertificateRequest(der)
 	if err != nil {
-		writeProblem(w, http.StatusBadRequest, "badCSR", "CSR 解不开")
+		writeProblem(w, http.StatusBadRequest, "badCSR", "cannot parse CSR")
 		return
 	}
 
@@ -488,7 +505,7 @@ func (s *Server) orderStatus(w http.ResponseWriter, r *http.Request) {
 	o := s.orders[id]
 	s.mu.Unlock()
 	if o == nil {
-		writeProblem(w, http.StatusNotFound, "malformed", "没有这个订单")
+		writeProblem(w, http.StatusNotFound, "malformed", "no such order")
 		return
 	}
 	writeJSON(w, http.StatusOK, s.orderJSON(id, o))
@@ -500,7 +517,7 @@ func (s *Server) certificate(w http.ResponseWriter, r *http.Request) {
 	o := s.orders[id]
 	s.mu.Unlock()
 	if o == nil || o.certPEM == nil {
-		writeProblem(w, http.StatusNotFound, "malformed", "还没有证书")
+		writeProblem(w, http.StatusNotFound, "malformed", "no certificate yet")
 		return
 	}
 	w.Header().Set("Content-Type", "application/pem-certificate-chain")
@@ -541,9 +558,10 @@ func (s *Server) issue(csr *x509.CertificateRequest) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// ---------- 小工具 ----------
+// ---------- Helpers ----------
 
-// jwsPayload 取出 JWS 的 payload。【刻意不校验签名】，理由见包注释。
+// jwsPayload extracts the JWS payload. It deliberately skips signature
+// verification; see the package comment.
 func jwsPayload(r *http.Request) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -555,7 +573,7 @@ func jwsPayload(r *http.Request) ([]byte, error) {
 		Signature string `json:"signature"`
 	}
 	if err := json.Unmarshal(body, &jws); err != nil {
-		return nil, fmt.Errorf("不是合法的 JWS: %w", err)
+		return nil, fmt.Errorf("invalid JWS: %w", err)
 	}
 	if jws.Payload == "" {
 		return []byte("{}"), nil // POST-as-GET
@@ -596,7 +614,8 @@ func firstOr(ss []string, fallback string) string {
 	return fallback
 }
 
-// TLSClientConfig 是一个信任这个假 CA 的 tls.Config，方便测试握手。
+// TLSClientConfig returns a tls.Config that trusts this fake CA, for testing
+// handshakes.
 func (s *Server) TLSClientConfig(serverName string) *tls.Config {
 	return &tls.Config{ServerName: serverName, RootCAs: s.RootPool(), MinVersion: tls.VersionTLS12}
 }

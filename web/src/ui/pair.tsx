@@ -1,12 +1,13 @@
 /**
- * 配对页。
+ * Pairing page.
  *
- * 配对码走 URL **fragment**：它不会发送给服务器，所以不进访问日志、不进
- * Referer、不被中间代理记录（AC-1.5）。读到之后立刻 replaceState 抹掉，
- * 免得留在浏览器历史里。
+ * The pairing code travels in the URL fragment, which is never sent to the server, so it
+ * stays out of access logs, Referer headers and proxies (AC-1.5). It is wiped with
+ * replaceState as soon as it is read, so it doesn't linger in browser history.
  *
- * 没有 fragment（用户直接打开 /pair）时是手输入口（ADR-0017）：终端里那
- * 16 位数字，空格 / - 都接受，边输边按 4 位分组，满 16 位才能提交。
+ * Without a fragment (the user opened /pair directly) this is the manual entry form
+ * (ADR-0017): the 16 digits from the terminal, spaces and `-` accepted, grouped by 4 as
+ * you type; submit is enabled at 16 digits.
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
 
@@ -38,13 +39,13 @@ export function PairPage() {
         setState('failed')
         setMessage(
           r.status === 429
-            ? '尝试过于频繁，请稍后再试。'
-            : (body.message ?? '配对码无效或已过期。'),
+            ? 'Too many attempts. Try again later'
+            : (body.message ?? 'Invalid or expired pairing code'),
         )
       })
       .catch(() => {
         setState('failed')
-        setMessage('无法连接到 agent。')
+        setMessage("Can't reach the agent")
       })
   }
 
@@ -54,12 +55,12 @@ export function PairPage() {
       setState('entry')
       return
     }
-    // 先抹掉 hash，再发请求 —— 万一请求慢，历史里也不会留下配对码
+    // Wipe the hash before the request, so a slow request can't leave the code in history
     history.replaceState(null, '', location.pathname)
     submit(code)
   }, [])
 
-  // 失败后仍能重试：表单留着（fragment 路径失败的人也可以改用手输）
+  // Keep the form after a failure so the user can retry (a failed fragment link can fall back to manual entry)
   const showForm = state === 'entry' || state === 'failed'
   const ready = digits.length === PAIR_DIGITS_LEN
 
@@ -76,7 +77,7 @@ export function PairPage() {
           }}
         >
           <p>
-            在服务器上执行 <code>webterm pair</code>，把终端里打印的 16 位数字填在这里（扫二维码也可以）：
+            Run <code>webterm pair</code> on the server and enter the 16-digit code it prints (or scan the QR code):
           </p>
           <input
             ref={inputRef}
@@ -92,12 +93,12 @@ export function PairPage() {
             onInput={(e) => setDigits(normalizePairDigits(e.currentTarget.value).slice(0, PAIR_DIGITS_LEN))}
           />
           <button type="submit" data-testid="pair-submit" disabled={!ready}>
-            配对
+            Pair
           </button>
         </form>
       )}
-      {state === 'pairing' && <p data-testid="pair-status">正在配对…</p>}
-      {state === 'done' && <p data-testid="pair-status">配对成功，正在跳转…</p>}
+      {state === 'pairing' && <p data-testid="pair-status">Pairing…</p>}
+      {state === 'done' && <p data-testid="pair-status">Paired. Redirecting…</p>}
       {state === 'failed' && (
         <p data-testid="pair-status" class="error">
           {message}

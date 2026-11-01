@@ -1,19 +1,16 @@
 name: E2E
 
-# E2E（真二进制 + 真浏览器）【在 CI 上不自动跑】—— 一次约 6 分钟，太费 Actions 额度。
-# 本地 `make e2e` 全绿是每个 PR 的硬门槛（CLAUDE.md），没有 CI 兜底。
-# 这里只留【手动】触发，想要 CI 上的结论时自己点一次：
+# End-to-end tests (real binary + real browser), on demand only:
 #
-#   gh workflow run E2E --ref <分支>
+#   gh workflow run E2E --ref <branch>
 #
-# 值得手动跑一次的场合：改动触及协议 / 重连 / 输入 / 布局，或改了 E2E 与构建本身。
-# 见 docs/70-testing/strategy.md §CI。
+# Run it for changes to the protocol, reconnects, input or layout. Locally: `make e2e`.
 on:
   workflow_dispatch:
 
 jobs:
   e2e:
-    name: E2E（真二进制 + 真浏览器）
+    name: E2E (real binary + browser)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -28,7 +25,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
         working-directory: web
-      # 完整构建是 E2E 的前置 —— 这保证了 go:embed 的路径是真的通的
+      # A full build first, so the go:embed path is exercised for real.
       - run: npm run build
         working-directory: web
       - run: go build -o webterm ./cmd/webterm

@@ -6,11 +6,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// setWinsize 给 PTY 设窗口大小。
+// setWinsize sets the PTY window size.
 //
-// 【不能用 pty.Setsize】：它内部调 f.Fd()，而 Go 的 (*os.File).Fd() 会把一个可轮询
-// 的文件切回阻塞模式、摘出 poller —— 之后 SetReadDeadline 失效，热升级时就
-// 打断不了 readLoop（ADR-0016）。走 SyscallConn.Control 拿 fd 做 ioctl 不改模式。
+// It can't use pty.Setsize, which calls f.Fd(). (*os.File).Fd() switches a
+// pollable file back to blocking mode and removes it from the poller, after
+// which SetReadDeadline stops working and a hot upgrade can't interrupt
+// readLoop (ADR-0016). Getting the fd through SyscallConn.Control for the
+// ioctl leaves the mode alone.
 func setWinsize(f *os.File, cols, rows uint16) error {
 	if f == nil {
 		return nil

@@ -13,7 +13,8 @@ import (
 	"github.com/sunhaijun/webterm/internal/session"
 )
 
-// Serve 跑完这条连接的一生：读、写、心跳、吊销巡检。
+// Serve runs the connection for its whole life: reading, writing, idle
+// detection and revocation checks.
 func (c *Conn) Serve(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -29,7 +30,7 @@ func (c *Conn) Serve(ctx context.Context) {
 	err := c.readLoop(ctx)
 
 	c.closeWith(websocket.StatusNormalClosure, "")
-	wg.Wait() // 等写 goroutine 把队列（尤其是致命 error）刷完
+	wg.Wait() // let the writer flush the queue, fatal errors in particular
 	c.detachAll()
 
 	c.mu.Lock()
@@ -38,11 +39,11 @@ func (c *Conn) Serve(ctx context.Context) {
 	_ = c.ws.Close(code, msg)
 
 	if err != nil && !errors.Is(err, context.Canceled) {
-		c.log.Debug("连接结束", "client_id", c.clientID, "err", err)
+		c.log.Debug("connection ended", "client_id", c.clientID, "err", err)
 	}
 }
 
-// readLoop 读帧并分发。
+// readLoop reads frames and dispatches them.
 func (c *Conn) readLoop(ctx context.Context) error {
 	first := true
 	for {
@@ -51,7 +52,7 @@ func (c *Conn) readLoop(ctx context.Context) error {
 			return nil
 		default:
 		}
-		// agent 判死：60 秒没收到任何帧就关连接（AC-2.8）
+		// Idle detection: close after 60 seconds without any frame (AC-2.8).
 		rctx, cancel := context.WithTimeout(ctx, c.deps.idleTimeout())
 		typ, data, err := c.ws.Read(rctx)
 		cancel()
@@ -60,15 +61,15 @@ func (c *Conn) readLoop(ctx context.Context) error {
 		}
 
 		if first {
-			// 收到 hello 之前收到任何其它帧 → expected_hello 并关闭
+			// Any frame other than hello first → expected_hello and close.
 			if typ != websocket.MessageText {
-				c.sendError("", nil, protocol.CodeExpectedHello, "第一条消息必须是 hello", true)
+				c.sendError("", nil, protocol.CodeExpectedHello, "First message must be hello", true)
 				return nil
 			}
 			msg, derr := protocol.Decode(data)
 			hello, ok := msg.(*protocol.Hello)
 			if derr != nil || !ok {
-				c.sendError("", nil, protocol.CodeExpectedHello, "第一条消息必须是 hello", true)
+				c.sendError("", nil, protocol.CodeExpectedHello, "First message must be hello", true)
 				return nil
 			}
 			if err := c.handleHello(hello); err != nil {
@@ -87,7 +88,8 @@ func (c *Conn) readLoop(ctx context.Context) error {
 	}
 }
 
-// writeLoop 把写队列刷到线上。每条连接只跑一次；不管从哪条路退出都关 flushed。
+// writeLoop flushes the write queue to the wire. It runs once per connection
+// and closes flushed on every exit path.
 func (c *Conn) writeLoop(ctx context.Context) {
 	defer close(c.flushed)
 	ticker := time.NewTicker(ackThrottle)
@@ -109,13 +111,14 @@ func (c *Conn) writeLoop(ctx context.Context) {
 				if !ok {
 					break
 				}
-				// 【不能用 Serve 的 ctx】：closeWith 会把它取消，而那一刻队列里往往
-				// 正躺着那条要告诉用户"为什么断"的 error。写的时限由 writeTimeout 自己兜。
+				// Not Serve's ctx: closeWith cancels it, often while the queue
+				// still holds the error that tells the user why the connection
+				// dropped. writeTimeout bounds the write instead.
 				wctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 				err := c.ws.Write(wctx, frameType(f), f.data)
 				cancel()
 				if err != nil {
-					c.closeWith(websocket.StatusInternalError, "写失败")
+					c.closeWith(websocket.StatusInternalError, "write failed")
 					return
 				}
 			}
@@ -130,10 +133,11 @@ func frameType(f outFrame) websocket.MessageType {
 	return websocket.MessageText
 }
 
-// drain 在关闭前把写队列里剩下的帧刷出去。
+// drain flushes the remaining frames before closing.
 //
-// 用独立的 context —— Serve 的那个此刻已经被 cancel 了，拿它写必然失败，
-// 而队列里往往正躺着那条要告诉用户"为什么断"的 error。
+// It uses its own context: Serve's is already canceled at this point, so
+// writes with it would fail, and the queue often holds the error that tells
+// the user why the connection dropped.
 func (c *Conn) drain() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -148,7 +152,8 @@ func (c *Conn) drain() {
 	}
 }
 
-// flushPendingAcks 补发被节流吞掉的 ack（取最新累计值）。
+// flushPendingAcks sends acks held back by throttling, using the latest
+// cumulative value.
 func (c *Conn) flushPendingAcks() {
 	c.mu.Lock()
 	if len(c.pendAck) == 0 {
@@ -168,11 +173,13 @@ func (c *Conn) flushPendingAcks() {
 	}
 }
 
-// flushPendingHeads 补发被节流吞掉的 head_seq（取最新值）。
+// flushPendingHeads sends head_seq values held back by throttling, using the
+// latest value.
 //
-// 【必须补发】：未订阅会话的输出常常是一阵一阵的 —— 一秒内打完就安静了，
-// 后面再没有新输出来触发下一条通知，客户端手里的 head_seq 就永远停在那一阵
-// 之前，未读标记不亮（AC-4.3）。ack 一直是这么补的，head_seq 漏了。
+// This is required: output from an unsubscribed session often comes in short
+// bursts. If a burst ends within the throttle window and nothing follows, the
+// client's head_seq would stay before the burst forever and the unread dot
+// would never light up (AC-4.3).
 func (c *Conn) flushPendingHeads() {
 	c.mu.Lock()
 	if len(c.pendHead) == 0 {
@@ -182,7 +189,8 @@ func (c *Conn) flushPendingHeads() {
 	now := time.Now()
 	ready := make(map[uint16]uint64, len(c.pendHead))
 	for sid, head := range c.pendHead {
-		// 节流窗口还没过就继续等；期间又订阅了就直接丢（OUTPUT 帧自带进度）
+		// Keep waiting while the throttle window is open. If the session got
+		// subscribed meanwhile, drop it: OUTPUT frames carry progress.
 		if c.subs[sid] {
 			delete(c.pendHead, sid)
 			continue
@@ -201,8 +209,9 @@ func (c *Conn) flushPendingHeads() {
 	}
 }
 
-// watchRevocation 每 2 秒查一次设备是否已被吊销（AC-1.11 要求 5 秒内断开，
-// 周期取 2 秒是为了留余量）。
+// watchRevocation checks every 2 seconds whether the device has been
+// revoked. AC-1.11 requires a disconnect within 5 seconds; 2 seconds leaves
+// headroom.
 func (c *Conn) watchRevocation(ctx context.Context) {
 	if c.deps.Revoked == nil {
 		return
@@ -217,16 +226,17 @@ func (c *Conn) watchRevocation(ctx context.Context) {
 			return
 		case <-t.C:
 			if c.deps.Revoked() {
-				c.Event(&protocol.Notice{Level: "error", Message: "此设备已被吊销"})
-				c.sendError("", nil, protocol.CodeUnauthorized, "此设备已被吊销", true)
+				c.Event(&protocol.Notice{Level: "error", Message: "This device has been revoked"})
+				c.sendError("", nil, protocol.CodeUnauthorized, "This device has been revoked", true)
 				return
 			}
 		}
 	}
 }
 
-// detachAll 连接结束时清理：退订所有会话，并丢弃本 client 尚未写入 PTY
-// 的输入（协议 §5.3）。
+// detachAll cleans up when the connection ends: it unsubscribes from every
+// session and discards this client's input not yet written to the PTY
+// (protocol §5.3).
 func (c *Conn) detachAll() {
 	c.mu.Lock()
 	clear(c.subs)
@@ -238,25 +248,28 @@ func (c *Conn) detachAll() {
 	}
 }
 
-// handleHello 处理首条消息并回 welcome。
+// handleHello handles the first message and replies with welcome.
 //
-// 续传的判定、补齐帧的入队、加入订阅者集合是同一个动作（Manager.Resume →
-// Session.Subscribe，在会话锁内）；welcome 要报出那个判定，所以它生成在补齐帧
-// 之后。连接从建立起就挂着写队列（见 Conn.holding），welcome 生成之后排到最前面
-// 一起放行 —— 客户端看到的顺序是 welcome → 各会话的 SNAPSHOT / OUTPUT。
+// Deciding the resume, enqueueing catch-up frames and joining the subscriber
+// set are one step (Manager.Resume → Session.Subscribe, under the session
+// lock). welcome reports that decision, so it is produced after the catch-up
+// frames. The write queue has been held since the connection was created (see
+// Conn.holding); welcome goes to the front and everything is released
+// together, so the client sees welcome → each session's SNAPSHOT / OUTPUT.
 func (c *Conn) handleHello(h *protocol.Hello) error {
 	if h.Protocol != protocol.Version {
 		c.sendError("", nil, protocol.CodeProtocolUnsupported,
-			"agent 支持协议版本 "+strconv.Itoa(protocol.Version)+"，client 是 "+strconv.Itoa(h.Protocol)+"；请刷新页面", true)
-		return errors.New("协议版本不匹配")
+			"agent speaks protocol "+strconv.Itoa(protocol.Version)+", client speaks "+strconv.Itoa(h.Protocol)+"; reload the page", true)
+		return errors.New("protocol version mismatch")
 	}
 	c.clientID = h.ClientID
 	if c.clientID == "" {
-		c.sendError("", nil, protocol.CodeBadRequest, "hello 缺少 client_id", true)
-		return errors.New("缺少 client_id")
+		c.sendError("", nil, protocol.CodeBadRequest, "hello is missing client_id", true)
+		return errors.New("missing client_id")
 	}
 
-	// 只订阅 client 明确要求续传的会话 —— 其余的它会在切过去时 subscribe
+	// Subscribe only to sessions the client asked to resume; it subscribes to
+	// the others when it switches to them.
 	for _, r := range h.Resume {
 		if _, ok := c.deps.Sessions.Get(r.SID); ok {
 			c.markSubscribed(r.SID)
@@ -282,15 +295,16 @@ func (c *Conn) handleHello(h *protocol.Hello) error {
 		Resumed:       resumed,
 	})
 	if err != nil {
-		c.sendError("", nil, protocol.CodeInternal, "编码 welcome 失败", true)
+		c.sendError("", nil, protocol.CodeInternal, "Failed to encode welcome", true)
 		return err
 	}
 	c.releaseWith(b)
 	return nil
 }
 
-// subscribe 订阅一个会话：增量还是快照由会话判定（协议 §5.1）。
-// cols/rows 为 0 表示沿用会话当前尺寸。
+// subscribe subscribes to a session; the session decides between incremental
+// and snapshot (protocol §5.1). cols/rows of 0 keep the session's current
+// size.
 func (c *Conn) subscribe(s *session.Session, outSeq uint64, cols, rows uint16) {
 	c.markSubscribed(s.SID())
 	s.Subscribe(c, outSeq, cols, rows)
@@ -299,6 +313,6 @@ func (c *Conn) subscribe(s *session.Session, outSeq uint64, cols, rows uint16) {
 func (c *Conn) markSubscribed(sid uint16) {
 	c.mu.Lock()
 	c.subs[sid] = true
-	delete(c.pendHead, sid) // 订阅之后 head_seq 通知没有意义了
+	delete(c.pendHead, sid) // head_seq notifications are pointless once subscribed
 	c.mu.Unlock()
 }

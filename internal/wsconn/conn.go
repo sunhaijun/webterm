@@ -1,8 +1,8 @@
-// Package wsconn 是 WebSocket 连接层：把 session 的输出与事件搬到线上，
-// 把线上的帧翻译成 session 的调用。
+// Package wsconn is the WebSocket connection layer. It puts session output
+// and events on the wire and turns incoming frames into session calls.
 //
-// 契约见 docs/30-protocol/websocket-protocol.md。它实现 session.Subscriber，
-// 而 session 完全不知道 WebSocket 的存在。
+// The contract is docs/30-protocol/websocket-protocol.md. Conn implements
+// session.Subscriber; package session knows nothing about WebSockets.
 package wsconn
 
 import (
@@ -18,32 +18,39 @@ import (
 )
 
 const (
-	// writeQueueBytes 是每连接写队列上限（协议 §5.6）。
-	// 满了就关闭该连接 —— 阻塞写会反压到 PTY.Read()，一个慢客户端不能
-	// 拖慢服务器上真正在跑的活。
+	// writeQueueBytes caps each connection's write queue (protocol §5.6).
+	// When it fills up the connection is closed: blocking would push back
+	// into PTY.Read(), and one slow client must not slow down the real work
+	// running on the server.
 	writeQueueBytes = 4 << 20
-	// idleTimeout：60 秒没收到任何帧就关连接（AC-2.8）。
+	// idleTimeout closes a connection that sends no frame for 60 seconds
+	// (AC-2.8).
 	idleTimeout = 60 * time.Second
-	// ackThrottle：同一会话的 ack 最多每 50ms 一条（累计量，丢中间值无害）。
+	// ackThrottle: at most one ack per session per 50ms. Acks are cumulative,
+	// so dropping intermediate values is harmless.
 	ackThrottle = 50 * time.Millisecond
-	// headSeqThrottle：未订阅会话的 head_seq 通知最多每秒一条。
+	// headSeqThrottle: at most one head_seq notification per second for an
+	// unsubscribed session.
 	headSeqThrottle = time.Second
-	// writeTimeout 是单次写的上限，防止一个卡住的 socket 占住写 goroutine。
+	// writeTimeout bounds a single write so a stuck socket can't hold the
+	// write goroutine.
 	writeTimeout = 30 * time.Second
 )
 
-// Deps 是连接层需要的外部依赖。
+// Deps are the external dependencies of the connection layer.
 type Deps struct {
 	Sessions      *session.Manager
 	Hub           *Hub
 	ServerVersion string
 	Logger        *slog.Logger
-	// Revoked 报告本连接对应的设备是否已被吊销。每 2 秒轮询一次（AC-1.11）。
+	// Revoked reports whether this connection's device has been revoked. It
+	// is polled every 2 seconds (AC-1.11).
 	Revoked func() bool
-	// IdleTimeout 覆盖默认的 60 秒判死间隔。0 表示用默认值。
-	// 存在只是为了让 IT-hb-1 不必真的等 60 秒。
+	// IdleTimeout overrides the default 60-second idle timeout; 0 means the
+	// default. It exists so IT-hb-1 doesn't have to wait 60 seconds.
 	IdleTimeout time.Duration
-	// WriteQueueBytes 覆盖默认的 4 MiB 写队列上限。0 表示用默认值。
+	// WriteQueueBytes overrides the default 4 MiB write queue limit; 0 means
+	// the default.
 	WriteQueueBytes int
 }
 
@@ -66,7 +73,7 @@ type outFrame struct {
 	data   []byte
 }
 
-// Conn 是一条 WebSocket 连接。
+// Conn is one WebSocket connection.
 type Conn struct {
 	ws   *websocket.Conn
 	deps Deps
@@ -75,22 +82,27 @@ type Conn struct {
 	clientID string
 
 	mu       sync.Mutex
-	subs     map[uint16]bool      // 已订阅的会话
-	lastAck  map[uint16]time.Time // ack 节流
+	subs     map[uint16]bool      // subscribed sessions
+	lastAck  map[uint16]time.Time // ack throttling
 	pendAck  map[uint16]uint64
-	lastHead map[uint16]time.Time // head_seq 节流
+	lastHead map[uint16]time.Time // head_seq throttling
 	pendHead map[uint16]uint64
 
-	// 写队列：一个切片 + 一个唤醒信号。不用 channel —— 要能把一批帧原子地排进去
-	// （一份快照的各帧），也要能让 welcome 插到 hello 处理期间入队的帧前面。
+	// The write queue is a slice plus a wake signal rather than a channel: a
+	// batch of frames (all frames of one snapshot) must be enqueued
+	// atomically, and welcome must be able to jump ahead of frames enqueued
+	// while hello was being handled.
 	q      []outFrame
-	queued int // 写队列（含 held）已占字节数
-	// holding：welcome 发出之前入队的一切都先挂在 held 里。
+	queued int // bytes in the write queue, including held
+	// holding: everything enqueued before welcome is parked in held.
 	//
-	// hello.resume 的判定与补齐帧的入队必须是同一个动作（协议 §5.1，在会话锁内），
-	// 而 welcome.resumed[] 又要报出那个判定 —— 所以帧先于 welcome 生成。挂起写队列、
-	// welcome 生成之后插在最前面一起放行，客户端看到的就是 welcome 在先。
-	// 连接一建立就挂起：observer 在 hello 之前就登记了，期间的广播也不能跑到 welcome 前面。
+	// Deciding hello.resume and enqueueing the catch-up frames must be one
+	// step (protocol §5.1, under the session lock), and welcome.resumed[]
+	// reports that decision, so those frames are produced before welcome.
+	// The queue is held, and once welcome exists it goes first and everything
+	// is released together, so the client sees welcome first. Holding starts
+	// as soon as the connection exists: the observer registers before hello,
+	// and broadcasts in that window must not overtake welcome either.
 	holding   bool
 	held      []outFrame
 	wake      chan struct{} // cap 1
@@ -98,19 +110,21 @@ type Conn struct {
 	closeCode websocket.StatusCode
 	closeMsg  string
 
-	done chan struct{} // closeWith 置 closed 的那一次关闭它
-	// flushed 在 writeLoop 退出（写队列刷完或写失败）时关闭。
+	done chan struct{} // closed by the closeWith call that sets closed
+	// flushed is closed when writeLoop exits (queue drained or write failed).
 	flushed chan struct{}
-	// cancel 取消 Serve 的 context，用来把阻塞在 ws.Read 上的 readLoop 叫醒
-	// （否则连接要等到 60 秒判死才真的断，AC-1.11 会挂）。
+	// cancel cancels Serve's context to wake a readLoop blocked in ws.Read;
+	// otherwise the connection would only drop at the 60-second idle timeout
+	// and AC-1.11 would fail.
 	//
-	// 但它【必须等写队列刷完再调】：coder/websocket 在读 context 被取消时
-	// 会直接销毁底层连接，抢在刷完之前调等于把那条"为什么断"的 error 一起
-	// 扔掉 —— 用户又只剩一个莫名的重连失败。
+	// It must only be called after the write queue is flushed: coder/websocket
+	// tears down the underlying connection when the read context is canceled,
+	// so calling it early throws away the error that explains the disconnect,
+	// leaving the user with an unexplained reconnect failure.
 	cancel context.CancelFunc
 }
 
-// New 包一条已升级的 WebSocket。
+// New wraps an upgraded WebSocket.
 func New(ws *websocket.Conn, deps Deps) *Conn {
 	log := deps.Logger
 	if log == nil {
@@ -132,15 +146,17 @@ func New(ws *websocket.Conn, deps Deps) *Conn {
 	}
 }
 
-// ClientID 实现 session.Subscriber。
+// ClientID implements session.Subscriber.
 func (c *Conn) ClientID() string { return c.clientID }
 
-// Push 实现 session.Subscriber：把一段输出编成 OUTPUT 帧排进写队列。
+// Push implements session.Subscriber: it encodes output as OUTPUT frames and
+// enqueues them.
 //
-// 【必须非阻塞】。队列满就关闭连接，客户端会自动重连走续传。
+// It must not block. When the queue is full the connection is closed, and the
+// client reconnects and resumes.
 func (c *Conn) Push(sid uint16, seq uint64, data []byte) {
 	frames := make([]outFrame, 0, 1)
-	// 大段输出要切成不超过 MaxPayload 的帧
+	// Split large output into frames of at most MaxPayload.
 	for off := 0; off < len(data); {
 		end := min(off+protocol.MaxPayload, len(data))
 		f := protocol.Frame{Type: protocol.TypeOutput, SID: sid, Seq: seq + uint64(off), Payload: data[off:end]}
@@ -150,10 +166,12 @@ func (c *Conn) Push(sid uint16, seq uint64, data []byte) {
 	c.enqueue(frames...)
 }
 
-// Snapshot 实现 session.Subscriber：把一份快照编成 SNAPSHOT 帧排进写队列。
+// Snapshot implements session.Subscriber: it encodes a snapshot as SNAPSHOT
+// frames and enqueues them.
 //
-// 超过单帧上限就拆：同一个 seq，除最后一帧外都带 MORE（协议 §3）。各帧一次性
-// 原子入队 —— 协议保证一份快照的各帧之间不夹杂同一 sid 的其它帧。
+// A snapshot larger than one frame is split: all parts share the seq, and all
+// but the last carry MORE (protocol §3). The parts are enqueued atomically;
+// the protocol guarantees no other frame for the same sid lands between them.
 func (c *Conn) Snapshot(sid uint16, seq uint64, data []byte) {
 	fs := protocol.SnapshotFrames(sid, seq, data)
 	frames := make([]outFrame, 0, len(fs))
@@ -163,9 +181,9 @@ func (c *Conn) Snapshot(sid uint16, seq uint64, data []byte) {
 	c.enqueue(frames...)
 }
 
-// Event 实现 session.Subscriber：把控制消息排进写队列。
+// Event implements session.Subscriber: it enqueues a control message.
 func (c *Conn) Event(msg any) {
-	// ack 与 head_seq 做节流，其余原样发
+	// ack and head_seq are throttled; everything else goes out as is.
 	switch m := msg.(type) {
 	case *protocol.Ack:
 		if !c.allowAck(m.SID, m.InAck) {
@@ -173,8 +191,9 @@ func (c *Conn) Event(msg any) {
 		}
 	case *protocol.SessionUpdated:
 		if m.HeadSeq != nil && onlyHeadSeq(m) {
-			// 只带 head_seq 的那种（未读用）：已订阅的会话不需要它 —— OUTPUT 帧
-			// 本身就带着进度，未读也永远是 false；未订阅的做 1s 节流
+			// A head_seq-only update (for unread tracking). Subscribed sessions
+			// don't need it: OUTPUT frames already carry progress, and they
+			// are never unread. Unsubscribed sessions are throttled to 1/s.
 			c.mu.Lock()
 			subscribed := c.subs[m.SID]
 			c.mu.Unlock()
@@ -182,8 +201,9 @@ func (c *Conn) Event(msg any) {
 				return
 			}
 		} else if m.HeadSeq != nil {
-			// 带着别的字段（会话退出时的 status + head_seq）：必须原样发出去，
-			// 不节流。顺手作废被节流挂起的旧值 —— 否则补发会在它后面送来一个更小的 head_seq
+			// Carries other fields too (status + head_seq when a session
+			// exits): send it unthrottled. Also drop any throttled pending
+			// value, or the later flush would deliver a smaller head_seq after it.
 			c.mu.Lock()
 			c.lastHead[m.SID] = time.Now()
 			delete(c.pendHead, m.SID)
@@ -193,11 +213,11 @@ func (c *Conn) Event(msg any) {
 	c.send(msg)
 }
 
-// send 把控制消息编码后入队，不过节流。
+// send encodes and enqueues a control message, bypassing throttling.
 func (c *Conn) send(msg any) {
 	b, err := protocol.Encode(msg)
 	if err != nil {
-		c.log.Error("编码控制消息失败", "err", err)
+		c.log.Error("encode control message failed", "err", err)
 		return
 	}
 	c.enqueue(outFrame{data: b})
@@ -208,7 +228,7 @@ func (c *Conn) allowAck(sid uint16, inAck uint64) bool {
 	defer c.mu.Unlock()
 	now := time.Now()
 	if now.Sub(c.lastAck[sid]) < ackThrottle {
-		c.pendAck[sid] = inAck // 记下最新值，由 writeLoop 的 ticker 补发
+		c.pendAck[sid] = inAck // keep the latest; writeLoop's ticker sends it later
 		return false
 	}
 	c.lastAck[sid] = now
@@ -221,7 +241,7 @@ func (c *Conn) allowHeadSeq(sid uint16, head uint64) bool {
 	defer c.mu.Unlock()
 	now := time.Now()
 	if now.Sub(c.lastHead[sid]) < headSeqThrottle {
-		c.pendHead[sid] = head // 记下最新值，由 writeLoop 的 ticker 补发
+		c.pendHead[sid] = head // keep the latest; writeLoop's ticker sends it later
 		return false
 	}
 	c.lastHead[sid] = now
@@ -229,7 +249,8 @@ func (c *Conn) allowHeadSeq(sid uint16, head uint64) bool {
 	return true
 }
 
-// enqueue 把一批帧原子地排进写队列。队列满 → 关闭连接（绝不阻塞）。
+// enqueue atomically appends a batch of frames to the write queue. If the
+// queue is full it closes the connection; it never blocks.
 func (c *Conn) enqueue(frames ...outFrame) {
 	if len(frames) == 0 {
 		return
@@ -245,8 +266,8 @@ func (c *Conn) enqueue(frames ...outFrame) {
 	}
 	if c.queued+n > c.deps.writeQueueBytes() {
 		c.mu.Unlock()
-		c.log.Warn("conn queue full，断开慢客户端", "client_id", c.clientID)
-		c.closeWith(websocket.StatusTryAgainLater, "写队列已满")
+		c.log.Warn("conn queue full, disconnecting slow client", "client_id", c.clientID)
+		c.closeWith(websocket.StatusTryAgainLater, "write queue full")
 		return
 	}
 	c.queued += n
@@ -262,8 +283,8 @@ func (c *Conn) enqueue(frames ...outFrame) {
 	}
 }
 
-// releaseWith 结束挂起：first 排在最前面，随后是挂起期间入队的全部帧。
-// 不在挂起状态时等价于普通入队。
+// releaseWith ends holding: first goes to the front, followed by everything
+// enqueued while holding. When not holding it is a plain enqueue.
 func (c *Conn) releaseWith(first []byte) {
 	f := outFrame{data: first}
 	c.mu.Lock()
@@ -280,7 +301,7 @@ func (c *Conn) releaseWith(first []byte) {
 		c.mu.Unlock()
 		return
 	}
-	c.queued += len(first) // welcome 可能超过一个慢客户端剩下的额度，但它必须发
+	c.queued += len(first) // welcome may exceed a slow client's remaining budget, but it must go out
 	c.q = append(c.q, f)
 	c.q = append(c.q, held...)
 	c.mu.Unlock()
@@ -294,7 +315,7 @@ func (c *Conn) signal() {
 	}
 }
 
-// pop 取出写队列的队首。
+// pop removes and returns the head of the write queue.
 func (c *Conn) pop() (outFrame, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -308,7 +329,8 @@ func (c *Conn) pop() (outFrame, bool) {
 	return f, true
 }
 
-// closeWith 请求关闭连接。幂等，第一次调用的原因胜出。
+// closeWith requests that the connection close. It is idempotent; the first
+// caller's reason wins.
 func (c *Conn) closeWith(code websocket.StatusCode, msg string) {
 	c.mu.Lock()
 	if c.closed {
@@ -319,11 +341,11 @@ func (c *Conn) closeWith(code websocket.StatusCode, msg string) {
 	c.closeCode, c.closeMsg = code, msg
 	cancel := c.cancel
 	c.mu.Unlock()
-	close(c.done) // 只有把 closed 置真的这一次走到这里
+	close(c.done) // only the call that set closed gets here
 	if cancel == nil {
 		return
 	}
-	// 先让 writeLoop 把队列刷完，再叫醒 readLoop
+	// Let writeLoop flush the queue first, then wake readLoop.
 	go func() {
 		select {
 		case <-c.flushed:
@@ -333,14 +355,17 @@ func (c *Conn) closeWith(code websocket.StatusCode, msg string) {
 	}()
 }
 
-// sendError 发一条 error 控制消息；fatal 为 true 时随后关闭连接。
+// sendError sends an error control message and, if fatal, then closes the
+// connection.
 //
-// 致命错误【必须先入队再关】，而且 Serve 要等写 goroutine 把队列刷完才
-// 真正关闭 socket —— 否则客户端只会看到一个裸的 close。"给出可读的错误
-// 消息而不是一个裸的握手失败"正是不在握手阶段做版本协商的理由（协议 §1）。
+// A fatal error is enqueued before closing, and Serve waits for the write
+// goroutine to flush the queue before closing the socket; otherwise the
+// client would only see a bare close. Giving a readable error instead of a
+// bare handshake failure is exactly why version negotiation does not happen
+// during the handshake (protocol §1).
 //
-// welcome 之前的错误（expected_hello、protocol_unsupported）没有 welcome 可等，
-// 直接结束挂起、排在最前面。
+// Errors before welcome (expected_hello, protocol_unsupported) have no
+// welcome to wait for, so they end holding and go to the front.
 func (c *Conn) sendError(reqID string, sid *uint16, code, message string, fatal bool) {
 	b, err := protocol.Encode(&protocol.Error{ReqID: reqID, SID: sid, Code: code, Message: message})
 	if err == nil {
@@ -360,7 +385,7 @@ func (c *Conn) sendError(reqID string, sid *uint16, code, message string, fatal 
 
 func (c *Conn) String() string { return fmt.Sprintf("conn(%s)", c.clientID) }
 
-// onlyHeadSeq 报告这条 session.updated 是不是只带了 head_seq（+ sid）。
+// onlyHeadSeq reports whether m carries only head_seq (plus sid).
 func onlyHeadSeq(m *protocol.SessionUpdated) bool {
 	return m.Name == nil && m.NameIsManual == nil && m.CWD == nil && m.Status == nil &&
 		m.ExitCode == nil && m.Cols == nil && m.Rows == nil

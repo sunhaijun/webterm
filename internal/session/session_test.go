@@ -11,8 +11,9 @@ import (
 	"github.com/sunhaijun/webterm/internal/session"
 )
 
-// testShellArgs 让 bash 不读任何 dotfile：断言才有确定性。生产默认是登录 shell
-// `-l -i`（见 TestLoginShellByDefault）。
+// testShellArgs keeps bash from reading any dotfiles so assertions are
+// deterministic. Production defaults to a login shell `-l -i` (see
+// TestLoginShellByDefault).
 var testShellArgs = []string{"--norc", "--noprofile", "-i"}
 
 func cfg() session.Config {
@@ -31,12 +32,12 @@ func create(t *testing.T, m *session.Manager) *session.Session {
 	return s
 }
 
-// IT-session-1：多会话各自独立 PTY、独立缓冲、独立序列号。
+// IT-session-1: sessions have independent PTYs, buffers, and seqs.
 func TestITSession1_Independence(t *testing.T) {
 	m := newManager(t, cfg())
 	a, b := create(t, m), create(t, m)
 	if a.SID() == b.SID() {
-		t.Fatal("两个会话拿到了同一个 sid")
+		t.Fatal("two sessions got the same sid")
 	}
 
 	ca, cb := newConn(t, m, "tab-a"), newConn(t, m, "tab-b")
@@ -53,18 +54,18 @@ func TestITSession1_Independence(t *testing.T) {
 	waitScreen(t, cb, "BBB-marker")
 
 	if strings.Contains(ca.Screen(), "BBB-marker") {
-		t.Error("会话 A 的输出里混进了 B 的内容")
+		t.Error("session A output contains session B content")
 	}
 	if strings.Contains(cb.Screen(), "AAA-marker") {
-		t.Error("会话 B 的输出里混进了 A 的内容")
+		t.Error("session B output contains session A content")
 	}
-	// 序列号各自独立：两个会话的 head_seq 无关
+	// Seqs are independent: the two head_seqs are unrelated.
 	if a.HeadSeq() == 0 || b.HeadSeq() == 0 {
-		t.Fatal("head_seq 没有推进")
+		t.Fatal("head_seq did not advance")
 	}
 }
 
-// IT-session-2：会话数上限。
+// IT-session-2: session limit.
 func TestITSession2_Limit(t *testing.T) {
 	c := cfg()
 	c.MaxSessions = 2
@@ -75,19 +76,22 @@ func TestITSession2_Limit(t *testing.T) {
 	if err != session.ErrSessionLimit {
 		t.Fatalf("err = %v, want ErrSessionLimit", err)
 	}
-	// 关掉一个之后又能建了
+	// Closing one makes room for another.
 	if _, err := m.Close(m.List()[0].SID()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Create(session.Spec{CWD: t.TempDir(), Cols: 80, Rows: 24}); err != nil {
-		t.Fatalf("关闭后仍无法新建: %v", err)
+		t.Fatalf("still cannot create after closing one: %v", err)
 	}
 }
 
-// IT-session-3：工作目录读 /proc/<前台进程组>/cwd，每秒一次，变了才发
-// session.updated{cwd, name}；自动命名跟随 CWD，手动改名后停止跟随（AC-4.4）。
+// IT-session-3: the working directory is read from
+// /proc/<foreground process group>/cwd once a second, and session.updated{cwd,
+// name} is sent only on change. The automatic name follows CWD until a manual
+// rename (AC-4.4).
 //
-// 任何 shell 都适用 —— 这里的 bash 不带任何 dotfile，没有一行 shell 集成。
+// It works with any shell: this bash loads no dotfiles and has no shell
+// integration at all.
 func TestITSession3_CWDPollingAndAutoNaming(t *testing.T) {
 	m := newManager(t, cfg())
 	dir := t.TempDir()
@@ -103,19 +107,19 @@ func TestITSession3_CWDPollingAndAutoNaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := s.Info().Name; got != "myproject" {
-		t.Fatalf("默认名 = %q, want 目录 basename", got)
+		t.Fatalf("default name = %q, want the directory basename", got)
 	}
 	if s.Info().NameIsManual {
-		t.Fatal("默认名不该是手动名")
+		t.Fatal("default name should not be manual")
 	}
 	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0, 0, 0)
 
-	// shell 里 cd：agent 自己从 /proc 读到，名字跟着变
+	// cd in the shell: the agent reads it from /proc and the name follows.
 	if err := c.Send(s, "cd "+other+"\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "收到 session.updated{cwd, name}", func() bool {
+	waitFor(t, "session.updated{cwd, name}", func() bool {
 		for _, e := range c.Events() {
 			if u, ok := e.(*protocol.SessionUpdated); ok && u.SID == s.SID() &&
 				u.CWD != nil && *u.CWD == other && u.Name != nil && *u.Name == "other" {
@@ -128,7 +132,8 @@ func TestITSession3_CWDPollingAndAutoNaming(t *testing.T) {
 		t.Fatalf("info = %+v", info)
 	}
 
-	// 目录没变就不再发：一秒一次的轮询不能变成一秒一条消息
+	// No change, no message: polling once a second must not mean a message
+	// once a second.
 	count := func() int {
 		n := 0
 		for _, e := range c.Events() {
@@ -139,46 +144,51 @@ func TestITSession3_CWDPollingAndAutoNaming(t *testing.T) {
 		return n
 	}
 	before := count()
-	time.Sleep(500 * time.Millisecond) // 5 个轮询周期
+	time.Sleep(500 * time.Millisecond) // 5 poll intervals
 	if got := count(); got != before {
-		t.Fatalf("目录没变却又发了 %d 条 cwd 更新", got-before)
+		t.Fatalf("sent %d more cwd updates without a directory change", got-before)
 	}
 
-	// 前台程序的目录：跑起来的命令在哪，用户就"在哪"
+	// The foreground program's directory: the user is wherever the running
+	// command is.
 	if err := c.Send(s, "(cd "+sub+" && exec sleep 30)\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "前台命令的目录被读到", func() bool { return s.Info().CWD == sub })
+	waitFor(t, "foreground command directory is read", func() bool { return s.Info().CWD == sub })
 	if err := c.Send(s, "\x03"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "回到提示符后目录跟回 shell", func() bool { return s.Info().CWD == other })
+	waitFor(t, "directory follows the shell back at the prompt", func() bool { return s.Info().CWD == other })
 
 	manual := "构建"
 	s.Rename(&manual)
 	info := s.Info()
 	if info.Name != manual || !info.NameIsManual {
-		t.Fatalf("改名后 = %+v", info)
+		t.Fatalf("after rename = %+v", info)
 	}
-	// 手动名不跟随 CWD
+	// A manual name does not follow CWD.
 	if err := c.Send(s, "cd "+sub+"\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "cwd 跟上", func() bool { return s.Info().CWD == sub })
+	waitFor(t, "cwd catches up", func() bool { return s.Info().CWD == sub })
 	if got := s.Info().Name; got != manual {
-		t.Fatalf("手动名被 CWD 改掉了: %q", got)
+		t.Fatalf("manual name was changed by CWD: %q", got)
 	}
-	// 传 nil 恢复自动
+	// nil restores automatic naming.
 	s.Rename(nil)
 	if info := s.Info(); info.Name != "myproject" || info.NameIsManual {
-		t.Fatalf("恢复自动后 = %+v", info)
+		t.Fatalf("after restoring automatic = %+v", info)
 	}
 }
 
-// IT-session-6：前台程序设的终端标题作自动名（AC-4.4，ADR-0043）。
+// IT-session-6: a terminal title set by the foreground program becomes the
+// automatic name (AC-4.4, ADR-0043).
 //
-// shell 在提示符时设的标题不用；前台程序设的用；程序退出回到目录名；再启动的程序
-// 设标题之前不沿用上一次的，设了一模一样的也认得出（看写入次数，不看内容）；手动名优先。
+// A title the shell sets at the prompt is ignored; one the foreground program
+// sets is used; when the program exits the name returns to the directory. A
+// newly started program doesn't inherit the previous title, and an identical
+// title set again is still recognized (by write count, not content). A manual
+// name wins.
 func TestITSession6_TerminalTitleAutoNaming(t *testing.T) {
 	m := newManager(t, cfg())
 	dir := t.TempDir() + "/proj"
@@ -191,31 +201,32 @@ func TestITSession6_TerminalTitleAutoNaming(t *testing.T) {
 	}
 	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0, 0, 0)
-	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+	waitFor(t, "shell ready", func() bool { return s.HeadSeq() > 0 })
 	name := func() string { return s.Info().Name }
 	stays := func(what, want string) {
 		t.Helper()
-		for range 5 { // 5 个轮询周期
+		for range 5 { // 5 poll intervals
 			time.Sleep(100 * time.Millisecond)
 			if got := name(); got != want {
-				t.Fatalf("%s：名字 = %q, want %q", what, got, want)
+				t.Fatalf("%s: name = %q, want %q", what, got, want)
 			}
 		}
 	}
 
-	// shell 自己设的（printf 是内建命令，前台就是 shell）：不用
+	// Set by the shell itself (printf is a builtin, so the shell is in the
+	// foreground): ignored.
 	if err := c.Send(s, `printf '\033]0;SHELL TITLE\007'`+"\r"); err != nil {
 		t.Fatal(err)
 	}
-	stays("shell 设的标题", "proj")
+	stays("title set by the shell", "proj")
 
-	// 前台程序设的：用，并且发 session.updated{name}
+	// Set by the foreground program: used, and session.updated{name} is sent.
 	prog := `bash -c 'printf "\033]0;PROG TITLE\007"; exec sleep 30'` + "\r"
 	if err := c.Send(s, prog); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "名字变成程序设的标题", func() bool { return name() == "PROG TITLE" })
-	waitFor(t, "发了 session.updated{name}", func() bool {
+	waitFor(t, "name becomes the program's title", func() bool { return name() == "PROG TITLE" })
+	waitFor(t, "session.updated{name} sent", func() bool {
 		for _, e := range c.Events() {
 			if u, ok := e.(*protocol.SessionUpdated); ok && u.Name != nil && *u.Name == "PROG TITLE" {
 				return true
@@ -224,46 +235,48 @@ func TestITSession6_TerminalTitleAutoNaming(t *testing.T) {
 		return false
 	})
 	if s.Info().NameIsManual {
-		t.Fatal("标题不是手动名")
+		t.Fatal("a title is not a manual name")
 	}
 
-	// 手动名优先；恢复自动后又是标题（程序还在前台）
+	// A manual name wins; restoring automatic brings back the title (the
+	// program is still in the foreground).
 	manual := "构建"
 	s.Rename(&manual)
-	stays("手动名", manual)
+	stays("manual name", manual)
 	s.Rename(nil)
 	if got := name(); got != "PROG TITLE" {
-		t.Fatalf("恢复自动后 = %q", got)
+		t.Fatalf("after restoring automatic = %q", got)
 	}
 
-	// 程序退出、回到提示符：回到目录名
+	// Program exits, back at the prompt: back to the directory name.
 	if err := c.Send(s, "\x03"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "回到目录名", func() bool { return name() == "proj" })
+	waitFor(t, "back to the directory name", func() bool { return name() == "proj" })
 
-	// 再起一个不设标题的程序：不沿用上一次的标题
+	// A new program that sets no title doesn't inherit the previous one.
 	if err := c.Send(s, "sleep 30\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "sleep 在前台", func() bool { return s.Info().CWD == dir && session.BusyForTest(s) })
-	stays("没设标题的新程序", "proj")
+	waitFor(t, "sleep in the foreground", func() bool { return s.Info().CWD == dir && session.BusyForTest(s) })
+	stays("new program without a title", "proj")
 	if err := c.Send(s, "\x03"); err != nil {
 		t.Fatal(err)
 	}
 
-	// 新程序设了一模一样的标题：认得出
+	// A new program setting an identical title is recognized.
 	if err := c.Send(s, prog); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "同样的标题再设一次也采用", func() bool { return name() == "PROG TITLE" })
+	waitFor(t, "identical title set again is used", func() bool { return name() == "PROG TITLE" })
 	if err := c.Send(s, "\x03"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "又回到目录名", func() bool { return name() == "proj" })
+	waitFor(t, "back to the directory name again", func() bool { return name() == "proj" })
 }
 
-// IT-session-4：shell 退出后状态变 exited 并携带退出码；缓冲保留可查看（AC-4.5）。
+// IT-session-4: when the shell exits, the status becomes exited with the exit
+// code, and the buffer stays viewable (AC-4.5).
 func TestITSession4_ExitedKeepsBuffer(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
@@ -273,41 +286,45 @@ func TestITSession4_ExitedKeepsBuffer(t *testing.T) {
 	if err := c.Send(s, "echo before-exit\rexit 3\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "会话退出", func() bool { return s.Status() == protocol.StatusExited })
+	waitFor(t, "session exit", func() bool { return s.Status() == protocol.StatusExited })
 
 	info := s.Info()
 	if info.ExitCode == nil || *info.ExitCode != 3 {
-		t.Fatalf("退出码 = %v, want 3", info.ExitCode)
+		t.Fatalf("exit code = %v, want 3", info.ExitCode)
 	}
-	// 缓冲保留：切走再回来仍能看到退出前的输出
+	// Buffer kept: switching away and back still shows output from before the
+	// exit.
 	if !strings.Contains(c.Screen(), "before-exit") {
-		t.Fatal("退出前的输出丢了")
+		t.Fatal("output from before the exit was lost")
 	}
-	// 模拟器保留：已退出的会话订阅照样拿快照（刷新页面也能回看最后的报错）
+	// Emulator kept: subscribing to an exited session still yields a snapshot
+	// (a page reload can still scroll back to the last error).
 	replay := newConn(t, m, "tab2")
 	if st, _ := s.Subscribe(replay, 0, 0, 0); st != protocol.ResumeSnapshot {
 		t.Fatalf("status = %q, want snapshot", st)
 	}
 	if !strings.Contains(render(replay, 80, 24), "before-exit") {
-		t.Fatal("exited 会话的快照里没有退出前的输出，无法回看最后的报错")
+		t.Fatal("exited session snapshot lacks the pre-exit output; the last error cannot be reviewed")
 	}
-	// 已退出的会话照样能增量续传（ring 也保留着）
+	// An exited session still supports incremental resume (the ring is kept).
 	incr := newConn(t, m, "tab3")
 	if st, _ := s.Subscribe(incr, 1, 0, 0); st != protocol.ResumeOK {
 		t.Fatalf("status = %q, want ok", st)
 	}
-	// exited 会话不接受输入
+	// An exited session accepts no input.
 	if err := c.Send(s, "echo nope\r"); err != session.ErrSessionExited {
-		t.Fatalf("向已退出的会话写入 err = %v, want ErrSessionExited", err)
+		t.Fatalf("write to exited session: err = %v, want ErrSessionExited", err)
 	}
 }
 
-// 退出消息排在最后一段输出之后：shell 退出时内核里往往还躺着最后几行输出，
-// agent 要等 readLoop 读到 EOF 再宣布退出。否则这几行 OUTPUT 会排在
-// session.updated{status:"exited"} 后面，前端的「进程结束」提示行就插到了输出前面。
-// 消息里的 head_seq 正好等于最后一帧的末尾。
+// The exit message follows the last output. When the shell exits the kernel
+// often still holds its last lines, so the agent waits for readLoop to hit EOF
+// before announcing the exit. Otherwise those OUTPUT frames would follow
+// session.updated{status:"exited"} and the frontend's "process exited" line
+// would land above them. The message's head_seq equals the end of the last
+// frame.
 func TestExitedAfterLastOutput(t *testing.T) {
-	for i := range 3 { // 竞态类的 bug，多跑几轮
+	for i := range 3 { // a race, so run a few rounds
 		m := newManager(t, cfg())
 		s := create(t, m)
 		c := newConn(t, m, "tab")
@@ -317,7 +334,7 @@ func TestExitedAfterLastOutput(t *testing.T) {
 		}
 		var upd *protocol.SessionUpdated
 		at := -1
-		waitFor(t, "收到 exited", func() bool {
+		waitFor(t, "exited", func() bool {
 			for j, e := range c.Timeline() {
 				if u, ok := e.(*protocol.SessionUpdated); ok && u.Status != nil && *u.Status == protocol.StatusExited {
 					upd, at = u, j
@@ -326,7 +343,7 @@ func TestExitedAfterLastOutput(t *testing.T) {
 			}
 			return false
 		})
-		time.Sleep(200 * time.Millisecond) // 给可能迟到的帧一点时间暴露出来
+		time.Sleep(200 * time.Millisecond) // give late frames a chance to show up
 		tl := c.Timeline()
 		var last *frameRec
 		for j, e := range tl {
@@ -335,50 +352,52 @@ func TestExitedAfterLastOutput(t *testing.T) {
 				continue
 			}
 			if j > at {
-				t.Fatalf("第 %d 轮：exited 之后还有帧 %+v —— 输出没读完就宣布退出了", i, f)
+				t.Fatalf("round %d: frame %+v after exited; the exit was announced before output was drained", i, f)
 			}
 			last = &f
 		}
 		if upd.ExitCode == nil || *upd.ExitCode != 3 {
-			t.Fatalf("退出码 = %v", upd.ExitCode)
+			t.Fatalf("exit code = %v", upd.ExitCode)
 		}
 		if upd.HeadSeq == nil || last == nil || *upd.HeadSeq != last.seq+uint64(last.n) {
-			t.Fatalf("第 %d 轮：exited 里的 head_seq = %v，最后一帧末尾 = %d", i, upd.HeadSeq, last.seq+uint64(last.n))
+			t.Fatalf("round %d: exited head_seq = %v, end of last frame = %d", i, upd.HeadSeq, last.seq+uint64(last.n))
 		}
 		if *upd.HeadSeq != s.HeadSeq() {
-			t.Fatalf("head_seq = %d，会话 head = %d", *upd.HeadSeq, s.HeadSeq())
+			t.Fatalf("head_seq = %d, session head = %d", *upd.HeadSeq, s.HeadSeq())
 		}
 		if !strings.Contains(c.Screen(), "tail-03000") {
-			t.Fatal("最后一行输出没到")
+			t.Fatal("last output line never arrived")
 		}
 	}
 }
 
-// 后台进程还占着 PTY 从端时 EOF 不会来：最多等 500 ms 照样宣布退出。
+// A background process holding the PTY slave keeps EOF from arriving; the exit
+// is announced anyway after at most 500 ms.
 func TestExitedEvenIfBackgroundHoldsPTY(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0, 0, 0)
-	// setsid：shell 退出时它不会被 SIGHUP 带走，从端一直开着
+	// setsid: the SIGHUP at shell exit doesn't reach it, so the slave stays open.
 	if err := c.Send(s, "setsid sleep 5 & exit 0\r"); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	waitFor(t, "会话退出", func() bool { return s.Status() == protocol.StatusExited })
+	waitFor(t, "session exit", func() bool { return s.Status() == protocol.StatusExited })
 	if d := time.Since(start); d > 3*time.Second {
-		t.Fatalf("等了 %v —— 不该等后台进程放掉 PTY", d)
+		t.Fatalf("waited %v; must not wait for the background process to release the PTY", d)
 	}
 }
 
-// IT-session-5：关闭会话必须杀掉整个进程组，否则子进程会变成孤儿继续跑。
+// IT-session-5: closing a session must kill the whole process group, or child
+// processes keep running as orphans.
 func TestITSession5_CloseKillsProcessGroup(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0, 0, 0)
 
-	// 起一个后台子进程，把它的 pid 打出来
+	// Start a background child and record its pid.
 	marker := t.TempDir() + "/child.pid"
 	cmd := fmt.Sprintf("sleep 300 & echo $! > %s; echo spawned\r", marker)
 	if err := c.Send(s, cmd); err != nil {
@@ -387,7 +406,7 @@ func TestITSession5_CloseKillsProcessGroup(t *testing.T) {
 	waitScreen(t, c, "spawned")
 
 	var pid int
-	waitFor(t, "子进程 pid 落盘", func() bool {
+	waitFor(t, "child pid written", func() bool {
 		b, err := os.ReadFile(marker)
 		if err != nil {
 			return false
@@ -399,14 +418,16 @@ func TestITSession5_CloseKillsProcessGroup(t *testing.T) {
 	if _, err := m.Close(s.SID()); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "后台作业被回收", func() bool { return !processAlive(pid) })
+	waitFor(t, "background job reaped", func() bool { return !processAlive(pid) })
 }
 
-// 忽略 SIGHUP 的后台作业也必须被清掉 —— 这条走的是 SIGKILL 兜底路径。
+// A background job that ignores SIGHUP must be killed too, via the SIGKILL
+// fallback.
 //
-// 交互式 bash 开着 job control，后台作业在【自己的】进程组里，kill(-pgid)
-// 根本打不到它。优雅路径靠 bash 转发 SIGHUP；作业把 SIGHUP 屏蔽了的话，
-// 只剩按会话清扫这一条路。
+// Interactive bash runs with job control, so a background job has its own
+// process group that kill(-pgid) never reaches. The graceful path relies on
+// bash forwarding SIGHUP; if the job ignores SIGHUP, sweeping the session is
+// the only way left.
 func TestCloseKillsHupImmuneJob(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
@@ -423,7 +444,7 @@ func TestCloseKillsHupImmuneJob(t *testing.T) {
 	waitScreen(t, c, "SPAWN-OK")
 
 	var pid int
-	waitFor(t, "子进程 pid 落盘", func() bool {
+	waitFor(t, "child pid written", func() bool {
 		b, err := os.ReadFile(marker)
 		if err != nil {
 			return false
@@ -432,37 +453,38 @@ func TestCloseKillsHupImmuneJob(t *testing.T) {
 		return err == nil && pid > 0
 	})
 	if !processAlive(pid) {
-		t.Fatal("测试前提不成立：子进程还没起来")
+		t.Fatal("precondition failed: child process is not running")
 	}
 
 	if _, err := m.Close(s.SID()); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "屏蔽 SIGHUP 的作业也被杀掉", func() bool { return !processAlive(pid) })
+	waitFor(t, "SIGHUP-immune job killed", func() bool { return !processAlive(pid) })
 }
 
-// 关闭 exited 会话不需要走信号流程，且必须是幂等的。
+// Closing an exited session skips the signal sequence and is idempotent.
 func TestCloseExitedSession(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	if err := s.Write("tab", 0, []byte("exit 0\r")); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "退出", func() bool { return s.Status() == protocol.StatusExited })
+	waitFor(t, "exit", func() bool { return s.Status() == protocol.StatusExited })
 
 	start := time.Now()
 	if _, err := m.Close(s.SID()); err != nil {
 		t.Fatal(err)
 	}
 	if d := time.Since(start); d > time.Second {
-		t.Fatalf("关闭 exited 会话花了 %v —— 不该等信号宽限期", d)
+		t.Fatalf("closing an exited session took %v; it must not wait for the signal grace period", d)
 	}
 	if _, err := m.Close(s.SID()); err != session.ErrUnknownSession {
-		t.Fatalf("重复关闭 err = %v, want ErrUnknownSession", err)
+		t.Fatalf("second close: err = %v, want ErrUnknownSession", err)
 	}
 }
 
-// sid 不复用刚释放的值 —— 避免"客户端还没处理完 sid=N 的关闭，新会话又叫 sid=N"。
+// A just-released sid is not reused, so a new session can't take sid N while a
+// client is still processing the close of sid N.
 func TestSIDNotImmediatelyReused(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
@@ -472,12 +494,12 @@ func TestSIDNotImmediatelyReused(t *testing.T) {
 	}
 	s2 := create(t, m)
 	if s2.SID() == sid {
-		t.Fatalf("sid %d 被立刻复用了", sid)
+		t.Fatalf("sid %d was reused immediately", sid)
 	}
 }
 
-// IT-resize-1：resize 消息真的作用到 PTY 上（TIOCSWINSZ），
-// 会话里 stty size 看到的就是前端算出来的尺寸（AC-3.11）。
+// IT-resize-1: resize really reaches the PTY (TIOCSWINSZ); stty size in the
+// session sees the size the frontend computed (AC-3.11).
 func TestITResize1_AppliesToPTY(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
@@ -493,20 +515,21 @@ func TestITResize1_AppliesToPTY(t *testing.T) {
 	waitScreen(t, c, "30 100")
 
 	if err := s.Resize(0, 24); err == nil {
-		t.Fatal("cols=0 应当被拒绝")
+		t.Fatal("cols=0 should be rejected")
 	}
 	if err := s.Resize(1001, 24); err == nil {
-		t.Fatal("cols>1000 应当被拒绝")
+		t.Fatal("cols>1000 should be rejected")
 	}
 }
 
-// startWinchProgram 在会话里起一个前台程序：每收到一次 SIGWINCH 就打一行"重画"，
-// 内容是它看到的尺寸。
+// startWinchProgram starts a foreground program in the session that prints a
+// "redraw" line with the size it sees on every SIGWINCH.
 //
-// 【必须是非交互的脚本】：交互式 bash 开着 job control，循环里的每个 sleep 都在
-// 自己的进程组里当前台，SIGWINCH 只打到 sleep，装了 trap 的 bash 收不到。
-// bash 脚本不开 job control，自己和子进程同在前台进程组；wait 被信号打断后
-// trap 立刻执行。
+// It must be a non-interactive script. Interactive bash runs with job control,
+// so each sleep in the loop would be the foreground in its own process group
+// and SIGWINCH would hit only the sleep, never the bash holding the trap. A
+// bash script has no job control, shares the foreground group with its
+// children, and runs the trap as soon as a signal interrupts wait.
 func startWinchProgram(t *testing.T, s *session.Session, c *fakeConn) {
 	t.Helper()
 	script := t.TempDir() + "/winch.sh"
@@ -523,10 +546,12 @@ while :; do sleep 0.05 & wait $!; done
 	waitScreen(t, c, "WINCH-READY")
 }
 
-// IT-resize-2：列数变了 → agent 以自己的重排为准，重发一份快照给每个订阅者；
-// 快照【先于】程序因 SIGWINCH 重画的字节（AC-2.22 / ADR-0026 §4）。
+// IT-resize-2: on a column change the agent's reflow wins and every subscriber
+// gets a new snapshot, ahead of the bytes the program redraws on SIGWINCH
+// (AC-2.22 / ADR-0026 §4).
 //
-// 反过来的话，重画字节会落在快照之前，被快照覆盖掉 —— 客户端拿不到那一屏。
+// In the other order the redraw would land before the snapshot and be
+// overwritten by it, and the client would never see that screen.
 func TestITResize2_ColsChangeResendsSnapshotBeforeRedraw(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
@@ -535,46 +560,48 @@ func TestITResize2_ColsChangeResendsSnapshotBeforeRedraw(t *testing.T) {
 	s.Subscribe(b, 0, 0, 0)
 	startWinchProgram(t, s, a)
 
-	t.Run("resize 消息", func(t *testing.T) {
+	t.Run("resize message", func(t *testing.T) {
 		before := a.Snapshots()
 		if err := s.Resize(100, 24); err != nil {
 			t.Fatal(err)
 		}
 		for _, c := range []*fakeConn{a, b} {
-			waitFor(t, "每个订阅者都收到新快照", func() bool { return c.Snapshots() == before+1 })
+			waitFor(t, "every subscriber gets a new snapshot", func() bool { return c.Snapshots() == before+1 })
 			waitScreen(t, c, "REDRAW-24 100")
 			if strings.Contains(string(c.LastSnapshot()), "REDRAW-24 100") {
-				t.Fatal("重画字节跑到了快照之前 —— TIOCSWINSZ 必须在快照入队之后")
+				t.Fatal("redraw bytes landed before the snapshot; TIOCSWINSZ must follow enqueueing the snapshot")
 			}
 			if c.gaps != 0 || c.dups != 0 {
-				t.Fatalf("seq 记账出错: gaps=%d dups=%d", c.gaps, c.dups)
+				t.Fatalf("seq accounting error: gaps=%d dups=%d", c.gaps, c.dups)
 			}
 		}
 		if cols := s.Info().Cols; cols != 100 {
-			t.Fatalf("会话 cols = %d", cols)
+			t.Fatalf("session cols = %d", cols)
 		}
 	})
 
-	t.Run("subscribe 带来新的列数", func(t *testing.T) {
+	t.Run("subscribe with new column count", func(t *testing.T) {
 		before := a.Snapshots()
 		c := newConn(t, m, "tab-c")
-		// out_seq 在窗口内也不管用：列数变了就走快照
+		// Even with out_seq inside the window, a column change means snapshot.
 		if st, _ := s.Subscribe(c, s.HeadSeq(), 90, 24); st != protocol.ResumeSnapshot {
 			t.Fatalf("status = %q, want snapshot", st)
 		}
 		if c.Snapshots() != 1 {
-			t.Fatalf("新订阅者收到 %d 份快照，want 1", c.Snapshots())
+			t.Fatalf("new subscriber got %d snapshots, want 1", c.Snapshots())
 		}
-		waitFor(t, "已有的订阅者也收到新快照", func() bool { return a.Snapshots() == before+1 })
+		waitFor(t, "existing subscriber gets the new snapshot too", func() bool { return a.Snapshots() == before+1 })
 		waitScreen(t, c, "REDRAW-24 90")
 		if strings.Contains(string(c.LastSnapshot()), "REDRAW-24 90") {
-			t.Fatal("重画字节跑到了快照之前")
+			t.Fatal("redraw bytes landed before the snapshot")
 		}
 	})
 }
 
-// 只改行数：模拟器.Resize + TIOCSWINSZ，【不发快照】—— 手机每弹一次软键盘就
-// 改一次行数，每次重发上百 KiB、清掉浏览器的回看位置，代价太大（ADR-0026 §4）。
+// Rows only: resize the emulator and TIOCSWINSZ, but send no snapshot. Phones
+// change rows every time the on-screen keyboard opens; resending hundreds of
+// KiB and resetting the browser's scrollback each time costs too much
+// (ADR-0026 §4).
 func TestResizeRowsOnlyNoSnapshot(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
@@ -586,50 +613,54 @@ func TestResizeRowsOnlyNoSnapshot(t *testing.T) {
 	if err := s.Resize(80, 30); err != nil {
 		t.Fatal(err)
 	}
-	waitScreen(t, c, "REDRAW-30 80") // PTY 确实改了
+	waitScreen(t, c, "REDRAW-30 80") // the PTY did change
 	if c.Snapshots() != before {
-		t.Fatal("只改行数却重发了快照")
+		t.Fatal("rows-only change resent a snapshot")
 	}
-	// subscribe 只带来新的行数：按 out_seq 走增量，同样不发快照
+	// subscribe with only new rows: incremental from out_seq, no snapshot
+	// either.
 	c2 := newConn(t, m, "tab-2")
 	if st, _ := s.Subscribe(c2, s.HeadSeq(), 80, 20); st != protocol.ResumeOK {
 		t.Fatalf("status = %q, want ok", st)
 	}
 	waitScreen(t, c2, "REDRAW-20 80")
 	if c2.Snapshots() != 0 || c.Snapshots() != before {
-		t.Fatal("只改行数却发了快照")
+		t.Fatal("rows-only change sent a snapshot")
 	}
-	// 尺寸没变：什么都不做
+	// Same size: nothing happens.
 	if err := s.Resize(80, 20); err != nil {
 		t.Fatal(err)
 	}
 	if c.Snapshots() != before {
-		t.Fatal("尺寸没变却发了快照")
+		t.Fatal("unchanged size sent a snapshot")
 	}
 }
 
-// 空闲 = 每个运行中的会话，PTY 的前台进程组就是 shell 自己；有命令在跑就算忙
-// （webterm reload --when-idle、控制 socket 的忙碌数）。
+// Idle means every running session's PTY foreground process group is the shell
+// itself; a running command counts as busy (webterm reload --when-idle, the
+// control socket's busy count).
 func TestBusyFollowsForegroundProcessGroup(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	idle := create(t, m)
 	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0, 0, 0)
-	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 && idle.HeadSeq() > 0 })
-	waitFor(t, "停在提示符算闲", func() bool { return m.Busy() == 0 })
+	waitFor(t, "shells ready", func() bool { return s.HeadSeq() > 0 && idle.HeadSeq() > 0 })
+	waitFor(t, "idle at the prompt", func() bool { return m.Busy() == 0 })
 
 	if err := c.Send(s, "sleep 30\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "sleep 30 在前台算忙", func() bool { return m.Busy() == 1 })
+	waitFor(t, "busy with sleep 30 in the foreground", func() bool { return m.Busy() == 1 })
 
-	// Ctrl-C 要补发：前台进程组换成 bash fork 出的子进程时就已经算忙，但它可能还没 exec
-	// sleep。这个窗口里的 SIGINT 被子进程里 bash 自己的处理函数接走，exec 之后就没了，
-	// sleep 照睡 30 秒（CI 上 -race 加并行时撞到过，本地 6 份并行约 2.5%）。
-	// 多出来的 ^C 落在提示符上，无害。
+	// Resend Ctrl-C. The session counts as busy once the foreground group
+	// switches to bash's forked child, which may not have exec'ed sleep yet. A
+	// SIGINT in that window goes to bash's own handler in the child and is
+	// lost at exec, so sleep runs the full 30 seconds (seen on CI with -race
+	// and parallelism; about 2.5% locally with 6 parallel runs). Extra ^Cs land
+	// harmlessly at the prompt.
 	var lastIntr time.Time
-	waitFor(t, "回到提示符算闲", func() bool {
+	waitFor(t, "idle back at the prompt", func() bool {
 		if time.Since(lastIntr) > 300*time.Millisecond {
 			if err := c.Send(s, "\x03"); err != nil {
 				t.Fatal(err)
@@ -639,20 +670,20 @@ func TestBusyFollowsForegroundProcessGroup(t *testing.T) {
 		return m.Busy() == 0
 	})
 
-	// 已退出的会话算闲
+	// An exited session counts as idle.
 	if err := c.Send(s, "exit\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "退出", func() bool { return s.Status() == protocol.StatusExited })
+	waitFor(t, "exit", func() bool { return s.Status() == protocol.StatusExited })
 	if m.Busy() != 0 {
-		t.Fatal("已退出的会话不该算忙")
+		t.Fatal("an exited session should not count as busy")
 	}
 }
 
-// shell 照常启动（ADR-0026 §6）：默认登录交互 shell（-l -i），--no-login-shell
-// 时只 -i。webterm 不注入任何东西。
+// The shell starts normally (ADR-0026 §6): an interactive login shell (-l -i)
+// by default, just -i with --no-login-shell. webterm injects nothing.
 func TestLoginShellByDefault(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // 别读到跑测试的人自己的 dotfile
+	t.Setenv("HOME", t.TempDir()) // don't read the test runner's own dotfiles
 	for _, tc := range []struct {
 		noLogin bool
 		want    string

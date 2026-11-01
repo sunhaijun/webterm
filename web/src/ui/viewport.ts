@@ -1,13 +1,13 @@
 /**
- * 软键盘与可视视口 —— docs/40-frontend/layout.md §高度计算（AC-3.8）。
+ * On-screen keyboard and the visual viewport (docs/40-frontend/layout.md, AC-3.8).
  *
- * 【高度的唯一真相来源是 visualViewport】，不是 100vh：iOS Safari 上
- * 100vh 不随键盘变化，用它算出来的布局会被键盘盖住。
+ * visualViewport is the only source of truth for height, not 100vh: on iOS Safari 100vh
+ * ignores the keyboard, so a layout based on it ends up under the keyboard.
  */
 
 export interface ViewportState {
   height: number
-  /** iOS 键盘弹出时会把可视区上推，要用 translateY 跟过去。 */
+  /** iOS pushes the visual viewport up when the keyboard opens; follow it with translateY. */
   offsetTop: number
 }
 
@@ -18,25 +18,27 @@ export function readViewport(): ViewportState {
 }
 
 /**
- * 布局视口高度 —— 判断"键盘是否占屏"的参照。
+ * Layout viewport height, the reference for "is the keyboard taking up the screen".
  *
- * 【不能用 window.innerHeight】：Safari 的 innerHeight 报的是可视视口高度（随捏合缩放、
- * 随软键盘一起变矮），拿它当参照，iPhone 上键盘一弹闸门就永远关着 → 不补偿 →
- * 整个 .app 被推出可视区。documentElement.clientHeight 在所有浏览器里都是布局视口高度。
+ * Not window.innerHeight: Safari reports the visual viewport height there (it shrinks
+ * with pinch zoom and with the keyboard). Using it as the reference, the gate on iPhone
+ * never opens when the keyboard appears, nothing is compensated, and the whole .app is
+ * pushed out of view. documentElement.clientHeight is the layout viewport height in every
+ * browser.
  */
 export function layoutViewportHeight(): number {
   return document.documentElement.clientHeight || window.innerHeight
 }
 
-/** 键盘占屏的最小高度：地址栏滑入滑出（布局视口同步变）、回弹都到不了。 */
+/** Minimum keyboard height. Address bar slide-in/out (the layout viewport changes with it) and overscroll bounce never reach it. */
 export const KEYBOARD_MIN_PX = 80
 
-/** 键盘弹起 = 可视视口比布局视口矮一大截。 */
+/** The keyboard is up when the visual viewport is much shorter than the layout viewport. */
 export function isKeyboardUp(visualHeight: number, layoutHeight: number): boolean {
   return visualHeight < layoutHeight - KEYBOARD_MIN_PX
 }
 
-/** `.app` 该写成什么样：高度、上推量、safe-area 下边距要不要归零。 */
+/** What to apply to `.app`: height, upward shift, and whether to zero the bottom safe-area inset. */
 export interface AppFit {
   height: number
   translateY: number
@@ -44,8 +46,9 @@ export interface AppFit {
 }
 
 /**
- * 闸门只看两个数（layout.md §键盘弹起时的 translateY 补偿）：键盘弹起才追 `offsetTop`；
- * 地址栏滑入滑出、边缘回弹（offsetTop 变而高度不变）一律不追 —— 否则拖一下抖一会儿。
+ * The gate looks at just two numbers (layout.md, translateY compensation with the
+ * keyboard up): follow `offsetTop` only while the keyboard is up. Address bar slides and
+ * edge bounce (offsetTop changes, height doesn't) are ignored, or every drag would jitter.
  */
 export function appFit(vp: ViewportState, layoutHeight: number): AppFit {
   const keyboardUp = isKeyboardUp(vp.height, layoutHeight)
@@ -57,10 +60,12 @@ export function appFit(vp: ViewportState, layoutHeight: number): AppFit {
 }
 
 /**
- * 让 `.app` 跟着可视视口走：高度 = visualViewport.height；键盘弹起时 translateY(offsetTop)
- * 并把 `--sa-bottom` 置 0（键盘已经盖住 Home 指示条）。rAF 合帧，一帧最多写一次。
+ * Makes `.app` track the visual viewport: height = visualViewport.height; with the keyboard
+ * up, translateY(offsetTop) and `--sa-bottom` set to 0 (the keyboard already covers the
+ * home indicator). Coalesced with rAF to at most one write per frame.
  *
- * 【不在这里 fit()】—— 布局还没稳定。终端容器上的 ResizeObserver 负责重算行列。
+ * No fit() here; layout hasn't settled yet. The ResizeObserver on the terminal container
+ * recomputes rows and columns.
  */
 export function installAppFit(root: HTMLElement): () => void {
   let raf = 0
@@ -94,7 +99,7 @@ export function installAppFit(root: HTMLElement): () => void {
   }
 }
 
-/** 防抖 —— resize 控制消息要 100ms 防抖（AC-3.11）。 */
+/** Debounce; resize control messages are debounced by 100ms (AC-3.11). */
 export function debounce<T extends unknown[]>(
   fn: (...args: T) => void,
   ms: number,
@@ -116,12 +121,12 @@ export function debounce<T extends unknown[]>(
 
 const COARSE = '(pointer: coarse)'
 
-/** 触摸能力。与形态正交：只决定 wide 上显不显示附加键、浮层是什么形态。 */
+/** Touch capability. Orthogonal to form factor: it only decides whether wide shows extra keys and which sheet shape to use. */
 export function isCoarsePointer(): boolean {
   return window.matchMedia?.(COARSE).matches ?? false
 }
 
-/** 触摸能力变了（给 Pad 接上 / 拔掉鼠标）。 */
+/** Touch capability changed (a mouse plugged into or out of a tablet). */
 export function watchCoarse(fn: (coarse: boolean) => void): () => void {
   const mq = window.matchMedia?.(COARSE)
   if (!mq) return () => {}
@@ -130,7 +135,7 @@ export function watchCoarse(fn: (coarse: boolean) => void): () => void {
   return () => mq.removeEventListener('change', on)
 }
 
-// ---------- 小块几何 ----------
+// ---------- Small geometry helpers ----------
 
 export interface Box {
   left: number
@@ -140,14 +145,15 @@ export interface Box {
 }
 
 /**
- * 选中项要不要滚进视野（AC-4.9）：已经整个可见就什么都不做；否则调用方
- * `scrollIntoView({ block: 'nearest', inline: 'nearest' })`，不用 smooth。
+ * Whether the selected item must be scrolled into view (AC-4.9). If fully visible, do
+ * nothing; otherwise the caller uses `scrollIntoView({ block: 'nearest', inline: 'nearest' })`,
+ * without smooth scrolling.
  */
 export function needsReveal(item: Box, view: Box): boolean {
   return item.left < view.left || item.right > view.right || item.top < view.top || item.bottom > view.bottom
 }
 
-/** 锚在触发点旁边的小菜单：放得下就放在触发点右下，放不下就往回收，总留 8px 边。 */
+/** A small menu anchored at the trigger point: below-right of it if it fits, pulled back otherwise, always 8px from the edges. */
 export function menuPosition(
   x: number,
   y: number,

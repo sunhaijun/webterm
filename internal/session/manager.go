@@ -19,64 +19,76 @@ import (
 	"github.com/sunhaijun/webterm/internal/vterm"
 )
 
-// ErrSessionLimit 表示会话数已达上限。
-var ErrSessionLimit = errors.New("session: 会话数已达上限")
+// ErrSessionLimit means the session limit has been reached.
+var ErrSessionLimit = errors.New("session: session limit reached")
 
-// ErrFrozen：正在热升级交接，此刻不接受新会话（ADR-0016）。
-var ErrFrozen = errors.New("session: 正在热升级，稍后再试")
+// ErrFrozen means a hot-upgrade handoff is in progress and new sessions are
+// refused for now (ADR-0016).
+var ErrFrozen = errors.New("session: hot upgrade in progress, try again shortly")
 
-// DefaultRingBytes 是每会话环形缓冲的默认容量（ADR-0026 §3）。它只服务增量
-// 续传：积压超过它时，快照（≤ 170 KiB）比重放更小更快。
+// DefaultRingBytes is the default per-session ring buffer size (ADR-0026 §3).
+// It only serves incremental resume: once the backlog exceeds it, a snapshot
+// (<= 170 KiB) is smaller and faster than a replay.
 const DefaultRingBytes = 256 << 10
 
-// Config 是 Manager 的配置。
+// Config configures a Manager.
 type Config struct {
-	MaxSessions int    // 默认 20
-	RingBytes   int    // 每会话环形缓冲，默认 DefaultRingBytes
-	Shell       string // 默认 bash
+	MaxSessions int    // default 20
+	RingBytes   int    // per-session ring buffer, default DefaultRingBytes
+	Shell       string // default bash
 
-	// ShellArgs 覆盖 shell 的启动参数。nil 时按 NoLoginShell 选默认值：
-	// 登录交互 shell `-l -i`（按 shell 自己的规则加载 profile 链），或 `-i`。
-	// 测试用它给出确定的 `--norc --noprofile -i`。
+	// ShellArgs overrides the shell arguments. When nil, NoLoginShell picks
+	// the default: an interactive login shell `-l -i` (loading the profile
+	// chain by the shell's own rules), or `-i`. Tests use it to pin
+	// `--norc --noprofile -i`.
 	ShellArgs []string
-	// NoLoginShell：--no-login-shell，用非登录交互 shell（bash 只读 ~/.bashrc）。
+	// NoLoginShell (--no-login-shell) starts a non-login interactive shell
+	// (bash reads only ~/.bashrc).
 	//
-	// 【故意是反的】：零值 = 登录 shell，与默认行为一致。默认开的布尔项写成正向
-	// 字段，任何忘了填 Config 的调用方都会静默失去默认行为。
+	// It is negated on purpose so the zero value means a login shell, the
+	// default. A positive field for an on-by-default option would silently
+	// drop the default for any caller that forgot to set it.
 	NoLoginShell bool
 
-	// SessionEnv 是 --session-env 给的 KEY=VAL，注入每个会话的 PTY（AC-7.8）。
-	// 同一个键出现多次时后面的胜出 —— 配置文件先灌、命令行后 Parse，
-	// 于是"命令行压过配置文件"这条规则在这里自然成立。
+	// SessionEnv holds KEY=VAL pairs from --session-env, injected into every
+	// session's PTY (AC-7.8). For repeated keys the last one wins. The config
+	// file is loaded before the command line is parsed, so the command line
+	// overrides the config file without extra logic.
 	SessionEnv []string
 
-	// NoAltScreenCompat 关掉内置的备用屏兼容清单（--no-altscreen-compat）。
-	// 同样故意是反的：零值 = 清单生效。
+	// NoAltScreenCompat disables the built-in alternate screen compat list
+	// (--no-altscreen-compat). Also negated on purpose: the zero value keeps
+	// the list on.
 	NoAltScreenCompat bool
 
-	// CWDPollInterval 是读 /proc/<前台进程组>/cwd 的周期，默认 1 秒（ADR-0026 §6）。
+	// CWDPollInterval is how often /proc/<foreground process group>/cwd is
+	// read; default 1s (ADR-0026 §6).
 	CWDPollInterval time.Duration
 }
 
-// altScreenCompat 是"把全屏 AI CLI 拉回主屏"的内置清单（AC-7.8，ADR-0024 §1）。
+// altScreenCompat is the built-in list that brings full-screen AI CLIs back to
+// the main screen (AC-7.8, ADR-0024 §1).
 //
-// 边界写死在这里：清单里**只放"把 TUI 拉回主屏"这一类开关**，任何改变程序行为
-// 的（模型、权限、遥测）一概不放。这些还都是上游的私有变量、没有兼容承诺，
-// 所以它必须能关（--no-altscreen-compat），也必须能验证
-// （docs/80-ops/troubleshooting.md 的两问）。
+// Scope is fixed: only switches that move a TUI back to the main screen.
+// Nothing that changes program behavior (model, permissions, telemetry). These
+// are private upstream variables with no compatibility promise, so the list
+// must be possible to disable (--no-altscreen-compat) and to verify (the two
+// questions in docs/80-ops/troubleshooting.md).
 var altScreenCompat = []string{
 	"CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1",
 }
 
-// buildEnv 组装会话 PTY 的环境（AC-7.8）。优先级从高到低：
+// buildEnv assembles the environment for a session PTY (AC-7.8). Precedence,
+// highest first:
 //
-//	fixed        webterm 自己的口径（TERM / WEBTERM_SESSION），不可覆盖
-//	sessionEnv   --session-env，用户显式指定
-//	base         agent 继承来的环境，用户机器上本来就有的
-//	compat       内置兼容清单，只在前三者都没有这个键时才生效
+//	fixed        webterm's own (TERM / WEBTERM_SESSION), cannot be overridden
+//	sessionEnv   --session-env, set explicitly by the user
+//	base         environment inherited by the agent, already on the user's machine
+//	compat       built-in compat list, applied only if none of the above sets the key
 //
-// 返回值里每个键只出现一次。exec 自己也会去重（保留最后一条），但"最后一条
-// 胜出"是隐式规则，不该成为正确性的依据 —— 显式去重才能让单测断言得起来。
+// Each key appears once in the result. exec also deduplicates (last wins), but
+// that is an implicit rule and shouldn't carry correctness; explicit dedup is
+// something unit tests can assert on.
 func buildEnv(base, compat, sessionEnv, fixed []string) []string {
 	at := make(map[string]int, len(base)+len(compat)+len(sessionEnv)+len(fixed))
 	out := make([]string, 0, len(base)+len(compat)+len(sessionEnv)+len(fixed))
@@ -98,7 +110,7 @@ func buildEnv(base, compat, sessionEnv, fixed []string) []string {
 		put(kv, true)
 	}
 	for _, kv := range compat {
-		put(kv, false) // 用户已经设过的不覆盖 —— 这是他的机器
+		put(kv, false) // don't override what the user set; it's their machine
 	}
 	for _, kv := range sessionEnv {
 		put(kv, true)
@@ -109,7 +121,8 @@ func buildEnv(base, compat, sessionEnv, fixed []string) []string {
 	return out
 }
 
-// envKey 取 KEY=VAL 的键；没有 = 的条目没有键，调用方会丢掉它。
+// envKey returns the key of KEY=VAL. An entry without = has no key and the
+// caller drops it.
 func envKey(kv string) string {
 	for i := 0; i < len(kv); i++ {
 		if kv[i] == '=' {
@@ -119,7 +132,7 @@ func envKey(kv string) string {
 	return ""
 }
 
-// compatEnv 返回本次要注入的兼容清单。
+// compatEnv returns the compat entries to inject.
 func (c *Config) compatEnv() []string {
 	if c.NoAltScreenCompat {
 		return nil
@@ -127,7 +140,8 @@ func (c *Config) compatEnv() []string {
 	return altScreenCompat
 }
 
-// shellArgs 返回 shell 的启动参数（ADR-0026 §6：shell 照常启动，不注入任何东西）。
+// shellArgs returns the shell arguments. The shell starts normally with nothing
+// injected (ADR-0026 §6).
 func (c *Config) shellArgs() []string {
 	if c.ShellArgs != nil {
 		return c.ShellArgs
@@ -153,36 +167,38 @@ func (c *Config) withDefaults() {
 	}
 }
 
-// Manager 负责 sid 分配、会话表、上限控制与生命周期编排。
+// Manager owns sid allocation, the session table, limits, and lifecycle.
 type Manager struct {
 	cfg Config
 
-	// instanceID 是本次进程启动的随机 id。
+	// instanceID is a random id for this process start.
 	//
-	// sid 是 uint16 且进程重启后从头分配 —— 没有实例标识的话，一个
-	// resume{sid:1, out_seq:很大} 会被当成增量或快照接到一个毫不相干的新会话上，
-	// 用户无从察觉。
+	// sids are uint16 and restart from 1 after a restart. Without an instance
+	// id, resume{sid:1, out_seq:large} would silently attach, as a delta or
+	// snapshot, to an unrelated new session.
 	instanceID string
 
 	mu       sync.RWMutex
 	sessions map[uint16]*Session
-	// order 是显示顺序（ADR-0040）：新建的排最后，关掉的删掉，Move 调整。
-	// 只放已经起来的会话 —— Create 的占位（nil）不在里面。
+	// order is the display order (ADR-0040): new sessions go last, closed
+	// ones are removed, Move rearranges. It holds only started sessions, not
+	// Create's nil placeholders.
 	order []uint16
-	// orderMu 把 Move 与它的广播串成一个动作，见 Move。不和 mu 一起拿：
-	// 广播期间 List / Get 照常走。
+	// orderMu makes Move and its broadcast one step; see Move. It is separate
+	// from mu so List and Get keep working during the broadcast.
 	orderMu sync.Mutex
 
 	nextSID   uint16
 	observers map[Subscriber]struct{}
-	// generation 是热升级的代数：每交接一次 +1（ADR-0016）。webterm reload 靠它判断新进程已接手。
+	// generation counts hot upgrades, +1 per handoff (ADR-0016). webterm
+	// reload uses it to tell that the new process has taken over.
 	generation int
-	frozen     bool // Freeze 期间拒绝 Create
+	frozen     bool // Create is refused while frozen
 
 	shutdownOnce sync.Once
 }
 
-// NewManager 创建会话管理器。
+// NewManager returns a session manager.
 func NewManager(cfg Config) *Manager {
 	cfg.withDefaults()
 	var b [8]byte
@@ -192,24 +208,27 @@ func NewManager(cfg Config) *Manager {
 		instanceID: hex.EncodeToString(b[:]),
 		sessions:   make(map[uint16]*Session),
 		observers:  make(map[Subscriber]struct{}),
-		nextSID:    1, // 0 保留为无效值
+		nextSID:    1, // 0 is reserved as invalid
 	}
 }
 
-// InstanceID 返回本次进程启动的实例 id（放进 welcome）。
+// InstanceID returns this process's instance id (sent in welcome).
 func (m *Manager) InstanceID() string { return m.instanceID }
 
-// AddObserver / RemoveObserver 登记一条连接。
+// AddObserver registers a connection.
 //
-// 【订阅与观察是两件事】：订阅（Session.Subscribe）决定收不收 OUTPUT / SNAPSHOT
-// 帧，观察决定收不收控制消息。未订阅的连接照样要收 session.updated —— 未读正是
-// 靠它带的 head_seq 推导出来的，只发给订阅者的话永远算不出未读。
+// Subscribing and observing are separate. Subscribing (Session.Subscribe)
+// controls OUTPUT / SNAPSHOT frames; observing controls control messages.
+// Unsubscribed connections still need session.updated, since unread state is
+// derived from its head_seq; sending it only to subscribers would make unread
+// impossible to compute.
 func (m *Manager) AddObserver(sub Subscriber) {
 	m.mu.Lock()
 	m.observers[sub] = struct{}{}
 	m.mu.Unlock()
 }
 
+// RemoveObserver unregisters a connection.
 func (m *Manager) RemoveObserver(sub Subscriber) {
 	m.mu.Lock()
 	delete(m.observers, sub)
@@ -226,14 +245,14 @@ func (m *Manager) observerList() []Subscriber {
 	return out
 }
 
-// fanout 把一条控制消息发给所有连接。
+// fanout sends a control message to every connection.
 func (m *Manager) fanout(msg any) {
 	for _, o := range m.observerList() {
 		o.Event(msg)
 	}
 }
 
-// fanoutTo 只发给某个 client 的连接（ack 是 per-client 的）。
+// fanoutTo sends only to one client's connections (acks are per client).
 func (m *Manager) fanoutTo(clientID string, msg any) {
 	for _, o := range m.observerList() {
 		if o.ClientID() == clientID {
@@ -242,7 +261,7 @@ func (m *Manager) fanoutTo(clientID string, msg any) {
 	}
 }
 
-// Limits 返回给 welcome 用的上限信息。
+// Limits returns the limits reported in welcome.
 func (m *Manager) Limits() protocol.Limits {
 	return protocol.Limits{
 		MaxSessions:   m.cfg.MaxSessions,
@@ -251,7 +270,7 @@ func (m *Manager) Limits() protocol.Limits {
 	}
 }
 
-// Spec 是新建会话的参数。
+// Spec holds the parameters for a new session.
 type Spec struct {
 	Name *string
 	CWD  string
@@ -259,7 +278,7 @@ type Spec struct {
 	Rows uint16
 }
 
-// Create 新建一个会话。
+// Create starts a new session.
 func (m *Manager) Create(spec Spec) (*Session, error) {
 	if !validSize(spec.Cols, spec.Rows) {
 		return nil, ErrBadSize
@@ -269,7 +288,7 @@ func (m *Manager) Create(spec Spec) (*Session, error) {
 		cwd, _ = os.UserHomeDir()
 	}
 	if fi, err := os.Stat(cwd); err != nil || !fi.IsDir() {
-		return nil, fmt.Errorf("session: cwd 不是有效目录: %s", spec.CWD)
+		return nil, fmt.Errorf("session: cwd is not a directory: %s", spec.CWD)
 	}
 
 	m.mu.Lock()
@@ -286,7 +305,7 @@ func (m *Manager) Create(spec Spec) (*Session, error) {
 		m.mu.Unlock()
 		return nil, err
 	}
-	m.sessions[sid] = nil // 占位，防止并发 Create 撞号
+	m.sessions[sid] = nil // placeholder so concurrent Creates don't collide
 	m.mu.Unlock()
 
 	s, err := m.start(sid, spec, cwd)
@@ -298,20 +317,22 @@ func (m *Manager) Create(spec Spec) (*Session, error) {
 	}
 	m.mu.Lock()
 	if m.frozen {
-		// 起 shell 期间开始了热升级：Freeze / Export 都没看见它，留着就没人接
+		// A hot upgrade started while the shell was starting. Freeze and Export
+		// never saw this session, so nobody would take it over.
 		delete(m.sessions, sid)
 		m.mu.Unlock()
 		s.close()
 		return nil, ErrFrozen
 	}
 	m.sessions[sid] = s
-	m.order = append(m.order, sid) // 新建的排最后
+	m.order = append(m.order, sid) // new sessions go last
 	m.mu.Unlock()
 	return s, nil
 }
 
-// allocSIDLocked 分配一个 sid：递增，跳过仍在使用的值，回绕后从 1 重新找空位。
-// 不复用刚释放的 sid，避免"客户端还没处理完 sid=3 的关闭，新会话又叫 sid=3"。
+// allocSIDLocked allocates a sid: increment, skip values in use, and wrap to 1.
+// Freshly released sids are not reused right away, so a new session can't
+// take sid 3 while a client is still processing the close of the old sid 3.
 func (m *Manager) allocSIDLocked() (uint16, error) {
 	for range 65535 {
 		sid := m.nextSID
@@ -323,41 +344,45 @@ func (m *Manager) allocSIDLocked() (uint16, error) {
 			return sid, nil
 		}
 	}
-	return 0, errors.New("session: sid 空间耗尽")
+	return 0, errors.New("session: sid space exhausted")
 }
 
 func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 	cmd := exec.Command(m.cfg.Shell, m.cfg.shellArgs()...)
 	cmd.Dir = cwd
-	// 会话环境（AC-7.8）：继承的环境先清掉干扰 shell 初始化的两个键，
-	// 再叠兼容清单 / --session-env / webterm 自己的口径。优先级见 buildEnv。
+	// Session environment (AC-7.8): drop the two inherited keys that interfere
+	// with shell startup, then layer the compat list, --session-env, and
+	// webterm's own keys. See buildEnv for precedence.
 	cmd.Env = buildEnv(
 		filterEnv(os.Environ(), "BASH_ENV", "ENV"),
 		m.cfg.compatEnv(),
 		m.cfg.SessionEnv,
 		[]string{
-			"TERM=xterm-256color", // xterm.js 的能力集与它最匹配，查询也由它回答
+			"TERM=xterm-256color", // closest match to xterm.js, which also answers queries
 			fmt.Sprintf("WEBTERM_SESSION=%d", sid),
 		},
 	)
 
-	// agent 是 -900 时，shell 要从第一条用户代码起就是 0（ADR-0034 §3）
+	// When the agent runs at -900, the shell must be at 0 before any user code
+	// runs (ADR-0034 §3).
 	var raw *os.File
 	err := withChildOOMAdj(func() (err error) {
 		raw, err = pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("session: 启动 PTY: %w", err)
+		return nil, fmt.Errorf("session: start PTY: %w", err)
 	}
-	// 换成可轮询的 master（ADR-0016）：creack/pty 给的是阻塞文件，SetReadDeadline
-	// 对它不起作用，热升级时打断不了阻塞读。dup 一份、置 O_NONBLOCK、os.NewFile
-	// 包起来就进了 Go 的 poller；原来的关掉（file description 由 dup 持有，shell 不会收 SIGHUP）。
+	// Switch to a pollable master (ADR-0016). creack/pty returns a blocking
+	// file that ignores SetReadDeadline, so a hot upgrade couldn't interrupt a
+	// blocked read. Dup it, set O_NONBLOCK, and wrap it with os.NewFile to put
+	// it in Go's poller. Closing the original is safe: the dup keeps the file
+	// description open, so the shell gets no SIGHUP.
 	ptmx, fd, err := pollable(raw)
 	if err != nil {
 		_ = raw.Close()
 		_ = cmd.Process.Kill()
-		return nil, fmt.Errorf("session: 包装 PTY: %w", err)
+		return nil, fmt.Errorf("session: wrap PTY: %w", err)
 	}
 
 	s := &Session{
@@ -389,11 +414,12 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 	return s, nil
 }
 
-// pollable 把 creack/pty 给的阻塞 master 换成 Go poller 里的非阻塞文件。
-// 返回新文件与它的 fd 号（fd 单独记着 —— 之后不能再对文件调 Fd()）。
+// pollable replaces creack/pty's blocking master with a non-blocking file in
+// Go's poller. It returns the new file and its fd number, which callers keep
+// separately because Fd() must never be called on the file afterward.
 //
-// dup 必须带 CLOEXEC：裸 dup 的 fd 会被之后起的每个 shell 及其子孙继承，
-// 关掉的会话的 pty 就一直释放不了。
+// The dup must be CLOEXEC. A plain dup would be inherited by every later shell
+// and its descendants, and a closed session's pty would never be released.
 func pollable(raw *os.File) (*os.File, int, error) {
 	fd, err := unix.FcntlInt(raw.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
@@ -406,13 +432,13 @@ func pollable(raw *os.File) (*os.File, int, error) {
 	f := os.NewFile(uintptr(fd), "ptmx")
 	if f == nil {
 		unix.Close(fd)
-		return nil, -1, errors.New("os.NewFile 失败")
+		return nil, -1, errors.New("os.NewFile failed")
 	}
 	_ = raw.Close()
 	return f, fd, nil
 }
 
-// Get 按 sid 取会话。
+// Get returns the session with the given sid.
 func (m *Manager) Get(sid uint16) (*Session, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -420,7 +446,7 @@ func (m *Manager) Get(sid uint16) (*Session, bool) {
 	return s, ok && s != nil
 }
 
-// List 返回所有会话，按显示顺序（ADR-0040）。
+// List returns all sessions in display order (ADR-0040).
 func (m *Manager) List() []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -433,21 +459,24 @@ func (m *Manager) List() []*Session {
 	return out
 }
 
-// Order 返回显示顺序（sid 列表）。
+// Order returns the display order as a list of sids.
 func (m *Manager) Order() []uint16 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return slices.Clone(m.order)
 }
 
-// Move 把会话 sid 挪到 before 前面（协议 §4.1 session.move，ADR-0040）。
-// before 为 nil 或不存在（比如刚被别处关掉）→ 挪到最后；等于 sid → 原地不动。
-// sid 不存在 → ErrUnknownSession，publish 不调。
+// Move moves session sid in front of before (protocol §4.1 session.move,
+// ADR-0040). A nil or missing before (say, just closed elsewhere) moves it to
+// the end; before == sid is a no-op. An unknown sid returns ErrUnknownSession
+// without calling publish.
 //
-// 成功时（位置没变也算）拿挪完之后的完整顺序调 publish —— 广播 session.order。
-// 【改顺序与广播在同一把锁里】：两台设备同时拖，各自的广播如果不串行，某条连接
-// 可能先收到后一次的顺序、再收到前一次的，停在一个 agent 上已经不存在的顺序上。
-// publish 不能阻塞，也不能回头调 Move（连接层的 Event 只是入队，满了就关连接）。
+// On success, even if nothing moved, publish receives the full new order to
+// broadcast as session.order. Reordering and broadcasting happen under one
+// lock: if two devices drag at once and their broadcasts interleave, a
+// connection could receive the later order before the earlier one and end up
+// on an order the agent no longer has. publish must not block or call Move
+// (the connection's Event only enqueues and closes the connection when full).
 func (m *Manager) Move(sid uint16, before *uint16, publish func(order []uint16)) error {
 	m.orderMu.Lock()
 	defer m.orderMu.Unlock()
@@ -469,7 +498,8 @@ func (m *Manager) Move(sid uint16, before *uint16, publish func(order []uint16))
 	return nil
 }
 
-// moveBefore 返回把 sid 挪到 before 前面之后的顺序；before 为 nil 或不在列表里时放到最后。
+// moveBefore returns order with sid moved in front of before, or to the end if
+// before is nil or not in the list.
 func moveBefore(order []uint16, sid uint16, before *uint16) []uint16 {
 	out := make([]uint16, 0, len(order)+1)
 	for _, v := range order {
@@ -486,14 +516,15 @@ func moveBefore(order []uint16, sid uint16, before *uint16) []uint16 {
 	return slices.Insert(out, at, sid)
 }
 
-// removeOrderLocked 把 sid 从显示顺序里删掉。调用方持有 m.mu。
+// removeOrderLocked removes sid from the display order. The caller holds m.mu.
 func (m *Manager) removeOrderLocked(sid uint16) {
 	if i := slices.Index(m.order, sid); i >= 0 {
 		m.order = slices.Delete(m.order, i, i+1)
 	}
 }
 
-// Infos 返回所有会话的元数据（welcome.sessions[]），按显示顺序。
+// Infos returns metadata for all sessions (welcome.sessions[]) in display
+// order.
 func (m *Manager) Infos() []protocol.SessionInfo {
 	list := m.List()
 	out := make([]protocol.SessionInfo, 0, len(list))
@@ -503,9 +534,10 @@ func (m *Manager) Infos() []protocol.SessionInfo {
 	return out
 }
 
-// Close 关闭并销毁一个会话。
+// Close ends and removes a session.
 //
-// running：SIGHUP → 2 秒 → SIGKILL；exited：直接释放。
+// A running session gets SIGHUP, then SIGKILL after 2 seconds; an exited one is
+// released immediately.
 func (m *Manager) Close(sid uint16) (*int, error) {
 	m.mu.Lock()
 	s, ok := m.sessions[sid]
@@ -524,18 +556,20 @@ func (m *Manager) Close(sid uint16) (*int, error) {
 	return code, nil
 }
 
-// Resume 处理 hello 里的续传请求：对每一项按协议 §5.1 判定 ok / snapshot / gone，
-// 并【立刻】把 sub 订阅上去（补齐的帧随之入队）。返回 welcome.resumed[]。
+// Resume handles the resume requests in hello. For each it decides ok,
+// snapshot, or gone per protocol §5.1 and subscribes sub immediately, which
+// enqueues the catch-up frames. It returns welcome.resumed[].
 //
-// 判定与入队必须是同一个动作（见 Session.Subscribe），所以 welcome 要排在这些帧
-// 前面得靠连接层：调用 Resume 之前先把写队列"挂起"，welcome 入队之后再放行。
+// Deciding and enqueueing must be one step (see Session.Subscribe), so getting
+// welcome ahead of those frames is the connection layer's job: it holds its
+// write queue before calling Resume and releases it after enqueueing welcome.
 //
-// 这是整个项目风险最高的一段逻辑，所以它不依赖网络也不依赖浏览器 ——
-// IT-resume-* 直接调它。
+// This is the riskiest logic in the project, so it depends on neither the
+// network nor a browser; IT-resume-* call it directly.
 func (m *Manager) Resume(sub Subscriber, instanceID string, reqs []protocol.ResumeReq) []protocol.ResumeResult {
 	out := make([]protocol.ResumeResult, 0, len(reqs))
 	clientID := sub.ClientID()
-	// instance_id 不符 = agent 重启过，手里的 sid 全部作废
+	// A different instance_id means the agent restarted and every sid is void.
 	restarted := instanceID != "" && instanceID != m.instanceID
 	for _, r := range reqs {
 		res := protocol.ResumeResult{SID: r.SID}
@@ -545,8 +579,9 @@ func (m *Manager) Resume(sub Subscriber, instanceID string, reqs []protocol.Resu
 			out = append(out, res)
 			continue
 		}
-		// 丢掉该 client 已入队但还没写进 PTY 的输入，再报 in_ack。
-		// 否则报出去的 in_ack 偏小，客户端会重发那些正待写入的字节 → 重复。
+		// Drop the client's queued-but-unwritten input before reporting
+		// in_ack. Otherwise in_ack is too low and the client resends bytes
+		// that are still waiting to be written, duplicating them.
 		s.DetachClient(clientID)
 		res.InAck = s.InAck(clientID)
 		res.Status, res.FromSeq = s.Subscribe(sub, r.OutSeq, 0, 0)
@@ -555,8 +590,9 @@ func (m *Manager) Resume(sub Subscriber, instanceID string, reqs []protocol.Resu
 	return out
 }
 
-// Busy 返回有命令在跑的会话数：PTY 的前台进程组不是 shell 自己（见 Session.busy）。
-// --when-idle 靠它等"所有会话都停在提示符"。
+// Busy returns how many sessions are running a command, meaning the PTY's
+// foreground process group is not the shell itself (see Session.busy).
+// --when-idle uses it to wait until every session is at a prompt.
 func (m *Manager) Busy() int {
 	n := 0
 	for _, s := range m.List() {
@@ -567,7 +603,8 @@ func (m *Manager) Busy() int {
 	return n
 }
 
-// Shutdown 关闭所有会话。幂等 —— SIGTERM 处理和 defer 都会调它。
+// Shutdown closes all sessions. It is idempotent; both the SIGTERM handler and
+// a defer call it.
 func (m *Manager) Shutdown() {
 	m.shutdownOnce.Do(m.shutdown)
 }

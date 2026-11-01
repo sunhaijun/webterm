@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// newFS 造一个带常见 flag 的 FlagSet，模拟 serve。
+// newFS builds a FlagSet with a few common flags, standing in for serve.
 func newFS() (*flag.FlagSet, *string, *int, *bool) {
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	fs.SetOutput(os.NewFile(0, os.DevNull))
@@ -29,7 +29,7 @@ func write(t *testing.T, body string) string {
 
 func TestConfigFileFillsFlags(t *testing.T) {
 	path := write(t, `
-# 注释
+# comment
 
 domain     = term.example.com
 https-port = 8443
@@ -49,11 +49,12 @@ no-login-shell = true
 		t.Errorf("https-port = %d", *port)
 	}
 	if !*noLogin {
-		t.Error("no-login-shell 应当为 true")
+		t.Error("no-login-shell should be true")
 	}
 }
 
-// 命令行必须压过配置文件 —— 否则临时改一次就得动文件。
+// The command line must win over the config file; otherwise a one-off change
+// means editing the file.
 func TestCommandLineOverridesConfigFile(t *testing.T) {
 	path := write(t, "domain = from-file.example.com\nhttps-port = 8443\n")
 	fs, domain, port, _ := newFS()
@@ -64,35 +65,36 @@ func TestCommandLineOverridesConfigFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if *domain != "from-argv.example.com" {
-		t.Errorf("命令行没能覆盖配置文件：domain = %q", *domain)
+		t.Errorf("command line did not override the config file: domain = %q", *domain)
 	}
 	if *port != 8443 {
-		t.Errorf("没被命令行提到的键应当保留配置文件的值：https-port = %d", *port)
+		t.Errorf("keys not given on the command line should keep the file's value: https-port = %d", *port)
 	}
 }
 
-// 键名写错必须当场报错并指出行号。安静忽略是最难查的那种 bug。
+// A misspelled key must fail immediately and name the line. Silently ignoring
+// it is the hardest kind of bug to track down.
 func TestUnknownKeyIsAnErrorWithLineNumber(t *testing.T) {
 	path := write(t, "domain = a.example.com\n\nhttpsport = 8443\n")
 	fs, _, _, _ := newFS()
 	err := loadConfigInto(fs, path)
 	if err == nil {
-		t.Fatal("键名写错却没报错")
+		t.Fatal("misspelled key was accepted")
 	}
-	for _, want := range []string{"httpsport", ":3", "没有"} {
+	for _, want := range []string{"httpsport", ":3", "unknown option"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("错误信息里缺 %q: %v", want, err)
+			t.Errorf("error is missing %q: %v", want, err)
 		}
 	}
 }
 
-// 属于别的子命令的键要跳过，不能当成写错 ——
-// 配置文件是所有子命令共用的一份。
+// Keys belonging to another subcommand are skipped, not treated as typos: one
+// config file is shared by every subcommand.
 func TestKeyOfAnotherSubcommandIsSkipped(t *testing.T) {
 	path := write(t, "domain = a.example.com\nmax-sessions = 5\n")
-	fs, domain, _, _ := newFS() // 这个 FlagSet 没有 max-sessions
+	fs, domain, _, _ := newFS() // this FlagSet has no max-sessions
 	if err := loadConfigInto(fs, path); err != nil {
-		t.Fatalf("合法但不属于本子命令的键不该报错: %v", err)
+		t.Fatalf("a valid key for another subcommand should not fail: %v", err)
 	}
 	if err := fs.Parse(nil); err != nil {
 		t.Fatal(err)
@@ -102,26 +104,26 @@ func TestKeyOfAnotherSubcommandIsSkipped(t *testing.T) {
 	}
 }
 
-// --dev 和 --config 不许进配置文件，理由见 configKeys 的注释。
+// --dev and --config are not allowed in the config file; see configKeys.
 func TestDevAndConfigAreRejected(t *testing.T) {
 	for _, key := range []string{"dev", "config"} {
 		path := write(t, key+" = true\n")
 		fs, _, _, _ := newFS()
 		if err := loadConfigInto(fs, path); err == nil {
-			t.Errorf("%q 不该被允许写进配置文件", key)
+			t.Errorf("%q should not be allowed in the config file", key)
 		}
 	}
 }
 
-// 文件不存在不是错误 —— 大多数人不需要配置文件。
+// A missing file is not an error; most users do not need one.
 func TestMissingConfigFileIsFine(t *testing.T) {
 	fs, _, _, _ := newFS()
 	if err := loadConfigInto(fs, filepath.Join(t.TempDir(), "nope")); err != nil {
-		t.Errorf("配置文件不存在时不该报错: %v", err)
+		t.Errorf("missing config file should not be an error: %v", err)
 	}
 }
 
-// 只写键名的布尔项算 true。
+// A bare boolean key means true.
 func TestBareBooleanKey(t *testing.T) {
 	path := write(t, "no-login-shell\n")
 	fs, _, _, noLogin := newFS()
@@ -132,50 +134,53 @@ func TestBareBooleanKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !*noLogin {
-		t.Error("只写键名的布尔项应当算 true")
+		t.Error("a bare boolean key should mean true")
 	}
 }
 
-// 值非法时要说清是配置文件的问题，别让人以为是命令行敲错了。
+// An invalid value must point at the config file, so it is not mistaken for a
+// command-line typo.
 func TestBadValueMentionsTheFile(t *testing.T) {
-	path := write(t, "https-port = 不是数字\n")
+	path := write(t, "https-port = not-a-number\n")
 	fs, _, _, _ := newFS()
 	err := loadConfigInto(fs, path)
 	if err == nil {
-		t.Fatal("非法值没报错")
+		t.Fatal("invalid value was accepted")
 	}
 	if !strings.Contains(err.Error(), "https-port") || !strings.Contains(err.Error(), ":1") {
-		t.Errorf("错误信息应当指出键名与行号: %v", err)
+		t.Errorf("error should name the key and line: %v", err)
 	}
 }
 
-// ★ 防漂移：白名单里的每个键都必须是 serve 真有的 flag。
-// 少了这条，改 flag 名之后配置文件会安静地失效。
+// Drift guard: every allowlisted key must be a real serve flag. Without this,
+// renaming a flag would silently break config files.
 func TestConfigKeysAllExistOnServe(t *testing.T) {
 	fs := serveFlagSet()
 	for key := range configKeys {
 		if fs.Lookup(key) == nil {
-			t.Errorf("configKeys 里的 %q 不是 serve 的 flag —— 改名后配置会安静失效", key)
+			t.Errorf("configKeys has %q, which is not a serve flag; config files using it would silently stop working", key)
 		}
 	}
 }
 
-// ★ 反向：serve 上那些"该能配"的 flag 都在白名单里。
+// The reverse: every serve flag that should be configurable is allowlisted.
 func TestServeFlagsAreConfigurable(t *testing.T) {
-	// 这几个刻意不进配置文件。handoff-fd 是热升级时旧进程在 exec 那一刻传的
-	// 内部参数（ADR-0016），写进配置文件只会让 serve 去读一个不存在的 fd
+	// These are deliberately excluded. handoff-fd is internal: the old process
+	// passes it at exec during a hot upgrade (ADR-0016), and in a config file
+	// it would make serve read an fd that does not exist.
 	excluded := map[string]bool{"dev": true, "config": true, "handoff-fd": true}
 	fs := serveFlagSet()
 	fs.VisitAll(func(f *flag.Flag) {
 		if excluded[f.Name] || configKeys[f.Name] {
 			return
 		}
-		t.Errorf("serve 有 --%s 但没进 configKeys —— 要么加进去，要么在 excluded 里说明为什么", f.Name)
+		t.Errorf("serve has --%s but configKeys does not; add it, or add it to excluded with a reason", f.Name)
 	})
 }
 
-// UT-config-removed-key：删掉的键（acme-staging，ADR-0044 §3）报「已经删掉了」并带行号，
-// 而不是「没有这个选项」—— 后者会让人怀疑自己拼错了。
+// UT-config-removed-key: a removed key (acme-staging, ADR-0044 §3) reports
+// "has been removed" with the line number, not "unknown option", which would
+// make people suspect a typo.
 func TestConfigRemovedKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 	if err := os.WriteFile(path, []byte("domain = x.example.com\nacme-staging = true\n"), 0o644); err != nil {
@@ -185,11 +190,11 @@ func TestConfigRemovedKey(t *testing.T) {
 	fs.String("domain", "", "")
 	err := loadConfigInto(fs, path)
 	if err == nil {
-		t.Fatal("写了 acme-staging 却没报错 —— 静默忽略会让人以为它还在生效")
+		t.Fatal("acme-staging was accepted; ignoring it silently would suggest it still works")
 	}
-	for _, want := range []string{":2:", "已经删掉了", "删掉这一行"} {
+	for _, want := range []string{":2:", "has been removed", "Delete this line"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("报错里缺 %q：%v", want, err)
+			t.Errorf("error is missing %q: %v", want, err)
 		}
 	}
 }

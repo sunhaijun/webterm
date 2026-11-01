@@ -1,12 +1,14 @@
-// Package handoff 是热升级的交接层（ADR-0016）：把会话状态从旧进程搬到
-// 原地 exec 出来的新进程。
+// Package handoff carries session state across a hot upgrade (ADR-0016), from
+// the old process to the new one it execs in place.
 //
-// 它只管【搬】：类型、编码、memfd、预检、exec。什么状态该进快照由
-// internal/session 决定（Session 结构体里"不能丢"的那部分就是这里的 Session），
-// 怎么用 fd 重建会话也在那边。这样包依赖是单向的：session → handoff。
+// It only moves data: types, encoding, memfd, the pre-flight check, and exec.
+// internal/session decides what goes into the snapshot (this package's Session
+// is the part of session.Session that must survive) and how to rebuild a
+// session from it, so the dependency runs one way: session -> handoff.
 //
-// 快照走 memfd：只在内存里，不落盘（不变式 3）；fd 随 exec 继承给新进程，
-// 新进程读完就关。
+// The snapshot lives in a memfd, in memory only and never on disk
+// (invariant 3). The fd is inherited across exec, and the new process closes
+// it after reading.
 package handoff
 
 import (
@@ -26,45 +28,52 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Schema 是快照格式的版本。规则：只加字段不删字段，新进程对缺失字段取零值；
-// 不兼容的改动升这个号，旧进程的预检就会在 exec 之前失败。
+// Schema is the snapshot format version. Fields are only ever added, never
+// removed, and the new process treats missing fields as zero values. An
+// incompatible change bumps this number so the old process's pre-flight check
+// fails before exec.
 //
-//	1  初版（ADR-0016）：粘性模式（termstate）、OSC 解析器、shell 集成状态
-//	2  ADR-0026：模拟器状态（VTerm）取代粘性模式；shell 集成的字段删除。
-//	   新进程照样读 1：缺 VTerm 时用环形缓冲尽力还原模拟器，不中止升级（§8）
+//	1  initial (ADR-0016): sticky modes (termstate), OSC parser, shell-integration state
+//	2  ADR-0026: emulator state (VTerm) replaces sticky modes; shell-integration fields removed.
+//	   Schema 1 still loads: without VTerm the emulator is rebuilt best-effort
+//	   from the ring buffer instead of aborting the upgrade (§8)
 const Schema = 2
 
-// FlagName 是新进程接收快照 fd 的 flag 名（serve --handoff-fd=N）。
+// FlagName is the flag through which the new process receives the snapshot fd
+// (serve --handoff-fd=N).
 const FlagName = "handoff-fd"
 
-// Listener 是一个随 exec 继承的监听 socket。
+// Listener is a listening socket inherited across exec.
 type Listener struct {
 	Name string `json:"name"` // "http" / "https"
 	FD   int    `json:"fd"`
 }
 
-// PendingInput 是已入队但还没写进 PTY 的一段输入。
+// PendingInput is input that was queued but not yet written to the PTY.
 type PendingInput struct {
 	ClientID string `json:"client_id"`
 	Data     []byte `json:"data"`
 }
 
-// Session 是一个会话"不能丢"的全部状态。字段清单见
-// docs/50-backend/session-manager.md §热升级交接。
+// Session is everything about a session that must survive a handoff. The
+// field list is documented in docs/50-backend/session-manager.md (hot-upgrade
+// handoff section).
 //
-// schema 1 的那些字段（integration / prompt_state / osc / modes / 命令记录 …）
-// 已删除：解码时被忽略，旧版本交过来的会话照样接得回来。
+// Schema 1 fields (integration, prompt_state, osc, modes, command records, ...)
+// are gone. The decoder ignores them, so sessions handed over by an older
+// version still load.
 type Session struct {
 	SID       uint16    `json:"sid"`
-	PtmxFD    int       `json:"ptmx_fd"`   // -1 = 没有（会话已退出）
-	ShellPID  int       `json:"shell_pid"` // 0 = 没有
+	PtmxFD    int       `json:"ptmx_fd"`   // -1 = none (session exited)
+	ShellPID  int       `json:"shell_pid"` // 0 = none
 	CreatedAt time.Time `json:"created_at"`
 
 	Name       string `json:"name,omitempty"`
 	NameManual bool   `json:"name_manual,omitempty"`
-	// Title / TitlePgrp：此刻采用的终端标题与它归属的前台进程组（ADR-0043 §4）。
-	// 不交接的话，升级后名字会先闪回目录名、等程序下次写标题才回来。旧快照里没有，
-	// 等于「没在用标题」。
+	// Title and TitlePgrp are the terminal title in use and the foreground
+	// process group it belongs to (ADR-0043 §4). Without them the name would
+	// flash back to the directory name after an upgrade until the program
+	// sets its title again. Absent in older snapshots, meaning no title in use.
 	Title     string `json:"title,omitempty"`
 	TitlePgrp int    `json:"title_pgrp,omitempty"`
 	CWD       string `json:"cwd"`
@@ -76,9 +85,10 @@ type Session struct {
 	RingBase uint64 `json:"ring_base"`
 	RingData []byte `json:"ring_data"`
 
-	// VTerm 是终端模拟器的完整状态（internal/vterm 的 Export，带满 2000 行历史；
-	// 对这一层是不透明的字节）。【必须交接】：屏幕、模式、历史推导不出来 ——
-	// 环形缓冲只有最近 256 KiB。schema 1 没有它。
+	// VTerm is the full terminal emulator state (internal/vterm Export, with
+	// the full 2000 lines of scrollback; opaque bytes at this layer). It must
+	// be handed over: the screen, modes, and scrollback cannot be rebuilt from
+	// the ring buffer, which holds only the last 256 KiB. Absent in schema 1.
 	VTerm []byte `json:"vterm,omitempty"`
 
 	InQueued map[string]uint64 `json:"in_queued,omitempty"`
@@ -87,19 +97,20 @@ type Session struct {
 	Pending []PendingInput `json:"pending,omitempty"`
 }
 
-// Snapshot 是一次交接的全部内容。
+// Snapshot is everything passed in one handoff.
 type Snapshot struct {
 	Schema      int        `json:"schema"`
-	Generation  int        `json:"generation"` // 新进程的代数：每交接一次 +1
+	Generation  int        `json:"generation"` // new process's generation; +1 per handoff
 	FromVersion string     `json:"from_version"`
 	InstanceID  string     `json:"instance_id"`
 	NextSID     uint16     `json:"next_sid"`
 	Listeners   []Listener `json:"listeners"`
-	Sessions    []Session  `json:"sessions"` // 按显示顺序（ADR-0040）
+	Sessions    []Session  `json:"sessions"` // in display order (ADR-0040)
 }
 
-// CloseFDs 关掉快照里为交接 dup 出来的会话 fd（交接中止时用）。监听 fd 由
-// agent 侧的 ExportListeners 返回的 *os.File 负责。
+// CloseFDs closes the session fds duplicated for the handoff; used when the
+// handoff is aborted. Listener fds are owned by the *os.File values returned
+// from the agent's ExportListeners.
 func (s *Snapshot) CloseFDs() {
 	for i := range s.Sessions {
 		if s.Sessions[i].PtmxFD >= 0 {
@@ -109,38 +120,40 @@ func (s *Snapshot) CloseFDs() {
 	}
 }
 
-// Validate 是新进程（handoff-check 与真正的恢复）对快照的检查。
+// Validate checks a snapshot in the new process, both in handoff-check and in
+// the real restore.
 func Validate(s *Snapshot) error {
 	if s == nil {
-		return errors.New("handoff: 快照为空")
+		return errors.New("handoff: snapshot is nil")
 	}
 	if s.Schema <= 0 || s.Schema > Schema {
-		return fmt.Errorf("handoff: 快照 schema %d，本版本只认 1..%d —— 新二进制比快照旧？", s.Schema, Schema)
+		return fmt.Errorf("handoff: snapshot schema %d, this build supports 1..%d (is the new binary older than the running one?)", s.Schema, Schema)
 	}
 	if s.InstanceID == "" {
-		return errors.New("handoff: 快照缺 instance_id")
+		return errors.New("handoff: snapshot has no instance_id")
 	}
 	seen := make(map[uint16]bool, len(s.Sessions))
 	for _, se := range s.Sessions {
 		if se.SID == 0 || seen[se.SID] {
-			return fmt.Errorf("handoff: 会话 sid %d 非法或重复", se.SID)
+			return fmt.Errorf("handoff: invalid or duplicate session sid %d", se.SID)
 		}
 		seen[se.SID] = true
 		if se.Status == "running" && (se.PtmxFD < 0 || se.ShellPID <= 0) {
-			return fmt.Errorf("handoff: 运行中的会话 %d 缺 ptmx fd 或 pid", se.SID)
+			return fmt.Errorf("handoff: running session %d has no ptmx fd or pid", se.SID)
 		}
 	}
 	return nil
 }
 
-// Encode / Decode 是快照的线格式（JSON）。
+// Encode serializes a snapshot to its wire format (JSON).
 func Encode(s *Snapshot) ([]byte, error) { return json.Marshal(s) }
 
+// Decode reads a snapshot and validates it.
 func Decode(r io.Reader) (*Snapshot, error) {
 	var s Snapshot
 	dec := json.NewDecoder(r)
 	if err := dec.Decode(&s); err != nil {
-		return nil, fmt.Errorf("handoff: 解码快照: %w", err)
+		return nil, fmt.Errorf("handoff: decode snapshot: %w", err)
 	}
 	if err := Validate(&s); err != nil {
 		return nil, err
@@ -148,8 +161,8 @@ func Decode(r io.Reader) (*Snapshot, error) {
 	return &s, nil
 }
 
-// Write 把快照写进一个只在内存里的文件，返回它（已 seek 到 0，已清 CLOEXEC，
-// 可以直接随 exec 继承）。
+// Write stores the snapshot in a memory-only file and returns it, seeked to 0
+// with CLOEXEC cleared so it is ready to be inherited across exec.
 func Write(s *Snapshot) (*os.File, error) {
 	raw, err := Encode(s)
 	if err != nil {
@@ -161,7 +174,7 @@ func Write(s *Snapshot) (*os.File, error) {
 	}
 	if _, err := f.Write(raw); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("handoff: 写快照: %w", err)
+		return nil, fmt.Errorf("handoff: write snapshot: %w", err)
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		f.Close()
@@ -174,8 +187,9 @@ func Write(s *Snapshot) (*os.File, error) {
 	return f, nil
 }
 
-// memFile 造一个匿名的内存文件：优先 memfd，没有（老内核 / 某些容器）就退到
-// tmpfs 上的 /dev/shm 并立刻 unlink —— 两者都不落磁盘。
+// memFile creates an anonymous in-memory file. It prefers memfd and falls back
+// to an immediately unlinked file on /dev/shm (tmpfs) on old kernels or in
+// containers without memfd. Neither touches disk.
 func memFile() (*os.File, error) {
 	fd, err := unix.MemfdCreate("webterm-handoff", 0)
 	if err == nil {
@@ -183,17 +197,17 @@ func memFile() (*os.File, error) {
 	}
 	f, err2 := os.CreateTemp("/dev/shm", "webterm-handoff-*")
 	if err2 != nil {
-		return nil, fmt.Errorf("handoff: memfd_create: %v；/dev/shm 也不可用: %w", err, err2)
+		return nil, fmt.Errorf("handoff: memfd_create: %v; /dev/shm unavailable too: %w", err, err2)
 	}
 	_ = os.Remove(f.Name())
 	return f, nil
 }
 
-// Read 在新进程里读回快照并关掉 fd。
+// Read loads the snapshot in the new process and closes fd.
 func Read(fd int) (*Snapshot, error) {
 	f := os.NewFile(uintptr(fd), "handoff")
 	if f == nil {
-		return nil, fmt.Errorf("handoff: fd %d 无效", fd)
+		return nil, fmt.Errorf("handoff: invalid fd %d", fd)
 	}
 	defer f.Close()
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -202,16 +216,18 @@ func Read(fd int) (*Snapshot, error) {
 	return Decode(f)
 }
 
-// Inherit 清掉 fd 的 CLOEXEC，让它活过 exec。Go 默认给所有 fd 置 CLOEXEC。
+// Inherit clears CLOEXEC on fd so it survives exec. Go sets CLOEXEC on every fd
+// by default.
 func Inherit(fd int) error {
 	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, 0); err != nil {
-		return fmt.Errorf("handoff: 清 fd %d 的 CLOEXEC: %w", fd, err)
+		return fmt.Errorf("handoff: clear CLOEXEC on fd %d: %w", fd, err)
 	}
 	return nil
 }
 
-// Check 是预检：以子进程跑【新二进制】的 handoff-check，把元数据快照喂给它。
-// 读不了就在这里失败 —— exec 之后没有回头路。
+// Check is the pre-flight check: it runs the new binary's handoff-check as a
+// child process and feeds it the metadata snapshot. If the new binary cannot
+// read it, fail here; there is no way back after exec.
 func Check(exe string, meta *Snapshot, timeout time.Duration) error {
 	raw, err := Encode(meta)
 	if err != nil {
@@ -221,44 +237,46 @@ func Check(exe string, meta *Snapshot, timeout time.Duration) error {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, "handoff-check")
 	cmd.Stdin = bytes.NewReader(raw)
-	cmd.WaitDelay = time.Second // 杀掉之后不再等它的子进程关管道
+	cmd.WaitDelay = time.Second // after the kill, don't wait for its children to close the pipe
 	out, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
 	switch {
 	case err == nil:
 	case ctx.Err() != nil:
-		return errors.New("handoff: 新二进制预检超时")
+		return errors.New("handoff: new binary pre-flight check timed out")
 	case !errors.As(err, &exit):
-		return fmt.Errorf("handoff: 起不来新二进制 %s: %w", exe, err)
+		return fmt.Errorf("handoff: cannot start new binary %s: %w", exe, err)
 	default:
-		return fmt.Errorf("handoff: 新二进制拒绝了快照: %s", bytes.TrimSpace(out))
+		return fmt.Errorf("handoff: new binary rejected the snapshot: %s", bytes.TrimSpace(out))
 	}
 	if !bytes.HasPrefix(bytes.TrimSpace(out), []byte("ok schema=")) {
-		return fmt.Errorf("handoff: 新二进制的预检输出不对: %q", out)
+		return fmt.Errorf("handoff: unexpected pre-flight output from new binary: %q", out)
 	}
 	return nil
 }
 
-// CheckOutput 是 handoff-check 成功时打的那一行。
+// CheckOutput is the line handoff-check prints on success.
 func CheckOutput() string { return "ok schema=" + strconv.Itoa(Schema) }
 
-// Exec 原地换成新二进制。只在出错时返回。
+// Exec replaces the process with the new binary. It returns only on error.
 //
-// argv 应当是 serve 的完整参数（不含 --handoff-fd），这里补上快照 fd。
+// argv is the full serve argument list without --handoff-fd; Exec appends the
+// snapshot fd.
 func Exec(exe string, argv []string, fd int) error {
 	args := append([]string{exe}, argv...)
 	args = append(args, "--"+FlagName+"="+strconv.Itoa(fd))
 	return syscall.Exec(exe, args, os.Environ())
 }
 
-// StripFlag 去掉参数里的 --handoff-fd=N（新进程再交接时要用原参数）。
-// flag 包认的四种写法都要去：--x=N、-x=N、--x N、-x N。
+// StripFlag removes --handoff-fd from args so the new process can hand off
+// again with its original arguments. It handles all four forms the flag
+// package accepts: --x=N, -x=N, --x N, -x N.
 func StripFlag(args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
 		case a == "--"+FlagName || a == "-"+FlagName:
-			i++ // 值在下一个
+			i++ // value is the next arg
 		case strings.HasPrefix(a, "--"+FlagName+"="), strings.HasPrefix(a, "-"+FlagName+"="):
 		default:
 			out = append(out, a)

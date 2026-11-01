@@ -37,11 +37,11 @@ func runDevices(args []string) error {
 			return err
 		}
 		if len(devs) == 0 {
-			fmt.Println("没有已授权的设备。跑 webterm pair 生成配对码。")
+			fmt.Println("No authorized devices. Run webterm pair to create a pairing code.")
 			return nil
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\t名字\t最后活动\t最后 IP")
+		fmt.Fprintln(w, "ID\tNAME\tLAST SEEN\tLAST IP")
 		for _, d := range devs {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", d.ID[:8], d.Name,
 				time.UnixMilli(d.LastSeenAt).Format("2006-01-02 15:04"), d.LastIP)
@@ -50,7 +50,7 @@ func runDevices(args []string) error {
 
 	case "revoke":
 		if fs.NArg() < 2 {
-			return fmt.Errorf("用法: webterm devices revoke <id>")
+			return fmt.Errorf("usage: webterm devices revoke <id>")
 		}
 		id, err := resolveDeviceID(st, fs.Arg(1))
 		if err != nil {
@@ -59,7 +59,7 @@ func runDevices(args []string) error {
 		if err := st.RevokeDevice(id, time.Now()); err != nil {
 			return err
 		}
-		fmt.Printf("设备 %s 已吊销。它的 WebSocket 会在 5 秒内断开。\n", id[:8])
+		fmt.Printf("Revoked device %s. Its WebSocket connections close within 5 seconds.\n", id[:8])
 		return nil
 
 	case "revoke-all":
@@ -67,13 +67,13 @@ func runDevices(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("已吊销全部 %d 台设备。所有设备都需要重新配对。\n", n)
+		fmt.Printf("Revoked %s. Every device must pair again.\n", plural(int(n), "device"))
 		return nil
 	}
-	return fmt.Errorf("未知子命令 %q，可用：list | revoke <id> | revoke-all", sub)
+	return fmt.Errorf("unknown command %q; available: list | revoke <id> | revoke-all", sub)
 }
 
-// resolveDeviceID 支持用 id 前缀（列表里显示的就是前 8 位）。
+// resolveDeviceID accepts an ID prefix; the list shows the first 8 characters.
 func resolveDeviceID(st *store.Store, prefix string) (string, error) {
 	devs, err := st.ListDevices()
 	if err != nil {
@@ -87,10 +87,10 @@ func resolveDeviceID(st *store.Store, prefix string) (string, error) {
 	}
 	switch len(hits) {
 	case 0:
-		return "", fmt.Errorf("没有匹配 %q 的设备", prefix)
+		return "", fmt.Errorf("no device matches %q", prefix)
 	case 1:
 		return hits[0], nil
 	default:
-		return "", fmt.Errorf("%q 匹配到 %d 台设备，请给出更长的前缀", prefix, len(hits))
+		return "", fmt.Errorf("%q matches %d devices; use a longer prefix", prefix, len(hits))
 	}
 }

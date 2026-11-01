@@ -1,12 +1,14 @@
 /**
- * E2E-37 滚动与写入的基线测量（只记录，不断言）—— ADR-0026 §7。
+ * E2E-37 Baseline for scrolling and writing (record only, no pass/fail) — ADR-0026 §7.
  *
- * 输出链路先用原生（流式 TextDecoder → term.write，DOM 渲染器，xterm 自带的触摸滚动）。
- * 这条场景量出原生的表现，作为将来"要不要加优化"的依据：要加回任何一项优化
- * （按帧合并、回看暂停、写入预算、WebGL、自写滚动），先拿这几个数对比，带着数据写 ADR。
+ * The output path is plain for now: streaming TextDecoder -> term.write, DOM renderer, xterm's own
+ * touch scrolling. This scenario measures that baseline so any future optimization (per-frame
+ * batching, pausing during scrollback, write budgets, WebGL, custom scrolling) is justified against
+ * these numbers in its ADR.
  *
- * 【这台机器没 GPU，只看主线程毫秒数】：长任务（duration > 50ms）的个数与最长一次。
- * 结果写进测试报告（annotation）并打印；只断言「测到了东西」，不断言快慢。
+ * The test machine has no GPU, so only main-thread time counts: the number of long tasks
+ * (duration > 50ms) and the longest one. Results go into the report as annotations and are printed.
+ * The test asserts only that something was measured, not how fast it was.
  */
 import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -25,7 +27,7 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-/** 长任务观察器：页面一加载就装上，记下每个长任务的起止。 */
+/** LONGTASKS installs a long-task observer at page load and records each task's start and duration. */
 const LONGTASKS = () => {
   const w = window as unknown as { __long: { start: number; dur: number }[] }
   w.__long = []
@@ -34,13 +36,13 @@ const LONGTASKS = () => {
       for (const e of list.getEntries()) w.__long.push({ start: e.startTime, dur: e.duration })
     }).observe({ type: 'longtask', buffered: true })
   } catch {
-    /* 不支持 longtask 的浏览器：记录为空 */
+    /* browser without longtask support: record stays empty */
   }
 }
 
 const now = (p: Page) => p.evaluate(() => performance.now())
 
-/** [from, to] 之间的长任务（duration > 50）。 */
+/** longTasks returns the long tasks (duration > 50) that started within [from, to]. */
 async function longTasks(p: Page, from: number, to = Infinity) {
   const all = await p.evaluate(() => (window as unknown as { __long: { start: number; dur: number }[] }).__long)
   const xs = all.filter((t) => t.start >= from && t.start <= to && t.dur > 50).map((t) => Math.round(t.dur))
@@ -53,20 +55,20 @@ function record(name: string, v: unknown) {
   console.log(`[E2E-37] ${s}`)
 }
 
-test('E2E-37 基线：输出期间 / 拖动期间 / 切回 1 MiB 快照 的主线程长任务（只记录）', async ({ page }) => {
+test('E2E-37 baseline: main-thread long tasks during output, during drag, and switching back to a 1 MiB snapshot (record only)', async ({ page }) => {
   await page.addInitScript(LONGTASKS)
   await agent.open(page)
   const a = (await hooks.sid(page))!
 
-  // ① emit.sh 4000 0 期间
+  // (1) During emit.sh 4000 0.
   const t1 = await now(page)
   await submit(page, `${EMIT} 4000 0`)
-  await waitText(page, 'EMIT-DONE', '输出跑完', 90_000)
+  await waitText(page, 'EMIT-DONE', 'output finished', 90_000)
   const t1e = await now(page)
   const write = await longTasks(page, t1, t1e)
-  record('①输出 4000 行', { ms: Math.round(t1e - t1), ...write })
+  record('(1) output 4000 lines', { ms: Math.round(t1e - t1), ...write })
 
-  // ② 输出跑完后，20 帧单指纵向拖（每帧 12px）
+  // (2) After output finishes: a one-finger vertical drag of 20 frames, 12px each.
   const r = (await rectOf(page, '[data-testid=terminal]'))!
   const x = r.left + r.width / 2
   let y = r.top + 60
@@ -85,15 +87,15 @@ test('E2E-37 基线：输出期间 / 拖动期间 / 切回 1 MiB 快照 的主�
   const t2e = await now(page)
   const drag = await longTasks(page, t2, t2e)
   const y1 = (await hooks.viewport(page)).y
-  record('②拖动 20 帧 × 12px', { ms: Math.round(t2e - t2), scrolledRows: y0 - y1, ...drag })
+  record('(2) drag 20 frames × 12px', { ms: Math.round(t2e - t2), scrolledRows: y0 - y1, ...drag })
 
-  // ③ 切回一个积压 1 MiB 的会话（走快照）：从按下切换键到快照写完
+  // (3) Switch back to a session with 1 MiB of backlog (snapshot path): from the switch keypress until the snapshot is written.
   const dir = mkdtempSync(join(tmpdir(), 'webterm-e2e37-'))
   const done = join(dir, 'flood')
   const pad = 'x'.repeat(60)
   await submit(page, `(sleep 2; for i in $(seq 1 15000); do printf 'pad %05d %s\\n' $i ${pad}; done; printf 'FLOOD-%s\\n' END; touch ${done}) &`)
   const b = await newSession(page)
-  await waitFor(() => existsSync(done), 'A 在后台积压了 1 MiB', 120_000)
+  await waitFor(() => existsSync(done), 'A built up 1 MiB of backlog in the background', 120_000)
   await page.waitForTimeout(500)
   expect(await hooks.sid(page)).toBe(b)
   const t3 = await now(page)
@@ -102,7 +104,7 @@ test('E2E-37 基线：输出期间 / 拖动期间 / 切回 1 MiB 快照 的主�
       new Promise<number>((resolve) => {
         const w = window as unknown as { __webterm: { text(): string } }
         const t0 = performance.now()
-        // Ctrl+Shift+↑ = 上一个会话（与按真键走同一个 window keydown 监听）
+        // Ctrl+Shift+Up = previous session (same window keydown listener as a real keypress).
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', ctrlKey: true, shiftKey: true, bubbles: true }))
         const tick = () => {
           if (w.__webterm.text().includes('FLOOD-END')) resolve(performance.now() - t0)
@@ -114,13 +116,13 @@ test('E2E-37 基线：输出期间 / 拖动期间 / 切回 1 MiB 快照 的主�
   expect(await hooks.sid(page)).toBe(a)
   const t3e = await now(page)
   const snap = (await hooks.frames(page)).filter((f) => f.sid === a && f.kind === 'SNAPSHOT')
-  record('③切回 1 MiB 积压（快照）', {
+  record('(3) switch back to 1 MiB backlog (snapshot)', {
     ms: Math.round(ms),
     snapshotBytes: snap.reduce((n, f) => n + f.bytes, 0),
     ...(await longTasks(page, t3, t3e)),
   })
 
-  // 只断言「量到了」：各段都真的发生过
+  // Assert only that each phase actually happened.
   expect(t1e - t1).toBeGreaterThan(0)
-  expect(snap.length, '③ 确实走了快照').toBeGreaterThan(0)
+  expect(snap.length, '(3) went through the snapshot path').toBeGreaterThan(0)
 })

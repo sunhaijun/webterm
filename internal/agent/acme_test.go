@@ -20,14 +20,16 @@ import (
 	"github.com/sunhaijun/webterm/internal/store"
 )
 
-// IT-tls-1..3（docs/70-testing/strategy.md）：ACME 链路的机械化证据。
+// IT-tls-1..3 (docs/70-testing/strategy.md): automated evidence that the
+// ACME path works.
 //
-// 用 internal/acmetest 里的本地假 CA，不用 pebble ——
-// 理由和"它证明什么、不证明什么"写在那个包的注释里。
+// Uses the local fake CA in internal/acmetest rather than pebble; that
+// package's doc comment explains why and what it does and doesn't prove.
 
 const testDomain = "term.test"
 
-// acmeFixture 起一个假 CA + 一个真的按生产路径监听的 agent。
+// acmeFixture is a fake CA plus an agent listening through the real
+// production path.
 type acmeFixture struct {
 	ca        *acmetest.Server
 	report    *lockedBuffer
@@ -36,16 +38,18 @@ type acmeFixture struct {
 	httpsPort int
 }
 
-// fixtureOpts 是夹具的可调项。
+// fixtureOpts tunes the fixture.
 type fixtureOpts struct {
-	// failChallenge 让假 CA 的验证必然失败（模拟"安全组没放行 80"）。
+	// failChallenge makes the fake CA's validation always fail (simulating a
+	// security group that blocks 80).
 	failChallenge bool
-	// certLifetime 是签出来的证书有效期，用来断言报出的到期日是真的。
+	// certLifetime is the issued certificate lifetime, used to check that the
+	// reported expiry date is real.
 	certLifetime time.Duration
 	tune         func(*agent.ServeConfig)
 }
 
-// newACMEFixture 按 ServeConfig 起监听。
+// newACMEFixture starts listening with a ServeConfig.
 func newACMEFixture(t *testing.T, o fixtureOpts) *acmeFixture {
 	t.Helper()
 
@@ -97,10 +101,12 @@ func newACMEFixture(t *testing.T, o fixtureOpts) *acmeFixture {
 		o.tune(&cfg)
 	}
 
-	// 假 CA 验证挑战时直接连本机的 :80 —— 这样就不需要让 term.test
-	// 真的解析出来，也是不用 pebble 的主要原因。
+	// The fake CA validates by connecting straight to the local :80, so
+	// term.test never has to resolve; that is the main reason for not using
+	// pebble.
 	//
-	// 【必须在 Listen 之前定下来】：预热是异步的，晚一步就有竞态。
+	// Set this before Listen: the warm-up is asynchronous, so setting it
+	// later races.
 	if !o.failChallenge {
 		ca.ValidateAgainst(fmt.Sprintf("127.0.0.1:%d", f.httpPort))
 	}
@@ -117,7 +123,8 @@ func newACMEFixture(t *testing.T, o fixtureOpts) *acmeFixture {
 	return f
 }
 
-// waitReport 等预热结果落到 CertReport（预热是异步的）。
+// waitReport waits for the warm-up result to reach CertReport (the warm-up
+// is asynchronous).
 func (f *acmeFixture) waitReport(t *testing.T, want string) string {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
@@ -127,22 +134,22 @@ func (f *acmeFixture) waitReport(t *testing.T, want string) string {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("等 %q 超时，CertReport 里只有:\n%s", want, f.report.String())
+	t.Fatalf("timed out waiting for %q; CertReport has only:\n%s", want, f.report.String())
 	return ""
 }
 
-// freePorts 一次分配 n 个【互不相同】的空闲端口。
-//
-// 以前是 freePort() 调两次：每次 Listen(:0) 拿到端口就 Close。内核会把刚释放
-// 的临时端口再发一次，于是 http 和 https 偶尔拿到同一个端口，serve 直接拒绝
-// （"--http-port 和 --https-port 不能相同"），测试随机红。把所有 listener
-// 拿在手里直到全部分配完，再一起关，就不会撞。
-// freePort 取一个空闲端口。只要一个时没有撞车问题；要两个以上用 freePorts。
+// freePort returns one free port. Use freePorts when you need more than one.
 func freePort(t *testing.T) int {
 	t.Helper()
 	return freePorts(t, 1)[0]
 }
 
+// freePorts allocates n distinct free ports at once.
+//
+// Calling freePort twice can return the same port: each Listen(:0) is closed
+// right away and the kernel may hand the port out again, so http and https
+// would occasionally collide and serve would reject them. Holding every
+// listener until all ports are allocated avoids that.
 func freePorts(t *testing.T, n int) []int {
 	t.Helper()
 	lns := make([]net.Listener, 0, n)
@@ -163,35 +170,37 @@ func freePorts(t *testing.T, n int) []int {
 	return ports
 }
 
-// IT-tls-1：走完整 ACME 流程真的拿到证书，落盘、能握手、报出到期时间。
+// IT-tls-1: the full ACME flow really obtains a certificate, stores it,
+// serves handshakes with it and reports its expiry.
 func TestACMEIssuesRealCertificate(t *testing.T) {
-	const lifetime = 47 * 24 * time.Hour // 故意不是 90 天，好确认日期不是写死的
+	const lifetime = 47 * 24 * time.Hour // not 90 days, to prove the date isn't hard-coded
 	f := newACMEFixture(t, fixtureOpts{certLifetime: lifetime})
 
-	report := f.waitReport(t, "证书已就绪")
-	// 报出的到期日必须是【证书真实的到期日】，不是占位符 ——
-	// 这是用户确认"真的成了"的唯一凭据
+	report := f.waitReport(t, "Certificate ready")
+	// The reported expiry must be the certificate's real expiry, not a
+	// placeholder: it is the user's only proof that it worked.
 	wantDate := time.Now().Add(lifetime).Local().Format("2006-01-02")
 	if !strings.Contains(report, wantDate) {
-		t.Errorf("预热报告里的到期日应当是 %s: %q", wantDate, report)
+		t.Errorf("warm-up report should give expiry %s: %q", wantDate, report)
 	}
-	if !strings.Contains(report, "自动续期") {
-		t.Errorf("预热报告缺续期说明: %q", report)
+	if !strings.Contains(report, "renews automatically") {
+		t.Errorf("warm-up report doesn't mention renewal: %q", report)
 	}
 
-	// 假 CA 侧确认签发的域名就是 --domain。
-	// 【数量的断言故意留到握手之后】—— 见文件末尾那条回归测试。
+	// On the CA side, the issued name is --domain. The count is checked only
+	// after the handshake; see the regression test at the end of this file.
 	if issued := f.ca.Issued(); len(issued) == 0 || issued[0] != testDomain {
-		t.Errorf("签发的域名 = %v, 想要 [%s]", issued, testDomain)
+		t.Errorf("issued names = %v, want [%s]", issued, testDomain)
 	}
 
-	// 证书落到了 CertDir，且目录是 0700（私钥在里面）
+	// The certificate is in CertDir, and the dir is 0700 (it holds the
+	// private key).
 	info, err := os.Stat(f.certDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o700 {
-		t.Errorf("证书目录权限 = %o, 想要 700", perm)
+		t.Errorf("cert dir mode = %o, want 700", perm)
 	}
 	entries, err := os.ReadDir(f.certDir)
 	if err != nil {
@@ -208,25 +217,27 @@ func TestACMEIssuesRealCertificate(t *testing.T) {
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
-		t.Errorf("%s 的证书没落盘，目录里只有 %v", testDomain, names)
+		t.Errorf("no certificate stored for %s; dir has only %v", testDomain, names)
 	}
 
-	// ★ 真握手：这才是"证书可用"的证据，光有文件不算
+	// A real handshake is the evidence that the certificate works; a file
+	// alone is not.
 	conn, err := tls.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", f.httpsPort),
 		f.ca.TLSClientConfig(testDomain))
 	if err != nil {
-		t.Fatalf("TLS 握手失败: %v", err)
+		t.Fatalf("TLS handshake failed: %v", err)
 	}
 	defer conn.Close()
 	leaf := conn.ConnectionState().PeerCertificates[0]
 	if err := leaf.VerifyHostname(testDomain); err != nil {
-		t.Errorf("证书不覆盖 %s: %v", testDomain, err)
+		t.Errorf("certificate doesn't cover %s: %v", testDomain, err)
 	}
 	if got := leaf.NotAfter.Local().Format("2006-01-02"); got != wantDate {
-		t.Errorf("握手拿到的证书到期日 = %s, 报告里说的是 %s —— 两者必须一致", got, wantDate)
+		t.Errorf("handshake certificate expires %s but the report says %s; they must match", got, wantDate)
 	}
 
-	// :80 上非挑战请求要 301 到 HTTPS（顺带证明挑战 handler 没吃掉全部路由）
+	// Non-challenge requests on :80 get a 301 to HTTPS (which also shows the
+	// challenge handler doesn't swallow every route).
 	noRedirect := &http.Client{
 		Timeout:       5 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -237,35 +248,36 @@ func TestACMEIssuesRealCertificate(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusMovedPermanently {
-		t.Errorf(":80 状态码 = %d, 想要 301", resp.StatusCode)
+		t.Errorf(":80 status = %d, want 301", resp.StatusCode)
 	}
 	if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, "https://"+testDomain) {
-		t.Errorf("Location = %q, 想要 https://%s 开头", loc, testDomain)
+		t.Errorf("Location = %q, want prefix https://%s", loc, testDomain)
 	}
 }
 
-// IT-tls-2：--dev 【一次都不找 CA】。
+// IT-tls-2: --dev never contacts the CA.
 //
-// 断言"没签发成功"太弱 —— 发起了但失败也满足。这里断言假 CA 收到零请求。
+// "Nothing was issued" is too weak: a started-but-failed issuance passes it
+// too. This asserts the fake CA received zero requests.
 func TestDevModeNeverTouchesACME(t *testing.T) {
 	f := newACMEFixture(t, fixtureOpts{tune: func(c *agent.ServeConfig) {
 		c.Dev = true
 	}})
 
-	// 给足够时间让"如果会去申请"的那条路走起来
+	// Give a would-be certificate request enough time to start.
 	time.Sleep(500 * time.Millisecond)
 
 	if n := f.ca.Requests(); n != 0 {
-		t.Errorf("--dev 下 CA 收到 %d 个请求，应当是 0 —— 开发模式不许申请证书", n)
+		t.Errorf("--dev: CA received %d requests, want 0; dev mode must not request certificates", n)
 	}
 	if got := f.report.String(); got != "" {
-		t.Errorf("--dev 下不该有证书报告，却有: %q", got)
+		t.Errorf("--dev: unexpected certificate report: %q", got)
 	}
 	if _, err := os.Stat(f.certDir); !os.IsNotExist(err) {
-		t.Errorf("--dev 下不该创建证书目录 %s (err=%v)", f.certDir, err)
+		t.Errorf("--dev: cert dir %s should not be created (err=%v)", f.certDir, err)
 	}
 
-	// 而且它确实在明文 HTTP 上工作
+	// And it does serve plain HTTP.
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).
 		Get(fmt.Sprintf("http://127.0.0.1:%d/healthz", f.httpPort))
 	if err != nil {
@@ -273,80 +285,86 @@ func TestDevModeNeverTouchesACME(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("--dev /healthz = %d, 想要 200", resp.StatusCode)
+		t.Errorf("--dev /healthz = %d, want 200", resp.StatusCode)
 	}
 }
 
-// IT-tls-3：挑战打不进来时给可读诊断（AC-1.13），而不是甩一行 Go error。
+// IT-tls-3: when the challenge can't get in, the user gets a readable
+// diagnosis (AC-1.13), not a raw Go error.
 func TestACMEFailureIsDiagnosable(t *testing.T) {
-	// 验证必然失败，模拟"安全组没放行 80"
+	// Validation always fails, simulating a security group that blocks 80.
 	f := newACMEFixture(t, fixtureOpts{failChallenge: true})
 
-	report := f.waitReport(t, "CA 没能连上本机做域名验证")
+	report := f.waitReport(t, "The CA could not reach this machine to validate the domain")
 
-	// 云安全组是最常漏的一步，必须排在第一条
-	sgAt := strings.Index(report, "云安全组")
-	dnsAt := strings.Index(report, "DNS 指向本机")
+	// The cloud security group is the step most often missed, so it must
+	// come first.
+	sgAt := strings.Index(report, "security group")
+	dnsAt := strings.Index(report, "Does DNS point to this machine")
 	if sgAt < 0 || dnsAt < 0 || sgAt > dnsAt {
-		t.Errorf("安全组应当排在 DNS 之前，实际 报告=\n%s", report)
+		t.Errorf("security group should come before DNS; report:\n%s", report)
 	}
 	for _, want := range []string{
-		"curl -sI http://" + testDomain, // 可以直接抄去跑
+		"curl -sI http://" + testDomain, // copy-pasteable
 		"dig +short " + testDomain,
-		"Cloudflare", // 小云朵是第二常见的坑
+		"Cloudflare", // the Cloudflare proxy is the second most common trap
 	} {
 		if !strings.Contains(report, want) {
-			t.Errorf("诊断里缺 %q，实际:\n%s", want, report)
+			t.Errorf("diagnosis lacks %q; got:\n%s", want, report)
 		}
 	}
-	// 不该是一行裸 error
+	// Must not be a single raw error line.
 	if strings.Contains(report, "acme: authorization error") && !strings.Contains(report, "1.") {
-		t.Errorf("诊断退化成裸 error 了:\n%s", report)
+		t.Errorf("diagnosis degraded to a raw error:\n%s", report)
 	}
 
-	// 失败了就不该有证书落盘（半个证书比没有更糟）
+	// A failure must not leave a certificate on disk (half a certificate is
+	// worse than none).
 	entries, err := os.ReadDir(f.certDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
 		if strings.Contains(e.Name(), testDomain) {
-			t.Errorf("签发失败却落了证书文件 %s", e.Name())
+			t.Errorf("issuance failed but certificate file %s was written", e.Name())
 		}
 	}
 }
 
-// 预热必须命中【真实客户端会用的那个缓存槽】。
+// The warm-up must hit the cache slot that real clients use.
 //
-// autocert 的缓存 key 含 isRSA = !supportsECDSA(hello)，而 supportsECDSA
-// 对一个空的 ClientHelloInfo 返回 false。所以预热时传空 hello 会签一张 RSA
-// 证书存到 "<域名>+rsa"；真实浏览器声明 ECDSA，key 是 "<域名>"，必然 miss
-// → 在 TLS 握手里现场再签一张。后果：
+// autocert's cache key includes isRSA = !supportsECDSA(hello), and
+// supportsECDSA returns false for an empty ClientHelloInfo. Warming up with an
+// empty hello would store an RSA certificate under "<domain>+rsa"; real
+// browsers advertise ECDSA and use the key "<domain>", miss, and trigger
+// another issuance inside the TLS handshake. Consequences:
 //
-//   - 每次重启都多签一张，很快撞满 LE 的"重复证书"限额（每周 5 张）
-//   - 握手要等 ACME 走完，ACME 一抖就是握手失败
-//   - "证书已就绪"报的是一张真实客户端根本不用的证书 —— 假的成功
+//   - every restart issues an extra certificate, quickly hitting LE's
+//     duplicate certificate limit (5 per week)
+//   - handshakes wait for ACME, so any ACME hiccup fails the handshake
+//   - "Certificate ready" reports a certificate real clients never use: a
+//     false success
 //
-// 所以这里断言【握手之后】签发总数仍然是 1。
+// So this asserts that the issued count is still 1 after a handshake.
 func TestWarmupHitsTheCacheSlotRealClientsUse(t *testing.T) {
 	f := newACMEFixture(t, fixtureOpts{})
-	f.waitReport(t, "证书已就绪")
+	f.waitReport(t, "Certificate ready")
 
 	if n := len(f.ca.Issued()); n != 1 {
-		t.Fatalf("预热后签发了 %d 张，应当是 1", n)
+		t.Fatalf("warm-up issued %d certificates, want 1", n)
 	}
 
-	// 真实客户端（Go 的 TLS 客户端声明 ECDSA，和浏览器一样）
+	// A real client: Go's TLS client advertises ECDSA, like browsers.
 	conn, err := tls.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", f.httpsPort),
 		f.ca.TLSClientConfig(testDomain))
 	if err != nil {
-		t.Fatalf("TLS 握手失败: %v", err)
+		t.Fatalf("TLS handshake failed: %v", err)
 	}
 	defer conn.Close()
 
-	// ★ 回归点：握手不该触发第二次签发
+	// The regression: the handshake must not trigger a second issuance.
 	if issued := f.ca.Issued(); len(issued) != 1 {
-		t.Errorf("握手之后签发了 %d 张（%v）—— 预热存错了缓存槽，"+
-			"真实客户端在握手里又签了一张", len(issued), issued)
+		t.Errorf("%d certificates issued after the handshake (%v): the warm-up used the wrong "+
+			"cache slot and the real client triggered another issuance", len(issued), issued)
 	}
 }

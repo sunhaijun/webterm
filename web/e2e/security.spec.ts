@@ -1,7 +1,7 @@
 /**
- * E2E-15 设备管理 —— AC-1.3 / AC-1.11
- * E2E-16 未认证访问 —— AC-1.7 / AC-1.8（含 AC-1.6 的配对限速）
- * E2E-17 PWA —— AC-1.14
+ * E2E-15 Device management (AC-1.3 / AC-1.11)
+ * E2E-16 Unauthenticated access (AC-1.7 / AC-1.8, plus AC-1.6 pairing rate limits)
+ * E2E-17 PWA (AC-1.14)
  */
 import { expect, test } from '@playwright/test'
 
@@ -13,15 +13,15 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-test('E2E-15 设备管理：两台设备、吊销设备二 5 秒内断开并回到配对引导、一键吊销全部连自己也退出', async ({ page, browser }) => {
+test('E2E-15 device management: two devices; revoking device two disconnects it within 5s and returns it to pairing; revoke all logs out this device too', async ({ page, browser }) => {
   await agent.open(page)
 
-  // ① 当前设备，current: true
+  // (1) This device, current: true.
   const one = await page.evaluate(async () => (await (await fetch('/api/devices', { credentials: 'same-origin' })).json()) as { id: string; current: boolean }[])
   expect(one.length).toBe(1)
   expect(one[0]!.current).toBe(true)
 
-  // ② 第二台设备
+  // (2) A second device.
   const ctx2 = await browser.newContext()
   const page2 = await ctx2.newPage()
   await page2.goto(await agent.newPairLink())
@@ -29,25 +29,26 @@ test('E2E-15 设备管理：两台设备、吊销设备二 5 秒内断开并回�
   await waitOnline(page2)
 
   const devices = await page.evaluate(async () => (await (await fetch('/api/devices', { credentials: 'same-origin' })).json()) as { id: string; current: boolean }[])
-  expect(devices.length, '应当有两台设备').toBe(2)
-  // current 标出发起请求的那台，UI 靠它防止误踢自己
+  expect(devices.length, 'two devices').toBe(2)
+  // `current` marks the requesting device; the UI uses it to avoid revoking itself by mistake.
   expect(devices.filter((d) => d.current).length).toBe(1)
 
-  // ③ 从设备一吊销设备二：它的 WebSocket 5 秒内断开，界面写明被吊销并换成配对引导页
+  // (3) Revoke device two from device one: its WebSocket drops within 5s, and the UI says it was
+  // revoked and switches to the pairing page.
   const other = devices.find((d) => !d.current)!
   const start = Date.now()
   const status = await page.evaluate(async (id) => (await fetch(`/api/devices/${id}`, { method: 'DELETE', credentials: 'same-origin' })).status, other.id)
   expect(status).toBe(204)
-  await expect(page2.getByTestId('revoked')).toContainText('此设备已被吊销', { timeout: 15_000 })
-  expect(Date.now() - start, '吊销后应当在 5 秒内断开（留 1 秒测量余量）').toBeLessThan(6000)
-  await expect(page2.getByTestId('unpaired'), '跳到配对引导页').toBeVisible()
+  await expect(page2.getByTestId('revoked')).toContainText('This device has been revoked', { timeout: 15_000 })
+  expect(Date.now() - start, 'disconnects within 5s of revocation (plus 1s measurement slack)').toBeLessThan(6000)
+  await expect(page2.getByTestId('unpaired'), 'shows the pairing page').toBeVisible()
   await expect(page2.getByTestId('terminal')).toHaveCount(0)
 
-  // 自己不受影响
+  // This device is unaffected.
   await waitOnline(page)
   await ctx2.close()
 
-  // ⑤ 一键吊销全部 → 自己也退出
+  // (5) Revoke all -> this device is logged out too.
   const all = await page.evaluate(async () => {
     const r = await fetch('/api/devices/revoke-all', { method: 'POST', credentials: 'same-origin' })
     return { status: r.status, body: await r.json() }
@@ -65,24 +66,25 @@ const wsUpgrade = {
   'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
 }
 
-test('E2E-16 未认证访问：静态页可达、API 与 WebSocket 升级都 401、伪造 Origin 403、配对限速 429', async ({ page, request }) => {
-  // ① 清了 Cookie 之后静态页仍然正常返回，前端显示"需要配对"
+test('E2E-16 unauthenticated access: static pages load, API and WebSocket upgrade return 401, forged Origin returns 403, pairing is rate limited with 429', async ({ page, request }) => {
+  // (1) Without a cookie the static page still loads and the frontend asks for pairing.
   await page.goto(agent.baseURL)
   await expect(page.getByTestId('unpaired')).toBeVisible()
 
-  // ②
+  // (2)
   expect((await request.get(`${agent.baseURL}/api/devices`)).status()).toBe(401)
-  // ③ WebSocket 升级也必须 401 —— 这是最容易漏的一条
-  expect((await request.get(`${agent.baseURL}/ws`, { headers: wsUpgrade })).status(), 'GET /ws 未认证必须 401').toBe(401)
+  // (3) The WebSocket upgrade must be 401 too; this is the one most easily missed.
+  expect((await request.get(`${agent.baseURL}/ws`, { headers: wsUpgrade })).status(), 'unauthenticated GET /ws must be 401').toBe(401)
 
-  // ④ 伪造 Origin：带着有效 Cookie 也要被 403 挡住
+  // (4) Forged Origin: blocked with 403 even with a valid cookie.
   await agent.pair(page)
   const cookieHeader = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join('; ')
   const forged = await request.get(`${agent.baseURL}/ws`, { headers: { ...wsUpgrade, Cookie: cookieHeader, Origin: 'https://evil.com' } })
-  expect(forged.status(), '跨站 Origin 必须 403').toBe(403)
+  expect(forged.status(), 'cross-site Origin must be 403').toBe(403)
 
-  // ⑤ 错误的配对码：5 次 / 分钟 / IP，连续失败另有指数退避（1s, 2s, 4s…，auth-pairing.md §限速）。
-  // 按退避间隔重试，前 5 次都是 401；第 6 次落在同一分钟里 → 429 + Retry-After
+  // (5) Wrong pairing codes: 5 per minute per IP, plus exponential backoff on consecutive failures
+  // (1s, 2s, 4s, ...; auth-pairing.md "Rate limiting"). Retrying at the backoff intervals, the first
+  // 5 get 401; the 6th falls in the same minute -> 429 + Retry-After.
   const post = (i: number) => request.post(`${agent.baseURL}/auth/pair`, { data: { code: `wrong-${i}` } })
   const waits = [0, 0, 1100, 2100, 4100, 8100]
   const codes: number[] = []
@@ -90,35 +92,35 @@ test('E2E-16 未认证访问：静态页可达、API 与 WebSocket 升级都 401
     if (waits[i]) await page.waitForTimeout(waits[i]!)
     const r = await post(i)
     codes.push(r.status())
-    if (r.status() === 429) expect(r.headers()['retry-after'], '429 必须带 Retry-After').toBeTruthy()
+    if (r.status() === 429) expect(r.headers()['retry-after'], '429 must include Retry-After').toBeTruthy()
   }
-  expect(codes, '前 5 次 401，第 6 次 429').toEqual([401, 401, 401, 401, 401, 429])
+  expect(codes, 'first 5 get 401, the 6th gets 429').toEqual([401, 401, 401, 401, 401, 429])
 
-  // 退避期间连发同样是 429（不等退避就重试）
+  // Retrying without waiting out the backoff also gets 429.
   const fast = await post(99)
   expect(fast.status()).toBe(429)
 })
 
-test('E2E-17 PWA：manifest 完整、SW 注册成功、断网刷新给明确状态页、不缓存 API 与 /ws', async ({ page, context }) => {
+test('E2E-17 PWA: complete manifest, service worker registers, offline reload shows a clear status page, API and /ws are not cached', async ({ page, context }) => {
   await agent.open(page)
 
-  // ① manifest
+  // (1) Manifest.
   const manifest = await page.evaluate(async () => (await (await fetch('/manifest.json')).json()) as Record<string, unknown>)
-  expect(manifest.display, 'PWA 必须是 standalone，否则还是有地址栏').toBe('standalone')
+  expect(manifest.display, 'PWA must be standalone, otherwise the address bar stays').toBe('standalone')
   expect(manifest.name).toBe('webterm')
   expect(manifest.start_url).toBe('/')
   expect(Array.isArray(manifest.icons) && (manifest.icons as unknown[]).length).toBeTruthy()
 
-  // ② Service Worker 注册成功并接管页面
-  await waitFor(async () => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length > 0), 'Service Worker 注册成功', 20_000)
-  await waitFor(() => page.evaluate(() => navigator.serviceWorker.controller !== null), 'SW 接管页面', 20_000)
-  // 再加载一次（在线）：这一次的静态壳经过 SW，被缓存下来
+  // (2) The service worker registers and controls the page.
+  await waitFor(async () => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length > 0), 'service worker registered', 20_000)
+  await waitFor(() => page.evaluate(() => navigator.serviceWorker.controller !== null), 'service worker controls the page', 20_000)
+  // Load once more while online: this time the static shell goes through the SW and gets cached.
   await page.reload()
   await waitOnline(page)
   await page.evaluate(() => fetch('/api/devices', { credentials: 'same-origin' }))
   await page.waitForTimeout(500)
 
-  // ④ 缓存里没有任何 /api/*、/auth/*、/ws
+  // (4) The cache holds no /api/*, /auth/* or /ws.
   const cached = await page.evaluate(async () => {
     const out: string[] = []
     for (const name of await caches.keys()) {
@@ -128,17 +130,18 @@ test('E2E-17 PWA：manifest 完整、SW 注册成功、断网刷新给明确状�
     return out
   })
   for (const p of cached) {
-    expect(p.startsWith('/api/'), `Service Worker 缓存了 API 响应: ${p}`).toBe(false)
-    expect(p.startsWith('/auth/'), `Service Worker 缓存了配对接口: ${p}`).toBe(false)
-    expect(p === '/ws', 'Service Worker 缓存了 /ws').toBe(false)
+    expect(p.startsWith('/api/'), `service worker cached an API response: ${p}`).toBe(false)
+    expect(p.startsWith('/auth/'), `service worker cached a pairing endpoint: ${p}`).toBe(false)
+    expect(p === '/ws', 'service worker cached /ws').toBe(false)
   }
-  // 但静态壳应该被缓存了，否则离线时连状态页都给不出来
-  expect(cached.some((p) => p === '/' || p.endsWith('.js')), `缓存里应当有静态壳：${cached}`).toBe(true)
+  // The static shell should be cached, or there would be no status page to show offline.
+  expect(cached.some((p) => p === '/' || p.endsWith('.js')), `cache should hold the static shell: ${cached}`).toBe(true)
 
-  // ③ 断网后刷新 → 明确的「无法连接到 agent」状态页（不是浏览器默认错误页，也不假装能用）
+  // (3) Reload while offline -> a clear "cannot reach the agent" status page (not the browser's
+  // default error page, and not pretending to work).
   await context.setOffline(true)
   await page.reload()
-  await expect(page.getByTestId('offline')).toContainText('无法连接到 agent')
+  await expect(page.getByTestId('offline')).toContainText("Can't reach the agent")
   await expect(page.getByTestId('terminal')).toHaveCount(0)
   await context.setOffline(false)
 })

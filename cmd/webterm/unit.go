@@ -5,8 +5,9 @@ import (
 	"strings"
 )
 
-// unitKind 是这台机器上装出来的 systemd 单元。ADR-0034 起 install.sh 装的是
-// 系统服务（以安装者本人运行）；之前装的机器还是用户服务，迁移前两种都会遇到。
+// unitKind is the systemd unit installed on this machine. Since ADR-0034,
+// install.sh installs a system service that runs as the installing user;
+// older machines still have a user service until they migrate, so both occur.
 type unitKind int
 
 const (
@@ -15,8 +16,9 @@ const (
 	unitUser
 )
 
-// detectUnit 问 systemd 有没有 webterm 单元。LoadState 普通用户就能查，不需要 sudo。
-// 系统单元优先：迁移到一半两边都在时，系统单元才是要的那个。
+// detectUnit asks systemd whether a webterm unit exists. Reading LoadState
+// needs no sudo. The system unit wins: midway through a migration both may
+// exist, and the system unit is the one that matters.
 func detectUnit() unitKind {
 	if unitLoaded("systemctl", "show", "webterm", "-p", "LoadState", "--value") {
 		return unitSystem
@@ -32,7 +34,7 @@ func unitLoaded(name string, args ...string) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "loaded"
 }
 
-// active 报告单元是不是 active。
+// active reports whether the unit is active.
 func (k unitKind) active() bool {
 	var args []string
 	switch k {
@@ -46,7 +48,8 @@ func (k unitKind) active() bool {
 	return exec.Command("systemctl", args...).Run() == nil
 }
 
-// ctl 给出提示文案里用的 systemctl 命令。系统服务的启停要 sudo，只读的不用。
+// ctl returns the systemctl command to show in hints. Starting or stopping a
+// system service needs sudo; read-only verbs do not.
 func (k unitKind) ctl(verb string) string {
 	switch k {
 	case unitUser:
@@ -60,8 +63,10 @@ func (k unitKind) ctl(verb string) string {
 	}
 }
 
-// journal 给出看日志的命令。系统服务下 agent 自己的日志不用 sudo 就能读，
-// 但 systemd 关于这个 unit 的记录（启停、OOM、崩溃）在系统日志里，排障时要 sudo。
+// journal returns the command for reading logs. Under a system service the
+// agent's own logs are readable without sudo, but systemd's records about the
+// unit (start/stop, OOM kills, crashes) are in the system journal, which needs
+// sudo when troubleshooting.
 func (k unitKind) journal() string {
 	if k == unitUser {
 		return "journalctl --user -u webterm"

@@ -17,7 +17,8 @@ import (
 	"github.com/sunhaijun/webterm/internal/store"
 )
 
-// 重启不该重新申请证书：缓存里的还有效就直接加载，一次 ACME 调用都不发。
+// A restart must not request a new certificate: a valid cached one is loaded
+// without a single ACME call.
 func TestRestartReusesCachedCertificate(t *testing.T) {
 	ca, err := acmetest.New()
 	if err != nil {
@@ -28,8 +29,9 @@ func TestRestartReusesCachedCertificate(t *testing.T) {
 
 	base := t.TempDir()
 	certDir := filepath.Join(base, "certs")
-	// 【必须一次分配两个】。分开调 freePort 两次，第一个 listener 已关闭，OS 可能
-	// 把同一个端口再发给第二次 —— http/https 撞车，偶发 CI 红（见 #30 的 freePorts）。
+	// Allocate both at once. Two separate freePort calls can return the same
+	// port, since the first listener is already closed; http and https would
+	// collide and CI would flake (see freePorts).
 	ports := freePorts(t, 2)
 	httpPort, httpsPort := ports[0], ports[1]
 	ca.ValidateAgainst(fmt.Sprintf("127.0.0.1:%d", httpPort))
@@ -60,30 +62,30 @@ func TestRestartReusesCachedCertificate(t *testing.T) {
 			t.Fatal(err)
 		}
 		deadline := time.Now().Add(20 * time.Second)
-		for time.Now().Before(deadline) && !strings.Contains(report.String(), "证书已就绪") {
+		for time.Now().Before(deadline) && !strings.Contains(report.String(), "Certificate ready") {
 			time.Sleep(20 * time.Millisecond)
 		}
-		if !strings.Contains(report.String(), "证书已就绪") {
-			t.Fatalf("%s 轮没拿到证书: %q", round, report.String())
+		if !strings.Contains(report.String(), "Certificate ready") {
+			t.Fatalf("%s run got no certificate: %q", round, report.String())
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		servers.Shutdown(ctx)
 		cancel()
 	}
 
-	start("第一次")
+	start("first")
 	afterFirst := ca.Requests()
 	issuedFirst := len(ca.Issued())
-	t.Logf("第一次启动：签发 %d 张，CA 收到 %d 个请求", issuedFirst, afterFirst)
+	t.Logf("first start: %d issued, %d CA requests", issuedFirst, afterFirst)
 
-	start("重启")
-	t.Logf("重启之后：签发 %d 张，CA 收到 %d 个请求", len(ca.Issued()), ca.Requests())
+	start("restart")
+	t.Logf("after restart: %d issued, %d CA requests", len(ca.Issued()), ca.Requests())
 
 	if n := len(ca.Issued()); n != issuedFirst {
-		t.Errorf("重启后签发数从 %d 变成 %d —— 重启不该重签", issuedFirst, n)
+		t.Errorf("issued count went from %d to %d after restart; a restart must not reissue", issuedFirst, n)
 	}
 	if ca.Requests() != afterFirst {
-		t.Errorf("重启后 CA 收到 %d 个请求（原来 %d）—— 重启不该找 CA",
+		t.Errorf("CA got %d requests after restart (was %d); a restart must not contact the CA",
 			ca.Requests(), afterFirst)
 	}
 	_ = http.StatusOK

@@ -1,10 +1,10 @@
-/** 指数退避（协议 §5.2 步骤③ / AC-2.9）。 */
+/** Exponential backoff (protocol §5.2 step 3 / AC-2.9). */
 
 export interface BackoffOptions {
   base?: number
   factor?: number
   max?: number
-  /** 抖动比例，0.2 = ±20% */
+  /** Jitter ratio; 0.2 = ±20% */
   jitter?: number
   random?: () => number
 }
@@ -25,16 +25,16 @@ export class Backoff {
     this.random = opts.random ?? Math.random
   }
 
-  /** 下一次重试的延迟（毫秒）。 */
+  /** Delay before the next retry, in ms. */
   next(): number {
     const raw = Math.min(this.base * this.factor ** this.attempt, this.max)
     this.attempt++
-    // 抖动是为了让多个标签页/多台设备不要在同一毫秒一起重连
+    // Jitter keeps many tabs / devices from reconnecting in the same millisecond
     const spread = raw * this.jitter
     return Math.round(raw - spread + this.random() * spread * 2)
   }
 
-  /** 连接成功、或网络恢复事件到来时重置。 */
+  /** Reset on a successful connection or when the network comes back. */
   reset(): void {
     this.attempt = 0
   }

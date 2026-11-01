@@ -11,7 +11,7 @@ import (
 func TestControlSocket(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.sock")
-	// 残留的旧 socket 文件不该挡住新进程
+	// A stale socket file must not block the new process.
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -28,21 +28,21 @@ func TestControlSocket(t *testing.T) {
 	defer cs.Close()
 	fi, _ := os.Stat(path)
 	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("socket 权限应为 0600，实际 %o", fi.Mode().Perm())
+		t.Fatalf("socket mode = %o, want 0600", fi.Mode().Perm())
 	}
 
 	resp, err := ControlCall(path, ControlRequest{Op: "status"}, time.Second)
 	if err != nil || resp.Status == nil || resp.Status.Generation != 3 || resp.Status.Busy != 1 || !resp.Status.Handoff {
-		t.Fatalf("status 应答不对: %+v %v", resp, err)
+		t.Fatalf("unexpected status reply: %+v %v", resp, err)
 	}
 	if _, err := ControlCall(path, ControlRequest{Op: "reexec"}, time.Second); err != nil || reexecs != 1 {
-		t.Fatalf("reexec 应当触发一次: %v (n=%d)", err, reexecs)
+		t.Fatalf("reexec should trigger once: %v (n=%d)", err, reexecs)
 	}
 	if _, err := ControlCall(path, ControlRequest{Op: "bogus"}, time.Second); err == nil {
-		t.Fatal("未知操作应当报错")
+		t.Fatal("unknown op should fail")
 	}
 	cs.Close()
 	if _, err := ControlCall(path, ControlRequest{Op: "status"}, 300*time.Millisecond); !errors.Is(err, ErrNoControl) {
-		t.Fatalf("关掉之后应当是 ErrNoControl，实际 %v", err)
+		t.Fatalf("after Close, want ErrNoControl, got %v", err)
 	}
 }

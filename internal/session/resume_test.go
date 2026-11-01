@@ -12,13 +12,15 @@ import (
 	"github.com/sunhaijun/webterm/internal/session"
 )
 
-// emitScript 产生确定性的输出：固定内容、固定顺序、含 ANSI 颜色、CJK 宽字符、
-// 长行。不含时间戳/随机数/主机名 —— 否则字节级比较没有意义。
+// emitScript produces deterministic output: fixed content and order, with ANSI
+// colors, CJK wide characters, and long lines. No timestamps, random numbers,
+// or hostnames, which would make byte-level comparison meaningless.
 func emitScript(lines int) string {
 	return "for i in $(seq 1 " + itoa(lines) + "); do " +
 		`printf '\033[3%dmline %03d\033[0m 中文宽字符 %s\n' $((i%8)) $i "$(printf 'x%.0s' $(seq 1 40))"; ` +
-		// 完成标记必须【只出现在输出里】，不能出现在被回显的命令行里 ——
-		// 否则等待条件会在命令刚敲完时就满足，测的是回显而不是输出。
+		// The done marker must appear only in the output, never in the echoed
+		// command line; otherwise the wait would succeed as soon as the
+		// command is typed, testing the echo rather than the output.
 		"done; printf 'EMIT-%s\\n' DONE\r"
 }
 
@@ -34,28 +36,30 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// IT-resume-1：断线期间会话不暂停 —— PTY 继续运行，环形缓冲继续累积。
+// IT-resume-1: a session doesn't pause while disconnected; the PTY keeps
+// running and the ring buffer keeps filling.
 func TestITResume1_SessionKeepsRunningWhileDisconnected(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0, 0, 0)
 
-	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+	waitFor(t, "shell ready", func() bool { return s.HeadSeq() > 0 })
 
-	// "断线"：连接层摘掉订阅
+	// "Disconnect": the connection layer drops the subscription.
 	s.Unsubscribe(c)
 	before := s.HeadSeq()
 
 	if err := c.Send(s, "echo while-offline\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "断线期间仍有输出累积", func() bool { return s.HeadSeq() > before })
+	waitFor(t, "output accumulates while disconnected", func() bool { return s.HeadSeq() > before })
 
 	if s.Status() != protocol.StatusRunning {
-		t.Fatal("断线导致会话暂停了")
+		t.Fatal("disconnecting paused the session")
 	}
-	// 重连补齐：断线期间的输出必须一个字节不少地回来
+	// Reconnect and catch up: every byte produced while disconnected must come
+	// back.
 	c2 := newConn(t, m, "tab")
 	if st, _ := s.Subscribe(c2, before, 0, 0); st != protocol.ResumeOK {
 		t.Fatalf("status = %q, want ok", st)
@@ -63,51 +67,56 @@ func TestITResume1_SessionKeepsRunningWhileDisconnected(t *testing.T) {
 	waitScreen(t, c2, "while-offline")
 }
 
-// IT-resume-2：增量回放 —— agent 只发 out_seq 之后的字节，不重发已收到的。
+// IT-resume-2: incremental replay. The agent sends only bytes after out_seq
+// and never resends what the client already has.
 func TestITResume2_IncrementalReplay(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0, 0, 0)
 
-	// 标记必须【只出现在输出里】—— 直接写 "echo ONE-MARK" 的话，被回显的
-	// 命令行本身就含这个串，断点会落在命令刚敲完、输出还没出来的位置。
+	// The marker must appear only in the output. With a plain
+	// "echo ONE-MARK" the echoed command line already contains it, and the cut
+	// would land after typing but before the output.
 	if err := c.Send(s, `printf 'ONE-%s\n' MARK`+"\r"); err != nil {
 		t.Fatal(err)
 	}
 	waitScreen(t, c, "ONE-MARK")
-	waitQuiet(t, s, 200*time.Millisecond) // 断点取在第一段输出彻底结束之后
+	waitQuiet(t, s, 200*time.Millisecond) // cut after the first output has fully finished
 
-	c.Detach() // 断线之后到达的字节应当石沉大海，否则断点会被竞态污染
+	c.Detach() // bytes after the disconnect must go nowhere, or races blur the cut point
 	at := c.OutSeq()
 	s.Unsubscribe(c)
 
 	if err := c.Send(s, `printf 'TWO-%s\n' MARK`+"\r"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "第二段输出产生", func() bool { return s.HeadSeq() > at })
+	waitFor(t, "second output produced", func() bool { return s.HeadSeq() > at })
 
-	// 从断点续订：只应收到断点之后的内容
+	// Resubscribe from the cut: only what follows it should arrive.
 	c2 := newConn(t, m, "tab")
 	st, from := s.Subscribe(c2, at, 0, 0)
 	if st != protocol.ResumeOK || from != at {
-		t.Fatalf("续传 = %s/%d, want ok/%d", st, from, at)
+		t.Fatalf("resume = %s/%d, want ok/%d", st, from, at)
 	}
 	waitScreen(t, c2, "TWO-MARK")
 
 	if strings.Contains(c2.Screen(), "ONE-MARK") {
-		t.Fatal("重发了客户端已经收到的字节 —— 续传应当是增量的")
+		t.Fatal("resent bytes the client already had; resume should be incremental")
 	}
 	if c2.Snapshots() != 0 {
-		t.Fatal("缓冲没溢出却走了快照路径")
+		t.Fatal("took the snapshot path without a buffer overflow")
 	}
 }
 
-// IT-resume-3 ★：输入跨重连不丢、不重、不触发 input_gap。
+// IT-resume-3: input survives a reconnect without loss, duplication, or
+// input_gap.
 //
-// in_ack 按 (client_id, sid) 记账并跨重连存活。若按连接记账，重连后 in_ack
-// 归零而客户端的 pending 仍从旧 seq 起，agent 会判 seq > in_ack → input_gap
-// → 关连接 → 无限重连，"断线期间的输入不丢"整条就废了。
+// in_ack is kept per (client_id, sid) and survives reconnects. If it were per
+// connection, in_ack would reset to 0 on reconnect while the client's pending
+// input still starts at the old seq; the agent would see seq > in_ack, send
+// input_gap, close the connection, and loop reconnecting forever, defeating
+// "no input lost while disconnected".
 func TestITResume3_InputSurvivesReconnect(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
@@ -118,13 +127,14 @@ func TestITResume3_InputSurvivesReconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitScreen(t, c, "A1")
-	waitFor(t, "输入被 ack", func() bool { return s.InAck("tab-1") == c.inSeqNext })
+	waitFor(t, "input acked", func() bool { return s.InAck("tab-1") == c.inSeqNext })
 
-	// "断线"
+	// "Disconnect".
 	s.Unsubscribe(c)
 	s.DetachClient("tab-1")
 
-	// 重连：同一个 client_id 拿回自己的 in_ack（Resume 顺带订阅上去）
+	// Reconnect: the same client_id gets its in_ack back (Resume also
+	// subscribes).
 	c2 := newConn(t, m, "tab-1")
 	resumed := m.Resume(c2, m.InstanceID(), []protocol.ResumeReq{
 		{SID: s.SID(), OutSeq: c.OutSeq()},
@@ -137,26 +147,27 @@ func TestITResume3_InputSurvivesReconnect(t *testing.T) {
 		t.Fatalf("status = %q, want ok", r.Status)
 	}
 	if r.InAck == 0 {
-		t.Fatal("重连后 in_ack 归零了 —— 客户端会从旧 seq 重发，必然 input_gap")
+		t.Fatal("in_ack reset to 0 after reconnect; the client would resend from the old seq and hit input_gap")
 	}
 	if r.InAck != c.inSeqNext {
-		t.Fatalf("in_ack = %d, want %d（断开前已全部写入）", r.InAck, c.inSeqNext)
+		t.Fatalf("in_ack = %d, want %d (everything was written before the disconnect)", r.InAck, c.inSeqNext)
 	}
 
-	// 客户端按 in_ack 裁剪重发队列，然后继续发新输入
+	// The client trims its resend queue to in_ack and sends new input.
 	c2.TrimTo(r.InAck)
 	if err := c2.Send(s, "echo A2\r"); err != nil {
-		t.Fatalf("重连后第一次写入就失败了: %v", err)
+		t.Fatalf("first write after reconnect failed: %v", err)
 	}
 	waitScreen(t, c2, "A2")
 
-	// 全程不能有空洞/重复
+	// No gaps or duplicates throughout.
 	if c2.gaps != 0 || c2.dups != 0 {
-		t.Fatalf("seq 记账出错: gaps=%d dups=%d", c2.gaps, c2.dups)
+		t.Fatalf("seq accounting error: gaps=%d dups=%d", c2.gaps, c2.dups)
 	}
 }
 
-// 重发已处理过的输入必须去重：agent 丢弃前 in_ack-seq 字节，只写剩下的。
+// Resent input that was already processed is deduplicated: the agent drops the
+// first in_ack-seq bytes and writes only the rest.
 func TestInputResendIsDeduplicated(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
@@ -167,9 +178,10 @@ func TestInputResendIsDeduplicated(t *testing.T) {
 	if err := c.Send(s, first); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "首段写入 PTY", func() bool { return s.InAck("tab") == uint64(len(first)) })
+	waitFor(t, "first chunk written to PTY", func() bool { return s.InAck("tab") == uint64(len(first)) })
 
-	// 重连后客户端重发了整段（含已处理的部分）+ 新内容
+	// After reconnecting the client resends everything (including the
+	// processed part) plus new input.
 	whole := first + "OK\r"
 	if err := c.Resend(s, 0, whole); err != nil {
 		t.Fatal(err)
@@ -177,21 +189,23 @@ func TestInputResendIsDeduplicated(t *testing.T) {
 	waitScreen(t, c, "DEDUP-OK")
 
 	if strings.Count(c.Screen(), "DEDUP-DEDUP") > 0 {
-		t.Fatal("重发的部分被重复写进了 PTY")
+		t.Fatal("the resent part was written to the PTY twice")
 	}
-	waitFor(t, "in_ack 推进到整段长度", func() bool { return s.InAck("tab") == uint64(len(whole)) })
+	waitFor(t, "in_ack reaches the full length", func() bool { return s.InAck("tab") == uint64(len(whole)) })
 }
 
-// 断线时 writeLoop 正卡在一段输入上（前台程序不读 stdin，PTY 输入满了）：它已被
-// 取出、还没 ack，后面还排着一段。重连后客户端从 in_ack 起整段重发 —— 每个字节
-// 只能进 PTY 一次。
+// At disconnect, writeLoop is stuck on a chunk (the foreground program isn't
+// reading stdin and the PTY input is full): taken from the queue but not acked,
+// with another chunk queued behind it. After reconnecting the client resends
+// everything from in_ack, and each byte must reach the PTY exactly once.
 func TestDetachKeepsInFlightInput(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	c := newConn(t, m, "tab")
 	s.Subscribe(c, 0, 0, 0)
 
-	// raw 模式下 1 秒不读 stdin，之后把收到的全部读下来、数字节
+	// In raw mode, ignore stdin for 1 second, then read everything and count
+	// the bytes.
 	f := t.TempDir() + "/in"
 	cmd := "stty raw -echo; printf 'STALL-%s\\n' ON; sleep 1; timeout --foreground 1 cat >" + f +
 		"; stty sane; echo COUNT=$(wc -c <" + f + ")\r"
@@ -205,17 +219,18 @@ func TestDetachKeepsInFlightInput(t *testing.T) {
 	if err := c.Send(s, stuck); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(200 * time.Millisecond) // writeLoop 取走 stuck，卡在 ptmx.Write 里
+	time.Sleep(200 * time.Millisecond) // writeLoop takes stuck and blocks in ptmx.Write
 	if err := c.Send(s, tail); err != nil {
 		t.Fatal(err)
 	}
 
-	// 断线（tail 被丢掉）→ 重连拿 in_ack → 从那里整段重发
+	// Disconnect (tail is dropped), reconnect for in_ack, resend everything
+	// from there.
 	s.Unsubscribe(c)
 	s.DetachClient("tab")
 	r := m.Resume(c, m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: c.OutSeq()}})[0]
 	if r.InAck != ack0 {
-		t.Fatalf("前提不成立：in_ack = %d, want %d（stuck 应当还卡着）", r.InAck, ack0)
+		t.Fatalf("precondition failed: in_ack = %d, want %d (stuck should still be blocked)", r.InAck, ack0)
 	}
 	c.TrimTo(r.InAck)
 	if err := c.Send(s, stuck+tail); err != nil {
@@ -226,11 +241,12 @@ func TestDetachKeepsInFlightInput(t *testing.T) {
 	var got []string
 	waitFor(t, "COUNT", func() bool { got = re.FindStringSubmatch(c.Screen()); return got != nil })
 	if want := itoa(len(stuck) + len(tail)); got[1] != want {
-		t.Fatalf("PTY 收到 %s 字节, want %s（卡着的那段被写了两遍？）", got[1], want)
+		t.Fatalf("PTY received %s bytes, want %s (was the stuck chunk written twice?)", got[1], want)
 	}
 }
 
-// 输入出现空洞必须报 ErrInputGap，让连接层关连接。
+// A gap in input must return ErrInputGap so the connection layer closes the
+// connection.
 func TestInputGapDetected(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
@@ -242,25 +258,27 @@ func TestInputGapDetected(t *testing.T) {
 	}
 }
 
-// 两个标签页各自独立记账 —— 混在一起没有意义。
+// Two tabs keep independent accounting.
 func TestInputAccountingIsPerClient(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
 	if err := s.Write("tab-a", 0, []byte("echo ")); err != nil {
 		t.Fatal(err)
 	}
-	// tab-b 的第一帧同样从 0 开始，不该被 tab-a 的进度影响
+	// tab-b's first frame also starts at 0 and must not be affected by tab-a.
 	if err := s.Write("tab-b", 0, []byte("echo ")); err != nil {
-		t.Fatalf("tab-b 从 seq 0 开始却被拒: %v", err)
+		t.Fatalf("tab-b starting at seq 0 was rejected: %v", err)
 	}
-	waitFor(t, "两个 client 各自 ack", func() bool {
+	waitFor(t, "both clients acked", func() bool {
 		return s.InAck("tab-a") == 5 && s.InAck("tab-b") == 5
 	})
 }
 
-// seq 从 0 重来、而这个 client_id 已有记账 = client 把计数器重置了却沿用旧 id
-// （协议 §5.4，ADR-0020 第 5 条）。照旧按重发丢掉重复部分，但必须留一条 Warn ——
-// 这种丢弃在浏览器一侧没有任何迹象。正常的首帧与重连重发不该吵。
+// seq restarting at 0 for a client_id that already has accounting means the
+// client reset its counter but kept its id (protocol §5.4, ADR-0020 item 5).
+// The overlap is still dropped as a resend, but a Warn must be logged because
+// the browser shows no sign of the drop. Normal first frames and reconnect
+// resends must stay quiet.
 func TestInputCounterResetIsLogged(t *testing.T) {
 	var logs bytes.Buffer
 	prev := slog.Default()
@@ -272,12 +290,12 @@ func TestInputCounterResetIsLogged(t *testing.T) {
 	if err := s.Write("tab", 0, []byte("abc")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Write("tab", 1, []byte("bcd")); err != nil { // 重连重发：前两字节重复
+	if err := s.Write("tab", 1, []byte("bcd")); err != nil { // reconnect resend: the first two bytes overlap
 		t.Fatal(err)
 	}
-	waitFor(t, "首帧与重发都写进去", func() bool { return s.InAck("tab") == 4 })
+	waitFor(t, "first frame and resend written", func() bool { return s.InAck("tab") == 4 })
 	if logs.Len() != 0 {
-		t.Fatalf("首帧与正常重发不该记日志：%s", logs.String())
+		t.Fatalf("first frame and normal resend should not log: %s", logs.String())
 	}
 
 	if err := s.Write("tab", 0, []byte("xyz")); err != nil {
@@ -285,25 +303,26 @@ func TestInputCounterResetIsLogged(t *testing.T) {
 	}
 	out := logs.String()
 	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "client=tab") || !strings.Contains(out, "accepted=4") {
-		t.Fatalf("计数器被重置却没留痕：%q", out)
+		t.Fatalf("counter reset was not logged: %q", out)
 	}
 	time.Sleep(100 * time.Millisecond)
 	if got := s.InAck("tab"); got != 4 {
-		t.Fatalf("in_ack = %d：重复部分仍应按重发丢掉", got)
+		t.Fatalf("in_ack = %d: the overlap should still be dropped as a resend", got)
 	}
 }
 
-// IT-resume-4：instance_id 不符 → 所有 resume 判 gone。
+// IT-resume-4: an instance_id mismatch answers every resume with gone.
 //
-// agent 重启后 sid 从头分配。没有实例标识的话，resume{sid:1, out_seq:很大}
-// 会被接到一个毫不相干的新会话上 —— 屏幕上留着旧会话的内容，之后接的却是
-// 另一个会话的输出。
+// After an agent restart, sids start over. Without an instance id,
+// resume{sid:1, out_seq:large} would attach to an unrelated new session: the
+// screen keeps the old session's content and continues with another
+// session's output.
 func TestITResume4_InstanceMismatchIsGone(t *testing.T) {
 	m := newManager(t, cfg())
 	s := create(t, m)
-	waitFor(t, "有输出", func() bool { return s.HeadSeq() > 0 })
+	waitFor(t, "some output", func() bool { return s.HeadSeq() > 0 })
 
-	t.Run("实例相符、进度在窗口内：增量", func(t *testing.T) {
+	t.Run("matching instance, position in window: incremental", func(t *testing.T) {
 		head := s.HeadSeq()
 		got := m.Resume(newConn(t, m, "tab"), m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: head}})
 		if got[0].Status != protocol.ResumeOK || got[0].FromSeq != head {
@@ -311,7 +330,7 @@ func TestITResume4_InstanceMismatchIsGone(t *testing.T) {
 		}
 	})
 
-	t.Run("实例不符一律 gone，什么都不推", func(t *testing.T) {
+	t.Run("mismatched instance: always gone, nothing pushed", func(t *testing.T) {
 		c := newConn(t, m, "tab")
 		got := m.Resume(c, "some-old-instance", []protocol.ResumeReq{
 			{SID: s.SID(), OutSeq: 999999},
@@ -323,18 +342,18 @@ func TestITResume4_InstanceMismatchIsGone(t *testing.T) {
 			}
 		}
 		if len(c.Frames()) != 0 {
-			t.Fatal("gone 的会话不该推任何帧")
+			t.Fatal("a gone session should push no frames")
 		}
 	})
 
-	t.Run("首次连接没有 instance_id 时按正常流程走", func(t *testing.T) {
+	t.Run("first connect without instance_id takes the normal path", func(t *testing.T) {
 		got := m.Resume(newConn(t, m, "tab"), "", []protocol.ResumeReq{{SID: s.SID(), OutSeq: 0}})
 		if got[0].Status != protocol.ResumeSnapshot {
-			t.Fatalf("status = %q, want snapshot（out_seq 为 0）", got[0].Status)
+			t.Fatalf("status = %q, want snapshot (out_seq is 0)", got[0].Status)
 		}
 	})
 
-	t.Run("sid 不存在也是 gone", func(t *testing.T) {
+	t.Run("unknown sid is gone too", func(t *testing.T) {
 		got := m.Resume(newConn(t, m, "tab"), m.InstanceID(), []protocol.ResumeReq{{SID: 60000, OutSeq: 0}})
 		if got[0].Status != protocol.ResumeGone {
 			t.Fatalf("status = %q, want gone", got[0].Status)
@@ -342,11 +361,12 @@ func TestITResume4_InstanceMismatchIsGone(t *testing.T) {
 	})
 }
 
-// 增量还是快照（协议 §5.1）：out_seq > 0 且在窗口内 → 增量；其余一律快照。
-// hello.resume 与 subscribe 走同一个判定。
+// Incremental or snapshot (protocol §5.1): out_seq > 0 and inside the window
+// means incremental; anything else means snapshot. hello.resume and subscribe
+// share the same decision.
 func TestResumeSnapshotWhenOutOfWindow(t *testing.T) {
 	c := cfg()
-	c.RingBytes = 4096 // 调小，让落出窗口可测
+	c.RingBytes = 4096 // small, so falling out of the window is testable
 	m := newManager(t, c)
 	s := create(t, m)
 	conn := newConn(t, m, "tab")
@@ -356,39 +376,40 @@ func TestResumeSnapshotWhenOutOfWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitScreen(t, conn, "EMIT-DONE")
-	waitFor(t, "缓冲发生裁剪", func() bool { return s.Info().BaseSeq > 0 })
+	waitFor(t, "buffer trimmed", func() bool { return s.Info().BaseSeq > 0 })
 	waitQuiet(t, s, 200*time.Millisecond)
 
-	t.Run("落出窗口 → 快照，from_seq = 快照的 seq", func(t *testing.T) {
+	t.Run("out of window: snapshot, from_seq is the snapshot seq", func(t *testing.T) {
 		re := newConn(t, m, "tab-r")
 		got := m.Resume(re, m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: 1}})
 		if got[0].Status != protocol.ResumeSnapshot {
 			t.Fatalf("status = %q, want snapshot", got[0].Status)
 		}
 		if re.Snapshots() != 1 || got[0].FromSeq != re.OutSeq() || got[0].FromSeq != s.HeadSeq() {
-			t.Fatalf("from_seq = %d，快照 seq = %d，head = %d —— 三者应当相等", got[0].FromSeq, re.OutSeq(), s.HeadSeq())
+			t.Fatalf("from_seq = %d, snapshot seq = %d, head = %d; all three should be equal", got[0].FromSeq, re.OutSeq(), s.HeadSeq())
 		}
-		// 快照就是完整的画面：落出窗口的那段历史照样在里面（AC-2.6 不再"截断"）
+		// The snapshot is the complete picture, including history that fell out
+		// of the window (AC-2.6: no more truncation).
 		if !strings.Contains(render(re, 80, 24), "EMIT-DONE") {
-			t.Fatal("快照里没有当前屏")
+			t.Fatal("snapshot lacks the current screen")
 		}
 	})
 
-	t.Run("out_seq 为 0（第一次打开 / 刷新）→ 快照", func(t *testing.T) {
+	t.Run("out_seq 0 (first open or reload): snapshot", func(t *testing.T) {
 		fresh := newConn(t, m, "tab-2")
 		if st, _ := s.Subscribe(fresh, 0, 0, 0); st != protocol.ResumeSnapshot || fresh.Snapshots() != 1 {
 			t.Fatalf("status = %q snapshots = %d", st, fresh.Snapshots())
 		}
 	})
 
-	t.Run("领先于 head → 快照", func(t *testing.T) {
+	t.Run("ahead of head: snapshot", func(t *testing.T) {
 		ahead := newConn(t, m, "tab-3")
 		if st, from := s.Subscribe(ahead, s.HeadSeq()+1000, 0, 0); st != protocol.ResumeSnapshot || from != s.HeadSeq() {
 			t.Fatalf("got %s/%d, want snapshot/%d", st, from, s.HeadSeq())
 		}
 	})
 
-	t.Run("窗口内 → 增量，原样推缺的那段，不发快照", func(t *testing.T) {
+	t.Run("in window: incremental, raw missing bytes, no snapshot", func(t *testing.T) {
 		base, head := s.Info().BaseSeq, s.HeadSeq()
 		incr := newConn(t, m, "tab-4")
 		st, from := s.Subscribe(incr, base+10, 0, 0)
@@ -396,29 +417,31 @@ func TestResumeSnapshotWhenOutOfWindow(t *testing.T) {
 			t.Fatalf("got %s/%d, want ok/%d", st, from, base+10)
 		}
 		if incr.Snapshots() != 0 {
-			t.Fatal("窗口内却发了快照")
+			t.Fatal("sent a snapshot inside the window")
 		}
 		if uint64(len(incr.Screen())) != head-(base+10) || incr.OutSeq() != head {
-			t.Fatalf("补齐了 %d 字节，want %d", len(incr.Screen()), head-(base+10))
+			t.Fatalf("caught up %d bytes, want %d", len(incr.Screen()), head-(base+10))
 		}
 	})
 }
 
-// 未订阅的会话产生输出时，未订阅的连接也要收到 head_seq —— 未读靠它推导。
+// When an unsubscribed session produces output, unsubscribed connections still
+// get its head_seq, from which unread state is derived.
 //
-// 订阅只决定收不收 OUTPUT 字节；只发给订阅者的话，后台会话永远算不出未读。
+// Subscribing only controls OUTPUT bytes; sending head_seq only to subscribers
+// would make unread impossible to compute for background sessions.
 func TestUnreadDerivedFromHeadSeq(t *testing.T) {
 	m := newManager(t, cfg())
 	visible, background := create(t, m), create(t, m)
 
 	c := newConn(t, m, "tab")
-	visible.Subscribe(c, 0, 0, 0) // 只订阅当前可见的那个
+	visible.Subscribe(c, 0, 0, 0) // subscribe only to the visible one
 
 	if err := c.Send(background, "echo in-background\r"); err != nil {
 		t.Fatal(err)
 	}
 
-	waitFor(t, "收到后台会话的 head_seq", func() bool {
+	waitFor(t, "background session head_seq", func() bool {
 		for _, e := range c.Events() {
 			if u, ok := e.(*protocol.SessionUpdated); ok &&
 				u.SID == background.SID() && u.HeadSeq != nil && *u.HeadSeq > 0 {
@@ -428,8 +451,8 @@ func TestUnreadDerivedFromHeadSeq(t *testing.T) {
 		return false
 	})
 
-	// 而它的字节【不该】过网络 —— 这是移动端的关键优化
+	// Its bytes must not cross the network; this is a key mobile optimization.
 	if strings.Contains(c.Screen(), "in-background") {
-		t.Fatal("未订阅的会话把输出也推过来了")
+		t.Fatal("an unsubscribed session pushed its output")
 	}
 }

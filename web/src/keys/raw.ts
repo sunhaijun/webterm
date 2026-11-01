@@ -1,42 +1,47 @@
 /**
- * 终端直输的文本输入（IME 兜底）—— docs/40-frontend/input.md §IME 处理 / §直接插入的文本。
+ * Text typed straight into the terminal, as an IME fallback (docs/40-frontend/input.md,
+ * IME handling and directly inserted text).
  *
- * 两条路：
- *  1. 【组字】期间一个字节都不能发，只在 compositionend 时把最终文本一次性发出去；
- *     过程中在光标位置渲染内联预览浮层，让用户知道自己在打什么。
- *  2. 【直接插入】的字符（软键盘不经过组字就插进来的，iOS 中文键盘的全角标点就是）
- *     由这里自己接管 —— xterm 接不住，见下面 beforeinput 处的注释（AC-3.14）。
+ * Two paths:
+ *  1. During IME composition not a single byte is sent; the final text goes out once on
+ *     compositionend. Meanwhile an inline preview at the cursor shows what is being typed.
+ *  2. Directly inserted characters (inserted by the on-screen keyboard without
+ *     composition, e.g. full-width punctuation on the iOS Chinese keyboard) are handled
+ *     here because xterm drops them; see the beforeinput comment below (AC-3.14).
  */
 
 export interface RawImeHandlers {
-  /** 提交最终文本（compositionend，或非组字的直接插入）。 */
+  /** Commits final text (compositionend, or a direct insertion outside composition). */
   onCommit(text: string): void
-  /** 组字内容变化，更新浮层。空串表示隐藏。 */
+  /** The composition text changed; update the preview. Empty string hides it. */
   onPreview(text: string): void
 }
 
 /**
- * 布防的保质期。
+ * How long an armed dedup marker stays valid.
  *
- * 【它不是判重的依据】。判重靠"谁布的防 + 一次性"：只有【已经被另一条路送出去】的
- * 文字才布防（compositionend 的补发、xterm _keyPress 送过的字符），压住一次就撤防。
- * 这个窗口只防一个过期的标记在很久以后吃掉一个真按键。
+ * This is not what decides duplicates. Dedup relies on who armed it and on one-shot use:
+ * only text that another path already sent gets armed (the compositionend re-send,
+ * characters xterm's _keyPress already sent), and the marker is disarmed after suppressing
+ * once. The window only stops a stale marker from eating a real keystroke much later.
  *
- * 【按内容 + 时间窗口判重是错的】：软键盘直接插入的字符只走 beforeinput 这一条路，
- * 用户连打两下同一个标点时，第二下会被静默吃掉 —— 而它没有别的路会替它发（ADR-0020）。
+ * Deduping by content + time window would be wrong: directly inserted characters arrive
+ * only through beforeinput, so typing the same punctuation twice would silently drop the
+ * second one, and nothing else would send it (ADR-0020).
  */
 const DEDUP_MS = 120
 
 /**
- * RawIme 挂在 xterm 的隐藏 textarea 上。
+ * RawIme attaches to xterm's hidden textarea.
  *
- * 那个 textarea 不能用 display:none —— 否则拿不到 composition 事件。
- * onCommit 发生在 compositionend / beforeinput 的派发里，调用方应当用
- * `term.input(text, true)` 把它送进同一个 onData 出口（回放门、粘滞修饰、inputStats 一视同仁）。
+ * That textarea must not be display:none, or composition events never fire. onCommit runs
+ * inside the compositionend / beforeinput dispatch; callers should pass the text to
+ * `term.input(text, true)` so it leaves through the same onData exit (replay gate, sticky
+ * modifiers and inputStats all apply).
  */
 export class RawIme {
   private composing = false
-  /** 布防中的文本 + 布防时刻：这一段【已经被别的路送出去了】，紧跟其后的同内容补发要吃掉。 */
+  /** Armed text and when it was armed: another path already sent it, so an identical re-send right after must be dropped. */
   private sent = ''
   private sentAt = 0
   private readonly el: HTMLTextAreaElement
@@ -52,7 +57,7 @@ export class RawIme {
       this.h.onPreview('')
     })
     this.on('compositionupdate', (e) => {
-      // 【不发送任何字节】，只更新浮层
+      // Send nothing; only update the preview
       this.h.onPreview((e as CompositionEvent).data ?? '')
     })
     this.on('compositionend', (e) => {
@@ -60,21 +65,23 @@ export class RawIme {
       this.h.onPreview('')
       const data = (e as CompositionEvent).data ?? ''
       if (data) this.commit(data)
-      // 清掉 textarea，避免 xterm 自己再把同一段内容当成输入发一遍
+      // Clear the textarea so xterm doesn't send the same text again as input
       this.el.value = ''
     })
 
-    // 【兜底复位】（AC-3.3 / ADR-0020）。上面那三条里 composing 只有一个出口 ——
-    // compositionend。可它不保证来：切输入法、切窗口、候选框被系统吞掉，都可能让
-    // 组字停在半路。而 composing 卡在 true 的后果是【这个会话的终端输入永久失效】
-    // （keydown 处理器全部 return），用户没有任何线索，只能刷新页面。
+    // Fallback reset (AC-3.3 / ADR-0020). Above, the only way out of composing is
+    // compositionend, and it isn't guaranteed: switching IMEs or windows, or the OS
+    // swallowing the candidate window, can leave composition half done. A composing flag
+    // stuck at true kills terminal input for this session for good (every keydown handler
+    // returns early), with no hint to the user except to reload.
     //
-    // blur：元素都不是焦点了，组字不可能还在进行。
+    // blur: the element lost focus, so composition can't still be in progress.
     this.on('blur', () => this.stopComposing())
-    // keydown：浏览器自己说了这不是组字中的按键（isComposing=false 且不是输入法
-    // 占用的 229）。【必须挂在捕获阶段】—— RawIme 是 term.open() 之后才构造的，
-    // 冒泡阶段排在 xterm 的 keydown 后面，等它跑完这一下按键已经被当成"组字中"
-    // 丢掉了。复位要发生在 xterm 处理这个键【之前】。
+    // keydown: the browser says this key is not part of a composition (isComposing=false
+    // and not the IME's 229). Must be capture phase: RawIme is constructed after
+    // term.open(), so in the bubble phase it would run after xterm's keydown, which would
+    // already have dropped the key as "composing". The reset has to happen before xterm
+    // handles the key.
     this.on(
       'keydown',
       (e) => {
@@ -85,70 +92,74 @@ export class RawIme {
       true,
     )
 
-    // xterm 的 _keyPress 在它自己处理掉一个可打印字符时【不会】preventDefault
-    //（cancelEvents 默认 false），那个字符还是会插进 textarea、再发一次 beforeinput。
-    // 记下来，下面去重用
+    // When xterm's _keyPress handles a printable character it does not preventDefault
+    // (cancelEvents defaults to false), so the character still lands in the textarea and
+    // fires beforeinput again. Arm it for the dedup below.
     this.on('keypress', (e) => {
       const key = (e as KeyboardEvent).key
       if (key && key.length === 1) this.arm(key)
     })
 
-    // 【直接插入的文本由我们自己发】（AC-3.14）。
+    // Directly inserted text is sent by us (AC-3.14).
     //
-    // xterm 5.5 的三条路都接不住 iOS 软键盘的全角标点：
-    //  · keydown 直接取字，条件是 keyCode >= 48 —— iOS 对这类直接插入报 keyCode 0；
-    //  · input 事件兜底，条件是没见过 keydown（_keyDownSeen）—— 可 keydown 刚发生过；
-    //  · keyCode === 229 的 textarea 差量，只在恰好是 229 时走。
-    // 于是同一个键盘上，报 229 的键（句号）能进，报 0 的键（逗号）两头都不接、字就没了。
+    // None of xterm 5.5's three input paths catch full-width punctuation from the iOS
+    // on-screen keyboard:
+    //  · keydown reads the character only if keyCode >= 48; iOS reports keyCode 0 for
+    //    these insertions;
+    //  · the input event fallback runs only if no keydown was seen (_keyDownSeen), but one
+    //    just happened;
+    //  · the textarea diff runs only for keyCode === 229.
+    // So on the same keyboard a key reporting 229 (period) gets through while one reporting
+    // 0 (comma) falls between the paths and is lost.
     //
-    // 这里在 beforeinput 上接管：preventDefault 让字符【不落进 textarea】，
-    // xterm 的 input 路径与 229 差量路径就都不会再发一遍。
-    // 组字不碰（那是 compositionend 的活）；xterm 在 keydown 里处理掉的键会
-    // preventDefault，根本不会有 beforeinput，普通按键完全不受影响。
+    // We take over in beforeinput: preventDefault keeps the character out of the textarea,
+    // so neither xterm's input path nor the 229 diff sends it again. Composition is left
+    // alone (compositionend handles it), and keys xterm handles in keydown are
+    // preventDefault'ed and never produce beforeinput, so ordinary keys are unaffected.
     this.on('beforeinput', (e) => {
       const ie = e as InputEvent
       if (this.composing || ie.isComposing) return
       if (ie.inputType !== 'insertText') return
       const data = ie.data
       if (!data) return
-      // 不管发不发，都别让它落进 textarea —— 落进去 xterm 的差量路径会补一刀
+      // Sent or not, keep it out of the textarea, or xterm's diff path sends it again
       e.preventDefault()
       const duplicate = data === this.sent && Date.now() - this.sentAt < DEDUP_MS
-      // 【一次性】：压住一次就撤防。补发只有一次，再来的同一段是用户又打了一下
+      // One-shot: disarm after suppressing once. The re-send happens once; the same text again is a new keystroke
       this.disarm()
       if (duplicate) return
-      // 【这里发出去的不布防】。它是用户此刻敲的字，不是别人已经送过的 ——
-      // 布防的话，连打两下同一个字符时第二下会被自己压掉（AC-3.14）
+      // Don't arm what we send here. It is what the user just typed, not something another
+      // path already sent; arming it would swallow the second of two identical keystrokes (AC-3.14)
       this.h.onCommit(data)
     })
   }
 
-  /** 组字结束（正常的 compositionend 走的是自己那条路，这里是兜底）。 */
+  /** Ends composition (the normal compositionend has its own path; this is the fallback). */
   private stopComposing(): void {
     if (!this.composing) return
     this.composing = false
-    this.h.onPreview('') // 浮层也要收掉，否则留一片没人管的预览挂在屏幕上
+    this.h.onPreview('') // Hide the preview too, or an orphaned one stays on screen
   }
 
-  /** 发出去并布防 —— 只有 compositionend 走这里：WebKit 会补发一次同一段文字。 */
+  /** Sends and arms. Only compositionend uses this: WebKit re-sends the same text once. */
   private commit(text: string): void {
     this.arm(text)
     this.h.onCommit(text)
   }
 
-  /** 布防：记下"已经被别的路送出去"的那一段。 */
+  /** Arms: records text that another path already sent. */
   private arm(text: string): void {
     this.sent = text
     this.sentAt = Date.now()
   }
 
-  /** 撤防。 */
+  /** Disarms. */
   private disarm(): void {
     this.sent = ''
     this.sentAt = 0
   }
 
-  /** 组字中？keydown 处理器必须在它为 true 时【全部 return】（AC-3.3）。 */
+  /** Whether composition is in progress. Every keydown handler must return early while it is true (AC-3.3). */
   get isComposing(): boolean {
     return this.composing
   }
@@ -164,7 +175,7 @@ export class RawIme {
   }
 }
 
-/** 内联预览浮层应当摆在哪 —— 跟着终端光标走。 */
+/** Where the inline preview goes: it follows the terminal cursor. */
 export interface CursorRect {
   left: number
   top: number

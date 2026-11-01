@@ -4,11 +4,11 @@ import preact from '@preact/preset-vite'
 export default defineConfig({
   plugins: [preact()],
   build: {
-    // 产物直接进 go:embed 的挂载点 —— 前端由 agent 自己提供，
-    // 不引入独立前端域名（不变式 2）
+    // Output goes straight into the go:embed directory: the agent serves the frontend
+    // itself, with no separate frontend origin (invariant 2)
     outDir: '../internal/webui/dist',
     emptyOutDir: true,
-    // 调试字节级连续性问题时，能看懂产物很重要
+    // Readable output matters when debugging byte-level continuity issues
     sourcemap: true,
   },
   server: {

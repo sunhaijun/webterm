@@ -1,8 +1,9 @@
 /**
- * E2E-45 拖动排序 —— AC-4.13，ADR-0040。
+ * E2E-45 Drag to reorder (AC-4.13, ADR-0040).
  *
- * 顺序存在 agent：client 发 session.move{sid, before}，agent 广播 session.order{sids}。
- * wide 鼠标按住标签横移；触屏 Pad 长按后移动；compact 抽屉用拖动柄。
+ * The order lives on the agent: the client sends session.move{sid, before} and the agent broadcasts
+ * session.order{sids}. Wide with a mouse: press a tab and move sideways. Touch tablet: long-press,
+ * then move. Compact: use the drag handle in the drawer.
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 
@@ -22,7 +23,7 @@ test.afterEach(() => agent.stop())
 const tabOrder = (p: Page) => p.locator('.tabbar .tab').evaluateAll((els) => els.map((e) => Number((e as HTMLElement).dataset.sid)))
 const rowOrder = (p: Page) => p.locator('.session-list .session-row').evaluateAll((els) => els.map((e) => Number((e as HTMLElement).dataset.sid)))
 
-/** 鼠标按住 from 标签的中心，分几步横移到 x，松手。 */
+/** mouseDragTab presses the center of tab `sid`, moves to x in a few steps, and releases. */
 async function mouseDragTab(page: Page, sid: number, toX: number, opts: { escape?: boolean } = {}) {
   const b = (await page.getByTestId(`tab-${sid}`).boundingBox())!
   const y = b.y + b.height / 2
@@ -46,10 +47,10 @@ async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: nu
   await cdp.detach()
 }
 
-test.describe('wide 鼠标', () => {
+test.describe('wide, mouse', () => {
   test.use(WIDE)
 
-  test('E2E-45 ①②③⑥ 拖标签排序；Esc 取消；顺序在 agent 上（刷新、第二台设备）；键盘切换按新顺序', async ({ page, browser }) => {
+  test('E2E-45 (1)(2)(3)(6) drag tabs to reorder; Esc cancels; order lives on the agent (reload, second device); keyboard switching follows the new order', async ({ page, browser }) => {
     const sent = await recordSent(page)
     const orders: { sids: number[] }[] = []
     page.on('websocket', (ws) =>
@@ -63,62 +64,63 @@ test.describe('wide 鼠标', () => {
     const c = await newSession(page)
     expect(await tabOrder(page)).toEqual([a, b, c])
 
-    // ① C 拖过 A 的中线 → C A B；当前不变；发一条 session.move，收到 session.order
+    // (1) Drag C past A's midline -> C A B; current session unchanged; one session.move sent, session.order received.
     await sent.clear()
     const ra = (await page.getByTestId(`tab-${a}`).boundingBox())!
     await mouseDragTab(page, c, ra.x + ra.width / 2 - 20)
     await expect.poll(() => tabOrder(page)).toEqual([c, a, b])
     const idxs = await Promise.all([c, a, b].map((s) => page.getByTestId(`tab-${s}-idx`).textContent()))
-    expect(idxs, '标签上的编号跟着新顺序（ADR-0041）').toEqual(['[1]', '[2]', '[3]'])
-    expect(await hooks.sid(page), '拖完不切换').toBe(c)
+    expect(idxs, 'tab numbers follow the new order (ADR-0041)').toEqual(['[1]', '[2]', '[3]'])
+    expect(await hooks.sid(page), 'dragging does not switch sessions').toBe(c)
     const moves = (await sent.ctl()).filter((m) => m.t === 'session.move')
     expect(moves).toMatchObject([{ sid: c, before: a }])
-    await expect.poll(() => orders.length, { message: '收到 session.order' }).toBeGreaterThan(0)
+    await expect.poll(() => orders.length, { message: 'session.order received' }).toBeGreaterThan(0)
     expect(orders.at(-1)).toMatchObject({ sids: [c, a, b] })
 
-    // 横移 3px 松手 = 点击（切到 B），不发 session.move
+    // Moving 3px and releasing is a click (switches to B) and sends no session.move.
     await sent.clear()
     const rb = (await page.getByTestId(`tab-${b}`).boundingBox())!
     await page.mouse.move(rb.x + rb.width / 2, rb.y + rb.height / 2)
     await page.mouse.down()
     await page.mouse.move(rb.x + rb.width / 2 + 3, rb.y + rb.height / 2)
     await page.mouse.up()
-    await waitFor(async () => (await hooks.sid(page)) === b, '是点击：切到 B')
+    await waitFor(async () => (await hooks.sid(page)) === b, 'it was a click: switched to B')
     expect((await sent.ctl()).filter((m) => m.t === 'session.move')).toHaveLength(0)
 
-    // ② A 往右拖过 B，不松手按 Esc → 回到原位，不发
+    // (2) Drag A right past B and press Esc before releasing -> back in place, nothing sent.
     await sent.clear()
     await mouseDragTab(page, a, rb.x + rb.width / 2 + 40, { escape: true })
     await page.waitForTimeout(300)
     expect(await tabOrder(page)).toEqual([c, a, b])
-    expect((await sent.ctl()).filter((m) => m.t === 'session.move'), 'Esc 取消不发').toHaveLength(0)
+    expect((await sent.ctl()).filter((m) => m.t === 'session.move'), 'Esc cancels without sending').toHaveLength(0)
 
-    // ③ 刷新后仍是 C A B；第二台设备一样；在第一台再拖一次，第二台不刷新就跟上
+    // (3) Still C A B after reload and on a second device; another drag on the first device reaches
+    // the second without a reload.
     await page.reload()
     await expect.poll(() => tabOrder(page)).toEqual([c, a, b])
     const ctx2 = await browser.newContext({ viewport: WIDE.viewport, screen: WIDE.contextOptions.screen })
     const page2 = await ctx2.newPage()
     await agent.open(page2)
-    await expect.poll(() => tabOrder(page2), { message: '第二台设备' }).toEqual([c, a, b])
+    await expect.poll(() => tabOrder(page2), { message: 'second device' }).toEqual([c, a, b])
     const strip = (await page.getByTestId('tabbar').boundingBox())!
-    await mouseDragTab(page, a, strip.x + strip.width + 200) // 拖到最后
+    await mouseDragTab(page, a, strip.x + strip.width + 200) // drag to the end
     await expect.poll(() => tabOrder(page)).toEqual([c, b, a])
-    await expect.poll(() => tabOrder(page2), { message: '广播到第二台' }).toEqual([c, b, a])
+    await expect.poll(() => tabOrder(page2), { message: 'broadcast to the second device' }).toEqual([c, b, a])
     await ctx2.close()
 
-    // ⑥ 键盘切换按新顺序：当前 C → Ctrl+Shift+↓ 到 B
+    // (6) Keyboard switching follows the new order: from C, Ctrl+Shift+Down goes to B.
     await page.getByTestId(`tab-${c}`).click()
-    await waitFor(async () => (await hooks.sid(page)) === c, '切到 C')
+    await waitFor(async () => (await hooks.sid(page)) === c, 'switched to C')
     await page.locator('.xterm-helper-textarea').focus()
     await page.keyboard.press('Control+Shift+ArrowDown')
-    await waitFor(async () => (await hooks.sid(page)) === b, '下一个是 B')
+    await waitFor(async () => (await hooks.sid(page)) === b, 'next is B')
   })
 })
 
-test.describe('compact 拖动柄', () => {
+test.describe('compact, drag handle', () => {
   test.use(PIXEL)
 
-  test('E2E-45 ④ 抽屉里按住拖动柄纵向拖；按住正文纵向拖是滚动、不改顺序', async ({ page }) => {
+  test('E2E-45 (4) vertical drag on the drawer handle reorders; vertical drag on the row body scrolls without reordering', async ({ page }) => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
     const b = await newSession(page)
@@ -132,9 +134,9 @@ test.describe('compact 拖动柄', () => {
     await touchDrag(page, { x: g.x + g.width / 2, y: g.y + g.height / 2 }, { x: g.x + g.width / 2, y: ra.y + 4 })
     await expect.poll(() => rowOrder(page)).toEqual([c, a, b])
     await expect(page.getByTestId(`session-${c}`).locator('.sl-idx')).toHaveText('[1]')
-    await expect(page.getByTestId('session-drawer'), '拖完抽屉还在、没切会话').toBeVisible()
+    await expect(page.getByTestId('session-drawer'), 'drawer stays open and the session does not switch').toBeVisible()
 
-    // 按住正文往上拖：滚动列表，不改顺序
+    // Drag the row body upward: scrolls the list, order unchanged.
     const rb = (await page.getByTestId(`session-${b}`).boundingBox())!
     await touchDrag(page, { x: rb.x + 60, y: rb.y + 26 }, { x: rb.x + 64, y: rb.y - 60 })
     await page.waitForTimeout(300)
@@ -143,10 +145,10 @@ test.describe('compact 拖动柄', () => {
   })
 })
 
-test.describe('触屏 Pad', () => {
+test.describe('touch tablet', () => {
   test.use(IPAD)
 
-  test('E2E-45 ⑤ 长按标签后不松手横移 = 拖；长按原地松手 = 会话菜单', async ({ page }) => {
+  test('E2E-45 (5) long-press a tab then move without releasing = drag; long-press and release in place = session menu', async ({ page }) => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
     const b = await newSession(page)
@@ -155,10 +157,10 @@ test.describe('触屏 Pad', () => {
     const rb = (await page.getByTestId(`tab-${b}`).boundingBox())!
     await touchDrag(page, { x: ra.x + ra.width / 2, y: ra.y + ra.height / 2 }, { x: rb.x + rb.width - 10, y: rb.y + rb.height / 2 }, 700)
     await expect.poll(() => tabOrder(page)).toEqual([b, a])
-    await expect(page.getByTestId('session-menu'), '拖了就不出菜单').toHaveCount(0)
+    await expect(page.getByTestId('session-menu'), 'a drag opens no menu').toHaveCount(0)
 
     const r = (await page.getByTestId(`tab-${a}`).boundingBox())!
     await touchDrag(page, { x: r.x + r.width / 2, y: r.y + r.height / 2 }, { x: r.x + r.width / 2, y: r.y + r.height / 2 }, 700, 1)
-    await expect(page.getByTestId('session-menu'), '原地松手 = 菜单').toBeVisible()
+    await expect(page.getByTestId('session-menu'), 'release in place = menu').toBeVisible()
   })
 })

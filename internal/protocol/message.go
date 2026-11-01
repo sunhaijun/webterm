@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// 控制消息类型（协议 §4）。未知的 t 值接收方必须忽略。
+// Control message types (protocol §4). Receivers must ignore unknown t values.
 const (
 	THello         = "hello"
 	TSessionCreate = "session.create"
@@ -28,7 +28,7 @@ const (
 	TNotice         = "notice"
 )
 
-// 错误码（协议 §7）。
+// Error codes (protocol §7).
 const (
 	CodeExpectedHello       = "expected_hello"
 	CodeProtocolUnsupported = "protocol_unsupported"
@@ -44,31 +44,32 @@ const (
 	CodeInternal            = "internal"
 )
 
-// 会话状态。
+// Session status values.
 const (
 	StatusRunning = "running"
 	StatusExited  = "exited"
 )
 
-// resumed[].status（协议 §4.2 / §5.1）。
+// Values of resumed[].status (protocol §4.2 / §5.1).
 const (
-	ResumeOK       = "ok"       // 增量续传：从 from_seq（= 客户端的 out_seq）接 OUTPUT
-	ResumeSnapshot = "snapshot" // 发快照：等 SNAPSHOT 帧，from_seq = 快照的 seq
-	ResumeGone     = "gone"     // sid 不存在 / instance_id 不符
+	ResumeOK       = "ok"       // incremental: OUTPUT continues from from_seq (the client's out_seq)
+	ResumeSnapshot = "snapshot" // expect SNAPSHOT frames; from_seq is the snapshot's seq
+	ResumeGone     = "gone"     // unknown sid or instance_id mismatch
 )
 
-// ---------- client → agent ----------
+// ---------- client -> agent ----------
 
 type ResumeReq struct {
 	SID    uint16 `json:"sid"`
 	OutSeq uint64 `json:"out_seq"`
 }
 
-// Hello 是连接后的第一条消息。
+// Hello is the first message on a connection.
 //
-// ClientID 是【每次页面加载一个】的 id，只放内存（不能存 sessionStorage /
-// localStorage，协议 §4.1），也是输入记账的 key。
-// InstanceID 是上次 welcome 里拿到的值，与 agent 当前值不符时所有 resume 判 gone。
+// ClientID is generated once per page load and kept in memory only (never in
+// sessionStorage or localStorage, protocol §4.1). It keys input accounting.
+// InstanceID is the value from the previous welcome; if it differs from the
+// agent's current one, every resume is answered with gone.
 type Hello struct {
 	T          string      `json:"t"`
 	Protocol   int         `json:"protocol"`
@@ -96,30 +97,33 @@ type SessionRename struct {
 	T     string  `json:"t"`
 	ReqID string  `json:"req_id"`
 	SID   uint16  `json:"sid"`
-	Name  *string `json:"name"` // null 恢复自动改名
+	Name  *string `json:"name"` // null restores automatic naming
 }
 
-// SessionMove 把会话 SID 挪到 Before 前面（ADR-0040）。
+// SessionMove moves session SID in front of Before (ADR-0040).
 //
-// Before 为 null 时挪到最后；Before 不存在（刚被别处关掉）也当 null，等于 SID
-// 时原地不动 —— 都不报错。用"放到谁前面"而不是目标下标：两台设备同时操作时，
-// 下标指的位置可能已经变了。
+// A null Before moves it to the end. A Before that no longer exists (closed
+// elsewhere) is treated as null, and Before == SID is a no-op; neither is an
+// error. The message names a neighbor rather than a target index because,
+// with two devices reordering at once, an index may already point elsewhere.
 type SessionMove struct {
 	T      string  `json:"t"`
 	ReqID  string  `json:"req_id"`
 	SID    uint16  `json:"sid"`
-	Before *uint16 `json:"before"` // null = 挪到最后
+	Before *uint16 `json:"before"` // null = move to the end
 }
 
 type Subscribe struct {
 	T      string `json:"t"`
 	SID    uint16 `json:"sid"`
 	OutSeq uint64 `json:"out_seq"`
-	// Cols/Rows 是此刻的终端尺寸，0 表示"沿用会话当前尺寸"。
+	// Cols/Rows are the current terminal size; 0 keeps the session's size.
 	//
-	// 【尺寸必须和 subscribe 同一条消息】，不能单发 resize：agent 要在同一把锁里
-	// 先改模拟器尺寸、再判定增量 / 快照、再入队，锁外才 TIOCSWINSZ —— 程序因
-	// SIGWINCH 重画的字节因此一定排在快照或增量之后（协议 §4.1）。
+	// The size must ride on subscribe, not a separate resize. Under one lock
+	// the agent resizes the emulator, decides incremental vs snapshot, and
+	// enqueues; only then, outside the lock, does it TIOCSWINSZ. The bytes a
+	// program redraws on SIGWINCH therefore always follow the snapshot or
+	// delta (protocol §4.1).
 	Cols uint16 `json:"cols,omitempty"`
 	Rows uint16 `json:"rows,omitempty"`
 }
@@ -141,7 +145,7 @@ type Ping struct {
 	TS int64  `json:"ts"`
 }
 
-// ---------- agent → client ----------
+// ---------- agent -> client ----------
 
 type Limits struct {
 	MaxSessions   int `json:"max_sessions"`
@@ -149,9 +153,10 @@ type Limits struct {
 	MaxFrameBytes int `json:"max_frame_bytes"`
 }
 
-// SessionInfo 是会话的完整快照（welcome.sessions[] 与 session.created）。
-// 没有 unread 字段 —— 未读由 client 按 head_seq > 本地 out_seq 推导，
-// 因为未读天然是 per-client 的，放服务端会让两个标签页互相清对方的未读。
+// SessionInfo is the full state of a session (welcome.sessions[] and
+// session.created). There is no unread field: clients derive it from
+// head_seq > local out_seq. Unread is inherently per client; tracking it on
+// the server would let two tabs clear each other's unread state.
 type SessionInfo struct {
 	SID          uint16 `json:"sid"`
 	Name         string `json:"name"`
@@ -166,10 +171,10 @@ type SessionInfo struct {
 	CreatedAt    int64  `json:"created_at"`
 }
 
-// ResumeResult 是 welcome.resumed[] 的一项。
+// ResumeResult is one entry of welcome.resumed[].
 //
-// FromSeq：ok 时是客户端自己的 out_seq；snapshot 时是快照的 seq（之后的
-// OUTPUT 从这里接）；gone 时为 0。
+// FromSeq is the client's own out_seq for ok, the snapshot's seq for snapshot
+// (later OUTPUT continues from there), and 0 for gone.
 type ResumeResult struct {
 	SID     uint16 `json:"sid"`
 	Status  string `json:"status"`
@@ -182,7 +187,8 @@ type Welcome struct {
 	Protocol      int    `json:"protocol"`
 	ServerVersion string `json:"server_version"`
 	InstanceID    string `json:"instance_id"`
-	// Home 是 agent 用户的家目录，前端用来把 CWD 缩写成 ~（协议 §4.2）。
+	// Home is the agent user's home directory; the frontend uses it to
+	// abbreviate CWD as ~ (protocol §4.2).
 	Home     string         `json:"home"`
 	Limits   Limits         `json:"limits"`
 	Sessions []SessionInfo  `json:"sessions"`
@@ -191,7 +197,7 @@ type Welcome struct {
 
 type SessionCreated struct {
 	T       string      `json:"t"`
-	ReqID   string      `json:"req_id,omitempty"` // 只出现在发起请求的那条连接的副本上
+	ReqID   string      `json:"req_id,omitempty"` // set only on the copy sent to the requesting connection
 	Session SessionInfo `json:"session"`
 }
 
@@ -202,7 +208,8 @@ type SessionClosed struct {
 	ExitCode *int   `json:"exit_code"`
 }
 
-// SessionUpdated 只携带发生变化的字段 + sid，client 做增量合并。
+// SessionUpdated carries sid plus only the fields that changed; clients merge
+// it into their state.
 type SessionUpdated struct {
 	T            string  `json:"t"`
 	SID          uint16  `json:"sid"`
@@ -216,11 +223,12 @@ type SessionUpdated struct {
 	HeadSeq      *uint64 `json:"head_seq,omitempty"`
 }
 
-// SessionOrder 是 session.move 之后的完整显示顺序，client 整个替换自己的（ADR-0040）。
-// 新建、关闭不发它：新建排最后、关掉的去掉，两边各自推得出来。
+// SessionOrder is the full display order after a session.move; clients replace
+// theirs wholesale (ADR-0040). It is not sent on create or close: new sessions
+// go last and closed ones drop out, which both sides can derive.
 type SessionOrder struct {
 	T     string   `json:"t"`
-	ReqID string   `json:"req_id,omitempty"` // 只出现在发起请求的那条连接的副本上
+	ReqID string   `json:"req_id,omitempty"` // set only on the copy sent to the requesting connection
 	SIDs  []uint16 `json:"sids"`
 }
 
@@ -249,15 +257,16 @@ type Notice struct {
 	Message string `json:"message"`
 }
 
-// ---------- 编解码 ----------
+// ---------- encoding ----------
 
-// ErrUnknownType 表示 t 是本实现不认识的类型。
-// 调用方【必须忽略】这种消息而不是断开连接 —— 前向兼容靠的就是这条（协议 §4）。
+// ErrUnknownType reports a message whose t this implementation does not know.
+// Callers must ignore such messages rather than disconnect; forward
+// compatibility depends on it (protocol §4).
 type ErrUnknownType struct{ T string }
 
 func (e *ErrUnknownType) Error() string { return "protocol: unknown message type " + e.T }
 
-// Encode 把控制消息编成 JSON，并按类型填好 t 字段。
+// Encode marshals a control message to JSON, setting t from its type.
 func Encode(msg any) ([]byte, error) {
 	switch m := msg.(type) {
 	case *Hello:
@@ -302,8 +311,9 @@ func Encode(msg any) ([]byte, error) {
 	return json.Marshal(msg)
 }
 
-// Decode 解析一条控制消息，返回具体类型的指针。
-// t 不认识时返回 *ErrUnknownType —— 调用方应当忽略而不是关连接。
+// Decode parses a control message and returns a pointer to its concrete type.
+// An unknown t returns *ErrUnknownType, which callers should ignore rather than
+// close the connection.
 func Decode(data []byte) (any, error) {
 	var probe struct {
 		T string `json:"t"`

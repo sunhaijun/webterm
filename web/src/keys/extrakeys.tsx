@@ -1,14 +1,18 @@
 /**
- * 附加键区（AC-3.18 / AC-3.19，input.md）：80px 的定高槽，两页 ——
- * 键位页（Termux 默认 14 键）和文本输入页（一个两行的 textarea）。左边 44px 的固定列：
- * compact 是会话按钮（上，方框里写会话数）与 ✎（下），wide 只有 ✎。两页高度相同，切换不改终端几何。
+ * Extra keys (AC-3.18 / AC-3.19, input.md): a fixed 80px slot with two pages, the key
+ * page (Termux's default 14 keys) and the text page (a two-row textarea). A fixed 44px
+ * column on the left holds the sessions button (top, session count in a box) and ✎
+ * (bottom) on compact, only ✎ on wide. Both pages have the same height, so flipping never
+ * changes terminal geometry.
  *
- * 停在哪一页、文本框里的草稿是**每个会话各一份**（AC-3.22，ADR-0036），由装配层记着：
- * 这里只显示当前会话的那一页，翻页交给 `onTogglePage`，文本框的 DOM 交给 `register`。
+ * The current page and the text draft are per session (AC-3.22, ADR-0036) and tracked by
+ * the controller. This component shows the active session's page, delegates flipping to
+ * `onTogglePage` and hands the text box DOM over via `register`.
  *
- * 所有键在 pointerdown 时 preventDefault：按附加键不让软键盘收起或弹出，焦点不动。
- * 字节在 pointerup 的派发里发（`term.input()`，走 onData 出口），这样在键区上横滑
- * 可以切页而不误按键；CTRL / ALT 长按锁定也要等抬起才知道是点还是按。
+ * Every key calls preventDefault on pointerdown, so pressing one never shows or hides the
+ * on-screen keyboard or moves focus. Bytes go out from the pointerup dispatch
+ * (`term.input()`, through onData), so a horizontal swipe across the keys flips pages
+ * without pressing anything, and a CTRL / ALT press only becomes a tap or a lock on release.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
@@ -21,19 +25,19 @@ import { isPageSwipe, textEnter, type KeyPage, type TextPageEls, type TextSend }
 
 export interface ExtraKeysProps {
   form: Form
-  /** 会话数：写在会话按钮的方框里。 */
+  /** Session count, shown in the sessions button's box. */
   count: number
-  /** 任一非当前会话有未读：会话按钮上的小红点。 */
+  /** Some non-active session has unread output: a dot on the sessions button. */
   unread: boolean
   sticky: Sticky
-  /** 当前会话停在哪一页。 */
+  /** The active session's page. */
   page: KeyPage
   onOpenSessions(): void
-  /** ✎ 或键区横滑：翻当前会话的页（装配层同步翻 DOM 并处理焦点）。 */
+  /** ✎ or a swipe across the keys: flip the active session's page (the controller flips the DOM and handles focus). */
   onTogglePage(): void
-  /** 一个非修饰键被按下（在 pointerup 的派发里调用）。 */
+  /** A non-modifier key was pressed (called from the pointerup dispatch). */
   onKey(id: ExtraKeyId): void
-  /** 文本页回车（在 keydown 的派发里调用）。 */
+  /** Enter on the text page (called from the keydown dispatch). */
   onSend(send: TextSend): void
   register(els: TextPageEls | null): void
 }
@@ -55,8 +59,9 @@ export function ExtraKeys(p: ExtraKeysProps) {
     const ta = taRef.current
     const slot = slotRef.current
     if (!ta || !slot) return
-    // 【必须 setAttribute】（AC-3.10）：Chrome 把 autocorrect 实现成 boolean IDL 属性，
-    // 写在 JSX 里框架会去赋属性，"off" 是真值，反射出来的 attribute 变成 autocorrect="on"
+    // Must use setAttribute (AC-3.10): Chrome implements autocorrect as a boolean IDL
+    // property. In JSX the framework sets the property, "off" is truthy, and the reflected
+    // attribute becomes autocorrect="on"
     ta.setAttribute('autocorrect', 'off')
     ta.setAttribute('autocapitalize', 'off')
     ta.setAttribute('spellcheck', 'false')
@@ -70,7 +75,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
     const keyEl = (e.target as Element).closest<HTMLElement>('[data-key]')
     const key = (keyEl?.dataset.key as ExtraKeyId | undefined) ?? null
     if (page === 'keys') {
-      e.preventDefault() // 不抢焦点
+      e.preventDefault() // Don't take focus
       capturePointer(e.currentTarget as Element, e.pointerId)
     }
     gesture.current = { x: e.clientX, y: e.clientY, key: page === 'keys' ? key : null }
@@ -102,13 +107,13 @@ export function ExtraKeys(p: ExtraKeysProps) {
 
   const onTextKey = (e: KeyboardEvent) => {
     if (e.key !== 'Enter') return
-    if (appAction(e) !== null) return // Ctrl+Shift+Enter 是新建会话，交给全局快捷键
+    if (appAction(e) !== null) return // Ctrl+Shift+Enter is New session; leave it to the global shortcut
     const ta = e.currentTarget as HTMLTextAreaElement
     const send = textEnter(ta.value, e)
-    if (send.kind === 'none') return // 组字中：交给输入法选词
-    e.preventDefault() // 回车永远不在文本框里插入换行
+    if (send.kind === 'none') return // Mid-composition: let the IME pick the candidate
+    e.preventDefault() // Enter never inserts a newline in the text box
     ta.value = ''
-    p.onSend(send) // 发完留在文本页、焦点不动
+    p.onSend(send) // Stay on the text page with focus unchanged
   }
 
   return (
@@ -120,11 +125,11 @@ export function ExtraKeys(p: ExtraKeysProps) {
             class="ek-side-btn"
             data-testid="open-sessions"
             data-unread={p.unread ? 'true' : 'false'}
-            aria-label={p.unread ? `${p.count} 个会话（有新输出）` : `${p.count} 个会话`}
+            aria-label={p.unread ? `Sessions: ${p.count} (new output)` : `Sessions: ${p.count}`}
             onPointerDown={noFocus}
             onClick={p.onOpenSessions}
           >
-            {/* 手机浏览器「标签页」按钮的样子：圆角方框里写会话数（ADR-0030 §3） */}
+            {/* Styled like a mobile browser's tabs button: the count in a rounded box (ADR-0030 §3) */}
             <span class="ek-count" aria-hidden="true">
               {p.count}
             </span>
@@ -135,7 +140,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
           class="ek-side-btn"
           data-testid="toggle-text"
           aria-pressed={page === 'text' ? 'true' : 'false'}
-          aria-label={page === 'text' ? '切回附加键' : '文本输入'}
+          aria-label={page === 'text' ? 'Back to extra keys' : 'Text input'}
           onPointerDown={noFocus}
           onClick={p.onTogglePage}
         >
@@ -152,7 +157,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
           press.cancel()
         }}
       >
-        <div class="ek-keys" role="group" aria-label="附加键">
+        <div class="ek-keys" role="group" aria-label="Extra keys">
           {EXTRA_KEYS.flat().map((k) => {
             const mod = k.id === 'Ctrl' ? 'ctrl' : k.id === 'Alt' ? 'alt' : null
             const sticky = mod ? p.sticky.state(mod) : undefined
@@ -172,7 +177,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
             )
           })}
         </div>
-        <textarea ref={taRef} class="ek-text" data-testid="textinput" rows={2} aria-label="文本输入" onKeyDown={onTextKey} />
+        <textarea ref={taRef} class="ek-text" data-testid="textinput" rows={2} aria-label="Text input" onKeyDown={onTextKey} />
       </div>
     </div>
   )

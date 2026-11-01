@@ -19,7 +19,8 @@ import (
 	"time"
 )
 
-// 裸跑 webterm 要一眼看到"现在正常吗"。渲染是纯函数，好把各种状态都钉住。
+// Bare webterm must answer "is it working?" at a glance. Rendering is a pure
+// function, so every state can be pinned down.
 func TestRenderStatus(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
@@ -29,107 +30,110 @@ func TestRenderStatus(t *testing.T) {
 		deny []string
 	}{
 		{
-			"一切正常",
+			"all healthy",
 			status{
 				running: true, runningVia: "systemd",
 				url:    "https://term.example.com:8443",
 				certOK: true, certExpiry: now.AddDate(0, 0, 89),
 				devices: 2, configPath: "/home/u/.config/webterm/config",
 			},
-			[]string{"运行中", "systemd", "https://term.example.com:8443",
-				"2026-12-06", "89 天", "2 台", "webterm pair"},
+			[]string{"Running", "systemd", "https://term.example.com:8443",
+				"2026-12-06", "89 days", "2 authorized", "webterm pair"},
 			nil,
 		},
 		{
-			// 最常见的第一次：服务起来了但还没配对
-			"还没有授权设备 → 指出下一步",
+			// The most common first run: the service is up but nothing is paired.
+			"no authorized devices points to the next step",
 			status{running: true, url: "https://x.example.com", certOK: true,
 				certExpiry: now.AddDate(0, 0, 89), devices: 0},
-			[]string{"还没有授权设备", "webterm pair"},
+			[]string{"None authorized yet", "webterm pair", "next step"},
 			nil,
 		},
 		{
-			"服务没在跑",
+			"service not running",
 			status{running: false, url: "https://x.example.com"},
-			[]string{"未运行", "webterm serve"},
+			[]string{"Not running", "webterm serve"},
 			nil,
 		},
 		{
-			"证书还没申请下来",
+			"certificate not issued yet",
 			status{running: true, url: "https://x.example.com", certOK: false},
-			[]string{"还没有证书"},
-			[]string{"到期"},
+			[]string{"Not issued yet"},
+			[]string{"until", "left"},
 		},
 		{
-			// 到期在即要显眼 —— 这是唯一会静默变成事故的东西
-			"证书快到期了",
+			// Imminent expiry must stand out: it is the one thing that silently
+			// turns into an outage.
+			"certificate expiring soon",
 			status{running: true, url: "https://x.example.com", certOK: true,
 				certExpiry: now.AddDate(0, 0, 5), devices: 1},
-			[]string{"5 天", "续期"},
+			[]string{"Only 5 days left", "renewal"},
 			nil,
 		},
 		{
-			"已经过期",
+			"certificate expired",
 			status{running: true, url: "https://x.example.com", certOK: true,
 				certExpiry: now.AddDate(0, 0, -1), devices: 1},
-			[]string{"已过期"},
+			[]string{"Expired"},
 			nil,
 		},
 		{
-			// ADR-0034：系统服务没在跑，启动命令要带 sudo
-			"系统服务没在跑",
+			// ADR-0034: starting a system service needs sudo.
+			"system service not running",
 			status{running: false, unit: unitSystem, url: "https://x.example.com"},
-			[]string{"未运行", "sudo systemctl start webterm"},
-			[]string{"--user", "迁移"},
+			[]string{"Not running", "sudo systemctl start webterm"},
+			[]string{"--user", "Migrate"},
 		},
 		{
-			// ADR-0034：还是用户服务 → 说清代价，并给出迁移命令（只提示，不替用户做）
-			"还是用户服务",
+			// ADR-0034: still a user service. Explain the cost and give the
+			// migration command; only suggest it, never run it.
+			"still a user service",
 			status{running: true, runningVia: "systemd", unit: unitUser,
 				url: "https://x.example.com", certOK: true, certExpiry: now.AddDate(0, 0, 89), devices: 1},
-			[]string{"用户服务", "先被杀", "webterm update --force-restart", "从 SSH 跑"},
+			[]string{"user service", "killed before", "webterm update --force-restart", "over SSH"},
 			nil,
 		},
 		{
-			"系统服务正常",
+			"system service healthy",
 			status{running: true, runningVia: "systemd", unit: unitSystem,
 				url: "https://x.example.com", certOK: true, certExpiry: now.AddDate(0, 0, 89), devices: 1},
-			[]string{"运行中（systemd）"},
-			[]string{"用户服务", "迁移"},
+			[]string{"Running (systemd)"},
+			[]string{"user service", "Migrate"},
 		},
 		{
-			"还没配地址（连 --dev 都没跑过）",
+			"no URL configured (never even ran --dev)",
 			status{running: false},
-			[]string{"还没配地址", "webterm install"},
+			[]string{"Not configured", "webterm install"},
 			nil,
 		},
 		{
-			// UT-status-cert：6 天期的 IP 证书刚签下来不标黄（ADR-0044 §4）
-			"IP 证书刚签下来",
+			// UT-status-cert: a freshly issued 6-day IP certificate is not
+			// flagged (ADR-0044 §4).
+			"fresh IP certificate",
 			status{running: true, url: "https://203.0.113.7", ipMode: true, certOK: true,
 				certStart: now.Add(-time.Hour), certExpiry: now.Add(159 * time.Hour), devices: 1},
-			[]string{"有效", "6 天", "自动续期"},
-			[]string{"只剩"},
+			[]string{"Valid", "6 days", "renews automatically"},
+			[]string{"Only"},
 		},
 		{
-			"IP 证书剩 30 小时还没续上",
+			"IP certificate unrenewed with 30 hours left",
 			status{running: true, url: "https://203.0.113.7", ipMode: true, certOK: true,
 				certStart: now.Add(-130 * time.Hour), certExpiry: now.Add(30 * time.Hour), devices: 1},
-			[]string{"只剩 30 小时", "80 从公网可达", "journalctl"},
-			[]string{"80 或 443"},
+			[]string{"Only 30 hours left", "port 80 reachable", "journalctl"},
+			[]string{"80 or 443"},
 		},
 		{
-			"90 天证书剩 11 天不标黄",
+			"90-day certificate with 11 days left is not flagged",
 			status{running: true, url: "https://x.example.com", certOK: true,
 				certStart: now.AddDate(0, 0, -79), certExpiry: now.AddDate(0, 0, 11), devices: 1},
-			[]string{"有效", "11 天"},
-			[]string{"只剩"},
+			[]string{"Valid", "11 days"},
+			[]string{"Only"},
 		},
 		{
-			"90 天证书剩 9 天标黄",
+			"90-day certificate with 9 days left is flagged",
 			status{running: true, url: "https://x.example.com", certOK: true,
 				certStart: now.AddDate(0, 0, -81), certExpiry: now.AddDate(0, 0, 9), devices: 1},
-			[]string{"只剩 9 天", "80 或 443"},
+			[]string{"Only 9 days left", "80 or 443"},
 			nil,
 		},
 	}
@@ -138,60 +142,95 @@ func TestRenderStatus(t *testing.T) {
 			got := renderStatus(tc.st, "v0.1.0", now, false)
 			for _, w := range tc.want {
 				if !strings.Contains(got, w) {
-					t.Errorf("缺 %q：\n%s", w, got)
+					t.Errorf("missing %q:\n%s", w, got)
 				}
 			}
 			for _, d := range tc.deny {
 				if strings.Contains(got, d) {
-					t.Errorf("不该出现 %q：\n%s", d, got)
+					t.Errorf("unexpected %q:\n%s", d, got)
 				}
 			}
-			// 命令清单永远要在
+			// The command list is always shown.
 			if !strings.Contains(got, "webterm doctor") {
-				t.Errorf("命令清单丢了：\n%s", got)
+				t.Errorf("command list is missing:\n%s", got)
 			}
 		})
 	}
 }
 
-// 剩余天数按自然日算，别出现 "-0 天" 这种。
+// Hint commands line up in one column even when one is longer than the rest.
+func TestRenderStatusHintsAligned(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	got := renderStatus(status{running: false, unit: unitUser, url: "https://x.example.com"}, "v0.1.0", now, false)
+	col := -1
+	for _, line := range strings.Split(got, "\n") {
+		for _, cmd := range []string{"webterm pair", "webterm devices", "webterm doctor", "webterm update --force-restart", "systemctl --user start webterm"} {
+			if !strings.HasPrefix(line, "  "+cmd+" ") {
+				continue
+			}
+			rest := strings.TrimLeft(line[2+len(cmd):], " ")
+			c := len(line) - len(rest)
+			if col == -1 {
+				col = c
+			} else if c != col {
+				t.Errorf("hint descriptions are not aligned (column %d vs %d):\n%s", c, col, got)
+			}
+		}
+	}
+	if col == -1 {
+		t.Fatalf("no hints found:\n%s", got)
+	}
+}
+
+// Days left are whole days, so "-0 days" never shows up.
 func TestDaysLeft(t *testing.T) {
 	now := time.Date(2026, 9, 8, 23, 30, 0, 0, time.UTC)
 	cases := []struct {
 		expiry time.Time
 		want   int
 	}{
-		{now.Add(30 * time.Minute), 0}, // 半小时后到期 → 今天
+		{now.Add(30 * time.Minute), 0}, // expires in half an hour: today
 		{now.Add(25 * time.Hour), 1},
 		{now.AddDate(0, 0, 89), 89},
-		{now.Add(-time.Hour), -1}, // 已过期
+		{now.Add(-time.Hour), -1}, // already expired
 	}
 	for _, tc := range cases {
 		if got := daysLeft(tc.expiry, now); got != tc.want {
-			t.Errorf("daysLeft(+%v) = %d, 想要 %d", tc.expiry.Sub(now), got, tc.want)
+			t.Errorf("daysLeft(+%v) = %d, want %d", tc.expiry.Sub(now), got, tc.want)
 		}
 	}
 }
 
-// 颜色只在接着终端时才该出现 —— 重定向到文件里不能躺着转义序列。
+func TestRemainingIsSingularForOne(t *testing.T) {
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	if got := remaining(now.Add(90*time.Minute), now); got != "1 hour" {
+		t.Errorf("remaining(+90m) = %q, want %q", got, "1 hour")
+	}
+	if got := remaining(now.Add(72*time.Hour), now); got != "3 days" {
+		t.Errorf("remaining(+72h) = %q, want %q", got, "3 days")
+	}
+}
+
+// Color appears only on a terminal; a redirected file must not contain escape
+// sequences.
 func TestRenderStatusColor(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
-	// 快到期和已过期是仅有的两处上色
+	// Expiring soon and expired are the only two colored states.
 	for _, st := range []status{
 		{running: true, url: "https://x.example.com", certOK: true, certExpiry: now.AddDate(0, 0, 5)},
 		{running: true, url: "https://x.example.com", certOK: true, certExpiry: now.AddDate(0, 0, -1)},
 	} {
 		plain := renderStatus(st, "v0.1.0", now, false)
 		if strings.Contains(plain, "\033[") {
-			t.Errorf("关了颜色还有转义序列：\n%q", plain)
+			t.Errorf("escape sequences with color off:\n%q", plain)
 		}
 		colored := renderStatus(st, "v0.1.0", now, true)
 		if !strings.Contains(colored, "\033[") {
-			t.Errorf("开了颜色却没上色：\n%q", colored)
+			t.Errorf("no color with color on:\n%q", colored)
 		}
-		// 关掉颜色不能丢信息
+		// Turning color off must not lose information.
 		if stripANSI(colored) != plain {
-			t.Errorf("上色改变了文字内容：\n%q\n%q", stripANSI(colored), plain)
+			t.Errorf("color changed the text:\n%q\n%q", stripANSI(colored), plain)
 		}
 	}
 }
@@ -210,9 +249,9 @@ func stripANSI(s string) string {
 	}
 }
 
-// NO_COLOR 一设就不上色，不管值是什么；TERM=dumb 同理。
+// Any NO_COLOR value, even empty, disables color; so does TERM=dumb.
 func TestColorEnabled(t *testing.T) {
-	// 非终端（普通文件）永远不上色
+	// A regular file is never colored.
 	f, err := os.CreateTemp(t.TempDir(), "out")
 	if err != nil {
 		t.Fatal(err)
@@ -221,25 +260,26 @@ func TestColorEnabled(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	os.Unsetenv("NO_COLOR")
 	if colorEnabled(f) {
-		t.Error("重定向到文件时不该上色")
+		t.Error("output redirected to a file should not be colored")
 	}
 	t.Setenv("NO_COLOR", "")
 	if colorEnabled(os.Stdin) {
-		t.Error("设了 NO_COLOR（哪怕是空值）就不该上色")
+		t.Error("NO_COLOR is set (even empty), so there should be no color")
 	}
 }
 
-// 探活必须带 SNI。
+// The liveness probe must send SNI.
 //
-// autocert 的 HostPolicy 只认 --domain 那个名字：拿 IP 直连、不带 SNI 时
-// 服务端【不给证书】，握手直接断 —— 那是服务端的拒绝，客户端
-// InsecureSkipVerify 救不了。漏了 SNI 就会把活着的服务判成"未运行"。
+// autocert's HostPolicy accepts only the --domain name. Connecting by IP
+// without SNI gets no certificate and the handshake fails; that is a
+// server-side refusal InsecureSkipVerify cannot fix. Without SNI the probe
+// reports a live service as not running.
 //
-// 【不能用 httptest.StartTLS】：它会无条件往 Certificates 里塞一张 localhost
-// 证书，而 Go 在 len(Certificates)>0 且 ServerName 为空时根本不调
-// GetCertificate —— 握手会用那张兜底证书成功，测试就失去意义了
-// （这个坑真踩到了：撤掉修复测试照样绿）。所以自己起一个只有
-// GetCertificate、没有兜底证书的服务器。
+// httptest.StartTLS is unusable here: it always puts a localhost certificate in
+// Certificates, and Go does not call GetCertificate when len(Certificates) > 0
+// and ServerName is empty. The handshake would succeed with that fallback, and
+// the test would pass even with the fix reverted (it did). So this starts a
+// server with only GetCertificate and no fallback certificate.
 func TestHealthzOKSendsSNI(t *testing.T) {
 	const domain = "t.example.com"
 	cert := selfSigned(t, domain)
@@ -257,36 +297,37 @@ func TestHealthzOKSendsSNI(t *testing.T) {
 			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 				sawSNI = append(sawSNI, hello.ServerName)
 				if hello.ServerName != domain {
-					// autocert 在 HostPolicy 不匹配时就是这么拒的
+					// this is how autocert refuses a host outside HostPolicy
 					return nil, fmt.Errorf("acme/autocert: host %q not configured in HostWhitelist", hello.ServerName)
 				}
 				return &cert, nil
 			},
 		},
 	}
-	go srv.ServeTLS(ln, "", "") //nolint:errcheck // 关闭时必然返回 ErrServerClosed
+	go srv.ServeTLS(ln, "", "") //nolint:errcheck // always ErrServerClosed on shutdown
 	defer srv.Close()
 
 	url := "https://" + ln.Addr().String() + "/healthz"
 	if !healthzOK(url, domain) {
-		t.Errorf("带上 SNI 应该探得通（服务端看到的 SNI: %q）", sawSNI)
+		t.Errorf("probe with SNI should succeed (server saw SNI %q)", sawSNI)
 	}
 	if healthzOK(url, "") {
-		t.Error("不带 SNI 时这个服务端会拒绝握手，不该报成功")
+		t.Error("this server rejects handshakes without SNI; the probe should not succeed")
 	}
 	if len(sawSNI) == 0 || sawSNI[0] != domain {
-		t.Errorf("服务端没收到期望的 SNI: %q", sawSNI)
+		t.Errorf("server did not receive the expected SNI: %q", sawSNI)
 	}
 }
 
-// 返回体不是 "ok" 就不算活着 —— 端口上是别的服务时靠这条区分。
+// A body other than "ok" does not count as alive; this is how another service
+// on the port is told apart.
 func TestHealthzOKChecksBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "<html>nginx</html>")
 	}))
 	defer srv.Close()
 	if healthzOK(srv.URL+"/healthz", "") {
-		t.Error("返回体不是 ok，不该判成 webterm")
+		t.Error("body is not ok; should not be taken for webterm")
 	}
 }
 
@@ -310,11 +351,13 @@ func selfSigned(t *testing.T, domain string) tls.Certificate {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
-// 探活不跟随重定向 —— 跟下去等于让别的地方替本机回答。
+// The probe does not follow redirects; following one lets another host answer
+// for this machine.
 //
-// 真实场景：生产的 :80 只有 ACME 挑战和跳转，/healthz 拿到的是 301，
-// 指向公网域名。跟下去会绕出这台机器再回来，正确性就依赖 DNS 和
-// 公网 IP 自反了；--bind 127.0.0.1 时更是直接指向一个本进程没在服务的地址。
+// In production, :80 only has ACME challenges and redirects, so /healthz there
+// returns a 301 to the public domain. Following it leaves the machine and comes
+// back, making correctness depend on DNS and NAT hairpinning; with
+// --bind 127.0.0.1 it points at an address this process does not even serve.
 func TestHealthzOKDoesNotFollowRedirect(t *testing.T) {
 	real := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok")
@@ -327,10 +370,10 @@ func TestHealthzOKDoesNotFollowRedirect(t *testing.T) {
 	defer redirector.Close()
 
 	if healthzOK(redirector.URL+"/healthz", "") {
-		t.Error("301 跟到别处拿到 ok，不该算本机活着")
+		t.Error("ok obtained by following a 301 elsewhere should not count as this machine being alive")
 	}
-	// 对照：目标本身直接答 ok 时要判成活着
+	// Control: a server that answers ok directly is alive.
 	if !healthzOK(real.URL+"/healthz", "") {
-		t.Error("直接返回 ok 的应该判成活着")
+		t.Error("a direct ok should count as alive")
 	}
 }

@@ -8,20 +8,21 @@ import (
 	"github.com/sunhaijun/webterm/internal/protocol"
 )
 
-// ErrTooManyConns 表示并发连接数已达上限。
-var ErrTooManyConns = errors.New("wsconn: 并发连接数已达上限")
+// ErrTooManyConns means the concurrent connection limit has been reached.
+var ErrTooManyConns = errors.New("wsconn: too many concurrent connections")
 
-// Hub 持有当前所有连接。
+// Hub holds all live connections.
 //
-// 连接数【必须有上限】：协议 §1 允许同设备开任意多标签页，而每条连接挂着
-// 一个 4 MiB 的写队列 —— 不设限就是一条内存耗尽的路（威胁模型 T6）。
+// The connection count must be capped: protocol §1 allows any number of tabs
+// per device, and each connection carries a 4 MiB write queue. Without a cap
+// that is a path to memory exhaustion (threat model T6).
 type Hub struct {
 	mu       sync.Mutex
 	conns    map[*Conn]struct{}
 	maxConns int
 }
 
-// NewHub 创建连接表。maxConns <= 0 表示用默认值 16。
+// NewHub creates a Hub. maxConns <= 0 means the default of 16.
 func NewHub(maxConns int) *Hub {
 	if maxConns <= 0 {
 		maxConns = 16
@@ -29,7 +30,8 @@ func NewHub(maxConns int) *Hub {
 	return &Hub{conns: make(map[*Conn]struct{}), maxConns: maxConns}
 }
 
-// Add 登记一条连接。超过上限返回 ErrTooManyConns（调用方应在握手阶段就拒绝）。
+// Add registers a connection. It returns ErrTooManyConns when the hub is
+// full; callers should reject the connection during the handshake.
 func (h *Hub) Add(c *Conn) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -40,28 +42,30 @@ func (h *Hub) Add(c *Conn) error {
 	return nil
 }
 
-// Remove 摘掉一条连接。
+// Remove unregisters a connection.
 func (h *Hub) Remove(c *Conn) {
 	h.mu.Lock()
 	delete(h.conns, c)
 	h.mu.Unlock()
 }
 
-// Count 返回当前连接数。
+// Count returns the number of live connections.
 func (h *Hub) Count() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.conns)
 }
 
-// Full 报告是否已满。
+// Full reports whether the hub is at its limit.
 func (h *Hub) Full() bool { return h.Count() >= h.maxConns }
 
-// Broadcast 把 msg 发给除 origin 外的所有连接，把 originMsg 发给 origin。
+// Broadcast sends msg to every connection except origin, and originMsg to
+// origin.
 //
-// session.created / closed / order 走这里 —— 否则 B 标签页看不到 A 新建的会话。
-// req_id 只出现在发起请求的那条连接的副本上。session.updated 由会话经
-// Manager 的 observer 发。
+// session.created / closed / order go through here; otherwise tab B would not
+// see a session created in tab A. Only the originating connection's copy
+// carries req_id. session.updated is sent by the session through the
+// Manager's observer.
 func (h *Hub) Broadcast(msg any, origin *Conn, originMsg any) {
 	h.mu.Lock()
 	targets := make([]*Conn, 0, len(h.conns))
@@ -81,12 +85,13 @@ func (h *Hub) Broadcast(msg any, origin *Conn, originMsg any) {
 	}
 }
 
-// NoticeAll 向所有连接广播一条 notice（如 SIGTERM 时的关闭预告）。
+// NoticeAll broadcasts a notice to every connection, such as the shutdown
+// warning on SIGTERM.
 func (h *Hub) NoticeAll(level, message string) {
 	h.Broadcast(&protocol.Notice{Level: level, Message: message}, nil, nil)
 }
 
-// CloseAll 关闭所有连接。
+// CloseAll closes every connection.
 func (h *Hub) CloseAll() {
 	h.mu.Lock()
 	targets := make([]*Conn, 0, len(h.conns))
@@ -95,6 +100,6 @@ func (h *Hub) CloseAll() {
 	}
 	h.mu.Unlock()
 	for _, c := range targets {
-		c.closeWith(websocket.StatusGoingAway, "agent 正在关闭")
+		c.closeWith(websocket.StatusGoingAway, "agent is shutting down")
 	}
 }

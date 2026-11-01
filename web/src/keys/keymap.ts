@@ -1,22 +1,24 @@
 /**
- * 按键映射 —— docs/40-frontend/keymap.md。
+ * Key mapping (docs/40-frontend/keymap.md).
  *
- * 终端直输时绝大部分按键交给 xterm 的 onData（它已经正确实现了标准映射）。
- * 这里只负责三件事：
- *   1. 附加键（两行 14 键，ADR-0025 §2）要发的字节 —— 与实体键盘同一编码，含 DECCKM；
- *   2. CTRL / ALT 粘滞修饰：附加键与软键盘的下一个字符都吃它；
- *   3. 应用级快捷键的识别（拦下来不让它进 PTY）。
+ * When typing into the terminal, almost every key goes through xterm's onData, which
+ * already implements the standard mapping. This module only handles:
+ *   1. bytes for the extra keys (two rows of 14, ADR-0025 §2), encoded like a physical
+ *      keyboard, DECCKM included;
+ *   2. sticky CTRL / ALT, which apply to the next extra key or on-screen keyboard character;
+ *   3. recognizing app-level shortcuts (kept out of the PTY).
  */
 
-/** 控制字符。 */
+/** Control characters. */
 export const ESC = '\x1b'
 
-// ---------- 应用级快捷键 ----------
+// ---------- App-level shortcuts ----------
 
 /**
- * 应用级快捷键只用 `Ctrl+Shift+*`：Ctrl+<字母> 是终端控制码、Alt+<字母> 是 TUI 的
- * Meta 键、Ctrl+Alt 在 Windows / 欧洲键盘上是 AltGr、Ctrl+<数字> 被浏览器占用。
- * `Ctrl/Cmd+F`、`Ctrl/Cmd+K` 都不拦，交还给浏览器或终端。
+ * App-level shortcuts use only `Ctrl+Shift+*`: Ctrl+<letter> is a terminal control code,
+ * Alt+<letter> is Meta in TUIs, Ctrl+Alt is AltGr on Windows / European layouts, and
+ * Ctrl+<digit> belongs to the browser. `Ctrl/Cmd+F` and `Ctrl/Cmd+K` are left to the
+ * browser or terminal.
  */
 export type AppAction =
   | 'newSession'
@@ -33,7 +35,7 @@ export interface KeyEventLike {
   metaKey: boolean
 }
 
-/** 识别应用级快捷键。返回 null 表示这不是应用快捷键，应当放行给终端。 */
+/** Recognizes app-level shortcuts. Null means it isn't one and the key goes to the terminal. */
 export function appAction(e: KeyEventLike): AppAction | null {
   if (!(e.ctrlKey && e.shiftKey) || e.altKey || e.metaKey) return null
   switch (e.key) {
@@ -54,14 +56,14 @@ export function appAction(e: KeyEventLike): AppAction | null {
   }
 }
 
-// ---------- 键到字节 ----------
+// ---------- Keys to bytes ----------
 
-/** 实体键盘上这些键的字节（keymap.md 的表）。方向键 / Home / End 见 `cursorKey`。 */
+/** Bytes for these physical keys (the table in keymap.md). Arrows / Home / End: see `cursorKey`. */
 export const KEY_BYTES: Readonly<Record<string, string>> = {
   Escape: ESC,
   Tab: '\t',
-  Enter: '\r', // CR，不是 LF —— PTY 的行规程期望回车键的真实字节
-  Backspace: '\x7f', // DEL，不是 0x08
+  Enter: '\r', // CR, not LF: the PTY line discipline expects the real Enter byte
+  Backspace: '\x7f', // DEL, not 0x08
   ArrowUp: `${ESC}[A`,
   ArrowDown: `${ESC}[B`,
   ArrowRight: `${ESC}[C`,
@@ -87,7 +89,7 @@ export const KEY_BYTES: Readonly<Record<string, string>> = {
   ShiftTab: `${ESC}[Z`,
 }
 
-/** 跟随 DECCKM 的键与它的终结字符。 */
+/** Keys that follow DECCKM, and their final characters. */
 const CURSOR_FINAL: Readonly<Record<string, string>> = {
   ArrowUp: 'A',
   ArrowDown: 'B',
@@ -98,9 +100,9 @@ const CURSOR_FINAL: Readonly<Record<string, string>> = {
 }
 
 /**
- * 方向键与 Home / End：应用光标键模式（DECCKM）下发 `ESC O x`，否则 `ESC [ x`。
- * DECCKM 的状态由调用方**每次按键时现读**（`term.modes.applicationCursorKeysMode`），
- * 不缓存：程序退出时会复位它。
+ * Arrows and Home / End: `ESC O x` in application cursor key mode (DECCKM), else `ESC [ x`.
+ * Callers read DECCKM fresh on every key press (`term.modes.applicationCursorKeysMode`)
+ * rather than caching it, since programs reset it on exit.
  */
 export function cursorKey(key: string, decckm: boolean): string | undefined {
   const fin = CURSOR_FINAL[key]
@@ -115,10 +117,10 @@ export interface Mods {
 export const NO_MODS: Mods = { ctrl: false, alt: false }
 
 /**
- * 一个字符加上修饰（keymap.md §附加键的粘滞修饰）。
+ * Applies modifiers to one character (keymap.md, sticky modifiers on extra keys).
  *
- * CTRL：字母（大小写不分）→ 0x01–0x1a；`[ \ ] ^ _` → 0x1b–0x1f；`@` / 空格 → 0x00；
- * `?` → 0x7f；其它原样。ALT：前缀 ESC。两个都有时先做 CTRL 再加 ESC。
+ * CTRL: letters (either case) → 0x01–0x1a; `[ \ ] ^ _` → 0x1b–0x1f; `@` / space → 0x00;
+ * `?` → 0x7f; anything else unchanged. ALT: prefix ESC. With both, CTRL first, then ESC.
  */
 export function chord(ch: string, mods: Partial<Mods>): string {
   let out = ch
@@ -151,7 +153,7 @@ export function chord(ch: string, mods: Partial<Mods>): string {
           out = '\x7f'
           break
         default:
-          out = ch // 没有对应控制码，原样发
+          out = ch // No control code for it: send as is
       }
     }
   }
@@ -159,12 +161,12 @@ export function chord(ch: string, mods: Partial<Mods>): string {
   return out
 }
 
-/** xterm 的修饰参数：1 + Shift(1) + Alt(2) + Ctrl(4)。 */
+/** xterm's modifier parameter: 1 + Shift(1) + Alt(2) + Ctrl(4). */
 function modParam(mods: Mods): number {
   return 1 + (mods.alt ? 2 : 0) + (mods.ctrl ? 4 : 0)
 }
 
-// ---------- 附加键（ADR-0025 §2，input.md §附加键） ----------
+// ---------- Extra keys (ADR-0025 §2, input.md) ----------
 
 export type ExtraKeyId =
   | 'Escape'
@@ -188,8 +190,8 @@ export interface ExtraKey {
 }
 
 /**
- * Termux 的默认键位，两行、静态：不随前台程序、提示符状态变。
- * testid 是 `key-<id>`。
+ * Termux's default layout: two static rows that don't change with the foreground program
+ * or prompt state. The testid is `key-<id>`.
  */
 export const EXTRA_KEYS: readonly (readonly ExtraKey[])[] = [
   [
@@ -212,7 +214,7 @@ export const EXTRA_KEYS: readonly (readonly ExtraKey[])[] = [
   ],
 ]
 
-/** 修饰键（粘滞）本身不发字节。 */
+/** Modifier keys (sticky) send no bytes themselves. */
 export function isModifierKey(id: ExtraKeyId): id is 'Ctrl' | 'Alt' {
   return id === 'Ctrl' || id === 'Alt'
 }
@@ -221,13 +223,13 @@ const PAGE_NUM: Partial<Record<ExtraKeyId, number>> = { PageUp: 5, PageDown: 6 }
 const CHAR_OF: Partial<Record<ExtraKeyId, string>> = { Slash: '/', Minus: '-', Escape: ESC, Tab: '\t' }
 
 /**
- * 附加键 → 字节，与实体键盘同一编码（keymap.md）。
+ * Extra key → bytes, encoded like a physical keyboard (keymap.md).
  *
- * - 方向键 / HOME / END：无修饰时跟随 DECCKM；有修饰时用 xterm 的修饰编码 `ESC [ 1 ; m X`
- *   （修饰形式不受 DECCKM 影响，xterm 也是这么做的）；
- * - PGUP / PGDN：`ESC [ 5 ~` / `ESC [ 6 ~`，有修饰时 `ESC [ 5 ; m ~`；
- * - ESC / TAB：CTRL 下原样，ALT 下前缀 ESC；
- * - `/` `-`：按 `chord` 组合（CTRL 下原样，ALT 下前缀 ESC）。
+ * - Arrows / HOME / END: follow DECCKM without modifiers; with modifiers use xterm's
+ *   `ESC [ 1 ; m X` (the modified form ignores DECCKM, as xterm does);
+ * - PGUP / PGDN: `ESC [ 5 ~` / `ESC [ 6 ~`, with modifiers `ESC [ 5 ; m ~`;
+ * - ESC / TAB: unchanged under CTRL, ESC-prefixed under ALT;
+ * - `/` `-`: combined via `chord` (unchanged under CTRL, ESC-prefixed under ALT).
  */
 export function extraKeyBytes(id: ExtraKeyId, mods: Mods, decckm: boolean): string {
   if (isModifierKey(id)) return ''
@@ -244,17 +246,17 @@ export function extraKeyBytes(id: ExtraKeyId, mods: Mods, decckm: boolean): stri
   return chord(ch, mods)
 }
 
-// ---------- CTRL / ALT 粘滞（input.md §行为） ----------
+// ---------- Sticky CTRL / ALT (input.md) ----------
 
 export type StickyState = 'off' | 'armed' | 'locked'
 export type StickyMod = 'ctrl' | 'alt'
 
 /**
- * 粘滞修饰的状态机。
+ * State machine for sticky modifiers.
  *
- * 点一下 → armed，只对**下一个键**生效；长按 → locked，连续生效；再点一下 → off。
- * 下一个键可以来自附加键（`take()`），也可以来自软键盘（`apply()`，挂在终端的
- * onData 出口上）。
+ * Tap → armed, applies to the next key only; long-press → locked, applies until released;
+ * tap again → off. The next key can come from the extra keys (`take()`) or from the
+ * on-screen keyboard (`apply()`, hooked into the terminal's onData exit).
  */
 export class Sticky {
   private readonly s: Record<StickyMod, StickyState> = { ctrl: 'off', alt: 'off' }
@@ -268,17 +270,17 @@ export class Sticky {
     return { ctrl: this.s.ctrl !== 'off', alt: this.s.alt !== 'off' }
   }
 
-  /** 点一下：off → armed；armed / locked → off。 */
+  /** Tap: off → armed; armed / locked → off. */
   tap(m: StickyMod): void {
     this.set(m, this.s[m] === 'off' ? 'armed' : 'off')
   }
 
-  /** 长按：锁定。 */
+  /** Long-press: lock. */
   hold(m: StickyMod): void {
     this.set(m, 'locked')
   }
 
-  /** 附加键用：取出当前修饰并消耗 armed（locked 保持）。 */
+  /** For extra keys: returns the current modifiers and consumes armed ones (locked stay). */
   take(): Mods {
     const mods = this.mods()
     this.consume()
@@ -286,8 +288,9 @@ export class Sticky {
   }
 
   /**
-   * onData 出口用：单个字符按修饰组合后返回，并消耗 armed；
-   * 没有修饰、或不是单个字符（粘贴、组字提交的一段、终端应答）时原样返回、不消耗。
+   * For the onData exit: a single character is combined with the modifiers and armed ones
+   * are consumed. With no modifiers, or for anything but a single character (paste, IME
+   * commit, terminal reply), data is returned unchanged and nothing is consumed.
    */
   apply(data: string): string {
     const mods = this.mods()

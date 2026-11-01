@@ -7,7 +7,8 @@ import (
 	"github.com/sunhaijun/webterm/internal/session"
 )
 
-// session 按 sid 取会话；不存在就回 unknown_session（不关连接）。
+// session looks up a session by sid. If there is none it replies with
+// unknown_session and keeps the connection open.
 func (c *Conn) session(reqID string, sid uint16) (*session.Session, bool) {
 	s, ok := c.deps.Sessions.Get(sid)
 	if !ok {
@@ -17,10 +18,10 @@ func (c *Conn) session(reqID string, sid uint16) (*session.Session, bool) {
 }
 
 func (c *Conn) unknownSession(reqID string, sid uint16) {
-	c.sendError(reqID, &sid, protocol.CodeUnknownSession, "会话不存在", false)
+	c.sendError(reqID, &sid, protocol.CodeUnknownSession, "Session not found", false)
 }
 
-// handleBinary 处理 INPUT 帧。
+// handleBinary handles INPUT frames.
 func (c *Conn) handleBinary(data []byte) {
 	f, err := protocol.DecodeFrame(data)
 	if err != nil {
@@ -28,12 +29,12 @@ func (c *Conn) handleBinary(data []byte) {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
 			code = protocol.CodeFrameTooLarge
 		}
-		c.sendError("", nil, code, "二进制帧非法", true)
+		c.sendError("", nil, code, "Invalid binary frame", true)
 		return
 	}
 	if !f.FromClient() {
-		// 方向不对：client 发来 OUTPUT / SNAPSHOT（协议 §3）
-		c.sendError("", nil, protocol.CodeBadFrame, "client 只能发 INPUT 帧", true)
+		// Wrong direction: the client sent OUTPUT / SNAPSHOT (protocol §3).
+		c.sendError("", nil, protocol.CodeBadFrame, "Clients may only send INPUT frames", true)
 		return
 	}
 	sid := f.SID
@@ -44,39 +45,43 @@ func (c *Conn) handleBinary(data []byte) {
 	switch err := s.Write(c.clientID, f.Seq, f.Payload); {
 	case err == nil:
 	case errors.Is(err, session.ErrSessionExited):
-		// 向已退出的会话写输入：丢弃并回错误，但【不关连接】
-		c.sendError("", &sid, protocol.CodeSessionExited, "会话已结束", false)
+		// Input to an exited session: drop it and reply with an error, but keep
+		// the connection open.
+		c.sendError("", &sid, protocol.CodeSessionExited, "Session has exited", false)
 	case errors.Is(err, session.ErrInputGap):
-		c.sendError("", &sid, protocol.CodeInputGap, "输入序列号出现空洞", true)
+		c.sendError("", &sid, protocol.CodeInputGap, "Gap in input sequence numbers", true)
 	case errors.Is(err, session.ErrInputStalled):
-		// 前台程序长时间不读 stdin。关掉这条连接而不是阻塞整条连接的读循环。
-		c.sendError("", &sid, protocol.CodeInputStalled, "会话输入队列已满", true)
+		// The foreground program has not read stdin for a long time. Close this
+		// connection rather than block its whole read loop.
+		c.sendError("", &sid, protocol.CodeInputStalled, "Session input queue is full", true)
 	default:
-		c.sendError("", &sid, protocol.CodeInternal, "写入失败", false)
+		c.sendError("", &sid, protocol.CodeInternal, "Write failed", false)
 	}
 }
 
-// handleControl 处理 JSON 控制消息。未知 t 值必须【忽略】而不是关连接。
+// handleControl handles JSON control messages. Unknown t values must be
+// ignored, not treated as fatal.
 func (c *Conn) handleControl(data []byte) {
 	msg, err := protocol.Decode(data)
 	if err != nil {
 		var unknown *protocol.ErrUnknownType
 		if errors.As(err, &unknown) {
-			return // 前向兼容：忽略不认识的类型
+			return // forward compatibility: ignore unknown types
 		}
-		c.sendError("", nil, protocol.CodeBadFrame, "控制消息无法解析", true)
+		c.sendError("", nil, protocol.CodeBadFrame, "Malformed control message", true)
 		return
 	}
 
 	switch m := msg.(type) {
 	case *protocol.Hello:
-		c.sendError("", nil, protocol.CodeBadFrame, "重复的 hello", true)
+		c.sendError("", nil, protocol.CodeBadFrame, "Duplicate hello", true)
 
 	case *protocol.SessionCreate:
 		c.handleSessionCreate(m)
 
 	case *protocol.SessionClose:
-		// 不在读循环里等：shell 不理 SIGHUP 时要等宽限期，而这条连接还载着别的会话
+		// Don't wait in the read loop: a shell that ignores SIGHUP takes a grace
+		// period, and this connection carries other sessions too.
 		go c.handleSessionClose(m)
 
 	case *protocol.SessionRename:
@@ -88,8 +93,10 @@ func (c *Conn) handleControl(data []byte) {
 		c.handleSessionMove(m)
 
 	case *protocol.Subscribe:
-		// 增量还是快照由会话判定（协议 §5.1）。尺寸跟着这条消息走，【不能单发
-		// resize】：列数变了要先改模拟器再出快照，TIOCSWINSZ 排在入队之后（§4.1）
+		// The session decides between incremental and snapshot (protocol
+		// §5.1). The size travels with this message, not as a separate
+		// resize: a column change must hit the emulator before the snapshot
+		// is taken, and TIOCSWINSZ comes after enqueueing (§4.1).
 		if s, ok := c.session("", m.SID); ok {
 			c.subscribe(s, m.OutSeq, m.Cols, m.Rows)
 		}
@@ -103,7 +110,8 @@ func (c *Conn) handleControl(data []byte) {
 		c.mu.Unlock()
 
 	case *protocol.Resize:
-		// 列数变了：会话给每个订阅者（包括本连接）重发一份快照（协议 §4.1）
+		// On a column change the session resends a snapshot to every subscriber,
+		// this connection included (protocol §4.1).
 		if s, ok := c.session("", m.SID); ok {
 			if err := s.Resize(m.Cols, m.Rows); err != nil {
 				c.sendError("", &m.SID, protocol.CodeBadRequest, err.Error(), false)
@@ -129,15 +137,17 @@ func (c *Conn) handleSessionCreate(m *protocol.SessionCreate) {
 		c.sendError(m.ReqID, nil, code, err.Error(), false)
 		return
 	}
-	// 广播给该设备的所有连接；req_id 只出现在发起方的副本上。
-	// 【不自动订阅】（协议 §4.1）：client 收到 session.created 后自己发
-	// subscribe{out_seq: 0}，走快照拿第一屏 —— 订阅只有这一条路。
+	// Broadcast to all connections; only the originator's copy carries req_id.
+	// No auto-subscribe (protocol §4.1): on session.created the client sends
+	// subscribe{out_seq: 0} itself and gets the first screen as a snapshot.
+	// That is the only way to subscribe.
 	info := s.Info()
 	c.deps.Hub.Broadcast(&protocol.SessionCreated{Session: info}, c,
 		&protocol.SessionCreated{ReqID: m.ReqID, Session: info})
 }
 
-// handleSessionClose 在自己的 goroutine 里跑：里面只有入队，连接关了也只是丢弃。
+// handleSessionClose runs in its own goroutine. It only enqueues, so if the
+// connection is gone the messages are simply dropped.
 func (c *Conn) handleSessionClose(m *protocol.SessionClose) {
 	code, err := c.deps.Sessions.Close(m.SID)
 	if err != nil {
@@ -148,8 +158,10 @@ func (c *Conn) handleSessionClose(m *protocol.SessionClose) {
 		&protocol.SessionClosed{ReqID: m.ReqID, SID: m.SID, ExitCode: code})
 }
 
-// handleSessionMove 改显示顺序并把完整顺序广播给所有连接（ADR-0040）。位置没变
-// 也广播，发起方据此确认。广播在 Move 的锁里做，见 Manager.Move。
+// handleSessionMove changes the display order and broadcasts the full order
+// to every connection (ADR-0040). It broadcasts even if nothing moved, which
+// the originator uses as confirmation. The broadcast happens under Move's
+// lock; see Manager.Move.
 func (c *Conn) handleSessionMove(m *protocol.SessionMove) {
 	err := c.deps.Sessions.Move(m.SID, m.Before, func(sids []uint16) {
 		c.deps.Hub.Broadcast(&protocol.SessionOrder{SIDs: sids}, c,

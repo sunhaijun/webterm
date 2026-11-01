@@ -1,11 +1,14 @@
 /**
- * E2E-21 软键盘几何：键盘一弹附加键仍在可视区 —— AC-3.8（layout.md §高度计算）。
+ * E2E-21 On-screen keyboard geometry: extra keys stay visible when the keyboard opens (AC-3.8,
+ * layout.md "Height").
  *
- * 两种浏览器模型都得对：
- *  - 布局视口一起缩（老 Android Chrome 的 resizes-content）：真的把 Playwright 视口缩小；
- *  - 只缩可视视口、浏览器把可视区上推（iOS Safari、Chrome ≥108 的 resizes-visual）：
- *    用假 visualViewport 精确重放，其中 Safari 语义下 window.innerHeight 也跟着变矮 ——
- *    这正是曾让闸门永远关着、把整个 .app 推出可视区的坑。
+ * Both browser models must work:
+ *  - The layout viewport shrinks too (resizes-content, older Android Chrome): shrink the Playwright
+ *    viewport for real.
+ *  - Only the visual viewport shrinks and the browser pushes it up (iOS Safari, Chrome >= 108
+ *    resizes-visual): replay it with a fake visualViewport. Under Safari semantics
+ *    window.innerHeight shrinks as well; that once kept the gate permanently closed and pushed the
+ *    whole .app out of view.
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 
@@ -47,7 +50,10 @@ const settle = (p: Page) =>
   p.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 200)))))
 const within = (r: Rect | null, top: number, bottom: number) => !!r && r.top >= top && r.bottom <= bottom
 
-/** 假 visualViewport：可控高度 / offsetTop；inner 非空时模拟 Safari（innerHeight = 可视视口高度）。 */
+/**
+ * installFakeViewport installs a fake visualViewport with controllable height and offsetTop. A
+ * non-null `inner` simulates Safari, where innerHeight equals the visual viewport height.
+ */
 const installFakeViewport = (p: Page) =>
   p.addInitScript(() => {
     const realInner = Object.getOwnPropertyDescriptor(Window.prototype, 'innerHeight')
@@ -83,69 +89,69 @@ const setViewport = (p: Page, h: number, top: number, inner: number | null) =>
     [h, top, inner] as const,
   )
 
-test('E2E-21 ① 布局视口一起缩（resizes-content）：.app 跟着缩、附加键在可视区、形态不变、rows 变少', async ({ page }) => {
+test('E2E-21 (1) layout viewport shrinks (resizes-content): .app shrinks, extra keys visible, form unchanged, fewer rows', async ({ page }) => {
   await agent.open(page)
   await settle(page)
   await focusTerm(page)
   const rows0 = (await hooks.size(page)).rows
   const resizes0 = await hooks.resizes(page)
 
-  await page.setViewportSize({ width: 393, height: 450 }) // 键盘占掉 277px
+  await page.setViewportSize({ width: 393, height: 450 }) // keyboard takes 277px
   await settle(page)
   const g = await geo(page)
   expect(g.appH).toBe('450px')
-  expect(g.appTf, '布局视口一起缩时没有上推，不该有 translateY').toBe('')
-  expect(within(g.keys, 0, 450), `附加键 ${JSON.stringify(g.keys)} 应在 [0,450]`).toBe(true)
-  expect(g.form, '形态不变').toBe('compact')
-  await expect.poll(() => hooks.resizes(page), { message: '发了 resize' }).toBeGreaterThan(resizes0)
-  expect((await hooks.size(page)).rows, '终端收缩而不是被遮挡').toBeLessThan(rows0)
+  expect(g.appTf, 'no push-up when the layout viewport shrinks, so no translateY').toBe('')
+  expect(within(g.keys, 0, 450), `extra keys ${JSON.stringify(g.keys)} should be within [0,450]`).toBe(true)
+  expect(g.form, 'form unchanged').toBe('compact')
+  await expect.poll(() => hooks.resizes(page), { message: 'resize sent' }).toBeGreaterThan(resizes0)
+  expect((await hooks.size(page)).rows, 'terminal shrinks instead of being covered').toBeLessThan(rows0)
 })
 
 for (const innerTracks of [true, false]) {
-  test(`E2E-21 ② 只缩可视视口 + 上推（${innerTracks ? 'Safari：innerHeight 跟着变矮' : 'Chrome：innerHeight 恒定'}）：.app 对齐可视区，附加键可见`, async ({ page }) => {
+  test(`E2E-21 (2) only the visual viewport shrinks and is pushed up (${innerTracks ? 'Safari: innerHeight shrinks too' : 'Chrome: innerHeight constant'}): .app aligns with the visible area, extra keys visible`, async ({ page }) => {
     await installFakeViewport(page)
     await agent.open(page)
     await settle(page)
     await focusTerm(page)
 
-    // 键盘弹起：可视 727→400；浏览器把可视区上推 327px
+    // Keyboard opens: visible height 727 -> 400; the browser pushes the visible area up 327px.
     await setViewport(page, 400, 327, innerTracks ? 400 : null)
     await settle(page)
     const g = await geo(page)
     expect(g.appH).toBe('400px')
-    expect(g.appTf, '必须用 translateY 把 .app 对齐到被上推的可视区').toBe('translateY(327px)')
+    expect(g.appTf, '.app must use translateY to follow the pushed-up visible area').toBe('translateY(327px)')
     expect(g.app.top).toBe(327)
-    expect(within(g.keys, 327, 727), `附加键 ${JSON.stringify(g.keys)} 应在可视区 [327,727]`).toBe(true)
+    expect(within(g.keys, 327, 727), `extra keys ${JSON.stringify(g.keys)} should be within the visible area [327,727]`).toBe(true)
 
-    // 键盘收起：全部复位
+    // Keyboard closes: everything resets.
     await setViewport(page, 727, 0, innerTracks ? 727 : null)
     await settle(page)
     const g2 = await geo(page)
     expect(g2.appH).toBe('727px')
     expect(g2.appTf).toBe('')
 
-    // 文本输入页聚焦时同样
+    // Same with the text page focused.
     await page.getByTestId('toggle-text').tap()
     await expect(page.getByTestId('textinput')).toBeFocused()
     await setViewport(page, 400, 327, innerTracks ? 400 : null)
     await settle(page)
     const g3 = await geo(page)
     expect(g3.appTf).toBe('translateY(327px)')
-    expect(within(g3.keys, 327, 727), `文本输入页 ${JSON.stringify(g3.keys)} 应在可视区 [327,727]`).toBe(true)
+    expect(within(g3.keys, 327, 727), `text page ${JSON.stringify(g3.keys)} should be within the visible area [327,727]`).toBe(true)
     await setViewport(page, 727, 0, innerTracks ? 727 : null)
     await settle(page)
     expect((await geo(page)).appTf).toBe('')
   })
 }
 
-test('E2E-21 ③ 普通回弹（offsetTop 变、高度不变）不补偿 —— 防拖动抖动环', async ({ page }) => {
+test('E2E-21 (3) plain overscroll bounce (offsetTop changes, height does not) is not compensated, avoiding a drag jitter loop', async ({ page }) => {
   await installFakeViewport(page)
   await agent.open(page)
   await settle(page)
-  await setViewport(page, 727, -40, null) // 顶部回弹
+  await setViewport(page, 727, -40, null) // bounce at the top
   await settle(page)
   expect((await geo(page)).appTf).toBe('')
-  await setViewport(page, 727, 60, null) // 拖动中的 offsetTop 漂移
+  await setViewport(page, 727, 60, null) // offsetTop drift during a drag
   await settle(page)
   expect((await geo(page)).appTf).toBe('')
 })

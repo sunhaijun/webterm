@@ -23,44 +23,53 @@ import (
 	"golang.org/x/crypto/acme"
 )
 
-// IP 模式的证书（ADR-0044）。
+// Certificates for IP mode (ADR-0044).
 //
-// Let's Encrypt 的 IP 证书只有 shortlived 一种（约 160 小时），而 autocert
-// 只会下 dns 订单、只按 SNI 找证书 —— 浏览器连 IP 时根本不发 SNI。
-// 所以这里直接用 acme.Client 走一遍 RFC 8555 + RFC 8738，只做 HTTP-01。
+// Let's Encrypt issues IP certificates only under the shortlived profile
+// (about 160 hours), while autocert only places dns orders and looks up
+// certificates by SNI, which browsers don't send when connecting to an IP.
+// So this file drives RFC 8555 + RFC 8738 directly with acme.Client, using
+// HTTP-01 only.
 
 const (
-	// ipCertProfile 是 Let's Encrypt 签 IP 证书时唯一接受的 profile。
+	// ipCertProfile is the only profile Let's Encrypt accepts for IP
+	// certificates.
 	ipCertProfile = "shortlived"
-	// accountKeyFile 与 autocert 的缓存键同名同格式（EC PRIVATE KEY PEM），
-	// 一个数据目录只用一个 ACME 账号，从 IP 换到域名时 autocert 也能直接读。
+	// accountKeyFile matches autocert's cache key name and format (EC
+	// PRIVATE KEY PEM), so one data dir uses one ACME account and autocert
+	// can read it after switching from an IP to a domain.
 	accountKeyFile = "acme_account+key"
-	// ipCertRetry 是签发 / 续期失败后的重试间隔。Let's Encrypt 的失败验证限额是
-	// 每个账号每个标识每小时 5 次，一小时一次远在线下。
+	// ipCertRetry is the retry interval after a failed issuance or renewal.
+	// Let's Encrypt allows 5 failed validations per account per identifier
+	// per hour; once an hour stays far below that.
 	ipCertRetry = time.Hour
-	// ipCertAttemptTimeout 是一次签发（注册、下单、验证、出证）最多等多久。
+	// ipCertAttemptTimeout bounds one issuance attempt (register, order,
+	// validate, finalize).
 	ipCertAttemptTimeout = 5 * time.Minute
 )
 
-// IsIPAddress 报告 --domain 是不是 IPv4 字面量（IP 模式）。
+// IsIPAddress reports whether --domain is an IPv4 literal (IP mode).
 func IsIPAddress(addr string) bool {
 	ip := net.ParseIP(addr)
 	return ip != nil && ip.To4() != nil && !strings.Contains(addr, ":")
 }
 
-// CheckAddress 校验 --domain 的取值。空值留给调用方按模式处理。
+// CheckAddress validates the --domain value. An empty value is left to the
+// caller, which handles it per mode.
 //
-// IPv6 字面量先拒掉：监听地址默认 0.0.0.0、URL 拼接与端口检查都没处理
-// 方括号和双栈，让它进来只会在更远的地方以更难懂的方式失败（ADR-0044 §1）。
+// IPv6 literals are rejected up front: the default listen address is
+// 0.0.0.0, and URL building and port checks don't handle brackets or dual
+// stack, so letting one in would only fail later in a more confusing way
+// (ADR-0044 §1).
 func CheckAddress(addr string) error {
 	if strings.Contains(addr, ":") && net.ParseIP(strings.Trim(addr, "[]")) != nil {
-		return fmt.Errorf("--domain %s 是 IPv6 地址，暂只支持 IPv4。\n"+
-			"  只有 IPv6 的机器请用域名（加一条 AAAA 记录）", addr)
+		return fmt.Errorf("--domain %s is an IPv6 address; only IPv4 is supported.\n"+
+			"  On an IPv6-only machine, use a domain name with an AAAA record", addr)
 	}
 	return nil
 }
 
-// acmeDirectory 是这次要用的 ACME 目录。
+// acmeDirectory returns the ACME directory URL to use.
 func acmeDirectory(cfg ServeConfig) string {
 	switch {
 	case cfg.ACMEDirectoryURL != "":
@@ -69,7 +78,8 @@ func acmeDirectory(cfg ServeConfig) string {
 	return acme.LetsEncryptURL
 }
 
-// ipCertManager 管一张 IP 证书：签发、缓存、续期、握手时交出去。
+// ipCertManager manages one IP certificate: issuance, caching, renewal and
+// serving it during handshakes.
 type ipCertManager struct {
 	ip      string
 	dirURL  string
@@ -78,7 +88,7 @@ type ipCertManager struct {
 
 	mu     sync.Mutex
 	cert   *tls.Certificate
-	tokens map[string]string // HTTP-01：token → key authorization
+	tokens map[string]string // HTTP-01: token → key authorization
 }
 
 func newIPCertManager(cfg ServeConfig) *ipCertManager {
@@ -91,20 +101,23 @@ func newIPCertManager(cfg ServeConfig) *ipCertManager {
 	}
 }
 
-// GetCertificate 不看 SNI —— 连 IP 的客户端不发 SNI。
+// GetCertificate ignores SNI; clients connecting to an IP don't send it.
 //
-// 【握手从不触发签发】：手里没有证书就失败。签发只由 run 发起，
-// 所以不存在「替别人申请证书」这种攻击面（ADR-0004 里 HostPolicy 防的那个）。
+// A handshake never triggers issuance: without a certificate it fails.
+// Issuance is only started explicitly (runIPCert, IssueCheck), so there is no
+// "request certificates on someone else's behalf" attack surface (what
+// HostPolicy guards against in ADR-0004).
 func (m *ipCertManager) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cert == nil {
-		return nil, errors.New("IP 证书还没签下来")
+		return nil, errors.New("no IP certificate yet")
 	}
 	return m.cert, nil
 }
 
-// HTTPHandler 应答 HTTP-01 挑战，其它请求交给 fallback（301 到 HTTPS）。
+// HTTPHandler answers HTTP-01 challenges and passes everything else to
+// fallback (the 301 to HTTPS).
 func (m *ipCertManager) HTTPHandler(fallback http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.URL.Path, "/.well-known/acme-challenge/")
@@ -128,12 +141,13 @@ func (m *ipCertManager) HTTPHandler(fallback http.Handler) http.Handler {
 	})
 }
 
-// renewAt 是该续期的时刻：剩余有效期不到总有效期的 1/3（和 autocert 同一条规则）。
+// renewAt is when to renew: once less than 1/3 of the lifetime remains (the
+// same rule as autocert).
 func renewAt(leaf *x509.Certificate) time.Time {
 	return leaf.NotAfter.Add(-leaf.NotAfter.Sub(leaf.NotBefore) / 3)
 }
 
-// current 返回手里的证书与它的叶子；没有就是 nil。
+// current returns the held certificate and its leaf, or nil if there is none.
 func (m *ipCertManager) current() (*tls.Certificate, *x509.Certificate) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -143,11 +157,12 @@ func (m *ipCertManager) current() (*tls.Certificate, *x509.Certificate) {
 	return m.cert, m.cert.Leaf
 }
 
-// ensure 保证手里有一张还不到续期时刻的证书。
+// ensure makes sure a certificate that isn't due for renewal is held.
 //
-// 顺序：内存里的 → 缓存里的 → 找 CA 签新的。【重启只读缓存】：每重启一次
-// 就签一张的话，「同一组标识每周 5 张」的限额几天就耗光了。
-// renewed 报告这次是不是真的找 CA 签了一张。
+// Order: memory, then the cache, then a new one from the CA. A restart only
+// reads the cache: issuing on every restart would exhaust the "5 per week for
+// the same set of names" limit within days. renewed reports whether the CA
+// actually issued a new certificate.
 func (m *ipCertManager) ensure(ctx context.Context) (leaf *x509.Certificate, renewed bool, err error) {
 	if _, l := m.current(); l != nil && m.now().Before(renewAt(l)) {
 		return l, false, nil
@@ -156,7 +171,8 @@ func (m *ipCertManager) ensure(ctx context.Context) (leaf *x509.Certificate, ren
 		m.setCert(c)
 		return c.Leaf, false, nil
 	} else if err == nil {
-		// 缓存里的已经该续了，但在新证书到手之前先用着 —— 没过期就比没有强
+		// The cached one is due for renewal, but use it until the new one
+		// arrives: unexpired beats nothing.
 		m.setCert(c)
 	}
 	c, err := m.obtain(ctx)
@@ -173,7 +189,7 @@ func (m *ipCertManager) setCert(c *tls.Certificate) {
 	m.mu.Unlock()
 }
 
-// obtain 找 CA 签一张新证书并落盘。
+// obtain gets a new certificate from the CA and stores it.
 func (m *ipCertManager) obtain(ctx context.Context) (*tls.Certificate, error) {
 	key, err := m.accountKey()
 	if err != nil {
@@ -182,7 +198,7 @@ func (m *ipCertManager) obtain(ctx context.Context) (*tls.Certificate, error) {
 	client := &acme.Client{Key: key, DirectoryURL: m.dirURL}
 	if _, err := client.Register(ctx, &acme.Account{}, acme.AcceptTOS); err != nil &&
 		!errors.Is(err, acme.ErrAccountAlreadyExists) {
-		return nil, fmt.Errorf("注册 ACME 账号: %w", err)
+		return nil, fmt.Errorf("register ACME account: %w", err)
 	}
 
 	order, err := client.AuthorizeOrder(ctx, acme.IPIDs(m.ip), acme.WithOrderIssuanceProfile(ipCertProfile))
@@ -222,7 +238,8 @@ func (m *ipCertManager) obtain(ctx context.Context) (*tls.Certificate, error) {
 	return c, nil
 }
 
-// authorize 过一个 authz：只走 HTTP-01（ADR-0044 §2 说了为什么不做 TLS-ALPN-01）。
+// authorize completes one authorization using HTTP-01 only (ADR-0044 §2
+// explains why not TLS-ALPN-01).
 func (m *ipCertManager) authorize(ctx context.Context, client *acme.Client, zurl string) error {
 	z, err := client.GetAuthorization(ctx, zurl)
 	if err != nil {
@@ -239,7 +256,7 @@ func (m *ipCertManager) authorize(ctx context.Context, client *acme.Client, zurl
 		}
 	}
 	if chal == nil {
-		return fmt.Errorf("CA 没有给 http-01 挑战（%s）", zurl)
+		return fmt.Errorf("CA offered no http-01 challenge (%s)", zurl)
 	}
 	ka, err := client.HTTP01ChallengeResponse(chal.Token)
 	if err != nil {
@@ -260,22 +277,23 @@ func (m *ipCertManager) authorize(ctx context.Context, client *acme.Client, zurl
 	return err
 }
 
-// assemble 把私钥与证书链拼成 tls.Certificate，并确认叶子真是给这个 IP 的。
+// assemble combines the key and chain into a tls.Certificate and checks that
+// the leaf really is for this IP.
 func (m *ipCertManager) assemble(key crypto.Signer, chain [][]byte) (*tls.Certificate, error) {
 	if len(chain) == 0 {
-		return nil, errors.New("CA 返回的证书链是空的")
+		return nil, errors.New("CA returned an empty certificate chain")
 	}
 	leaf, err := x509.ParseCertificate(chain[0])
 	if err != nil {
 		return nil, err
 	}
 	if err := leaf.VerifyHostname(m.ip); err != nil {
-		return nil, fmt.Errorf("证书不是给 %s 的: %w", m.ip, err)
+		return nil, fmt.Errorf("certificate is not valid for %s: %w", m.ip, err)
 	}
 	return &tls.Certificate{Certificate: chain, PrivateKey: key, Leaf: leaf}, nil
 }
 
-// ---------- 缓存：与 autocert 同格式（先私钥 PEM，再证书链） ----------
+// ---------- Cache: same format as autocert (key PEM, then the chain) ----------
 
 func (m *ipCertManager) cachePath() string { return filepath.Join(m.certDir, m.ip) }
 
@@ -304,14 +322,14 @@ func (m *ipCertManager) loadCache() (*tls.Certificate, error) {
 		}
 	}
 	if key == nil {
-		return nil, errors.New("缓存里没有私钥")
+		return nil, errors.New("no private key in cached certificate")
 	}
 	c, err := m.assemble(key, chain)
 	if err != nil {
 		return nil, err
 	}
 	if !m.now().Before(c.Leaf.NotAfter) {
-		return nil, errors.New("缓存里的证书已过期")
+		return nil, errors.New("cached certificate has expired")
 	}
 	return c, nil
 }
@@ -333,7 +351,7 @@ func (m *ipCertManager) accountKey() (crypto.Signer, error) {
 	if raw, err := os.ReadFile(p); err == nil {
 		b, _ := pem.Decode(raw)
 		if b == nil {
-			return nil, fmt.Errorf("%s 不是 PEM", p)
+			return nil, fmt.Errorf("%s is not PEM", p)
 		}
 		return x509.ParseECPrivateKey(b.Bytes)
 	}
@@ -351,7 +369,8 @@ func (m *ipCertManager) accountKey() (crypto.Signer, error) {
 	return k, nil
 }
 
-// writeFileAtomic 先写临时文件再改名：写到一半被杀也不会留下半张证书。
+// writeFileAtomic writes a temp file and renames it, so being killed midway
+// never leaves half a certificate.
 func writeFileAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -378,16 +397,18 @@ func writeFileAtomic(path string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
-// ---------- 运行：预热 + 续期循环 ----------
+// ---------- Running: warm-up plus renewal loop ----------
 
-// runIPCert 启动时拿到证书并报告，之后在续期时刻续期，失败每小时重试。
-// ctx 取消（关闭监听）时退出。
+// runIPCert obtains the certificate at startup and reports it, then renews at
+// the renewal time, retrying hourly on failure. It returns when ctx is
+// canceled (listeners closed).
 func (a *Agent) runIPCert(ctx context.Context, m *ipCertManager) {
 	const env = "Let's Encrypt"
 	first := true
 	for {
-		// 单次签发设上限：acme.Client 默认的 HTTP 客户端没有超时，CA 那边一挂起，
-		// 续期循环就永远卡在这一轮，证书几天后悄悄过期
+		// Bound each attempt: acme.Client's default HTTP client has no
+		// timeout, so a hung CA would stall the loop forever and the
+		// certificate would quietly expire days later.
 		attempt, cancel := context.WithTimeout(ctx, ipCertAttemptTimeout)
 		leaf, renewed, err := m.ensure(attempt)
 		cancel()
@@ -398,28 +419,30 @@ func (a *Agent) runIPCert(ctx context.Context, m *ipCertManager) {
 		_, held := m.current()
 		switch {
 		case err != nil && held == nil:
-			// 手里一张都没有：HTTPS 不可用，这是要大声说的
-			a.log.Error("证书申请失败 —— HTTPS 还不可用", "ip", m.ip, "env", env, "retry", ipCertRetry)
+			// No certificate at all: HTTPS is down, so say it loudly.
+			a.log.Error("certificate request failed; HTTPS is not available yet", "ip", m.ip, "env", env, "retry", ipCertRetry)
 			if first {
 				fmt.Fprint(a.certReport(true), describeACMEError(err, m.ip))
 			}
 		case err != nil:
-			// 还有一张没过期的在用，只是续不上：HTTPS 照常，但几天之内会过期
+			// An unexpired certificate is still in use, but renewal failed:
+			// HTTPS works for now and will break within days.
 			if first {
 				a.reportCertReady(env, held)
 			}
-			a.log.Warn("IP 证书续期失败，一小时后重试（续期只走 80 端口的 HTTP-01，80 要一直从公网可达）",
+			a.log.Warn("IP certificate renewal failed; retrying in an hour (renewal uses HTTP-01 on port 80 only, so port 80 must stay reachable from the internet)",
 				"ip", m.ip, "err", err, "expires", held.NotAfter.Local().Format("2006-01-02 15:04"))
 		default:
 			if first {
 				a.reportCertReady(env, leaf)
 			} else if renewed {
-				a.log.Info("IP 证书已续期", "ip", m.ip, "expires", leaf.NotAfter.Local().Format("2006-01-02 15:04"))
+				a.log.Info("IP certificate renewed", "ip", m.ip, "expires", leaf.NotAfter.Local().Format("2006-01-02 15:04"))
 			}
 			wait = renewAt(leaf).Sub(m.now())
 			if renewed && wait <= 0 {
-				// 刚签的就已经到续期时刻：多半是系统时钟不对。不能每秒签一张，退回按小时重试
-				a.log.Warn("新签的 IP 证书立刻就到续期时刻了，检查系统时钟", "expires", leaf.NotAfter)
+				// Due for renewal right after issuance: the system clock is
+				// probably wrong. Don't issue every second; fall back to hourly.
+				a.log.Warn("newly issued IP certificate is already due for renewal; check the system clock", "expires", leaf.NotAfter)
 				wait = ipCertRetry
 			}
 		}
@@ -438,6 +461,6 @@ func (a *Agent) runIPCert(ctx context.Context, m *ipCertManager) {
 }
 
 func (a *Agent) reportCertReady(env string, leaf *x509.Certificate) {
-	fmt.Fprintf(a.certReport(false), "证书已就绪（%s，IP 证书，到期 %s，自动续期）\n",
+	fmt.Fprintf(a.certReport(false), "Certificate ready (%s, IP certificate, expires %s, renews automatically)\n",
 		env, leaf.NotAfter.Local().Format("2006-01-02 15:04"))
 }

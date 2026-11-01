@@ -1,6 +1,7 @@
-// Package agent 是 HTTP 层：路由、认证中间件、TLS、生命周期。
+// Package agent is the HTTP layer: routing, auth middleware, TLS and
+// lifecycle.
 //
-// 见 docs/20-architecture/overview.md 与 docs/60-security/auth-pairing.md。
+// See docs/20-architecture/overview.md and docs/60-security/auth-pairing.md.
 package agent
 
 import (
@@ -15,11 +16,11 @@ import (
 	"github.com/sunhaijun/webterm/internal/wsconn"
 )
 
-// Config 是 agent 的运行配置。
+// Config is the agent's runtime configuration.
 type Config struct {
 	Domain string
-	// HTTPSPort 是【对外】的 HTTPS 端口。Origin 校验要用它 ——
-	// 浏览器在非 443 端口上发的 Origin 带着端口号。
+	// HTTPSPort is the public HTTPS port. Origin checks need it: on a port
+	// other than 443 the browser's Origin includes the port.
 	HTTPSPort  int
 	Dev        bool
 	TrustProxy bool
@@ -27,15 +28,18 @@ type Config struct {
 	Version    string
 	Logger     *slog.Logger
 
-	// 下面几个只为集成测试而存在，生产走默认值。
+	// The fields below exist only for integration tests; production uses
+	// the defaults.
 	WSIdleTimeout   time.Duration
 	WSWriteQueueMax int
-	// CertReport 把证书预热的结果重定向到这里。生产留空：
-	// 成功走 stdout、失败走 stderr。测试里给一个 buffer，两者都能断言。
+	// CertReport receives the certificate warm-up report. Empty in
+	// production: success goes to stdout, failure to stderr. Tests pass a
+	// buffer so they can assert on both.
 	CertReport io.Writer
 }
 
-// Agent 把 store / auth / session / 连接层缝成一个 HTTP 服务。
+// Agent stitches the store, auth, sessions and connection layer into one
+// HTTP service.
 type Agent struct {
 	cfg      Config
 	log      *slog.Logger
@@ -46,7 +50,7 @@ type Agent struct {
 	mux      *http.ServeMux
 }
 
-// New 组装 agent。
+// New assembles an Agent.
 func New(cfg Config, st *store.Store, sessions *session.Manager) *Agent {
 	log := cfg.Logger
 	if log == nil {
@@ -65,65 +69,68 @@ func New(cfg Config, st *store.Store, sessions *session.Manager) *Agent {
 	return a
 }
 
-// Auth 暴露认证服务（CLI 的 pair 子命令要用）。
+// Auth returns the auth service; the CLI's pair subcommand uses it.
 func (a *Agent) Auth() *auth.Auth { return a.auth }
 
-// Hub 暴露连接表（优雅关闭时要广播 notice）。
+// Hub returns the connection hub; graceful shutdown broadcasts a notice
+// through it.
 func (a *Agent) Hub() *wsconn.Hub { return a.hub }
 
-// Handler 返回带全局中间件的处理器。
+// Handler returns the handler wrapped in global middleware.
 func (a *Agent) Handler() http.Handler {
 	return a.securityHeaders(a.mux)
 }
 
-// routes 定义路由与它们的认证要求。
+// routes defines the routes and their auth requirements.
 //
-// 认证矩阵见 docs/60-security/auth-pairing.md。最容易漏的一条是
-// **/ws 必须认证** —— 中间件不能只包 REST（AC-1.7）。
+// The auth matrix is in docs/60-security/auth-pairing.md. The easiest one to
+// miss: /ws must require auth; the middleware cannot wrap only REST (AC-1.7).
 func (a *Agent) routes() {
-	// 不需要认证：静态资源、配对页与配对接口、健康检查
+	// No auth: static assets, the pairing page and endpoint, health check.
 	a.mux.Handle("GET /", a.staticHandler())
 	a.mux.Handle("GET /pair", a.staticHandler())
-	// Service Worker 与 manifest 必须免认证：它们是静态壳的一部分，
-	// 而且 SW 的注册发生在页面还没拿到任何数据之前
+	// The service worker and manifest must not require auth: they are part
+	// of the static shell, and the SW registers before the page has any data.
 	a.mux.Handle("GET /sw.js", a.staticHandler())
 	a.mux.Handle("GET /manifest.json", a.staticHandler())
 	a.mux.HandleFunc("POST /auth/pair", a.handlePair)
 	a.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("ok")) // 不泄露任何信息，连版本号都不给
+		_, _ = w.Write([]byte("ok")) // reveals nothing, not even the version
 	})
 
-	// 需要认证
+	// Auth required.
 	a.mux.Handle("GET /ws", a.requireAuth(http.HandlerFunc(a.handleWS)))
 	a.mux.Handle("GET /api/devices", a.requireAuth(http.HandlerFunc(a.handleListDevices)))
 	a.mux.Handle("PATCH /api/devices/{id}", a.requireAuth(http.HandlerFunc(a.handlePatchDevice)))
 	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeDevice)))
 	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(http.HandlerFunc(a.handleRevokeAll)))
 
-	// 其余 /api/* 一律先认证、再 404（路由认证矩阵：/api/* ✓）。不兜住的话它们会
-	// 落进 GET / 的 SPA 回退，未认证也能拿到 200 + index.html —— 删掉的
-	// /api/commands、/api/fs、/api/settings（ADR-0026 §6）就是这么一批路径。
+	// Every other /api/* path authenticates first, then 404s (auth matrix:
+	// /api/* ✓). Without this they would fall through to the SPA fallback on
+	// GET / and return 200 + index.html even unauthenticated, as the removed
+	// /api/commands, /api/fs and /api/settings did (ADR-0026 §6).
 	//
-	// 按方法逐个登记：不带方法的 "/api/" 与 "GET /" 在 ServeMux 里算冲突。
+	// Register per method: a method-less "/api/" conflicts with "GET /" in
+	// ServeMux.
 	apiNotFound := a.requireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		a.writeError(w, http.StatusNotFound, "not_found", "没有这个接口")
+		a.writeError(w, http.StatusNotFound, "not_found", "No such endpoint")
 	}))
 	for _, m := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
 		a.mux.Handle(m+" /api/", apiNotFound)
 	}
 }
 
-// PurgeLoop 周期性清理过期配对码。
+// PurgeLoop periodically deletes expired pairing codes.
 func (a *Agent) PurgeLoop(stop <-chan struct{}) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	purge := func() {
 		if _, err := a.store.PurgePairings(time.Now()); err != nil {
-			a.log.Warn("清理配对码失败", "err", err)
+			a.log.Warn("purge pairing codes failed", "err", err)
 		}
 	}
-	purge() // 启动时先跑一次
+	purge() // once at startup
 	for {
 		select {
 		case <-stop:

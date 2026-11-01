@@ -7,7 +7,7 @@ import { applyTheme, readTheme } from './ui/prefs'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
 
-// 主题在首次渲染之前打上（ADR-0037 §1）：配对页、闸门页也一样，不先亮后暗
+// Apply the theme before the first render (ADR-0037 §1), on the pairing and gate pages too, so there's no light flash
 applyTheme(readTheme())
 
 const root = document.getElementById('app')!
@@ -20,8 +20,8 @@ render(
   root,
 )
 
-// Service Worker 只缓存静态壳，见 public/sw.js。
-// 需要 secure context —— localhost 也算，所以 --dev 下同样能测。
+// The Service Worker caches only the static shell; see public/sw.js.
+// It needs a secure context; localhost counts, so it works under --dev too.
 if ('serviceWorker' in navigator) {
   addEventListener('load', () => {
     void navigator.serviceWorker.register('/sw.js', { scope: '/' })

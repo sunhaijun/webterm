@@ -5,20 +5,25 @@ import (
 	"unicode"
 )
 
-// 终端标题作自动名（ADR-0043）。
+// Terminal title as automatic session name (ADR-0043).
 //
-// 标题归属于【设它时在前台的进程组】：轮询发现标题被写过（写入次数变了），就把它记在
-// 此刻的前台进程组名下。只有那个进程组仍在前台、且它不是 shell 本身时才采用 ——
-// shell 在提示符时设的 `user@host: dir`（Debian 默认 .bashrc）不用，程序退出回到目录名，
-// 再启动的程序设标题之前不沿用上一次的。
+// A title belongs to the process group that was in the foreground when it was
+// set: when polling sees the write count change, the title is attributed to
+// the current foreground process group. It is used only while that group is
+// still in the foreground and is not the shell itself. So the shell's
+// `user@host: dir` prompt title (Debian's default .bashrc) is ignored, the name
+// falls back to the directory when the program exits, and a newly started
+// program doesn't inherit the previous title before setting its own.
 
-// maxTitleRunes 是采用的标题最多保留的字符数。标签 240px、抽屉一行也就二三十个字，
-// 再长只是白白占消息。
+// maxTitleRunes caps the title length. A 240px tab or a drawer row shows only
+// 20-30 characters; anything longer just bloats messages.
 const maxTitleRunes = 64
 
-// cleanTitle 清洗程序设的标题：控制字符（C0、DEL、C1）换成空格，连续空白合成一个，
-// 去掉首尾空白，最多 maxTitleRunes 个字符。内容本身不改写 —— claude 的 ✳ / ◐ 前缀
-// 就是忙闲信号。
+// cleanTitle sanitizes a program-set title: control characters (C0, DEL, C1)
+// become spaces, whitespace runs collapse to one, leading and trailing
+// whitespace is trimmed, and the result is capped at maxTitleRunes. The
+// content is not otherwise rewritten; claude's ✳ / ◐ prefix is its busy/idle
+// signal.
 func cleanTitle(raw string) string {
 	var b strings.Builder
 	space := false
@@ -45,9 +50,10 @@ func cleanTitle(raw string) string {
 	return b.String()
 }
 
-// pickTitle 决定此刻采用哪个标题（"" = 不用，名字回到目录名）。fg 是此刻的前台
-// 进程组，owner 是标题的归属，shell 是 shell 的 pid（交互式 shell 开着 job control，
-// pid 就是它的进程组 id；0 = 不知道）。
+// pickTitle decides which title to use ("" = none, the name falls back to the
+// directory). fg is the current foreground process group, owner is the
+// title's owning group, and shell is the shell's pid (an interactive shell
+// with job control leads its own group, so pid == pgid; 0 = unknown).
 func pickTitle(raw string, fg, owner, shell int) string {
 	if owner <= 0 || fg != owner || (shell > 0 && fg == shell) {
 		return ""

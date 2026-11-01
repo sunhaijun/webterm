@@ -1,7 +1,7 @@
 {
   "name": "webterm",
   "short_name": "webterm",
-  "description": "一个 Go 单二进制的浏览器终端",
+  "description": "A browser terminal in a single Go binary",
   "display": "standalone",
   "start_url": "/",
   "scope": "/",
