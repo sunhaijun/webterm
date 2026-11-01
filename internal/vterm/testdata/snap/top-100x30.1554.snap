@@ -5,7 +5,7 @@
 [0mMiB Swap:[0;1m   2048.0 [0mtotal,[0;1m   1274.2 [0mfree,[0;1m    773.8 [0mused.[0;1m   1798.8 [0mavail Mem[0m
 
 [0;7m    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND                     [0m
-[0;1m2963523 usr       30  10 2010400  47996  11848 R  81.8   1.2  23:33.37 awtto-node                   [0m
+[0;1m2963523 usr       30  10 2010400  47996  11848 R  81.8   1.2  23:33.37 myapp-node                   [0m
 
 
 
