@@ -143,11 +143,13 @@ test.describe('1440×900 鼠标', () => {
     expect(dialogs, '不用浏览器对话框').toBe(0)
   })
 
-  test('E2E-41 ④ 改名：双击 → 输入框 → 回车；清空回车恢复自动命名', async ({ page }) => {
+  test('E2E-41 ④ 改名：双击 → 输入框 → 回车；清空回车恢复自动命名；改名前后都带编号', async ({ page }) => {
     await agent.open(page)
     const sid = (await hooks.sid(page))!
     const auto = (await tabName(page, sid))!
     expect(auto, '自动命名 = CWD 的 basename（家目录是 ~）').toBe('~')
+    const idx = page.getByTestId(`tab-${sid}-idx`)
+    await expect(idx, '标签带编号（ADR-0041）').toHaveText('[1]')
 
     await page.getByTestId(`tab-${sid}`).dblclick()
     const input = page.getByTestId('rename-input')
@@ -155,6 +157,7 @@ test.describe('1440×900 鼠标', () => {
     await input.fill('RENAMED')
     await input.press('Enter')
     await expect.poll(() => tabName(page, sid)).toBe('RENAMED')
+    await expect(idx, '改过名的也带编号，同抽屉').toHaveText('[1]')
 
     // 改名之后不再跟随 CWD
     await submit(page, 'cd /tmp')

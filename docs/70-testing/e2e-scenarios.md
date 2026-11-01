@@ -566,7 +566,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 1. **结构**：顶栏在终端上方；`tabbar`（标签条）里只有一个标签，`new-session` 在顶栏里、**不在** `tabbar` 里，位于标签条右边、左边缘距标签条右边缘 12px（ADR-0035）；右侧钉住 `conn-dot` 与 `open-settings`，`open-settings` 在最右、`conn-dot` 紧挨在它左边；`new-session` 里的 SVG、`open-settings` 里的 SVG 与 `conn-dot` 三者的垂直中心两两相差 ≤ 0.5px，两个 SVG 一样大；没有 `open-sessions`，没有附加键
 2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
 3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹 `close-confirm`（居中浮窗，不是浏览器对话框），点 `close-ok` 后标签消失；中键点标签同样先确认；焦点在终端里时按 `Ctrl+Shift+W` → 确认浮层，按 `Enter` → 关闭，焦点回到新的当前会话的终端（AC-4.11）
-4. **改名**：双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
+4. **改名**：标签有 `tab-<sid>-idx`，内容是 `[n]`（它在顺序里的位置）；双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`，`tab-<sid>-idx` 仍是 `[n]`（改过名的也带编号，ADR-0041）；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
 5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现 `⇵`；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
 6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点；切回 A → 消失
 7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签后原地松手 → `session-menu`；附加键在，左列只有 `toggle-text`；`new-session` 与 `tabbar` 右边缘相距 16px
@@ -619,7 +619,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 > `web/e2e/order.spec.ts`。[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)。
 
-1. **wide 鼠标**（1440×900）：建到 3 个会话 A B C → 鼠标按住 C 的标签往左拖过 A 的中线松手 → 标签顺序是 C A B，当前会话不变（拖完不切换）；发出一条 `session.move{sid: C, before: A}`，随后收到 `session.order{sids: [C, A, B]}`；按住 B 横移 3px 松手 → 只是点击（切到 B），不发 `session.move`
+1. **wide 鼠标**（1440×900）：建到 3 个会话 A B C → 鼠标按住 C 的标签往左拖过 A 的中线松手 → 标签顺序是 C A B，编号（`tab-<sid>-idx`）依次是 `[1] [2] [3]`，当前会话不变（拖完不切换）；发出一条 `session.move{sid: C, before: A}`，随后收到 `session.order{sids: [C, A, B]}`；按住 B 横移 3px 松手 → 只是点击（切到 B），不发 `session.move`
 2. **拖到一半按 Esc**：按住 A 往右拖过 B，不松手按 `Esc` → 回到原位，松手后不发 `session.move`
 3. **顺序在 agent 上**：刷新页面 → 仍是 C A B；再开第二个 browser context（第二台设备）→ 它的标签顺序也是 C A B；在第一个里再拖一次（A 拖到最后）→ 第二个不刷新就变成 C B A
 4. **compact 拖动柄**（Pixel 5）：同一个 agent 上，打开抽屉 → 每行右端有 `session-<sid>-grip`；触摸按住最后一行的柄往上拖到第一行上方松手 → 它成为第一行、编号 `[1]`；按住一行的正文纵向拖 → 是滚动列表，顺序不变

@@ -202,3 +202,4 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0038](adr/0038-close-confirm-sheet.md) | 关闭确认不用浏览器的 `confirm()`，用自己的浮层；关闭中的会话不再收东西 |
 | [0039](adr/0039-drawer-row-swipe-actions.md) | 手机会话列表左滑出按钮；改名用一张小 sheet；浮层跟着可视区走 |
 | [0040](adr/0040-session-order-drag.md) | 会话可以拖动排序，顺序存在 agent 上（协议加 `session.move` / `session.order`） |
+| [0041](adr/0041-tab-index-and-edit-icon.md) | 标签名前带编号 `[n]`（与抽屉一致，改过名的也带）；文本页按钮画成铅笔斜出圆角方框的 SVG |
