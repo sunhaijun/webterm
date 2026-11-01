@@ -5,9 +5,11 @@
  * 至少半屏高、底部一行四周留白（ADR-0037 §5）；关闭确认叠在抽屉上（ADR-0038）；从抽屉进设置。
  * 抽屉有约 170ms 的进场动画，量矩形前先等它落位。
  */
+import { mkdirSync, rmSync } from 'node:fs'
+
 import { devices, expect, test, type Page } from '@playwright/test'
 
-import { Agent, focusTerm, hooks, newSession, openDrawer, rectOf, settled, waitFor } from './harness'
+import { Agent, FIXTURES, focusTerm, hooks, newSession, openDrawer, rectOf, settled, submit, waitFor } from './harness'
 
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 test.setTimeout(90_000)
@@ -231,7 +233,7 @@ test.describe('Pixel 5', () => {
     // 保持接收
     await swipeRow(page, b, -150)
     await item(b).getByTestId('row-pin').click()
-    await expect(page.getByTestId(`session-${b}`).locator('.pin-mark'), '名前出现 ⇵').toBeVisible()
+    await expect(page.getByTestId(`session-${b}`).locator('.pin-mark svg'), '名前出现图钉（SVG，ADR-0042）').toBeVisible()
     expect(await rowShift(page, b), '点完按钮行关上').toBe(0)
 
     // 改名：叠在抽屉上的小 sheet，输入框有焦点、全选、16px
@@ -324,5 +326,57 @@ test.describe('Pixel 5', () => {
     expect(r.bottom - inc.bottom, '底部留白').toBeGreaterThanOrEqual(16)
     await page.mouse.click(v.w / 2, 40) // 点遮罩
     await expect(page.getByTestId('settings')).toHaveCount(0)
+  })
+
+  test('E2E-28 ⑩ 路径按原样从左往右排、放不下从左截；名字优先（ADR-0042 §3）', async ({ page }) => {
+    // 一定很长、又不在家目录下的路径：前面那几段放不下，名字 project 仍要整个显示
+    const root = `/tmp/wt-e2e-${process.pid}-${Date.now()}`
+    const deep = `${root}/aaaaaaaaaaaa/bbbbbbbbbbbb/cccccccccccc/dddddddddddd/project`
+    mkdirSync(deep, { recursive: true })
+    try {
+      await agent.open(page)
+      await submit(page, 'cd /usr/local/share')
+      await newSession(page)
+      await submit(page, `cd ${FIXTURES}`) // 通常在家目录下：显示成 ~/…
+      await newSession(page)
+      await submit(page, `cd ${deep}`)
+      await openDrawer(page)
+      const metas = page.locator('.session-row .sl-meta')
+      await expect
+        .poll(() => metas.allTextContents(), { message: '三行的路径都更新了' })
+        .toEqual([expect.stringMatching(/\/usr\/local\/share$/), expect.stringMatching(/\/fixtures$/), expect.stringMatching(/\/project$/)])
+
+      // 量字符实际画在哪：只比 textContent 测不出 rtl 造成的颠倒
+      const geo = await metas.evaluateAll((els) =>
+        els.map((meta) => {
+          const node = meta.querySelector('bdi')?.firstChild ?? meta.firstChild!
+          const text = node.textContent!
+          const at = (i: number) => {
+            const r = document.createRange()
+            r.setStart(node, i)
+            r.setEnd(node, i + 1)
+            return r.getBoundingClientRect()
+          }
+          const box = meta.getBoundingClientRect()
+          const first = at(0)
+          const last = at(text.length - 1)
+          return { text, firstLeft: first.left, lastLeft: last.left, lastRight: last.right, boxLeft: box.left, boxRight: box.right }
+        }),
+      )
+      for (const g of geo) {
+        expect(g.firstLeft, `${g.text}：第一个字符在最后一个字符左边`).toBeLessThan(g.lastLeft)
+        expect(g.lastRight, `${g.text}：末尾看得见`).toBeLessThanOrEqual(g.boxRight + 0.5)
+        expect(g.lastLeft, `${g.text}：末尾看得见`).toBeGreaterThanOrEqual(g.boxLeft - 0.5)
+      }
+      expect(geo[2]!.firstLeft, '长路径放不下：开头被截在框外').toBeLessThan(geo[2]!.boxLeft)
+
+      const names = await page.locator('.session-row .sl-text').evaluateAll((els) =>
+        els.map((e) => ({ text: e.textContent, fits: e.scrollWidth <= e.clientWidth })),
+      )
+      expect(names.map((n) => n.text)).toEqual(['share', 'fixtures', 'project'])
+      for (const n of names) expect(n.fits, `名字「${n.text}」整个可见`).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

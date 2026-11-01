@@ -6,13 +6,14 @@
  * 上下位置也随字体度量变（ADR-0035 §3）。
  */
 
-function Icon({ d }: { d: string }) {
+/** `size`：画在多大的框里（默认 14px）；路径总在 14×14 的坐标里，线宽跟着等比缩放。 */
+function Icon({ d, size = 14 }: { d: string; size?: number }) {
   return (
     <svg
       class="icon"
       viewBox="0 0 14 14"
-      width="14"
-      height="14"
+      width={size}
+      height={size}
       aria-hidden="true"
       fill="none"
       stroke="currentColor"
@@ -28,6 +29,17 @@ function Icon({ d }: { d: string }) {
 export const PlusIcon = () => <Icon d="M7 1.5v11M1.5 7h11" />
 
 export const MinusIcon = () => <Icon d="M1.5 7h11" />
+
+/** 关闭（ADR-0042 §2）：两笔交叉。标签上 12px，浮层标题栏 16px。 */
+export const CloseIcon = ({ size = 14 }: { size?: number }) => <Icon d="M3.5 3.5l7 7M10.5 3.5l-7 7" size={size} />
+
+/** 保持接收（ADR-0042 §2）：图钉 —— 顶上一横、钉身往下收窄再张开成底座、钉尖。 */
+export const PinIcon = ({ size = 14 }: { size?: number }) => (
+  <Icon d="M4.75 1.75h4.5M5.75 1.75v3.5L3.5 8.25h7L8.25 5.25v-3.5M7 8.25v4" size={size} />
+)
+
+/** 菜单里的勾（会话菜单「保持接收」开着时）。 */
+export const CheckIcon = ({ size = 14 }: { size?: number }) => <Icon d="M2.5 7.5l3 3 6-6.5" size={size} />
 
 /**
  * 文本页按钮（附加键左列，ADR-0041 §2）：圆角方框缺掉右上角，一支铅笔从框中间斜向右上伸出缺口。

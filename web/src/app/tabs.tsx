@@ -14,7 +14,7 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { ConnState, StateInfo } from '../conn/connection'
 import type { SessionView } from '../sessions/store'
-import { GearIcon, PlusIcon } from '../ui/icons'
+import { CloseIcon, GearIcon, PinIcon, PlusIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { DragReorder } from '../ui/reorder'
@@ -243,8 +243,8 @@ export function TopBar(p: TopBarProps) {
               [{s.index}]
             </span>
             {s.pinned && (
-              <span class="pin-mark" aria-label="保持接收">
-                ⇵
+              <span class="pin-mark" role="img" aria-label="保持接收">
+                <PinIcon size={12} />
               </span>
             )}
             {p.renaming === s.sid ? (
@@ -267,7 +267,7 @@ export function TopBar(p: TopBarProps) {
                 p.onClose(s.sid)
               }}
             >
-              ✕
+              <CloseIcon size={12} />
             </button>
           </div>
         ))}

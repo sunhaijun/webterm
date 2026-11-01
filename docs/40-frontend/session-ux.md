@@ -59,7 +59,7 @@ agent 的回答只有两种（[协议 §5.1](../30-protocol/websocket-protocol.m
 
 ### compact（手机）：会话按钮 → 底部抽屉
 
-附加键左列上格是**会话按钮**（`data-testid="open-sessions"`），样子学手机浏览器的「标签页」按钮：一个圆角方框，框里写着当前有几个会话，新建、关闭时立刻跟着变。点它打开会话抽屉。任一**非当前**会话有未读（`headSeq > outSeq`）时，方框右上角有一个小红点（`data-unread="true"`）。为什么不用 ☰，见 [ADR-0030](../20-architecture/adr/0030-no-settings.md) §3。
+附加键左列上格是**会话按钮**（`data-testid="open-sessions"`），样子学手机浏览器的「标签页」按钮：一个圆角方框，框里写着当前有几个会话，新建、关闭时立刻跟着变。点它打开会话抽屉。任一**非当前**会话有未读（`headSeq > outSeq`）时，方框右上角有一个未读点（`data-unread="true"`，强调色，[ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md)）。为什么不用 ☰，见 [ADR-0030](../20-architecture/adr/0030-no-settings.md) §3。
 
 ```
 ┌────┐
@@ -88,7 +88,8 @@ agent 的回答只有两种（[协议 §5.1](../30-protocol/websocket-protocol.m
 ```
 
 - 抽屉就是 `Drawer` 原语（[layout.md](layout.md#浮层)）：贴底整宽的 sheet，`data-testid="session-drawer"`。**高度至少半屏**（50vh，最多 80vh），会话少的时候多出来的高度给列表。
-- 列表（`session-list`）一行一个会话（`session-<sid>`）：编号 `[n]`（按当前顺序，从 1 开始，关掉中间的会话后后面的顺延；顺序可以拖，见 [§排序](#排序ac-413)）、名字、CWD 或退出码、未读点。开着保持接收的会话名前有一个 `⇵` 标记。行高 52px。
+- 列表（`session-list`）一行一个会话（`session-<sid>`）：编号 `[n]`（按当前顺序，从 1 开始，关掉中间的会话后后面的顺延；顺序可以拖，见 [§排序](#排序ac-413)）、名字、CWD 或退出码、未读点。开着保持接收的会话名前有一个图钉标记（示意图里画成 `⇵`）。行高 52px。
+- **路径**按原样从左往右排（`<bdi dir="ltr">`），放不下时从左边截、省略号在左，保住末尾的目录。**名字优先占地方**：收缩时路径先让，名字放得下就整个显示；路径最少留 `min(6em, 25%)`，名字长到连这点都放不下时才截名字（[ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §3）。
 - 底部固定一行：`+ 新会话`（`new-session`，占满剩下的宽度）与设置（`open-settings`，48px 的方形按钮，⚙ 图标）。两个都是带细边的圆角块，四周留白，不贴 sheet 的边（[layout.md §浮层](layout.md#浮层)）。点设置 = 关掉抽屉、打开设置（[layout.md §设置](layout.md#设置ac-53)）。
 - 点一行 = 切过去并关闭抽屉。**左滑或长按一行 = 露出这一行的按钮**（见 [§行操作](#行操作compact)）。
 - **关闭抽屉**：点遮罩、选中一个会话、`Esc`、✕、系统返回键；下滑只作加速。
@@ -105,7 +106,7 @@ agent 的回答只有两种（[协议 §5.1](../30-protocol/websocket-protocol.m
 ```
 
 - 顶栏 `.topbar` 高 36px（`pointer: coarse` 时 40px），常驻。从左到右：可横向滚动的标签条 `data-testid="tabbar"`（**只装标签**）、`+`、空白、连接状态点（`conn-dot`）、设置（`open-settings`）。`+`、状态点、设置都不在标签条里，不跟着滚（[ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)）。
-- 一个标签（`tab-<sid>`）= 编号 + 会话名 + 未读点；开着保持接收的名前有 `⇵`；已退出的变灰。名字过长截断加省略号（编号不截），`title` 里是全名与 CWD。
+- 一个标签（`tab-<sid>`）= 编号 + 会话名 + 未读点；开着保持接收的名前有图钉（示意图里画成 `⇵`）；已退出的变灰。名字过长截断加省略号（编号不截），`title` 里是全名与 CWD。
 - **编号**（`tab-<sid>-idx`）就是抽屉里的 `[n]`（按当前顺序，从 1 开始），让同名的标签分得开。**每个标签都带**，改过名的也带，与抽屉一致（[ADR-0041](../20-architecture/adr/0041-tab-index-and-edit-icon.md)）。等宽字体、`--muted` 色，当前标签里跟着用强调色。
 - **宽度**（[ADR-0031](../20-architecture/adr/0031-tabs-equal-width.md)）：每个标签一样宽，等分标签条的可用宽度，最宽 240px、最窄 120px。
 - **`+`**（`new-session`）在标签条右边：放得下时标签条正好是标签的总宽，`+` 跟在最后一个标签后面；放不下时标签条缩到剩下的宽度、自己滚动，`+` 停在它右边，**始终可见**。
@@ -208,7 +209,8 @@ typing = 切换前焦点在终端里或文本框里
 - **未读是 client 推导出来的，不是服务端状态**：`unread = headSeq > outSeq`。
 - agent 对未订阅会话产生输出时发 `session.updated{head_seq}`（每会话最多 1s 一条，节流吞掉的那条要补发最新值）。
 - 不让服务端存 `unread` 布尔量：未读天然是 per-client 的，两个标签页会互相清对方的未读。
-- 显示位置：抽屉列表行与标签上的未读点；`compact` 上另有会话按钮的小红点（任一非当前会话未读即亮）。
+- 显示位置：抽屉列表行与标签上的未读点；`compact` 上另有会话按钮角上的未读点（任一非当前会话未读即亮）。
+- **未读点是强调色**（`--accent`），不是红色：红色只表示出错或破坏性操作（非零退出码、关闭、断线），免得「有新输出」看起来像「出事了」（[ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §1）。
 - 会话退出也算"需要注意"：显示 `exit <code>`，非零用警示色。
 
 ## 自动命名（AC-4.4）

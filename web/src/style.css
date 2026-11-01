@@ -277,7 +277,7 @@ button { font: inherit; color: inherit; }
   flex: none; width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: 6px; background: transparent;
-  color: var(--muted); font-size: 11px; cursor: pointer;
+  color: var(--muted); cursor: pointer;
   visibility: hidden;
 }
 .tab-close:hover { background: var(--hover); color: var(--fg); }
@@ -315,8 +315,9 @@ button { font: inherit; color: inherit; }
 .conn-dot[data-state='closed'] { background: var(--err); }
 @keyframes pulse { 50% { opacity: 0.3; } }
 
-.pin-mark { flex: none; color: var(--muted); font-size: 11px; margin-right: 2px; }
-.unread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--err); }
+/* 保持接收的图钉与未读点（ADR-0042）：未读是强调色，红色只表示出错 */
+.pin-mark { flex: none; display: inline-flex; color: var(--muted); margin-right: 3px; }
+.unread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 
 /* ---------- 附加键（input.md §附加键） ---------- */
 
@@ -353,7 +354,7 @@ button { font: inherit; color: inherit; }
 /* 未读小红点挂在方框右上角，描一圈底色和方框的边线分开 */
 .ek-side-btn[data-unread='true']::after {
   content: ''; position: absolute; top: 5px; right: 4px;
-  width: 8px; height: 8px; border-radius: 50%; background: var(--err);
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   box-shadow: 0 0 0 2px var(--surface);
 }
 .ek-main { position: relative; min-width: 0; }
@@ -423,9 +424,9 @@ button { font: inherit; color: inherit; }
   flex: none; width: 36px; height: 36px;
   display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: 8px; background: transparent; color: var(--muted);
-  font-size: 15px; cursor: pointer;
+  cursor: pointer;
 }
-.app[data-coarse='true'] .drawer-close { width: 44px; height: 44px; font-size: 17px; }
+.app[data-coarse='true'] .drawer-close { width: 44px; height: 44px; }
 .drawer-close:hover, .drawer-close:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
 .drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 
@@ -518,9 +519,10 @@ button { font: inherit; color: inherit; }
 .session-row[data-exited='true'] .sl-name { opacity: 0.55; }
 .sl-idx { flex: none; color: var(--muted); font-family: var(--font-mono); font-size: 13px; }
 .sl-name { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; overflow: hidden; font-size: 15px; }
+/* 名字优先（ADR-0042 §3）：收缩时路径的权重远大于名字，路径先让；路径最少留 min(6em, 25%)，看得到最后一段 */
 .sl-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sl-meta {
-  flex: 1 1 auto; min-width: 0; text-align: right;
+  flex: 1 1000 auto; min-width: min(6em, 25%); text-align: right;
   color: var(--muted); font-family: var(--font-mono); font-size: 12px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl;
 }

@@ -12,7 +12,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 import type { SessionView } from '../sessions/store'
 import { shortCwd } from '../sessions/store'
 import { Drawer } from '../ui/drawer'
-import { GripIcon } from '../ui/icons'
+import { CheckIcon, GripIcon, PinIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { DragReorder } from '../ui/reorder'
@@ -230,12 +230,17 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
             >
               <span class="sl-idx">[{s.index}]</span>
               <span class="sl-name">
-                {s.pinned && <span class="pin-mark" aria-label="保持接收">⇵</span>}
+                {s.pinned && (
+                  <span class="pin-mark" role="img" aria-label="保持接收">
+                    <PinIcon size={12} />
+                  </span>
+                )}
                 <span class="sl-text">{s.name}</span>
               </span>
               {s.unread && <span class="unread-dot" aria-label="有新输出" />}
               <span class="sl-meta" data-failed={s.status === 'exited' && s.exitCode !== 0 ? 'true' : 'false'}>
-                {s.status === 'exited' ? `exit ${s.exitCode ?? '?'}` : shortCwd(s.cwd, home)}
+                {/* 外层 rtl 只为从左边截；路径本身按从左往右排，`~` `/` 才不会被挪到右边（ADR-0042 §3） */}
+                <bdi dir="ltr">{s.status === 'exited' ? `exit ${s.exitCode ?? '?'}` : shortCwd(s.cwd, home)}</bdi>
               </span>
               <span
                 class="row-grip"
@@ -445,7 +450,7 @@ export function SessionMenu({ session, x, y, onRename, onTogglePin, onClose, onD
           onClick={(e) => fresh(e) && onTogglePin()}
         >
           <span>保持接收</span>
-          <span class="menu-check">{session.pinned ? '✓' : ''}</span>
+          <span class="menu-check">{session.pinned && <CheckIcon size={12} />}</span>
         </button>
         <button role="menuitem" class="danger" data-testid="session-close" onClick={(e) => fresh(e) && onClose()}>
           关闭

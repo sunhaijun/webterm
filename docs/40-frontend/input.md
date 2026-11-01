@@ -37,7 +37,7 @@
 
 | 位置 | testid | 动作 |
 |---|---|---|
-| 会话按钮 `[3]`（仅 `compact`） | `open-sessions` | 圆角方框里写会话数；打开会话抽屉；有未读时带小红点（[session-ux.md](session-ux.md)） |
+| 会话按钮 `[3]`（仅 `compact`） | `open-sessions` | 圆角方框里写会话数；打开会话抽屉；有未读时带未读点（[session-ux.md](session-ux.md)） |
 | ✎ | `toggle-text` | 键位页 ⇄ 文本输入页。图标是铅笔斜出圆角方框（SVG，[layout.md §图标](layout.md#图标)） |
 | ESC / | - | `key-Escape` `key-Slash` `key-Minus` | 发对应字节 |
 | HOME ↑ END PGUP | `key-Home` `key-ArrowUp` `key-End` `key-PageUp` | 同上 |

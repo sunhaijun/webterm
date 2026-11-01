@@ -20,7 +20,7 @@ test.afterEach(() => agent.stop())
 const geo = async (p: Page) => ({ rect: await rectOf(p, '[data-testid=terminal]'), size: await hooks.size(p) })
 const closeVisible = (p: Page, sid: number) =>
   p.getByTestId(`tab-${sid}-close`).evaluate((el) => getComputedStyle(el).visibility === 'visible')
-/** 标签上显示的名字（不含 ⇵ 与未读点）。 */
+/** 标签上显示的名字（不含编号、图钉与未读点）。 */
 const tabName = (p: Page, sid: number) => p.getByTestId(`tab-${sid}`).locator('.tab-name').textContent()
 /** `+` 的左边缘到标签条右边缘的间隔（ADR-0035 §2）。 */
 const plusGap = async (p: Page) => {
@@ -183,7 +183,7 @@ test.describe('1440×900 鼠标', () => {
     await expect(menu.getByTestId('session-close')).toBeVisible()
     await menu.getByTestId('session-pin').click()
     await expect(menu).toHaveCount(0)
-    await expect(page.getByTestId(`tab-${a}`).locator('.pin-mark'), '名字前出现 ⇵').toHaveText('⇵')
+    await expect(page.getByTestId(`tab-${a}`).locator('.pin-mark svg'), '名字前出现图钉（SVG，ADR-0042）').toBeVisible()
 
     // A 跑持续输出，切到别的会话：A 的帧照样到（outSeq 在涨），也就不会有未读
     await switchTo(page, a)
@@ -200,7 +200,7 @@ test.describe('1440×900 鼠标', () => {
     expect(await hooks.unread(page, a)).toBe(false)
   })
 
-  test('E2E-41 ⑥ 未读：A 持续输出，切到 B → A 的标签有未读点；切回消失', async ({ page }) => {
+  test('E2E-41 ⑥ 未读：A 持续输出，切到 B → A 的标签有强调色的未读点；切回消失', async ({ page }) => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
     const b = await newSession(page)
@@ -210,6 +210,10 @@ test.describe('1440×900 鼠标', () => {
     await switchTo(page, b)
     await expect(page.getByTestId(`tab-${a}-unread`)).toBeVisible({ timeout: 20_000 })
     await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'true')
+    // 未读点是强调色（= 当前标签的文字色），不是红色（ADR-0042 §1）
+    const dot = await page.getByTestId(`tab-${a}-unread`).evaluate((e) => getComputedStyle(e).backgroundColor)
+    const accent = await page.getByTestId(`tab-${b}`).evaluate((e) => getComputedStyle(e).color)
+    expect(dot).toBe(accent)
     await switchTo(page, a)
     await expect(page.getByTestId(`tab-${a}-unread`)).toHaveCount(0)
     await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'false')
