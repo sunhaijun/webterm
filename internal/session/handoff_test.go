@@ -316,6 +316,52 @@ func TestHandoffKeepsTerminalState(t *testing.T) {
 	}
 }
 
+// IT-handoff-1（ADR-0043 §4）：前台程序设的标题跨交接保留。交接之后名字立刻就是
+// 标题，不先闪回目录名、等程序下次写标题才回来。
+func TestHandoffKeepsTitleName(t *testing.T) {
+	c := cfg()
+	m := session.NewManager(c)
+	s := create(t, m)
+	conn := newConn(t, m, "tab")
+	s.Subscribe(conn, 0, 0, 0)
+	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+	if err := conn.Send(s, `bash -c 'printf "\033]0;HANDOFF TITLE\007"; exec sleep 30'`+"\r"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "名字是标题", func() bool { return s.Info().Name == "HANDOFF TITLE" })
+
+	conn.Detach()
+	s.Unsubscribe(conn)
+	if err := m.Freeze(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := m.Export("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.RemoveObserver(conn)
+
+	m2 := session.NewManager(c)
+	if err := m2.Restore(snap); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m2.Shutdown)
+	s2, ok := m2.Get(s.SID())
+	if !ok {
+		t.Fatal("交接后找不到会话")
+	}
+	if got := s2.Info().Name; got != "HANDOFF TITLE" {
+		t.Fatalf("交接之后名字 = %q, want 标题", got)
+	}
+	// 之后的轮询也不把它改掉（归属的进程组还在前台）
+	for range 5 {
+		time.Sleep(100 * time.Millisecond)
+		if got := s2.Info().Name; got != "HANDOFF TITLE" {
+			t.Fatalf("交接之后轮询把名字改成了 %q", got)
+		}
+	}
+}
+
 // enterAltScreen 让会话进入备用屏，并把环形缓冲顶掉一轮：之后 ESC[?1049h 只在
 // 模拟器里，环形缓冲里已经没有了。
 func enterAltScreen(t *testing.T, s *session.Session, c *fakeConn, ring int) {

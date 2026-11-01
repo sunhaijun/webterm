@@ -11,6 +11,7 @@
 import type { ComponentChildren } from 'preact'
 import { useLayoutEffect, useRef } from 'preact/hooks'
 
+import { CloseIcon } from './icons'
 import { installSwipeDismiss } from './swipe'
 
 export interface DrawerProps {
@@ -127,7 +128,7 @@ export function Drawer({
         <div class="drawer-head">
           <h2 class="drawer-title">{title}</h2>
           <button class="drawer-close" data-testid="drawer-close" aria-label="关闭" onClick={() => closeRef.current()}>
-            ✕
+            <CloseIcon size={16} />
           </button>
         </div>
         <div class="drawer-body">

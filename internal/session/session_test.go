@@ -175,6 +175,94 @@ func TestITSession3_CWDPollingAndAutoNaming(t *testing.T) {
 	}
 }
 
+// IT-session-6：前台程序设的终端标题作自动名（AC-4.4，ADR-0043）。
+//
+// shell 在提示符时设的标题不用；前台程序设的用；程序退出回到目录名；再启动的程序
+// 设标题之前不沿用上一次的，设了一模一样的也认得出（看写入次数，不看内容）；手动名优先。
+func TestITSession6_TerminalTitleAutoNaming(t *testing.T) {
+	m := newManager(t, cfg())
+	dir := t.TempDir() + "/proj"
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := m.Create(session.Spec{CWD: dir, Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newConn(t, m, "tab")
+	s.Subscribe(c, 0, 0, 0)
+	waitFor(t, "shell 就绪", func() bool { return s.HeadSeq() > 0 })
+	name := func() string { return s.Info().Name }
+	stays := func(what, want string) {
+		t.Helper()
+		for range 5 { // 5 个轮询周期
+			time.Sleep(100 * time.Millisecond)
+			if got := name(); got != want {
+				t.Fatalf("%s：名字 = %q, want %q", what, got, want)
+			}
+		}
+	}
+
+	// shell 自己设的（printf 是内建命令，前台就是 shell）：不用
+	if err := c.Send(s, `printf '\033]0;SHELL TITLE\007'`+"\r"); err != nil {
+		t.Fatal(err)
+	}
+	stays("shell 设的标题", "proj")
+
+	// 前台程序设的：用，并且发 session.updated{name}
+	prog := `bash -c 'printf "\033]0;PROG TITLE\007"; exec sleep 30'` + "\r"
+	if err := c.Send(s, prog); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "名字变成程序设的标题", func() bool { return name() == "PROG TITLE" })
+	waitFor(t, "发了 session.updated{name}", func() bool {
+		for _, e := range c.Events() {
+			if u, ok := e.(*protocol.SessionUpdated); ok && u.Name != nil && *u.Name == "PROG TITLE" {
+				return true
+			}
+		}
+		return false
+	})
+	if s.Info().NameIsManual {
+		t.Fatal("标题不是手动名")
+	}
+
+	// 手动名优先；恢复自动后又是标题（程序还在前台）
+	manual := "构建"
+	s.Rename(&manual)
+	stays("手动名", manual)
+	s.Rename(nil)
+	if got := name(); got != "PROG TITLE" {
+		t.Fatalf("恢复自动后 = %q", got)
+	}
+
+	// 程序退出、回到提示符：回到目录名
+	if err := c.Send(s, "\x03"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "回到目录名", func() bool { return name() == "proj" })
+
+	// 再起一个不设标题的程序：不沿用上一次的标题
+	if err := c.Send(s, "sleep 30\r"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "sleep 在前台", func() bool { return s.Info().CWD == dir && session.BusyForTest(s) })
+	stays("没设标题的新程序", "proj")
+	if err := c.Send(s, "\x03"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 新程序设了一模一样的标题：认得出
+	if err := c.Send(s, prog); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "同样的标题再设一次也采用", func() bool { return name() == "PROG TITLE" })
+	if err := c.Send(s, "\x03"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "又回到目录名", func() bool { return name() == "proj" })
+}
+
 // IT-session-4：shell 退出后状态变 exited 并携带退出码；缓冲保留可查看（AC-4.5）。
 func TestITSession4_ExitedKeepsBuffer(t *testing.T) {
 	m := newManager(t, cfg())

@@ -357,3 +357,46 @@ func TestSnapshotCapNeverDropsScreen(t *testing.T) {
 		t.Fatal("当前屏被减了")
 	}
 }
+
+// UT-name-2（模拟器一侧）：标题与写入次数（ADR-0043 §2）。同样的标题再写一次也计数 ——
+// 会话靠次数判断「前台程序设过标题」，新进程设了一模一样的标题也要认得出来。
+// 导出 / 导入带着标题，计数从导入后重新开始。
+func TestTitleAndWrites(t *testing.T) {
+	term := New(80, 24)
+	if title, n := term.Title(); title != "" || n != 0 {
+		t.Fatalf("新模拟器 = (%q, %d)", title, n)
+	}
+	term.Write([]byte("\x1b]0;✳ Claude Code\x07"))
+	if title, n := term.Title(); title != "✳ Claude Code" || n != 1 {
+		t.Fatalf("OSC 0 之后 = (%q, %d)", title, n)
+	}
+	term.Write([]byte("\x1b]2;✳ Claude Code\x1b\\")) // 同样的标题、OSC 2、ST 结尾
+	if title, n := term.Title(); title != "✳ Claude Code" || n != 2 {
+		t.Fatalf("再写一次同样的标题 = (%q, %d)，次数要加 1", title, n)
+	}
+	term.Write([]byte("\x1b]0;◐ Claude"))
+	term.Write([]byte(" Code\x07")) // 切在两次写入之间
+	if title, n := term.Title(); title != "◐ Claude Code" || n != 3 {
+		t.Fatalf("切开的 OSC = (%q, %d)", title, n)
+	}
+	term.Write([]byte("\x1b]1;icon only\x07")) // 只改图标名，不是标题
+	if title, n := term.Title(); title != "◐ Claude Code" || n != 3 {
+		t.Fatalf("OSC 1 之后 = (%q, %d)", title, n)
+	}
+
+	data, err := term.Export()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := Import(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title, n := back.Title(); title != "◐ Claude Code" || n != 0 {
+		t.Fatalf("导入之后 = (%q, %d)，标题要在、计数从 0 起", title, n)
+	}
+	back.Write([]byte("\x1b]0;✳ Claude Code\x07"))
+	if _, n := back.Title(); n != 1 {
+		t.Fatalf("导入之后再写一次，次数 = %d", n)
+	}
+}

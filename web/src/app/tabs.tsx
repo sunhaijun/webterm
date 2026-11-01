@@ -1,7 +1,8 @@
 /**
  * wide（PC / Pad）的顶部标签栏（session-ux.md §wide，参照 Termius）。
  *
- * 从左到右：标签条（只装标签）、`+`、空白、连接状态点、设置（ADR-0037）。标签等宽（120–240px，纯 CSS，
+ * 从左到右：标签条（只装标签）、`+`、空白、连接状态点、设置（ADR-0037）。标签名前带编号 `[n]`，
+ * 同抽屉（ADR-0041）。标签等宽（120–240px，纯 CSS，
  * ADR-0031）；放不下时标签条横向滚动，当前标签变化时把它滚进视野（整个已可见则不动，
  * 不用 smooth）。`+` 不在标签条里，放不下时也始终可见，前面隔开一段不可点的空白（ADR-0035）。
  * 切换标签不改终端几何。
@@ -13,7 +14,7 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { ConnState, StateInfo } from '../conn/connection'
 import type { SessionView } from '../sessions/store'
-import { GearIcon, PlusIcon } from '../ui/icons'
+import { CloseIcon, GearIcon, PinIcon, PlusIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { DragReorder } from '../ui/reorder'
@@ -237,9 +238,13 @@ export function TopBar(p: TopBarProps) {
               }
             }}
           >
+            {/* 编号让同名的标签分得开，同抽屉（ADR-0041） */}
+            <span class="tab-idx" data-testid={`tab-${s.sid}-idx`}>
+              [{s.index}]
+            </span>
             {s.pinned && (
-              <span class="pin-mark" aria-label="保持接收">
-                ⇵
+              <span class="pin-mark" role="img" aria-label="保持接收">
+                <PinIcon size={12} />
               </span>
             )}
             {p.renaming === s.sid ? (
@@ -262,7 +267,7 @@ export function TopBar(p: TopBarProps) {
                 p.onClose(s.sid)
               }}
             >
-              ✕
+              <CloseIcon size={12} />
             </button>
           </div>
         ))}

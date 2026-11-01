@@ -53,6 +53,8 @@ type Session struct {
     mu         sync.RWMutex    // 保护以下所有字段
     name       string
     nameManual bool
+    title      string          // 此刻采用的终端标题（ADR-0043）；"" = 不用标题
+    titlePgrp  int             // 标题归属的前台进程组：最近一次写标题时在前台的那个
     cwd        string
     status     Status          // running | exited
     exitCode   *int
@@ -152,13 +154,18 @@ broadcast(session.updated{status:"exited", exit_code})
 
 ### `cwdLoop`
 
-运行中的会话每秒读一次工作目录：
+运行中的会话每秒读一次工作目录与终端标题：
 
 ```
 pgrp := ioctl(ptmx, TIOCGPGRP)          // PTY 的前台进程组
 cwd  := readlink("/proc/<pgrp>/cwd")
-变了 → s.cwd = cwd；!nameManual 且名字变了 → 一起广播 session.updated{cwd, name}
+title, writes := 模拟器的标题, 标题被写过几次
+writes 变了 → titlePgrp = pgrp            // 标题归属于设它时在前台的进程组
+s.title = (pgrp == titlePgrp && pgrp != shell 的 pid) ? clean(title) : ""
+cwd 变了、或名字变了 → 一起广播 session.updated{cwd?, name?}
 ```
+
+- 标题的规则见 [ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)：shell 在提示符时设的标题不用，程序退出回到目录名；用写入次数判断「设过」，新进程设了同样的标题也认得出
 
 - 前台进程组的组长就是用户此刻在用的程序（shell、vim、claude…），它的目录就是用户认为"我在哪"
 - 读失败（进程刚退出、权限）就跳过这一轮，不清空已有的 `cwd`
@@ -267,6 +274,7 @@ exited:
 ```go
 func (s *Session) displayName() string {
     if s.nameManual { return s.name }
+    if s.title != "" { return s.title }     // 前台程序设的终端标题（ADR-0043）
     if s.cwd == "" { return "shell" }
     if s.cwd == home { return "~" }
     if b := filepath.Base(s.cwd); b != "" && b != "/" { return b }
@@ -274,7 +282,7 @@ func (s *Session) displayName() string {
 }
 ```
 
-`cwdLoop` 读到新目录时：更新 `s.cwd`；若 `!nameManual` 且名字发生变化，广播 `session.updated{name, cwd}`。
+`cwdLoop` 每一轮：更新 `s.cwd` 与 `s.title`；目录变了或名字变了（`!nameManual` 时）就广播一条 `session.updated`，只带变了的字段。
 
 **不做重名去重**（不加 `(2)` 后缀）—— 两个都在 `webterm` 目录下的会话本来就该同名。
 
@@ -328,7 +336,7 @@ func (s *Session) displayName() string {
 
 任何一步失败（预检、memfd、exec 返回）→ `Thaw`：清 deadline、放行几个循环、恢复接受连接，日志 + notice 明说原因。**不自动退化成 restart**。
 
-进快照的字段（`internal/handoff.Session`）就是 `Session` 结构体里"不能丢"的那部分：sid、ptmx fd、shell pid、createdAt、name / nameManual、cwd、status / exitCode、cols / rows、ring（base + 字节）、**模拟器状态**、inQueued / inAck、未写完的输入。**不进**快照的：订阅者 —— 连接会重建；agent 与 shell 的 `oom_score_adj` —— 前者随 execve 保留，后者本来就在 shell 进程上。已退出的会话（ring 与模拟器保留供回看）也交接，只是没有 fd 和 pid。
+进快照的字段（`internal/handoff.Session`）就是 `Session` 结构体里"不能丢"的那部分：sid、ptmx fd、shell pid、createdAt、name / nameManual、title / titlePgrp（ADR-0043 §4）、cwd、status / exitCode、cols / rows、ring（base + 字节）、**模拟器状态**、inQueued / inAck、未写完的输入。**不进**快照的：订阅者 —— 连接会重建；agent 与 shell 的 `oom_score_adj` —— 前者随 execve 保留，后者本来就在 shell 进程上。已退出的会话（ring 与模拟器保留供回看）也交接，只是没有 fd 和 pid。
 
 **交接前后同一会话生成的快照必须逐字节相等**，增量路径必须字节级连续（`TestHandoffByteLevelContinuity`）。
 

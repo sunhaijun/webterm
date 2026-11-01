@@ -68,6 +68,8 @@ test.describe('wide 鼠标', () => {
     const ra = (await page.getByTestId(`tab-${a}`).boundingBox())!
     await mouseDragTab(page, c, ra.x + ra.width / 2 - 20)
     await expect.poll(() => tabOrder(page)).toEqual([c, a, b])
+    const idxs = await Promise.all([c, a, b].map((s) => page.getByTestId(`tab-${s}-idx`).textContent()))
+    expect(idxs, '标签上的编号跟着新顺序（ADR-0041）').toEqual(['[1]', '[2]', '[3]'])
     expect(await hooks.sid(page), '拖完不切换').toBe(c)
     const moves = (await sent.ctl()).filter((m) => m.t === 'session.move')
     expect(moves).toMatchObject([{ sid: c, before: a }])

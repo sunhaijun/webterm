@@ -202,5 +202,8 @@ create ──> running ──(shell 退出)──> exited ──(用户关闭)�
 | [0038](adr/0038-close-confirm-sheet.md) | 关闭确认不用浏览器的 `confirm()`，用自己的浮层；关闭中的会话不再收东西 |
 | [0039](adr/0039-drawer-row-swipe-actions.md) | 手机会话列表左滑出按钮；改名用一张小 sheet；浮层跟着可视区走 |
 | [0040](adr/0040-session-order-drag.md) | 会话可以拖动排序，顺序存在 agent 上（协议加 `session.move` / `session.order`） |
+| [0041](adr/0041-tab-index-and-edit-icon.md) | 标签名前带编号 `[n]`（与抽屉一致，改过名的也带）；文本页按钮画成铅笔斜出圆角方框的 SVG |
+| [0042](adr/0042-red-means-error-and-line-icons.md) | 未读点用强调色、红色只表示出错；标签与浮层的 ✕、保持接收标记换成线条图标；抽屉路径不再前后颠倒、名字优先 |
+| [0043](adr/0043-terminal-title-as-auto-name.md) | 前台程序（不是 shell）设的终端标题作会话自动名，优先于目录名；shell 提示符设的不用 |
 | [0044](adr/0044-ip-address-certificates.md) | 没有域名也能部署：`--domain` 接受公网 IPv4，Let's Encrypt 6 天期 IP 证书；删掉 `--acme-staging` |
 | [0045](adr/0045-install-from-the-binary.md) | 安装脚本嵌进二进制（`webterm install`）、网上取的脚本只下载并交接、启动前先签好证书、装完直接配对 |

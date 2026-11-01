@@ -152,7 +152,7 @@ Pixel 5（`compact`）与 1440×900（`wide`）各跑一遍。
 1. 创建会话 A、B
 2. 在 A 里跑 `emit.sh 100 50`（持续输出）
 3. 切到 B
-4. A 出现未读标记（由 `session.updated{head_seq}` > 本地 `out_seq` 推导）：Pixel 5 上 `open-sessions` 带红点（`data-unread=true`）、抽屉里 A 那行有未读点；1440×900 上 A 的标签有未读点
+4. A 出现未读标记（由 `session.updated{head_seq}` > 本地 `out_seq` 推导）：Pixel 5 上 `open-sessions` 带未读点（`data-unread=true`）、抽屉里 A 那行有未读点；1440×900 上 A 的标签有未读点
 5. 在 B 里 `echo in-b`，正常工作
 6. 切回 A：内容**完整**（切走期间的输出全在），未读标记清除
 7. A 的滚动位置保持在切走前的位置（除非之前在底部，则跟到底部）
@@ -355,9 +355,10 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 3. **关闭方式**（会话抽屉）：点遮罩、`Esc`、✕、选中一个会话、`page.goBack()`（系统返回键）各关一次；`goBack` 之后页面仍在 `/`；五次开关之后 `history.length` 至多比开始时多 1
 4. **不挤终端**：开关抽屉前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
 5. **焦点恢复**（AC-4.8）：先点终端让它有焦点 → 开抽屉 → 选另一个会话 → 焦点在新会话的 helper textarea 上；先让终端失焦 → 开抽屉 → 选会话 → 焦点**不**在终端
-6. **行操作**（AC-4.12，ADR-0039）：两个会话。触摸左滑第二行 120px → 松手后它停在打开（行内容左移 216px），`row-pin` `row-rename` `row-close` 可见；只左滑 60px → 弹回；打开后右滑 → 关上；纵向拖列表不打开任何一行。长按一行 → 同样打开、**不出现** `session-menu`；再左滑另一行 → 前一行关上；点开着那行的正文 → 关上、当前会话不变。`row-pin` → 名字前出现 `⇵`、行关上。`row-rename` → `rename-sheet` 叠在抽屉上（两个 `.drawer`），`rename-input` 有焦点、内容全选、字号 16px；输入 `RENAMED` 按 `Enter` → sheet 消失、抽屉仍在，那一行显示 `RENAMED`；再打开改名清空按「保存」→ 恢复自动命名；再打开改名按 `Esc` → 只关改名
+6. **行操作**（AC-4.12，ADR-0039）：两个会话。触摸左滑第二行 120px → 松手后它停在打开（行内容左移 216px），`row-pin` `row-rename` `row-close` 可见；只左滑 60px → 弹回；打开后右滑 → 关上；纵向拖列表不打开任何一行。长按一行 → 同样打开、**不出现** `session-menu`；再左滑另一行 → 前一行关上；点开着那行的正文 → 关上、当前会话不变。`row-pin` → 名字前出现图钉（`.pin-mark` 里是 SVG）、行关上。`row-rename` → `rename-sheet` 叠在抽屉上（两个 `.drawer`），`rename-input` 有焦点、内容全选、字号 16px；输入 `RENAMED` 按 `Enter` → sheet 消失、抽屉仍在，那一行显示 `RENAMED`；再打开改名清空按「保存」→ 恢复自动命名；再打开改名按 `Esc` → 只关改名
 9. **浮层跟着可视区**（ADR-0039 §3）：打开改名 sheet 后把视口高度减 300px（模拟可视视口被键盘压缩：`.app` 的高度跟着变）→ `rename-sheet` 的底边与 `.app` 的底边差 ≤ 1px，`rename-input` 整个在 `.app` 的矩形里；`session-drawer` 的高度 ≤ `.app` 高度的 80%
 7. **高度与留白**（AC-5.11，ADR-0037 §5）：只有 1 个会话时打开抽屉 → `session-drawer` 的高度 ≥ 可视区高度的 50%（差 ≤ 1px）；底部一行贴着 sheet 底部；`new-session` 的底边与 sheet 底边之间 ≥ 16px、左边与 sheet 左边之间 16px，`open-settings` 的右边与 sheet 右边之间 16px，两个按钮之间 12px，两个按钮一样高（48px）
+10. **路径与名字**（ADR-0042 §3）：三个会话，分别 `cd` 到 `/usr/local/share`、`e2e/fixtures`（绝对路径，通常在家目录下，显示成 `~/…`）、`/`；打开抽屉 → 每一行路径文本节点的**第一个字符显示在最后一个字符左边**（用 `Range` 量字符的实际矩形；只比 `textContent` 测不出颠倒），最后一个字符整个落在 `.sl-meta` 的矩形里；`fixtures` 那一行的名字整个可见（`.sl-text` 的 `scrollWidth ≤ clientWidth`）
 8. **从抽屉进设置**：点 `open-settings` → `session-drawer` 消失，`settings` 出现，贴底整宽、有抓手；它的高度小于可视区的 50%（不套会话抽屉的最小高度）；`font-inc` 的底边与 sheet 底边之间 ≥ 16px；点遮罩关闭
 
 ---
@@ -566,13 +567,14 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 1. **结构**：顶栏在终端上方；`tabbar`（标签条）里只有一个标签，`new-session` 在顶栏里、**不在** `tabbar` 里，位于标签条右边、左边缘距标签条右边缘 12px（ADR-0035）；右侧钉住 `conn-dot` 与 `open-settings`，`open-settings` 在最右、`conn-dot` 紧挨在它左边；`new-session` 里的 SVG、`open-settings` 里的 SVG 与 `conn-dot` 三者的垂直中心两两相差 ≤ 0.5px，两个 SVG 一样大；没有 `open-sessions`，没有附加键
 2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
 3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹 `close-confirm`（居中浮窗，不是浏览器对话框），点 `close-ok` 后标签消失；中键点标签同样先确认；焦点在终端里时按 `Ctrl+Shift+W` → 确认浮层，按 `Enter` → 关闭，焦点回到新的当前会话的终端（AC-4.11）
-4. **改名**：双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
-5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现 `⇵`；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
-6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点；切回 A → 消失
+4. **改名**：标签有 `tab-<sid>-idx`，内容是 `[n]`（它在顺序里的位置）；双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`，`tab-<sid>-idx` 仍是 `[n]`（改过名的也带编号，ADR-0041）；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
+5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现图钉（`.pin-mark` 里是 SVG）；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
+6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点，颜色是强调色（与当前标签的文字同色，不是 `--err`，ADR-0042）；切回 A → 消失
 7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签后原地松手 → `session-menu`；附加键在，左列只有 `toggle-text`；`new-session` 与 `tabbar` 右边缘相距 16px
 8. **等宽与滚动**（ADR-0031 / ADR-0035）：建到 3 个会话 → 三个标签等宽（差 ≤ 1px）、都是 240px，`tabbar` 正好是三个标签的宽度、不横向滚动（`scrollWidth` = `clientWidth`），`new-session` 的左边缘 = 最后一个标签的右边缘 + 12px；把窗口改成 600×900（`screen` 不变，仍是 `wide`）、建到 5 个 → 每个标签 120px（差 ≤ 1px），`tabbar` 放不下（`scrollWidth > clientWidth`），当前（最后建的）整个可见；**`new-session` 整个落在顶栏里、可点（`elementFromPoint` 命中它），左边缘 = `tabbar` 右边缘 + 12px**；把 `tabbar` 滚到最左（`scrollLeft = 0`）→ `new-session` 的位置不变；（此时 `scrollLeft` 为 0）鼠标悬在标签条上纵向滚轮向下再向上 → `scrollLeft` 先变大后变小；窗口改回 1440 → 5 个都是 240px，不再横向滚动
 9. **间隔不可点**（ADR-0035 §2）：两个会话，焦点在终端里；在最后一个标签右边缘与 `new-session` 左边缘之间那 12px 的正中点击 → 会话数不变、当前会话不变、焦点仍在终端里
 10. **设置是居中浮窗**（AC-5.11，ADR-0037 §4）：焦点在终端里，点 `open-settings` → `settings` 水平、垂直都居中（中心与可视区中心差 ≤ 1px），宽 420px，没有抓手；`.term` 的矩形与 `__webterm.size()` 不变；按 `Esc` → 浮层消失，焦点回到终端的 helper textarea（打字有回显）
+11. **终端标题作名字**（AC-4.4，ADR-0043）：harness 的 shell 读用户的 `.bashrc`，提示符可能设 `user@host: dir` 标题 —— 等两秒，标签名仍是 `~`（shell 设的不用）；跑 `bash -c 'printf "\033]0;E2E TITLE\007"; sleep 3'` → 标签名变成 `E2E TITLE`、编号仍在；它退出回到提示符 → 标签名回到 `~`
 
 ---
 
@@ -619,7 +621,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 > `web/e2e/order.spec.ts`。[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)。
 
-1. **wide 鼠标**（1440×900）：建到 3 个会话 A B C → 鼠标按住 C 的标签往左拖过 A 的中线松手 → 标签顺序是 C A B，当前会话不变（拖完不切换）；发出一条 `session.move{sid: C, before: A}`，随后收到 `session.order{sids: [C, A, B]}`；按住 B 横移 3px 松手 → 只是点击（切到 B），不发 `session.move`
+1. **wide 鼠标**（1440×900）：建到 3 个会话 A B C → 鼠标按住 C 的标签往左拖过 A 的中线松手 → 标签顺序是 C A B，编号（`tab-<sid>-idx`）依次是 `[1] [2] [3]`，当前会话不变（拖完不切换）；发出一条 `session.move{sid: C, before: A}`，随后收到 `session.order{sids: [C, A, B]}`；按住 B 横移 3px 松手 → 只是点击（切到 B），不发 `session.move`
 2. **拖到一半按 Esc**：按住 A 往右拖过 B，不松手按 `Esc` → 回到原位，松手后不发 `session.move`
 3. **顺序在 agent 上**：刷新页面 → 仍是 C A B；再开第二个 browser context（第二台设备）→ 它的标签顺序也是 C A B；在第一个里再拖一次（A 拖到最后）→ 第二个不刷新就变成 C B A
 4. **compact 拖动柄**（Pixel 5）：同一个 agent 上，打开抽屉 → 每行右端有 `session-<sid>-grip`；触摸按住最后一行的柄往上拖到第一行上方松手 → 它成为第一行、编号 `[1]`；按住一行的正文纵向拖 → 是滚动列表，顺序不变
