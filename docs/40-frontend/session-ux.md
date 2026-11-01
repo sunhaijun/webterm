@@ -274,10 +274,10 @@ Uses the `Drawer` primitive ([ADR-0038](../20-architecture/adr/0038-close-confir
 When the shell exits, the session becomes `exited` and a **local notice** is written at the end of the terminal:
 
 ```
-[Process exited (code 1) · press Enter to close]
+[Exited (code 1) · Enter to close]
 ```
 
-Without an exit code: `[Process exited · press Enter to close]`.
+Without an exit code: `[Exited · Enter to close]`.
 
 - When to write it: the session is `exited` **and `out_seq` has caught up to the `head_seq` in the exit message** (the agent guarantees that message comes after the last OUTPUT, protocol §4.2). Then a plain `term.write()`; xterm writes are FIFO, so the line lands after the last output.
 - **Not counted in seq**: it's a purely local write; `outSeq` doesn't change.

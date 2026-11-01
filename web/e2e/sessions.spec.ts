@@ -29,7 +29,7 @@ import {
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 const WIDE = { viewport: { width: 1440, height: 900 }, contextOptions: { screen: { width: 1440, height: 900 } } }
 
-const EXIT_LINE = '[Process exited (code 1) · press Enter to close]'
+const EXIT_LINE = '[Exited (code 1) · Enter to close]'
 
 /**
  * atBottom reports whether the viewport is at the bottom of the buffer. It uses buffer positions

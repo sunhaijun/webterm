@@ -131,9 +131,9 @@ describe('snapshots (AC-2.6)', () => {
 
 describe('process-exited line (AC-4.5)', () => {
   it('matches the documented text and omits the parentheses without an exit code', () => {
-    expect(exitLine(1)).toContain('[Process exited (code 1) · press Enter to close]')
+    expect(exitLine(1)).toContain('[Exited (code 1) · Enter to close]')
     expect(exitLine(0)).toContain('(code 0)')
-    expect(exitLine(null)).toContain('[Process exited · press Enter to close]')
+    expect(exitLine(null)).toContain('[Exited · Enter to close]')
   })
 
   it('goes after the last output, starting a new line if the cursor is not at column 0', async () => {

@@ -234,7 +234,7 @@ In direct input, dispatch on the helper textarea what an on-screen keyboard does
 > AC-4.2, AC-4.5, US-7.3
 
 1. Create sessions up to the limit (5, set in the fixture) → `new-session` is disabled and says "Session limit reached (5)"
-2. In one session, `printf 'LAST-%s\n' LINE`, then `exit 1` → `[Process exited (code 1) · press Enter to close]` appears at the end of the terminal, **after** `LAST-LINE`; the notice is written by the frontend and not counted in seq: after it appears `__webterm.outSeq()` doesn't change any more, and equals the agent's `head_seq` (checked after a reload against `welcome.sessions[].head_seq`)
+2. In one session, `printf 'LAST-%s\n' LINE`, then `exit 1` → `[Exited (code 1) · Enter to close]` appears at the end of the terminal, **after** `LAST-LINE`; the notice is written by the frontend and not counted in seq: after it appears `__webterm.outSeq()` doesn't change any more, and equals the agent's `head_seq` (checked after a reload against `welcome.sessions[].head_seq`)
 3. The exited session's content is still scrollable, selectable, and copyable
 4. The drawer list shows `exit 1` (warning color); the tab is only grayed out (`data-exited`), with no exit code
 5. **Reload the page** → the notice appears **only once** in the buffer

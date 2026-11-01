@@ -251,6 +251,6 @@ export function themeFromCss(get: (name: string) => string): ITheme {
 
 /** The local process-exited line (AC-4.5), dimmed to set it apart from output. */
 export function exitLine(code: number | null): string {
-  const text = code === null ? '[Process exited · press Enter to close]' : `[Process exited (code ${code}) · press Enter to close]`
+  const text = code === null ? '[Exited · Enter to close]' : `[Exited (code ${code}) · Enter to close]`
   return `\x1b[0;2m${text}\x1b[0m`
 }

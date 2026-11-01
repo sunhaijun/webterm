@@ -100,7 +100,7 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] `tail -f`: follows the bottom under continuous output; scrolling up isn't yanked back down
 - [x] `git log` pager and colors
 - [x] `Ctrl+C` interrupts `sleep 100`
-- [ ] `Ctrl+D` exits the shell → a "Process exited · press Enter to close" line appears at the end, content is kept; `Enter` closes the session
+- [ ] `Ctrl+D` exits the shell → an "[Exited · Enter to close]" line appears at the end, content is kept; `Enter` closes the session
 - [ ] Run Claude Code / another TUI agent in a session: sending a long Chinese prompt from the text page works
 - [x] Print a binary file (`head -c 4096 /dev/urandom`) → no crash, later output is fine
 - [x] 256 colors and true color display correctly

@@ -213,7 +213,7 @@ describe('process-exited line (AC-4.5)', () => {
     store.output(1, enc('LAST-LINE\r\n'), true)
     await flush(t)
     await flush(t)
-    expect(lines(t)).toEqual(['LAST-LINE', '[Process exited (code 1) · press Enter to close]'])
+    expect(lines(t)).toEqual(['LAST-LINE', '[Exited (code 1) · Enter to close]'])
   })
 
   it('writes once, and again after a snapshot (which clears the screen), so there is always exactly one line after reloads and reconnects', async () => {
@@ -224,14 +224,14 @@ describe('process-exited line (AC-4.5)', () => {
     store.output(1, enc(''), false)
     await flush(t)
     await flush(t)
-    expect(lines(t).filter((l) => l.includes('Process exited'))).toHaveLength(1)
+    expect(lines(t).filter((l) => l.includes('[Exited'))).toHaveLength(1)
 
     conn.out.set(1, 50)
     conn.head.set(1, 50)
     store.snapshot(1, enc('restored\r\n'))
     await flush(t)
     await flush(t)
-    expect(lines(t)).toEqual(['restored', '[Process exited (code 0) · press Enter to close]'])
+    expect(lines(t)).toEqual(['restored', '[Exited (code 0) · Enter to close]'])
   })
 
   it('does not change outSeq (the line is a local write, not in the agent\'s emulator)', () => {
