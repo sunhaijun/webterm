@@ -1,76 +1,53 @@
-# ADR-0003 不用 tmux，agent 自持 PTY
+# ADR-0003 No tmux: the agent owns the PTY
 
-> 状态：Accepted · 2026-09-06
+Status: Accepted (2026-09-06). The cost below is narrowed by [ADR-0016](0016-hot-reexec.md) (hot upgrades keep sessions) and [ADR-0034](0034-system-service-oom-priority.md) (the agent is protected from the OOM killer).
 
-## 背景
+## Context
 
-原始需求提到"会话的维持，如果需要可以使用 tmux 来达到目的"。中间方案曾是"agent 自持 PTY + 环形缓冲做持久化，tmux 作为每会话可选开关"。最终决定完全去掉 tmux。
+The request said tmux could be used for session persistence if needed. An intermediate design had the agent hold the PTY plus a ring buffer, with tmux as a per-session option. We dropped tmux entirely.
 
-## 决策
+## Decision
 
-**会话由 agent 自己持有 PTY 管理。不套 tmux，连可选开关都不做。**
+**The agent holds each session's PTY directly. No tmux, not even as an option.**
 
 ```go
-cmd := exec.Command("bash", "--rcfile", rcPath, "-i")
-ptmx, _ := pty.Start(cmd)   // agent 持有 master fd
+ptmx, _ := pty.Start(cmd)   // the agent holds the master fd
 ```
 
-## 否决 tmux 的理由
+Why not tmux:
 
-### 1. tmux 在持久化上给不出更好的东西
+1. **It adds nothing to persistence.** Recovering from a disconnect needs deltas: the client says "I have N bytes", the server continues from byte N. tmux can't do that: `tmux attach` only redraws the current screen, and `capture-pane` is a snapshot too. The ring buffer and sequence numbers have to be ours anyway, and once they exist tmux's persistence value is zero.
+2. **Model clash.** tmux has its own session/window/pane model. Passing it through to the web brings its prefix keys, copy-mode and status bar along, and getting away from copy-mode scrollback is one of webterm's goals. Not passing it through makes tmux a useless layer of indirection.
+3. **One more external dependency**, against [ADR-0002](0002-self-contained-binary.md). tmux versions on target machines (1.8 to 3.x behave quite differently) would be a permanent source of support noise.
+4. **Even an option costs.** Per-session tmux means two code paths, two test suites and two sets of failure modes, for an edge case.
 
-断线恢复真正需要的是**增量**：客户端说"我收到第 N 字节了"，服务端从第 N 字节接着发。
+## Consequences
 
-tmux 给不出这个。`tmux attach` 只能**重画当前屏幕**（`capture-pane` 也只是快照）。要做增量续传，环形缓冲 + 序列号是必须自己实现的 —— 而一旦实现了它，tmux 在持久化上的价值就归零。
+Positive:
 
-### 2. 模型冲突
+- Simple model: a session is one PTY plus one ring buffer, nothing nested.
+- No external dependency, no version compatibility matrix.
+- One code path.
 
-tmux 有自己的 session / window / pane 三层模型。如果把它透传到 Web，我们会连它那套交互（前缀键、copy-mode、状态栏）一起继承过来 —— 而"摆脱 copy-mode 那种反人类的回看方式"本来就是 webterm 的需求之一。
+Negative (accepted): **if the agent process exits, every session dies.** The agent holds the PTY master fd. When the agent dies, the shell on the slave side gets `SIGHUP` and exits. With tmux, sessions would survive upgrades and server restarts.
 
-如果不透传，那 tmux 就只是一层多余的间接。
+This is accepted because network drops and process restarts happen at very different rates:
 
-### 3. 多一个外部依赖
-
-违背"一个二进制就是完整服务"（[ADR-0002](0002-self-contained-binary.md)）。目标机器上 tmux 的版本差异（1.8 到 3.x 行为差别不小）会成为长期的排障噪音源。
-
-### 4. 可选开关也有成本
-
-"每会话可选 tmux" 意味着两条代码路径、两套测试、两种排障场景。为了一个边缘的互操作场景付这个成本不值得。
-
-## 后果
-
-**正面**：
-- 会话模型简单：一个会话 = 一个 PTY + 一个环形缓冲，没有嵌套
-- 无外部依赖，无版本兼容矩阵
-- 单一代码路径
-
-**负面（重要，已明确接受）**：
-
-> **agent 进程重启 = 所有会话消失。**
-
-PTY 的 master fd 由 agent 持有。agent 一死，slave 端的 shell 收到 `SIGHUP` 就退出了。所以升级 webterm、重启服务器，会话都保不住。有 tmux 的话它们能活下来。
-
-**为什么接受**：
-
-"网络断线"和"进程重启"是两个不同频率的问题。
-
-| | 频率 | webterm 的处理 |
+| | Frequency | webterm |
 |---|---|---|
-| 网络断线 | 每天多次 | **彻底解决**（增量续传，用户只看到状态灯闪一下） |
-| agent 进程重启 | 升级时，很少 | 会话丢失 |
+| Network drop | Many times a day | Fully handled: incremental resume, the user just sees the status dot blink |
+| Agent restart | On upgrade, rarely | Sessions lost |
 
-用户的真实痛点是前者。为了后者引入 tmux 是错配。
+The real pain is the first one. Bringing in tmux for the second is a mismatch.
 
-**缓解措施**：
-- 升级前 UI 明确提示"将关闭 N 个会话"
-- `webterm serve` 收到 `SIGTERM` 时先向所有客户端广播 `notice{level:"warn"}`，再等 2 秒关闭，让用户至少知道发生了什么
-- 命令历史存在 SQLite 里，**跨重启存活** —— 所以"我刚才在跑什么"这个信息不会丢
+Mitigations:
 
-**补法已落地**：[ADR-0016](0016-hot-reexec.md) 用原地 re-exec 交接 PTY fd、环形缓冲与会话元数据，升级不再丢会话。上面"负面后果"一段现在只对真正的进程重启（`SIGTERM`、崩溃、机器重启）成立。
+- Before an upgrade the UI says how many sessions will close.
+- On `SIGTERM`, `webterm serve` first broadcasts `notice{level:"warn"}` to all clients and waits 2 seconds before closing, so users at least know what happened.
 
-**OOM 那一半由 [ADR-0034](0034-system-service-oom-priority.md) 压下去**：改成以普通用户运行的系统服务后，agent 是 -900、会话是 0，内存吃紧时不再是 8 MB 的 agent 先被挑中、所有会话陪葬。
+Since then:
 
-## 用户仍然可以自己用 tmux
+- [ADR-0016](0016-hot-reexec.md) hands PTY fds, ring buffers and session metadata to the new binary through an in-place re-exec, so upgrades no longer lose sessions. The cost above now applies only to real process restarts: `SIGTERM`, crashes, reboots.
+- [ADR-0034](0034-system-service-oom-priority.md) handles the OOM half: running as a system service under a regular user, the agent gets an OOM score adjustment of -900 and sessions get 0, so under memory pressure the 8 MB agent is no longer picked first and takes every session down with it.
 
-这个决策**不阻止**用户在 webterm 的会话里手动敲 `tmux`。它只是说 webterm 不管理 tmux。
-需要注意的是：那种情况下 shell 集成的 OSC 序列要穿过 tmux（tmux 默认会过滤未知 OSC，需要 `set -g allow-passthrough on`），命令历史与 CWD 上报可能失效。这属于用户自选的降级路径（shell 集成文档已随 ADR-0026 删除）。
+Users can still run `tmux` inside a webterm session themselves. webterm just doesn't manage it.

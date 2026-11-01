@@ -1,14 +1,16 @@
 /**
- * wide（PC / Pad）的顶部标签栏（session-ux.md §wide，参照 Termius）。
+ * The top tab bar on wide (desktop / tablet; session-ux.md §wide, modeled on Termius).
  *
- * 从左到右：标签条（只装标签）、`+`、空白、连接状态点、设置（ADR-0037）。标签名前带编号 `[n]`，
- * 同抽屉（ADR-0041）。标签等宽（120–240px，纯 CSS，
- * ADR-0031）；放不下时标签条横向滚动，当前标签变化时把它滚进视野（整个已可见则不动，
- * 不用 smooth）。`+` 不在标签条里，放不下时也始终可见，前面隔开一段不可点的空白（ADR-0035）。
- * 切换标签不改终端几何。
+ * Left to right: the tab strip (tabs only), `+`, spacer, connection status dot, settings
+ * (ADR-0037). Tab names are prefixed with `[n]`, like the drawer (ADR-0041). Tabs share
+ * the width equally (120–240px, pure CSS, ADR-0031); when they don't fit, the strip
+ * scrolls horizontally and the active tab is scrolled into view when it changes (no-op if
+ * fully visible, no smooth scrolling). `+` is outside the strip so it stays visible, with
+ * a non-clickable gap before it (ADR-0035). Switching tabs never changes terminal geometry.
  *
- * 拖动排序（ADR-0040）：鼠标按住标签横移 > 5px 开始拖；触屏长按后不松手移动开始拖，
- * 长按后原地松手是会话菜单。拖完的那次 click 吞掉；`Esc` 取消。
+ * Drag to reorder (ADR-0040): with a mouse, press a tab and move > 5px; on touch,
+ * long-press then move without lifting. Long-press and release in place opens the session
+ * menu. The click that ends a drag is swallowed; `Esc` cancels.
  */
 import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 
@@ -37,11 +39,11 @@ export interface TopBarProps {
   onRename(sid: number, name: string): void
   onCancelRename(): void
   onSettings(): void
-  /** 拖动排序松手：把 sid 挪到 before 前面（null = 最后）。 */
+  /** Drag-to-reorder drop: move sid in front of `before` (null = to the end). */
   onMove(sid: number, before: number | null): void
 }
 
-/** 鼠标按住横移超过这么多才算拖（再小就是点）。 */
+/** A mouse press must move this far to become a drag; anything less is a click. */
 const DRAG_START_PX = 5
 
 interface TabPress {
@@ -50,14 +52,15 @@ interface TabPress {
   x: number
   y: number
   touch: boolean
-  /** 触屏：长按到点了，接下来一移动就是拖；原地松手是菜单。 */
+  /** Touch: the long-press fired; moving now starts a drag, releasing in place opens the menu. */
   armed: boolean
   drag: DragReorder | null
 }
 
 /**
- * 按下顶栏的任何地方（标签、`+`、`+` 前的空白、⚙）都不抢焦点：焦点留在终端（或文本输入页）里，
- * 切过去接着打字。改名的输入框除外。挂在 `.topbar` 上，冒泡上来的一并处理。
+ * Pressing anywhere on the top bar (tabs, `+`, the gap before it, ⚙) never steals focus:
+ * focus stays in the terminal (or text page) so you can keep typing after switching. The
+ * rename input is the exception. Installed on `.topbar`, so it covers bubbled events too.
  */
 const keepFocus = (e: PointerEvent) => {
   if ((e.target as Element).closest('input')) return
@@ -69,7 +72,7 @@ export function TopBar(p: TopBarProps) {
   const press = useRef(new PressTracker()).current
   const active = p.sessions.find((s) => s.active)?.sid ?? null
   const tp = useRef<TabPress | null>(null)
-  /** 拖完 / 长按出菜单之后的那次 click 吞掉。 */
+  /** Swallow the click that follows a drag or a long-press menu. */
   const swallow = useRef(false)
   const [armed, setArmed] = useState<number | null>(null)
   const latest = useRef(p)
@@ -105,7 +108,7 @@ export function TopBar(p: TopBarProps) {
   }
 
   useLayoutEffect(() => {
-    // 拖动中按 Esc：取消，回到原位
+    // Esc during a drag cancels it and snaps back
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || !tp.current?.drag) return
       e.preventDefault()
@@ -128,8 +131,8 @@ export function TopBar(p: TopBarProps) {
   useLayoutEffect(() => {
     const strip = stripRef.current
     if (!strip) return
-    // 滚动条是隐藏的：鼠标滚轮纵向滚 = 横着滚标签条（ADR-0031 §3）。
-    // 放得下、或者本来就是横向手势（触控板）时不拦
+    // The scrollbar is hidden, so a vertical mouse wheel scrolls the strip sideways (ADR-0031 §3).
+    // Leave it alone when everything fits or the gesture is already horizontal (trackpad).
     const onWheel = (e: WheelEvent) => {
       if (strip.scrollWidth <= strip.clientWidth || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
       e.preventDefault()
@@ -137,7 +140,7 @@ export function TopBar(p: TopBarProps) {
       strip.scrollLeft += e.deltaY * unit
     }
     strip.addEventListener('wheel', onWheel, { passive: false })
-    // 触屏长按之后：这次触摸归拖动，不让浏览器拿去横向滚标签条（之后的 pointer 事件才不会被 cancel）
+    // After a touch long-press this touch belongs to the drag; keep the browser from scrolling the strip (or it cancels the pointer events)
     const onTouchMove = (e: TouchEvent) => {
       if (tp.current?.armed) e.preventDefault()
     }
@@ -149,11 +152,11 @@ export function TopBar(p: TopBarProps) {
   }, [])
 
   const rtt = p.connInfo.rttMs
-  const dotTitle = p.conn === 'online' && rtt !== undefined && rtt > 300 ? `在线 · ${rtt}ms` : connLabel(p.conn, p.connInfo)
+  const dotTitle = p.conn === 'online' && rtt !== undefined && rtt > 300 ? `Online · ${rtt}ms` : connLabel(p.conn, p.connInfo)
 
   return (
     <div class="topbar" onPointerDown={keepFocus}>
-      <div class="tabbar" data-testid="tabbar" role="tablist" aria-label="会话" ref={stripRef}>
+      <div class="tabbar" data-testid="tabbar" role="tablist" aria-label="Sessions" ref={stripRef}>
         {p.sessions.map((s, index) => (
           <div
             key={s.sid}
@@ -171,13 +174,13 @@ export function TopBar(p: TopBarProps) {
             onPointerDown={(e) => {
               if ((e.target as Element).closest('.tab-close, input')) return
               if (e.pointerType !== 'touch' && e.button !== 0) return
-              if (tp.current) endPress(true) // 上一次按下没收到 pointerup（在别处松的手）
+              if (tp.current) endPress(true) // The previous press never got a pointerup (released elsewhere)
               const { clientX: x, clientY: y } = e
               const t: TabPress = { sid: s.sid, index, x, y, touch: e.pointerType === 'touch', armed: false, drag: null }
               tp.current = t
               swallow.current = false
               if (t.touch) {
-                // 长按：先「拿起来」，松手时才知道是菜单（原地松手）还是拖（移动了）
+                // Long-press picks the tab up; on release we learn whether it was a menu (no move) or a drag
                 press.down(x, y, () => {
                   if (tp.current !== t) return
                   t.armed = true
@@ -188,7 +191,7 @@ export function TopBar(p: TopBarProps) {
             onPointerMove={(e) => {
               const t = tp.current
               if (!t || t.sid !== s.sid) return
-              if (!t.touch && (e.buttons & 1) === 0) return endPress(true) // 鼠标已经在别处松开了
+              if (!t.touch && (e.buttons & 1) === 0) return endPress(true) // The mouse was already released elsewhere
               if (t.touch && !t.armed) {
                 press.move(e.clientX, e.clientY)
                 return
@@ -215,18 +218,18 @@ export function TopBar(p: TopBarProps) {
               p.onSelect(s.sid)
             }}
             onAuxClick={(e) => {
-              // 中键点标签 = 关闭
+              // Middle-click closes the tab
               if (e.button !== 1) return
               e.preventDefault()
               p.onClose(s.sid)
             }}
             onMouseDown={(e) => {
-              if (e.button === 1) e.preventDefault() // 别让中键进入自动滚动
+              if (e.button === 1) e.preventDefault() // Keep middle-click from starting autoscroll
             }}
             onDblClick={() => p.onRenameStart(s.sid)}
             onContextMenu={(e) => {
               e.preventDefault()
-              // 触屏长按时 Android 会发 contextmenu：菜单由松手决定（原地松手才是菜单，移动了是拖）
+              // Android fires contextmenu on touch long-press; the release decides instead (in place = menu, moved = drag)
               if (tp.current?.touch) return
               p.onMenu(s.sid, e.clientX, e.clientY)
             }}
@@ -238,12 +241,12 @@ export function TopBar(p: TopBarProps) {
               }
             }}
           >
-            {/* 编号让同名的标签分得开，同抽屉（ADR-0041） */}
+            {/* The index tells same-named tabs apart, as in the drawer (ADR-0041) */}
             <span class="tab-idx" data-testid={`tab-${s.sid}-idx`}>
               [{s.index}]
             </span>
             {s.pinned && (
-              <span class="pin-mark" role="img" aria-label="保持接收">
+              <span class="pin-mark" role="img" aria-label="Pinned">
                 <PinIcon size={12} />
               </span>
             )}
@@ -252,12 +255,12 @@ export function TopBar(p: TopBarProps) {
             ) : (
               <span class="tab-name">{s.name}</span>
             )}
-            {s.unread && <span class="unread-dot" data-testid={`tab-${s.sid}-unread`} aria-label="有新输出" />}
+            {s.unread && <span class="unread-dot" data-testid={`tab-${s.sid}-unread`} aria-label="New output" />}
             <button
               class="tab-close"
               data-testid={`tab-${s.sid}-close`}
               tabIndex={-1}
-              aria-label={`关闭 ${s.name}`}
+              aria-label={`Close ${s.name}`}
               onPointerDown={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -276,15 +279,15 @@ export function TopBar(p: TopBarProps) {
         class="tab-new"
         data-testid="new-session"
         disabled={p.atLimit}
-        aria-label="新会话"
-        title={p.atLimit ? `会话数已达上限 ${p.maxSessions}` : '新会话（Ctrl+Shift+Enter）'}
+        aria-label="New session"
+        title={p.atLimit ? `Session limit reached (${p.maxSessions})` : 'New session (Ctrl+Shift+Enter)'}
         onClick={p.onNew}
       >
-        {/* 图标而不是 `+` 字符：字符的上下位置随字体度量变，和状态点对不齐（ADR-0035 §3） */}
+        {/* An icon, not a `+` glyph: glyph position depends on font metrics and won't line up with the status dot (ADR-0035 §3) */}
         <PlusIcon />
       </button>
       <span class="conn-dot" data-testid="conn-dot" data-state={p.conn} title={dotTitle} aria-hidden="true" />
-      <button class="topbar-btn" data-testid="open-settings" aria-label="设置" title="设置" onClick={p.onSettings}>
+      <button class="topbar-btn" data-testid="open-settings" aria-label="Settings" title="Settings" onClick={p.onSettings}>
         <GearIcon />
       </button>
     </div>

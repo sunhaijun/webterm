@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// 限速参数（AC-1.6）。只对 POST /auth/pair 限速 ——
-// 其它路由要么是静态资源，要么已经要求认证。
+// Rate limit parameters (AC-1.6). Only POST /auth/pair is limited; every
+// other route either serves static assets or already requires auth.
 const (
 	perIPPerMinute  = 5
 	backoffBase     = time.Second
@@ -21,35 +21,37 @@ const (
 )
 
 type ipState struct {
-	attempts  []time.Time // 滑动窗口内的尝试
-	failures  int         // 连续失败次数，驱动指数退避
+	attempts  []time.Time // attempts within the sliding window
+	failures  int         // consecutive failures; drives exponential backoff
 	blockedTo time.Time
 }
 
-// Limiter 是配对接口的限速器。
+// Limiter rate-limits the pairing endpoint.
 //
-// 状态只在内存里（重启即清），不落库 —— 它保护的是一个 5 分钟就过期的
-// 一次性配对码，重启后重来一遍的窗口本来就极窄。
+// State lives only in memory and resets on restart. It protects a one-time
+// code that expires in 5 minutes, so the extra window a restart opens is tiny.
 type Limiter struct {
 	mu              sync.Mutex
 	ips             map[string]*ipState
-	global          []time.Time // 全局失败时间戳
+	global          []time.Time // global failure timestamps
 	globalBlockedTo time.Time
 	lastGC          time.Time
 }
 
-// NewLimiter 创建限速器。
+// NewLimiter creates a Limiter.
 func NewLimiter() *Limiter {
 	return &Limiter{ips: make(map[string]*ipState), lastGC: time.Now()}
 }
 
-// Allow 报告某个 IP 现在能否尝试配对。不允许时返回建议的 Retry-After。
+// Allow reports whether ip may attempt pairing now. If not, it also returns
+// the suggested Retry-After.
 func (l *Limiter) Allow(ip string, now time.Time) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.gcLocked(now)
 
-	// 全局熔断：任意 IP 累计失败到阈值就整体停一会儿（告警由 Failed 的调用方打）
+	// Global circuit breaker: once failures across all IPs hit the threshold,
+	// pause everyone for a while. The caller of Failed logs the alert.
 	if now.Before(l.globalBlockedTo) {
 		return false, l.globalBlockedTo.Sub(now)
 	}
@@ -72,9 +74,10 @@ func (l *Limiter) Allow(ip string, now time.Time) (bool, time.Duration) {
 	}
 	st.attempts = kept
 	if len(st.attempts) >= perIPPerMinute {
-		// 至少要等到最早那次尝试滑出一分钟窗口；连续失败过的话再叠上退避。
-		// 【必须给出一个正的时长】—— 客户端拿它做倒计时，返回 0 等于让它
-		// 立刻重试，限速就形同虚设。
+		// Wait at least until the oldest attempt leaves the one-minute window,
+		// longer if backoff from consecutive failures says so. The wait must
+		// be positive: the client counts down from it, and 0 would mean
+		// "retry now", defeating the limit.
 		wait := st.attempts[0].Add(time.Minute).Sub(now)
 		if b := l.backoffFor(st.failures); b > wait {
 			wait = b
@@ -89,7 +92,7 @@ func (l *Limiter) Allow(ip string, now time.Time) (bool, time.Duration) {
 	return true, 0
 }
 
-// Failed 记一次配对失败，推进指数退避。
+// Failed records a failed pairing attempt and advances the backoff.
 func (l *Limiter) Failed(ip string, now time.Time) (globalTripped bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -116,14 +119,15 @@ func (l *Limiter) Failed(ip string, now time.Time) (globalTripped bool) {
 	return false
 }
 
-// Succeeded 清掉某个 IP 的失败计数。
+// Succeeded clears the failure count for ip.
 func (l *Limiter) Succeeded(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.ips, ip)
 }
 
-// backoffFor 返回第 n 次连续失败后的退避时长：1s, 2s, 4s… 上限 5 分钟。
+// backoffFor returns the backoff after n consecutive failures: 1s, 2s, 4s…,
+// capped at 5 minutes.
 func (l *Limiter) backoffFor(n int) time.Duration {
 	if n <= 0 {
 		return 0
@@ -138,10 +142,13 @@ func (l *Limiter) backoffFor(n int) time.Duration {
 	return d
 }
 
-// gcLocked 定期丢掉长时间没动静的 IP 记录，防止 map 无界增长。
+// gcLocked periodically drops idle IP entries so the map can't grow without
+// bound.
 //
-// 闲 = 最后一次尝试已滑出一分钟窗口、且不在封禁中。attempts 只在这个 IP 再来时
-// 才裁剪，所以不能拿它空不空来判断 —— 试过一次就再没来的 IP 会永远留着。
+// An entry is idle when its last attempt is outside the one-minute window and
+// it is not blocked. attempts is only trimmed when that IP comes back, so
+// checking whether it is empty is not enough: an IP that tried once and never
+// returned would stay forever.
 func (l *Limiter) gcLocked(now time.Time) {
 	if now.Sub(l.lastGC) < limiterGCPeriod {
 		return
@@ -155,11 +162,12 @@ func (l *Limiter) gcLocked(now time.Time) {
 	}
 }
 
-// ClientIP 取请求的来源 IP。
+// ClientIP returns the client IP of the request.
 //
-// 【默认不信任 X-Forwarded-For】—— 否则攻击者可以伪造它绕过限速。
-// 只有明确开了 --trust-proxy 才用它，且取【最后一跳】（最近的可信代理
-// 追加的那个才是它看到的真实客户端）。
+// X-Forwarded-For is not trusted by default; otherwise an attacker could forge
+// it to bypass rate limiting. It is used only with --trust-proxy, and then
+// only the last hop: the entry appended by the nearest trusted proxy is the
+// real client that proxy saw.
 func ClientIP(r *http.Request, trustProxy bool) string {
 	if trustProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {

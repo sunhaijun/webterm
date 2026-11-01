@@ -1,10 +1,10 @@
 /**
- * UT-raw-1：终端直输时【直接插入的文本】（AC-3.14）。
+ * UT-raw-1: directly inserted text when typing into the terminal (AC-3.14).
  *
- * 软键盘不经过组字直接插字符 —— iOS 中文键盘的全角标点就走这条。
- * xterm 5.5 接不住它（keydown 发生过就忽略 input 事件，而 keyCode < 48 的键
- * 它自己又取不出字符），所以 RawIme 在 beforeinput 上自己接管。
- * 见 docs/40-frontend/input.md §直接插入的文本。
+ * The on-screen keyboard inserts characters without composition; full-width punctuation
+ * on the iOS Chinese keyboard takes this path. xterm 5.5 drops these (it ignores input
+ * events after a keydown, and can't read the character from keys with keyCode < 48), so
+ * RawIme takes over in beforeinput. See docs/40-frontend/input.md.
  */
 import { describe, expect, it, vi } from 'vitest'
 
@@ -16,7 +16,7 @@ function makeTextarea(): HTMLTextAreaElement {
   return el
 }
 
-/** 软键盘直接插入一个字符时浏览器发的 beforeinput。 */
+/** The beforeinput a browser fires when the on-screen keyboard inserts a character directly. */
 function beforeInput(data: string | null, inputType = 'insertText'): InputEvent {
   return new InputEvent('beforeinput', { inputType, data, cancelable: true, bubbles: true })
 }
@@ -25,8 +25,8 @@ function composition(type: string, data: string): CompositionEvent {
   return new CompositionEvent(type, { data })
 }
 
-describe('UT-raw-1 终端直输：直接插入的文本', () => {
-  it('非组字的 insertText 自己发出去，并 preventDefault（字符不落进 textarea）', () => {
+describe('UT-raw-1 directly inserted text', () => {
+  it('sends insertText outside composition itself and calls preventDefault (the character never lands in the textarea)', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -36,12 +36,12 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
 
     expect(onCommit).toHaveBeenCalledTimes(1)
     expect(onCommit).toHaveBeenCalledWith('，')
-    // 【关键】preventDefault：字符不进 textarea，xterm 的 input 路径与 229 差量路径
-    // 就都不会再发一遍
+    // The key point: with preventDefault the character stays out of the textarea, so neither
+    // xterm's input path nor the 229 diff path sends it again
     expect(e.defaultPrevented).toBe(true)
   })
 
-  it('一次插入多个字符（预测输入整词上屏）原样发出', () => {
+  it('sends multi-character insertions (predictive text committing a word) as is', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -50,7 +50,7 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
     expect(onCommit).toHaveBeenCalledWith('，。！')
   })
 
-  it('组字期间不碰 —— 那是 compositionend 的活', () => {
+  it('leaves composition alone; compositionend handles it', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -60,10 +60,10 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
     el.dispatchEvent(e)
 
     expect(onCommit).not.toHaveBeenCalled()
-    expect(e.defaultPrevented, '组字中绝不能拦 —— 拦了输入法就废了').toBe(false)
+    expect(e.defaultPrevented, 'must never block during composition, or the IME breaks').toBe(false)
   })
 
-  it('inputType 不是 insertText 的不碰（组字文本 / 删除 / 替换各有各的路）', () => {
+  it('ignores inputTypes other than insertText (composition text, deletes and replacements have their own paths)', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -76,7 +76,7 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
     expect(onCommit).not.toHaveBeenCalled()
   })
 
-  it('data 为空的 insertText 不发', () => {
+  it('does not send insertText with empty data', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -86,7 +86,7 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
     expect(onCommit).not.toHaveBeenCalled()
   })
 
-  it('compositionend 之后补发的同一段文字吃掉不重发（WebKit 会补这一发）', () => {
+  it('swallows the identical re-send after compositionend (WebKit sends one)', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -99,11 +99,11 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
 
     const e = beforeInput('你好')
     el.dispatchEvent(e)
-    expect(onCommit, '同一段文字不能发两遍').toHaveBeenCalledTimes(1)
-    expect(e.defaultPrevented, '吃掉它 —— 别让它落进 textarea').toBe(true)
+    expect(onCommit, 'the same text must not be sent twice').toHaveBeenCalledTimes(1)
+    expect(e.defaultPrevented, 'swallowed: keep it out of the textarea').toBe(true)
   })
 
-  it('compositionend 之后紧跟的【标点】照常发出 —— 组字完接着打逗号是常事', () => {
+  it('still sends punctuation typed right after compositionend (a comma after a word is common)', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -116,7 +116,7 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
     expect(onCommit).toHaveBeenNthCalledWith(2, '，')
   })
 
-  it('keypress 刚发过同一个字符就吃掉 —— xterm 的 _keyPress 已经送过了', () => {
+  it('swallows a character just sent via keypress, since xterm\'s _keyPress already sent it', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -125,26 +125,26 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
     const e = beforeInput('é')
     el.dispatchEvent(e)
 
-    expect(onCommit, 'xterm 已经发过，不能再发一遍').not.toHaveBeenCalled()
+    expect(onCommit, 'xterm already sent it; must not send again').not.toHaveBeenCalled()
     expect(e.defaultPrevented).toBe(true)
   })
 
-  it('连打两下同一个字符：两下都要进 —— 去重不能吃掉用户的第二下（AC-3.14 / ADR-0020）', () => {
+  it('sends both of two identical keystrokes; dedup must not eat the second (AC-3.14 / ADR-0020)', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
 
-    // 软键盘直接插入的字符【只走 beforeinput 这一条路】（keyCode 0，xterm 两头都不接），
-    // 所以第二下没有别的路会替它发 —— 这里吃掉就是永久丢字
+    // Directly inserted characters only arrive through beforeinput (keyCode 0, which xterm
+    // ignores on both paths), so nothing else would send the second one; eating it here loses it for good
     el.dispatchEvent(beforeInput('，'))
     el.dispatchEvent(beforeInput('，'))
 
-    expect(onCommit, '用户打了两下就该发两下').toHaveBeenCalledTimes(2)
+    expect(onCommit, 'two keystrokes, two sends').toHaveBeenCalledTimes(2)
     expect(onCommit).toHaveBeenNthCalledWith(1, '，')
     expect(onCommit).toHaveBeenNthCalledWith(2, '，')
   })
 
-  it('去重是【一次性】的：压掉补发的那一次之后就撤防，再来的同一段是新输入', () => {
+  it('dedup is one-shot: after suppressing the re-send it disarms, and the same text again is new input', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -153,27 +153,27 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
     el.dispatchEvent(composition('compositionend', '哈'))
     expect(onCommit).toHaveBeenCalledTimes(1)
 
-    el.dispatchEvent(beforeInput('哈')) // WebKit 的补发 —— 吃掉
+    el.dispatchEvent(beforeInput('哈')) // WebKit's re-send: swallowed
     expect(onCommit).toHaveBeenCalledTimes(1)
 
-    el.dispatchEvent(beforeInput('哈')) // 用户自己又打了一个「哈」—— 必须发
-    expect(onCommit, '撤防之后就是新输入').toHaveBeenCalledTimes(2)
+    el.dispatchEvent(beforeInput('哈')) // the user typed 哈 again: must be sent
+    expect(onCommit, 'after disarming it is new input').toHaveBeenCalledTimes(2)
   })
 
-  it('keypress 的去重同样一次性：连按两下，xterm 发两下、我们一下都不补', () => {
+  it('keypress dedup is one-shot too: two presses, xterm sends both, we send neither', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
 
-    // 物理键盘：每一下都有自己的 keypress（xterm 已经送出去了），各自布防各自压掉
+    // Physical keyboard: each press has its own keypress (already sent by xterm), each arms and suppresses once
     for (let i = 0; i < 2; i++) {
       el.dispatchEvent(new KeyboardEvent('keypress', { key: 'l', bubbles: true }))
       el.dispatchEvent(beforeInput('l'))
     }
-    expect(onCommit, 'xterm 送的，我们一下都不该补').not.toHaveBeenCalled()
+    expect(onCommit, 'xterm sent them; we must not add any').not.toHaveBeenCalled()
   })
 
-  it('keypress 的是别的字符，不影响这一发', () => {
+  it('a keypress for a different character does not affect this one', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -183,7 +183,7 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
     expect(onCommit).toHaveBeenCalledWith('，')
   })
 
-  it('dispose 之后不再接管', () => {
+  it('stops handling input after dispose', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     const ime = new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -197,20 +197,20 @@ describe('UT-raw-1 终端直输：直接插入的文本', () => {
 })
 
 /**
- * UT-raw-2：组字状态的兜底复位（AC-3.3 / ADR-0020）。
+ * UT-raw-2: fallback reset of the composition state (AC-3.3 / ADR-0020).
  *
- * `composing` 原本只有 compositionend 一个出口，而它不保证来 —— 切输入法、
- * 切窗口、候选框被系统吞掉都可能让组字停在半路。卡在 true 的后果是
- * 【这个会话的终端输入永久失效】（keydown 处理器全部 return），用户没有任何
- * 线索，只能刷新页面。
+ * `composing` used to have one exit, compositionend, which isn't guaranteed: switching
+ * IMEs or windows, or the OS swallowing the candidate window, can leave composition half
+ * done. Stuck at true, terminal input for the session is dead for good (every keydown
+ * handler returns early), with no hint to the user except to reload.
  */
-describe('UT-raw-2 组字兜底复位', () => {
+describe('UT-raw-2 composition fallback reset', () => {
   const start = (el: HTMLTextAreaElement) => {
     el.dispatchEvent(composition('compositionstart', ''))
     el.dispatchEvent(composition('compositionupdate', 'ni'))
   }
 
-  it('blur：元素都不是焦点了，组字不可能还在进行', () => {
+  it('resets on blur: without focus, composition cannot be in progress', () => {
     const el = makeTextarea()
     const onPreview = vi.fn()
     const ime = new RawIme(el, { onCommit: vi.fn(), onPreview })
@@ -220,11 +220,11 @@ describe('UT-raw-2 组字兜底复位', () => {
 
     el.dispatchEvent(new FocusEvent('blur'))
 
-    expect(ime.isComposing, 'blur 之后必须放行输入').toBe(false)
-    expect(onPreview).toHaveBeenLastCalledWith('') // 浮层也要收掉
+    expect(ime.isComposing, 'input must flow again after blur').toBe(false)
+    expect(onPreview).toHaveBeenLastCalledWith('') // the preview is hidden too
   })
 
-  it('一个 isComposing=false 的 keydown 就证明组字已经结束', () => {
+  it('resets on a keydown with isComposing=false, which proves composition ended', () => {
     const el = makeTextarea()
     const ime = new RawIme(el, { onCommit: vi.fn(), onPreview: vi.fn() })
 
@@ -234,32 +234,32 @@ describe('UT-raw-2 组字兜底复位', () => {
     expect(ime.isComposing).toBe(false)
   })
 
-  it('组字中的按键不误复位：isComposing=true 或 keyCode 229 都还在组字', () => {
+  it('does not reset on composition keys: isComposing=true or keyCode 229 means still composing', () => {
     const el = makeTextarea()
     const ime = new RawIme(el, { onCommit: vi.fn(), onPreview: vi.fn() })
 
     start(el)
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', keyCode: 78, isComposing: true }))
-    expect(ime.isComposing, 'isComposing=true 的键就是在组字').toBe(true)
+    expect(ime.isComposing, 'a key with isComposing=true is part of the composition').toBe(true)
 
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Process', keyCode: 229 }))
-    expect(ime.isComposing, '229 是输入法占用的按键').toBe(true)
+    expect(ime.isComposing, '229 is a key taken by the IME').toBe(true)
   })
 
-  it('复位【必须发生在 xterm 之前】—— 所以挂在捕获阶段', () => {
+  it('resets before xterm sees the key, so it listens in the capture phase', () => {
     const el = makeTextarea()
     const ime = new RawIme(el, { onCommit: vi.fn(), onPreview: vi.fn() })
-    // xterm 的监听器挂在冒泡阶段（RawIme 是 term.open() 之后才构造的，排在它后面）
+    // xterm listens in the bubble phase (RawIme is constructed after term.open(), so it would run after xterm)
     let composingSeenByXterm: boolean | null = null
     el.addEventListener('keydown', () => (composingSeenByXterm = ime.isComposing))
 
     start(el)
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', keyCode: 65, isComposing: false }))
 
-    expect(composingSeenByXterm, '轮到 xterm 时组字必须已经复位，否则这一下按键还是丢').toBe(false)
+    expect(composingSeenByXterm, 'composition must be reset by the time xterm runs, or this key is still lost').toBe(false)
   })
 
-  it('兜底复位之后 compositionend 仍然来了：照常提交，不丢字', () => {
+  it('still commits when compositionend arrives after a fallback reset, losing nothing', () => {
     const el = makeTextarea()
     const onCommit = vi.fn()
     const ime = new RawIme(el, { onCommit, onPreview: vi.fn() })
@@ -272,7 +272,7 @@ describe('UT-raw-2 组字兜底复位', () => {
     expect(ime.isComposing).toBe(false)
   })
 
-  it('dispose 之后不再有任何监听', () => {
+  it('removes every listener on dispose', () => {
     const el = makeTextarea()
     const onPreview = vi.fn()
     const ime = new RawIme(el, { onCommit: vi.fn(), onPreview })

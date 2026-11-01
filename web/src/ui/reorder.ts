@@ -1,11 +1,11 @@
 /**
- * 拖动排序（AC-4.13，ADR-0040）：纯函数 + 一个只管 DOM 位移的小控制器。
- * 标签栏横着拖（x），手机抽屉竖着拖（y）。
+ * Drag to reorder (AC-4.13, ADR-0040): pure functions plus a small controller that only
+ * moves DOM elements. The tab bar drags along x, the phone drawer along y.
  */
 
 /**
- * 把 `sid` 挪到 `before` 前面（协议 §4.1 session.move）：`before` 为 null 或不在列表里 → 放到最后；
- * 等于 `sid` → 原地不动（和 agent 一致）。
+ * Moves `sid` in front of `before` (protocol §4.1 session.move). `before` null or not in
+ * the list → move to the end; equal to `sid` → no-op (matching the agent).
  */
 export function moveBefore(order: readonly number[], sid: number, before: number | null): number[] {
   if (!order.includes(sid) || before === sid) return [...order]
@@ -15,15 +15,16 @@ export function moveBefore(order: readonly number[], sid: number, before: number
   return [...rest.slice(0, i), sid, ...rest.slice(i)]
 }
 
-/** 把下标 `from` 的项挪到下标 `to`（挪完之后它所在的下标）之后，它应该排在谁前面（null = 最后）。 */
+/** After moving the item at index `from` to index `to` (its index after the move), the sid it now precedes (null = last). */
 export function beforeAt(order: readonly number[], from: number, to: number): number | null {
   const rest = order.filter((_, i) => i !== from)
   return rest[to] ?? null
 }
 
 /**
- * 插入下标：被拖项的中心在轴上的位置 `center`，其余各项（按原顺序，含被拖项自己）的中线 `mids`。
- * 越过谁的中线就排到谁的另一边。返回被拖项挪完之后的下标。
+ * Drop index. `center` is the dragged item's center on the axis; `mids` are the midpoints
+ * of all items in original order (including the dragged one). Crossing an item's midpoint
+ * moves past it. Returns the dragged item's index after the move.
  */
 export function dropIndex(mids: readonly number[], from: number, center: number): number {
   let to = from
@@ -32,12 +33,12 @@ export function dropIndex(mids: readonly number[], from: number, center: number)
   return to
 }
 
-/** 指针离可滚动区边缘多近开始自动滚（px）。 */
+/** How close (px) the pointer must be to the scroller's edge to start auto-scrolling. */
 export const EDGE_PX = 32
-/** 自动滚的速度：每帧最多这么多 px，越靠边越快。 */
+/** Auto-scroll speed: at most this many px per frame, faster closer to the edge. */
 export const EDGE_SPEED = 12
 
-/** 指针在 [lo, hi] 区间里的位置 → 这一帧该滚多少（负 = 往起点方向）。 */
+/** Pointer position within [lo, hi] → how far to scroll this frame (negative = toward the start). */
 export function edgeScroll(pos: number, lo: number, hi: number): number {
   if (pos < lo + EDGE_PX) return -Math.ceil(EDGE_SPEED * Math.min(1, (lo + EDGE_PX - pos) / EDGE_PX))
   if (pos > hi - EDGE_PX) return Math.ceil(EDGE_SPEED * Math.min(1, (pos - (hi - EDGE_PX)) / EDGE_PX))
@@ -46,21 +47,22 @@ export function edgeScroll(pos: number, lo: number, hi: number): number {
 
 export interface DragOptions {
   axis: 'x' | 'y'
-  /** 可滚动的容器（标签条 / 抽屉正文）。 */
+  /** The scrolling container (tab strip / drawer body). */
   scroller: HTMLElement
-  /** 参与排序的各项，按当前顺序。 */
+  /** The items being reordered, in current order. */
   items: HTMLElement[]
-  /** 开始拖时各项的 sid，与 items 一一对应（拖动中列表变了也按这份算）。 */
+  /** Sids of the items when the drag started, matching items one to one (used even if the list changes mid-drag). */
   order: readonly number[]
-  /** 被拖的那一项在 items 里的下标。 */
+  /** Index of the dragged item in items. */
   from: number
-  /** 按下时指针在轴上的位置（client 坐标）。 */
+  /** Pointer position on the axis at press time (client coordinates). */
   start: number
 }
 
 /**
- * 一次拖动：被拖项跟着指针，其余项让位（都只改 transform，不动 DOM），靠边自动滚。
- * `finish()` 清掉所有位移，位置变了就返回该发的 session.move，否则 null。
+ * One drag: the dragged item follows the pointer and the others make room (transforms
+ * only, no DOM changes), auto-scrolling near the edges. `finish()` clears all offsets and
+ * returns the session.move to send if the position changed, else null.
  */
 export class DragReorder {
   private readonly o: DragOptions
@@ -78,7 +80,7 @@ export class DragReorder {
     const len = (b: DOMRect) => (o.axis === 'x' ? b.width : b.height)
     const rects = o.items.map(r)
     this.mids = rects.map((b) => lo(b) + len(b) / 2)
-    // 让位距离 = 被拖项的尺寸（项之间没有空隙）
+    // Others shift by the dragged item's size (items have no gaps between them)
     this.size = len(rects[o.from]!)
     this.scroll0 = this.scrollPos()
     this.pos = o.start
@@ -124,7 +126,7 @@ export class DragReorder {
     })
   }
 
-  /** 松手（或取消）：清掉位移；位置变了返回 `{sid, before}`（给 session.move），否则 null。 */
+  /** Release (or cancel): clears offsets; returns `{sid, before}` for session.move if the position changed, else null. */
   finish(cancel = false): { sid: number; before: number | null } | null {
     if (this.raf) cancelAnimationFrame(this.raf)
     this.raf = 0

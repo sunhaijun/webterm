@@ -1,87 +1,87 @@
-# 设备与布局
+# Devices and layout
 
-> 状态：Accepted
+> Status: Accepted
 
-定义支持范围和各设备的目标体验。界面决策见 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md)，实现见 [`../40-frontend/layout.md`](../40-frontend/layout.md)。
+Supported devices and the target experience on each. UI decisions are in [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md); implementation in [`../40-frontend/layout.md`](../40-frontend/layout.md).
 
 ---
 
-## 目标设备优先级
+## Device priority
 
-webterm 的差异化价值集中在移动端 —— 桌面上你本来就有本地终端可用。所以优先级是：
+webterm's value is on mobile — on a desktop you already have a local terminal. Priority:
 
-1. **手机（竖屏）** — 最高优先级。通勤、临时排障。最难做好，也最有价值。
-2. **Pad** — 次高。有一定屏幕面积，可能配外接键盘。
-3. **PC** — 必须完整可用，但不是差异化重点。
-4. **手机（横屏）** — 需要能用（看宽输出、看日志），但不优化输入。
+1. **Phone (portrait)** — highest. Commuting, quick fixes. Hardest to get right and the most valuable.
+2. **Tablet** — next. Reasonable screen area, possibly an external keyboard.
+3. **Desktop** — must be fully usable, but isn't where webterm differentiates.
+4. **Phone (landscape)** — must work (wide output, logs), but input isn't optimized.
 
-## 两种形态
+## Two forms
 
-参照 Termux：一块全屏终端，下面两行固定的附加键，没有标题栏和状态栏。设备只分两种**形态**，它们**只在会话怎么切换上不同**：
+Modeled on Termux: one full-screen terminal with two fixed rows of extra keys below it, no title bar, no status bar. Devices fall into two **forms**, which **differ only in how you switch sessions**:
 
-| 形态 | 设备 | 判据 | 会话切换 |
+| Form | Devices | Rule | Session switching |
 |---|---|---|---|
-| `compact` | 手机（竖屏、横屏） | 屏幕短边 < 600px | 附加键左列的会话按钮 → 底部抽屉 |
-| `wide` | PC、Pad | 屏幕短边 ≥ 600px | 顶部标签栏（参照 Termius） |
+| `compact` | Phone (portrait and landscape) | Screen short side < 600px | Session button in the left column of the extra keys → bottom drawer |
+| `wide` | Desktop, tablet | Screen short side ≥ 600px | Tab bar on top (like Termius) |
 
-- 判据是**屏幕**短边，不是视口：形态在一台设备上永远不变，弹软键盘、旋转、分屏都不会让界面换一套。
-- 不做 UA 嗅探。触摸能力用 `@media (pointer: coarse)` 单独判断：它决定 `wide` 上显示不显示附加键，以及浮层是底部抽屉还是居中浮窗。
+- The rule uses the **screen**'s short side, not the viewport, so a device never changes form: the on-screen keyboard, rotation and split screen never swap the UI.
+- No UA sniffing. Touch is detected separately with `@media (pointer: coarse)`; it decides whether `wide` shows the extra keys. Sheets follow the form, not the pointer: a bottom sheet on `compact`, a centered dialog on `wide` ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §4).
 
-## 各设备目标
+## Per-device targets
 
-### 手机竖屏（`compact`）
+### Phone, portrait (`compact`)
 
-- **终端占据除附加键（80px）外的全部高度**。没有标题栏、没有状态栏；连接状态平时不显示，断线时在终端顶部盖一条横幅。
-- 软键盘弹出用 `visualViewport` 处理：终端区收缩而不是被遮挡，附加键始终贴在键盘上方。
-- 附加键两行 14 个，位置固定，`393px` 宽下全部可见、不用横滑。
-- 打长段中文：附加键区切到文本输入页，原生输入框，输入法候选框位置正确。
-- 切会话：会话按钮（方框里写着会话数）打开底部抽屉，两下点击。有新输出的会话让按钮带未读点。
-- 默认字号 14px（约 45 列）：**可读 > 兼容宽输出**。可在设置里调（10–24px）。
-- 尊重 `env(safe-area-inset-*)`（刘海、Home 指示条）；Android PWA 里系统返回键先关抽屉，不直接退出应用。
+- **The terminal takes the full height except for the extra keys (80px).** No title bar, no status bar; the connection state is hidden normally, and a banner covers the top of the terminal when disconnected.
+- The on-screen keyboard is handled with `visualViewport`: the terminal area shrinks instead of being covered, and the extra keys always sit right above the keyboard.
+- Two rows, 14 extra keys, in fixed positions, all visible at `393px` width without horizontal scrolling.
+- Long CJK text: switch the extra-keys area to the text page — a native text box with the IME candidate window in the right place.
+- Switching sessions: the session button (a box showing the session count) opens the bottom drawer; two taps. A session with new output puts an unread dot on the button.
+- Default font size 14px (about 45 columns): **readability over fitting wide output**. Adjustable in settings (10–24px).
+- Respect `env(safe-area-inset-*)` (notch, Home indicator); in an Android PWA the system Back button closes the drawer first instead of exiting the app.
 
-### 手机横屏（`compact`）
+### Phone, landscape (`compact`)
 
-- 与竖屏同一套界面，只是列数多、行数少。
-- 键盘弹出时终端只剩几行，这是已接受的取舍（横屏不优化输入）。
+- The same UI as portrait, with more columns and fewer rows.
+- With the keyboard open only a few rows remain. Accepted (landscape input isn't optimized).
 
-### Pad（`wide`）
+### Tablet (`wide`)
 
-- 顶部标签栏（40px），一次点击切会话，未读一眼可见。
-- 触屏时附加键与手机相同（键更宽）；接了鼠标（`pointer: fine`）时附加键消失，与 PC 相同。
-- 外接键盘时应用快捷键可用（[`../40-frontend/keymap.md`](../40-frontend/keymap.md)）。
+- Tab bar on top (40px): one tap to switch sessions, unread visible at a glance.
+- On touch, the same extra keys as on phones (wider keys); with a mouse (`pointer: fine`) the extra keys disappear, as on desktop.
+- With an external keyboard, the app's shortcuts work ([`../40-frontend/keymap.md`](../40-frontend/keymap.md)).
 
-### PC（`wide`）
+### Desktop (`wide`)
 
-- 顶部标签栏（36px）：切换、中键关闭、双击改名、右键会话菜单。
-- 没有附加键、没有文本输入页；实体键盘的输入法直接进终端。
-- 默认 100+ 列。
+- Tab bar on top (36px): switch, middle-click to close, double-click to rename, right-click for the session menu.
+- No extra keys, no text page; the physical keyboard's IME types straight into the terminal.
+- 100+ columns by default.
 
 ---
 
-## 浏览器支持
+## Browser support
 
-| 浏览器 | 最低版本 | 说明 |
+| Browser | Minimum version | Notes |
 |---|---|---|
-| Chrome / Edge | 最近 2 个大版本 | 主要开发目标 |
-| Safari (iOS) | iOS 16+ | 移动端主要目标；注意 `visualViewport` 和 100vh 行为差异 |
+| Chrome / Edge | Last 2 major versions | Primary development target |
+| Safari (iOS) | iOS 16+ | Primary mobile target; watch for `visualViewport` and 100vh differences |
 | Safari (macOS) | 16+ | |
-| Firefox | 最近 2 个大版本 | |
+| Firefox | Last 2 major versions | |
 
-明确不支持：IE、旧版 Android WebView（< Chrome 100）。
+Not supported: IE, old Android WebView (< Chrome 100).
 
-依赖的现代 API（不做 polyfill）：`visualViewport`、`ResizeObserver`、CSS `env()`、Clipboard API、Service Worker、History API。
+Modern APIs we rely on (no polyfills): `visualViewport`, `ResizeObserver`, CSS `env()`, Clipboard API, Service Worker, History API.
 
 ---
 
 ## PWA
 
-- `display: standalone`，无地址栏。
-- 图标、主题色随系统深浅色切换。
-- Service Worker **只缓存静态壳**（HTML/JS/CSS/字体），不缓存任何终端数据。
-- 离线时展示"无法连接到 agent"的明确状态，不假装能用。
+- `display: standalone`, no address bar.
+- Icon and theme color follow the system light/dark setting.
+- The Service Worker **caches only the static shell** (HTML/JS/CSS/fonts), never any terminal data.
+- Offline shows a clear "can't reach the agent" state instead of pretending to work.
 
-## 字体
+## Fonts
 
-- 等宽字体栈优先用系统内置，不打包 webfont（体积 + 首屏）。
-- 必须包含中文等宽回退，保证 CJK 宽字符对齐。
-- 启用 xterm 的 `unicode11` addon 以正确计算 CJK 与 emoji 宽度。
+- Prefer the system's built-in monospace fonts; don't bundle webfonts (size and first paint).
+- Must include a CJK monospace fallback so wide characters align.
+- Enable xterm's `unicode11` addon for correct CJK and emoji widths.

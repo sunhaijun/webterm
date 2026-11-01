@@ -1,4 +1,4 @@
-/** 测试共用的小工具。 */
+/** Small shared test helpers. */
 import type { Terminal } from '@xterm/xterm'
 
 import type { SessionInfo } from '../src/protocol/messages'
@@ -20,17 +20,17 @@ export function info(sid: number, patch: Partial<SessionInfo> = {}): SessionInfo
   }
 }
 
-/** 等 xterm 把之前排下的 write 全部解析完（write 回调按 FIFO 触发）。 */
+/** Waits until xterm has parsed every queued write (write callbacks fire in FIFO order). */
 export function flush(term: Pick<Terminal, 'write'>): Promise<void> {
   return new Promise((r) => term.write('', () => r()))
 }
 
-/** 某一行的文本（去掉行尾空白）。 */
+/** One line's text, trailing whitespace trimmed. */
 export function lineText(term: Terminal, y: number): string {
   return term.buffer.active.getLine(y)?.translateToString(true) ?? ''
 }
 
-/** 整个缓冲区（含 scrollback）的非空行。 */
+/** Non-empty lines of the whole buffer, scrollback included. */
 export function lines(term: Terminal): string[] {
   const buf = term.buffer.active
   const out: string[] = []

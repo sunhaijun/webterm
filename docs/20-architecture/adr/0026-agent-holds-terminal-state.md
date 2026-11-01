@@ -1,192 +1,190 @@
-# ADR-0026 输出链路：agent 持有终端状态，浏览器只负责显示
+# ADR-0026 Output path: the agent holds terminal state, the browser only displays it
 
-状态：已接受（2026-10-30）· 与 [ADR-0025](0025-termux-style-ui.md) 在同一个 PR（m8）里落地
+Status: Accepted (2026-10-30). Shipped in the same PR as [ADR-0025](0025-termux-style-ui.md) (m8).
 
-**取代**：
+Supersedes:
 
-- [ADR-0019](0019-altscreen-redraw-not-replay.md)（备用屏不回放、改为重画）全部；
-- [ADR-0024](0024-scrollback-layered-model.md) §2（预算写入、回看暂停跟随）、§3（客户端快照）、§4（备用屏滚动转滚轮）。§1（注入环境变量把 claude 拉回主屏）保留；
-- [ADR-0006](0006-agent-side-osc-parsing.md)（agent 解析并剥离 OSC）与 [ADR-0010](0010-bash-rcfile-injection.md)（rcfile 注入 shell 集成）全部 —— 输出流不再被 agent 改写，shell 集成整体删除；
-- [ADR-0025](0025-termux-style-ui.md) §10 里「保留 OSC 7」那一句，以及它的分步：m8 与 m9 合并成一个 PR。
+- [ADR-0019](0019-altscreen-redraw-not-replay.md) (redraw instead of replaying the alternate screen) entirely.
+- [ADR-0024](0024-scrollback-layered-model.md) §2 (budgeted writes, pausing follow while reading back), §3 (client snapshot) and §4 (alternate-screen drag to wheel). §1 (inject an environment variable to keep claude on the main screen) stays.
+- [ADR-0006](0006-agent-side-osc-parsing.md) (agent parses and strips OSC) and [ADR-0010](0010-bash-rcfile-injection.md) (rcfile-injected shell integration) entirely. The agent no longer rewrites the output stream, and shell integration is gone.
+- The "keep OSC 7" sentence in [ADR-0025](0025-termux-style-ui.md) §10, and its rollout: the first two steps merge into one PR.
 
-**修订**：[ADR-0009](0009-hybrid-ws-framing.md)（混合帧）—— 新增 `SNAPSHOT` 帧类型，删掉 `ATTR_PREFIX` 标志；协议版本 1 → 2。
+Amends [ADR-0009](0009-hybrid-ws-framing.md) (hybrid framing): adds the `SNAPSHOT` frame type and removes the `ATTR_PREFIX` flag. Protocol version 1 → 2.
 
-**不变**：增量续传的字节级连续性（AC-2.1 ★）、输入的 `in_seq` / `in_ack`（AC-2.4 / AC-2.12）、热升级不丢会话（[ADR-0016](0016-hot-reexec.md)，交接的内容变了）、输入绝不静默丢弃（[ADR-0020](0020-input-never-silently-dropped.md)，回放门保留）。
+Unchanged: byte-level continuity of incremental resume (AC-2.1 ★); input `in_seq` / `in_ack` (AC-2.4 / AC-2.12); hot upgrade keeps sessions ([ADR-0016](0016-hot-reexec.md); what's handed off changes); input is never silently dropped ([ADR-0020](0020-input-never-silently-dropped.md); the replay gate stays).
 
-## 背景
+## Context
 
-### 用户的反馈
+Output display was "nearly unusable", and there was no way to tell where the problem was.
 
-输出显示「几乎没法用」，而且不知道是哪里出的问题。
+### The old model: the agent stores bytes, the browser stores the screen
 
-### 现在的模型：agent 存字节，浏览器存屏幕
+The agent only had output bytes (the ring buffer); screen state existed only in the browser's xterm. Whenever the browser missed part of the byte stream (switched away, disconnected past the window, reloaded), the screen had to be rebuilt. Four patches accumulated for that:
 
-agent 手里只有一段输出字节（环形缓冲），屏幕状态只在浏览器的 xterm 里。只要浏览器错过了连续的字节流（切走会话、断线超出窗口、刷新页面），就得把屏幕重新拼出来。为此先后打了四块补丁：
-
-| 补丁 | 它在补什么 | 出处 |
+| Patch | What it covered for | Source |
 |---|---|---|
-| reset 回放：`ATTR_PREFIX` 帧清屏后重放整个窗口 | 窗口接不上浏览器手里那一屏 | 协议 §3 / §5 |
-| 回放门：吞掉回放期间 xterm 对历史查询的自动应答 | 历史字节里的查询被重新回答，答案当成按键进了程序 | ADR-0020 |
-| 备用屏重画：agent 跟踪粘性模式，抖窗口尺寸逼程序重画，300ms 兜底 | 字节窗口拼不出 vim / codex 的当前屏 | ADR-0019 |
-| 客户端快照：刷新前存 IndexedDB | 刷新后浏览器什么都没有 | ADR-0024 §3（没合并，卡在协议层 bug 上） |
+| Reset replay: an `ATTR_PREFIX` frame clears the screen and replays the whole window | The window doesn't line up with the screen the browser has | Protocol §3 / §5 |
+| Replay gate: swallow xterm's automatic replies to historical queries during replay | Queries in old bytes get answered again, and the answers reach the program as keystrokes | ADR-0020 |
+| Alternate-screen redraw: the agent tracks sticky modes, jiggles the window size to force a redraw, 300ms fallback | A byte window can't rebuild vim's or codex's current screen | ADR-0019 |
+| Client snapshot: save to IndexedDB before reload | After a reload the browser has nothing | ADR-0024 §3 (never merged; blocked on a protocol bug) |
 
-再加上性能层（按帧合并、回看暂停、64 KiB 预算写入）和 shell 集成（OSC 剥离、命令记录、集成状态机），任何一处出错，症状都长得一样：屏幕不对。没法归因。
+Add the performance layer (per-frame coalescing, pause while reading back, 64 KiB budgeted writes) and shell integration (OSC stripping, command records, integration state machine), and every failure looked the same: the screen is wrong. Nothing could be attributed.
 
-根子是**模型错配**：备用屏程序的输出是「带模式的差分补丁」，字节窗口一滑过 `ESC[?1049h` 就拼不回来（[ADR-0019](0019-altscreen-redraw-not-replay.md) §背景）。Termux 和 tmux 没有这类问题，因为终端模拟器就在 PTY 旁边，屏幕状态始终在那里。
+The root cause is a **model mismatch**. Alternate-screen output is a series of mode-dependent diffs; once the byte window slides past `ESC[?1049h`, the screen can't be rebuilt (see the context of [ADR-0019](0019-altscreen-redraw-not-replay.md)). Termux and tmux don't have this problem because the terminal emulator sits next to the PTY and the screen state is always there.
 
-### 离线试验（2026-10-30）
+### Offline experiment (2026-10-30)
 
-候选里只有 [tuios.dev/vt](https://pkg.go.dev/tuios.dev/vt)（v0.3.2，MIT，charm `x/vt` 的分叉）能导出**完整状态**：它的 `snapshot.Capture` + `snapshot.Replay` 产出一段任何 xterm 都能吃的字节，带上终端模式、当前画笔、滚动区域、字符集、制表位、光标形状、未完成的软换行，以及**解析到一半的序列**。charm `x/vt`、`vt10x`、`midterm` 只能导出画面，没有进入实测。
+Of the candidates, only [tuios.dev/vt](https://pkg.go.dev/tuios.dev/vt) (v0.3.2, MIT, a fork of charm `x/vt`) can export **complete state**. Its `snapshot.Capture` + `snapshot.Replay` produce bytes any xterm can consume, carrying terminal modes, the current pen, scroll region, character sets, tab stops, cursor shape, a pending soft wrap, and even **a partially parsed sequence**. charm `x/vt`, `vt10x` and `midterm` can only export the picture and weren't tested further.
 
-**一致性**：17 段真实录制（claude 两种渲染方式、codex、vim、tmux、less、top、python、长日志、中文彩色输出）× 每段 23 个截断点（一部分故意切在转义序列和多字节字符中间）。以 xterm.js（headless 5.5，unicode11）为裁判，比较「xterm 直接吃原始字节」与「xterm 先吃快照再吃截断点之后的字节」，逐格比字符、宽度、颜色、属性、光标、模式：
+**Consistency**: 17 real recordings (claude in both renderers, codex, vim, tmux, less, top, python, long logs, colored CJK output) × 23 cut points each, some deliberately inside escape sequences and multibyte characters. With xterm.js (headless 5.5, unicode11) as the judge, compare "xterm consumes the raw bytes" against "xterm consumes the snapshot, then the bytes after the cut", cell by cell: character, width, color, attributes, cursor, modes.
 
-- 完全一致：claude ×3、codex、vim、tmux、python、长日志、中文彩色输出、假的备用屏 TUI。
-- 看得见的差异只有三处：
-  - top 表头最后一格少了反白。程序写满整行后 `EL`，xterm.js 不擦最后一格，真 xterm / ghostty / tuios 都擦。这是 xterm.js 的偏差；
-  - SGR 53（上划线）被 `Replay` 丢掉；
-  - 关闭自动换行时，光标停在最后一列的记法（100 对 99），画面上看不出来。
-- 只在重新排版时才显出来：less 这类程序改写过的行，软换行标记两边不同（xterm 记在下一行，tuios 记在上一行，`EL` 清的不是同一个）。
-- **改尺寸之后两边各自重排，结果不一致**：改列数时历史里有上百行不同；只改行数时，有的场景差在对齐了几行空行，有的是程序没收到 SIGWINCH 时画面不同。
+- Identical: claude ×3, codex, vim, tmux, python, long logs, colored CJK output, a synthetic alternate-screen TUI.
+- Only three visible differences:
+  - top's header loses reverse video in its last cell. The program fills the line and then sends `EL`; xterm.js doesn't erase the last cell, while real xterm, ghostty and tuios do. This is an xterm.js deviation.
+  - SGR 53 (overline) is dropped by `Replay`.
+  - With autowrap off, a cursor parked in the last column is recorded differently (100 vs 99). Invisible on screen.
+- Visible only on reflow: lines rewritten by programs like less carry the soft-wrap flag on different sides (xterm marks the next line, tuios the previous one, so `EL` clears different things).
+- **After a resize, each side reflows on its own and the results differ.** Changing columns produced hundreds of differing history lines. Changing only rows differed in a few aligned blank lines in some cases, and where the program didn't receive SIGWINCH in others.
 
-**性能**（Xeon E5-2697 v2 单核）：
+**Performance** (one core of a Xeon E5-2697 v2):
 
-| 项 | 数 |
+| Item | Value |
 |---|---|
-| 解析吞吐 | 13–52 MB/s，混合约 22 MB/s。claude 输出只有 0.5–0.8 KB/s |
-| 每会话常驻 | 带 5000 行历史 < 1 MiB；空会话 0.06 MiB |
-| 快照（只要当前屏） | 0.3–3 KiB，< 0.5 ms |
-| 快照（带 2000 行历史，普通内容） | 108–169 KiB，约 35 ms（上限见 §3） |
-| 运行中的 claude / vim / tmux 的快照 | ≤ 4 KiB |
-| 浏览器吃 2000 行快照 | 11–24 ms（对比现在重放 1 MiB 窗口 60–75 ms） |
-| 二进制 | +1.8 MB，`CGO_ENABLED=0` 可编 |
+| Parse throughput | 13–52 MB/s, about 22 MB/s mixed. claude produces only 0.5–0.8 KB/s |
+| Resident per session | < 1 MiB with 5000 lines of history; 0.06 MiB empty |
+| Snapshot, current screen only | 0.3–3 KiB, < 0.5 ms |
+| Snapshot with 2000 lines of history, ordinary content | 108–169 KiB, about 35 ms (limit in §3) |
+| Snapshot of a running claude / vim / tmux | ≤ 4 KiB |
+| Browser applying a 2000-line snapshot | 11–24 ms (vs 60–75 ms to replay a 1 MiB window) |
+| Binary size | +1.8 MB, builds with `CGO_ENABLED=0` |
 
-**顺带发现的 bug**：xterm.js（5.5 与 6.0.0）的 `write(Uint8Array)`，在一个 3 字节 UTF-8 字符被切进两次写入、且第 2 字节是 `0x80`、切在第 2 字节之后时，会把整个字符丢掉。实测 `…` 和 `。`，同规律覆盖 U+2000–203F 与 U+3000–303F（`— “ ” ‘ ’ • 、「」《》`）。现在 PTY 的读边界和 64 KiB 预算写入器都会切开字符，所以中文输出偶尔吞标点，而字节级连续性测试测不出来。
+**A bug found along the way**: xterm.js `write(Uint8Array)` (5.5 and 6.0.0) drops the whole character when a 3-byte UTF-8 character is split across two writes right after its second byte and that byte is `0x80`. Measured with `…` and `。`; the same pattern covers U+2000–203F and U+3000–303F (`— “ ” ‘ ’ • 、「」《》`). Both PTY read boundaries and the 64 KiB budgeted writer split characters, so CJK output occasionally lost punctuation, and byte-level continuity tests couldn't catch it.
 
-## 决定
+## Decision
 
-### 1. agent 给每个会话跑一个终端模拟器
+### 1. The agent runs a terminal emulator per session
 
-- 用 `tuios.dev/vt`，**钉死 v0.3.2**，包在 `internal/vterm` 里。会话代码只通过它的几个方法访问：写入、改尺寸、生成快照、导出 / 导入状态（热升级用）。将来换实现只动这一个包。
-- **所有 PTY 输出都喂给它**，不管有没有人订阅；和环形缓冲的追加**在同一把锁里**完成，所以任何时刻「模拟器吃到了第几个字节」都等于 `head_seq`。
-- 历史 **2000 行**，和快照带的行数一致：存多了也发不出去。
-- 模拟器自己生成的查询应答**丢掉**，查询仍由浏览器的 xterm 回答（见 §5）。
+- Use `tuios.dev/vt`, **pinned at v0.3.2**, wrapped in `internal/vterm`. Session code goes through a handful of methods: write, resize, snapshot, export / import state (for hot upgrade). Replacing the implementation touches only that package.
+- **All PTY output is fed to it**, whether anyone is subscribed or not, under **the same lock** as the ring-buffer append. At any moment the number of bytes the emulator has consumed equals `head_seq`.
+- **2000 lines** of history, the same as a snapshot carries; storing more couldn't be sent anyway.
+- Query replies generated by the emulator are **discarded**; queries are still answered by the browser's xterm (§5).
 
-### 2. agent 不再改写输出流
+### 2. The agent no longer rewrites the output stream
 
-shell 集成整体删除（§6），没有 OSC 要剥离了。**`seq` = 会话累计的 PTY 输出字节数**，一个字节都不改；`ATTR_PREFIX` 删除。
+Shell integration is gone (§6), so there's no OSC to strip. **`seq` = cumulative PTY output bytes for the session**, with not one byte changed. `ATTR_PREFIX` is removed.
 
-### 3. 订阅只有两条路：增量，或者快照
+### 3. Subscribing has two paths: incremental or snapshot
 
-`hello.resume`（重连）与 `subscribe`（第一次打开、切回）走同一个判定：
+`hello.resume` (reconnect) and `subscribe` (first open, switching back) use the same decision:
 
-| 条件 | 走哪条路 | 发什么 |
+| Condition | Path | What is sent |
 |---|---|---|
-| 客户端的 `out_seq > 0`，且仍在环形缓冲窗口内（`base_seq ≤ out_seq ≤ head_seq`） | **增量**（`status: "ok"`） | 从 `out_seq` 起的原始字节（`OUTPUT` 帧），与现在相同 |
-| 其余：第一次打开、刷新页面（`out_seq == 0`）、落出窗口 | **快照**（`status: "snapshot"`） | `SNAPSHOT` 帧：`seq` = 生成时的 `head_seq`，payload = `Replay` 字节（当前屏 + 至多 2000 行历史 + 模式 + 画笔 + 半截序列）；之后从 `seq` 起接 `OUTPUT` |
+| Client `out_seq > 0` and still inside the ring-buffer window (`base_seq ≤ out_seq ≤ head_seq`) | **Incremental** (`status: "ok"`) | Raw bytes from `out_seq` on (`OUTPUT` frames), as before |
+| Anything else: first open, page reload (`out_seq == 0`), fell out of the window | **Snapshot** (`status: "snapshot"`) | A `SNAPSHOT` frame: `seq` = `head_seq` at generation time, payload = `Replay` bytes (current screen + up to 2000 lines of history + modes + pen + partial sequence); then `OUTPUT` from `seq` on |
 
-- **环形缓冲缩到 256 KiB**，只服务增量这一条路。积压超过 256 KiB 时，快照（≤ 170 KiB，浏览器 11–24 ms）比重放更小更快。缓冲按字节裁剪，不再找 `\n` 边界：落出窗口的客户端一律走快照，裁剪位置不再影响显示。
-- **删除**：`reset` 消息、`redraw` 消息、`ATTR_PREFIX`、`internal/termstate`、抖窗口尺寸、300ms 兜底、`notifyReset`。
-- **快照上限 1 MiB**：超过就按比例减少带的历史行数重新生成一次。离线试验里的「≤ 170 KiB」只对普通内容成立；宽终端（400 列）配上每 10 格换一次颜色的输出，满 2000 行实测约 1.6 MiB、生成 330 ms，1000 列约 4 MiB，已经顶到连接写队列上限。
-- 快照超过单帧上限（256 KiB）时拆成多帧：同一个 `seq`，除最后一帧外都带 `FLAG_MORE`（bit0）。浏览器收齐再应用。
-- 浏览器收到 `SNAPSHOT`：在写入流里写 RIS（`ESC c`）复位 → 换一个新的 UTF-8 解码器 → 写入快照 → `outSeq = seq`。**用写入流里的 RIS（`ESC c`）复位，不要调 `term.reset()`**：`reset()` 是同步的，不清写缓冲。列数一变 agent 立刻重发快照，此时还没解析完的旧输出会被画到复位之后、快照之前。RIS 和快照一起进写缓冲，顺序天然正确（xterm 自己在 `reset()` 的注释里也建议这种场合用 RIS）。不再提示「历史输出已截断」：快照就是完整的画面，没有被截断的东西。
+- **The ring buffer shrinks to 256 KiB** and serves only the incremental path. Beyond 256 KiB of backlog, a snapshot (≤ 170 KiB, 11–24 ms in the browser) is smaller and faster than replay. The buffer trims by byte, no longer at `\n` boundaries: a client that falls out of the window always gets a snapshot, so the trim position no longer affects what's displayed.
+- **Removed**: the `reset` message, the `redraw` message, `ATTR_PREFIX`, `internal/termstate`, window-size jiggling, the 300ms fallback, `notifyReset`.
+- **Snapshots are capped at 1 MiB.** Over the cap, regenerate once with proportionally fewer history lines. The "≤ 170 KiB" from the experiment holds only for ordinary content: a 400-column terminal with output changing color every 10 cells measured about 1.6 MiB and 330 ms for 2000 lines, and about 4 MiB at 1000 columns, which hits the connection's write-queue limit.
+- A snapshot larger than the per-frame limit (256 KiB) is split across frames with the same `seq`; all but the last carry `FLAG_MORE` (bit0). The browser applies it once all parts arrive.
+- On `SNAPSHOT`, the browser writes RIS (`ESC c`) into the write stream to reset → switches to a fresh UTF-8 decoder → writes the snapshot → sets `outSeq = seq`. **Reset with in-stream RIS, not `term.reset()`.** `reset()` is synchronous and doesn't clear the write buffer. When the column count changes, the agent resends a snapshot immediately, and old output that hasn't been parsed yet would be drawn after the reset and before the snapshot. RIS goes into the write buffer together with the snapshot, so ordering is correct by construction (xterm's own comment on `reset()` recommends RIS for this case). The "older output truncated" notice is gone: a snapshot is a complete picture, and nothing was truncated.
 
-### 4. 改列数以 agent 为准，重发一次快照
+### 4. On a column change the agent's reflow wins, and a snapshot is resent
 
-试验里两边各自重排的结果不一致，所以列数一变，就以 agent 的重排为唯一真相：
-
-```
-resize / subscribe 带来的 cols 与当前不同:
-  锁内: 模拟器.Resize(cols, rows) → 生成快照（seq = head）→ 发给这个会话的每个订阅者
-  锁外: TIOCSWINSZ（程序因 SIGWINCH 重画的字节排在快照之后）
-只改行数:
-  模拟器.Resize + TIOCSWINSZ，不发快照
-```
-
-只改行数不发快照，是为了软键盘：手机上每弹出、收起一次键盘都会改行数，每次重发上百 KiB、清掉浏览器的回看位置，代价太大。分歧只存在于「程序没有因 SIGWINCH 重画」的那部分画面，下一次快照（切回、重连、改列数）时收敛。
-
-### 5. 查询仍由浏览器回答；回放门保留，范围变小
-
-- agent 侧模拟器的应答一律丢弃。查询的回答者仍是浏览器里的 xterm.js：能力集（不支持 kitty 键盘协议、kitty 图形、sixel）和主题色都以它为准，程序探测到的就是它真正能显示的。让 agent 代答的话，tuios 会宣称支持这些能力，claude 就会改用浏览器不懂的编码。
-- 浏览器写入 `SNAPSHOT` 和增量补课字节时，xterm 产生的自动应答**不进 PTY**，用户输入照常放行。判据仍是「谁产生的」，见 [input.md](../../40-frontend/input.md)。快照字节里没有查询，所以真正要防的只剩增量补课这一段。
-- 代价不变：浏览器不在线时，程序发出的查询没人回答，要等它自己超时。今天就是这样。
-
-### 6. 工作目录改读 `/proc`，shell 集成整体删除
-
-- **CWD** = `readlink /proc/<前台进程组>/cwd`（对 PTY master 做 `TIOCGPGRP`），每个运行中的会话每秒读一次，变了就发 `session.updated{cwd, name}`。会话默认名仍是 CWD 的 basename（AC-4.4）。任何 shell 都能用，不再只认 bash。只构建 Linux（CI 只出 linux/amd64、linux/arm64），`/proc` 一定在。
-- **「会话空闲」**（`--when-idle` 与控制 socket `status` 的忙碌数，[ADR-0016](0016-hot-reexec.md) §5）改为：PTY 的前台进程组就是 shell 自己（`TIOCGPGRP` == shell pid，和读 CWD 同一个调用）。原来靠提示符状态，集成失效时看不出忙不忙；现在任何 shell 都准。
-- **shell 照常启动**：默认 `bash -l -i`（登录 shell，按 bash 自己的规则加载 profile 链）；`--no-login-shell` 时 `bash -i`（加载 `~/.bashrc`）。不再生成临时 rcfile。
-- **删除**：`internal/shellinit`、`internal/oscparse`、`webterm shell-init` 子命令、`--no-shell-integration`、集成握手与状态机、按命令的活性探测、`prompt` / `command.start` / `command.end` / `cwd` 消息、会话字段 `integration` / `prompt_state` / `unmarked_input`；命令历史全套：`commands` 表（新迁移 DROP）、`/api/commands*`、`/api/fs`、`/api/settings`、`--no-history`、`internal/store/commands.go`。
-
-### 7. 浏览器的输出路径：原生
+The experiment showed independent reflows disagree, so when the column count changes, the agent's reflow is the single source of truth:
 
 ```
-每个会话: 一个 TextDecoder('utf-8')，stream 模式
-OUTPUT 帧   → term.write(decoder.decode(payload, {stream: true}))
-SNAPSHOT 帧 → decoder = new TextDecoder(); term.write('\x1bc' + decode(快照))   // RIS 在流内复位
+cols from resize / subscribe differ from the current value:
+  under the lock: emulator.Resize(cols, rows) → generate a snapshot (seq = head) → send to every subscriber of the session
+  after the lock: TIOCSWINSZ (the program's SIGWINCH redraw lands after the snapshot)
+rows only:
+  emulator.Resize + TIOCSWINSZ, no snapshot
 ```
 
-- **先解码成字符串再写**，绕开 xterm 切开 UTF-8 时丢字的 bug。
-- 删除：按帧合并、回看暂停跟随及其提示条、64 KiB 预算写入器、只给可见会话挂 WebGL（改用 xterm 默认的 DOM 渲染器）、自写的触屏滚动与惯性（改用 xterm 自带）、客户端快照。这些都等量过实际效果再说：量的口径是主线程长任务（这台机器没有 GPU），基线场景见 [e2e-scenarios.md](../../70-testing/e2e-scenarios.md) E2E-37。
-- 会话结束的本地提示行（ADR-0025 §6）直接 `term.write()`：xterm 的写入本来就是先进先出，不再需要「经过同一个写入器」。
+A rows-only change skips the snapshot because of the on-screen keyboard: on a phone every open and close changes the row count, and resending a hundred-odd KiB each time and wiping the browser's scroll position costs too much. The two sides can only differ in screen areas the program didn't redraw on SIGWINCH, and they converge at the next snapshot (switching back, reconnecting, a column change).
 
-### 8. 热升级交接模拟器状态
+### 5. The browser still answers queries; the replay gate stays with a smaller scope
 
-`handoff.Session` 里的粘性模式（`termstate`）换成模拟器状态：`snapshot.Capture`（带满 2000 行历史）导出，新进程 `snapshot.Apply` 导回。环形缓冲、`seq`、`in_ack` 照旧交接。交接前后同一会话生成的快照必须逐字节相等。
+- The agent's emulator replies are always discarded. The browser's xterm.js remains the one that answers: its capabilities (no kitty keyboard protocol, no kitty graphics, no sixel) and theme colors are authoritative, so what a program detects is what the browser can actually display. If the agent answered, tuios would claim those capabilities and claude would switch to encodings the browser doesn't understand.
+- While the browser writes a `SNAPSHOT` or incremental catch-up bytes, xterm's automatic replies **don't reach the PTY**; user input passes through as usual. The criterion is still "who produced it", see [input.md](../../40-frontend/input.md). Snapshot bytes contain no queries, so only incremental catch-up actually needs guarding.
+- The cost is unchanged: while no browser is connected, a program's queries go unanswered until it times out.
 
-**从旧版本升级上来**（交接数据里没有模拟器状态）：新进程新建一个模拟器，把交接来的环形缓冲内容喂进去，尽力还原。这只发生在升级到本版本的那一次：缓冲窗口如果正好从备用屏程序的中间开始，那个会话的画面会错一次，下一次程序重画（或用户按一下键）就恢复。不为此中止升级 —— 会话活下来比这一次画面更重要。
+### 6. The working directory comes from `/proc`; shell integration is removed
 
-旧版本 rcfile 给 bash 装的钩子在升级后仍然活着，会继续发 OSC 133 / 1701 / 7。它们现在原样透传给浏览器（xterm 会忽略），等那个 shell 退出、新会话起来就没有了。
+- **CWD** = `readlink /proc/<foreground process group>/cwd` (`TIOCGPGRP` on the PTY master), read once per second for each running session; on change, send `session.updated{cwd, name}`. The default session name is still the CWD's basename (AC-4.4). This works with any shell, not just bash. We only build for Linux (CI ships linux/amd64 and linux/arm64), so `/proc` is always there.
+- **"Session idle"** (`--when-idle` and the busy count in the control socket's `status`, [ADR-0016](0016-hot-reexec.md) §5) now means the PTY's foreground process group is the shell itself (`TIOCGPGRP` == shell pid, the same call as the CWD read). It used to rely on prompt state, which couldn't tell busy from idle when integration broke; now it's accurate for any shell.
+- **The shell starts normally**: `bash -l -i` by default (a login shell, loading bash's own profile chain); `bash -i` with `--no-login-shell` (loads `~/.bashrc`). No more temporary rcfile.
+- **Removed**: `internal/shellinit`, `internal/oscparse`, the `webterm shell-init` subcommand, `--no-shell-integration`, the integration handshake and state machine, per-command liveness probes, the `prompt` / `command.start` / `command.end` / `cwd` messages, the session fields `integration` / `prompt_state` / `unmarked_input`, and the whole command history stack: the `commands` table (dropped by a new migration), `/api/commands*`, `/api/fs`, `/api/settings`, `--no-history`, `internal/store/commands.go`.
 
-### 9. 依赖与构建
+### 7. The browser output path is native
 
-`tuios.dev/vt v0.3.2` 及其依赖（`charmbracelet/x/ansi`、`ultraviolet` 等）全是纯 Go，`CGO_ENABLED=0` 构建通过。它的 `ghostty` build tag 会引入 cgo，我们不开。go.mod 里会出现 `go.mitchellh.com/libghostty` 的版本记录，但不参与编译。
+```
+per session: one TextDecoder('utf-8') in stream mode
+OUTPUT frame   → term.write(decoder.decode(payload, {stream: true}))
+SNAPSHOT frame → decoder = new TextDecoder(); term.write('\x1bc' + decode(snapshot))   // RIS resets in-stream
+```
 
-### 10. 测试口径
+- **Decode to a string first, then write.** This avoids xterm's dropped-character bug on split UTF-8.
+- Removed: per-frame coalescing, pausing follow while reading back and its hint, the 64 KiB budgeted writer, mounting WebGL only for the visible session (now xterm's default DOM renderer), custom touch scrolling and inertia (now xterm's built-in), and the client snapshot. Any of them comes back only if measurements call for it. Measure main-thread long tasks (this machine has no GPU); the baseline scenario is E2E-37 in [e2e-scenarios.md](../../70-testing/e2e-scenarios.md).
+- The local session-end line ([ADR-0025](0025-termux-style-ui.md) §6) is a direct `term.write()`. xterm writes are FIFO, so it no longer needs to go "through the same writer".
 
-| 路径 | 口径 | 测试 |
+### 8. Hot upgrade hands off emulator state
+
+The sticky modes (`termstate`) in `handoff.Session` are replaced by emulator state: exported with `snapshot.Capture` (with the full 2000 lines of history) and imported in the new process with `snapshot.Apply`. The ring buffer, `seq` and `in_ack` are handed off as before. Snapshots generated for the same session before and after the handoff must be byte-identical.
+
+**Upgrading from an older version** (no emulator state in the handoff data): the new process creates an emulator and feeds it the handed-off ring buffer as a best effort. This only happens on the one upgrade to this version. If a buffer window happens to start in the middle of an alternate-screen program, that session shows a wrong screen once, until the program redraws (or the user presses a key). Don't abort the upgrade over it; keeping sessions alive matters more than one screen.
+
+Hooks installed in bash by the old rcfile survive the upgrade and keep emitting OSC 133 / 1701 / 7. They now pass through to the browser untouched (xterm ignores them) and disappear once that shell exits.
+
+### 9. Dependencies and build
+
+`tuios.dev/vt v0.3.2` and its dependencies (`charmbracelet/x/ansi`, `ultraviolet`, and others) are pure Go and build with `CGO_ENABLED=0`. Its `ghostty` build tag pulls in cgo; we don't enable it. go.mod records a version of `go.mitchellh.com/libghostty`, but it isn't compiled.
+
+### 10. Testing standards
+
+| Path | Standard | Tests |
 |---|---|---|
-| 增量续传 | **字节级**：断线重连后的序列化结果与不断线逐字节一致（AC-2.1，不变） | E2E-2、`TestByteLevelContinuity` |
-| 快照 | **屏幕级**：xterm 先吃快照再吃之后的字节，逐格等于直接吃全部字节（字符、宽度、颜色、属性、光标、模式；软换行标记与上面三处已知差异除外） | Vitest 跑录制夹具（xterm headless 当裁判）、E2E-30 / 31 / 36 |
-| 热升级 | 交接前后快照逐字节相等；增量路径字节级连续 | `TestHandoffByteLevelContinuity` |
+| Incremental resume | **Byte level**: the serialized terminal after a disconnect and reconnect is byte-identical to one without the disconnect (AC-2.1, unchanged) | E2E-2, `TestByteLevelContinuity` |
+| Snapshot | **Screen level**: xterm fed the snapshot and then the following bytes matches, cell by cell, xterm fed all the bytes (character, width, color, attributes, cursor, modes; excluding soft-wrap flags and the three known differences above) | Vitest over recorded fixtures (xterm headless as judge), E2E-30 / 31 / 36 |
+| Hot upgrade | Snapshots before and after the handoff are byte-identical; the incremental path stays byte-level continuous | `TestHandoffByteLevelContinuity` |
 
-录制夹具（真实程序的原始字节）进 `internal/vterm/testdata/`，由 Go 测试生成各截断点的快照，Vitest 用 `@xterm/headless` 当裁判比对。
+Recorded fixtures (raw bytes from real programs) live in `internal/vterm/testdata/`. Go tests generate snapshots at each cut point, and Vitest compares them using `@xterm/headless` as the judge.
 
-## 不变式（CLAUDE.md）随之改写
+### CLAUDE.md invariants
 
-- **③ 输出不落盘**：落盘的只有设备与认证数据（命令历史已删）。
-- **④ 序列号连续**：`seq` = 累计 PTY 输出字节数，agent 不改写输出流；`SNAPSHOT` 帧不计入 `seq`。
+- **3. No output on disk**: only device and authentication data is persisted (command history is gone).
+- **4. Contiguous sequence numbers**: `seq` = cumulative PTY output bytes; the agent doesn't rewrite the output stream; `SNAPSHOT` frames don't count toward `seq`.
 
-## 代价与取舍
+## Consequences
 
-- **新依赖**：tuios 很新（5 个版本，最新 2026-10-26，单人维护，v0 API 会变）。对策：钉版本，包一层 `internal/vterm`，只用五六个方法。
-- **吞吐上限**：每个会话的输出被 agent 解析一遍，单核约 20 MB/s。`cat` 一个大文件会被限在这个速度（tmux 同理）；交互程序的输出远低于它。
-- **三处可见差异**接受。top 那一格要等程序重画那一格才对。
-- **只改行数时两边可能短暂不一致**，下一次快照收敛（§4）。
-- **刷新页面**要下载一次快照（≤ 170 KiB），换来刷新后有 2000 行历史可翻（AC-5.14 由 agent 实现，不再需要浏览器存快照）。
-- **失去 shell 集成**：没有命令记录、没有提示符状态。ssh 出去之后 CWD 显示的是本机 ssh 进程的目录，这一点和以前一样。
-- **浏览器不在线时**，程序的终端查询没人回答（同今天）。
+- **New dependency**: tuios is young (5 releases, the latest on 2026-10-26, a single maintainer, a v0 API that will change). Mitigation: pin the version, wrap it in `internal/vterm`, use only five or six methods.
+- **Throughput ceiling**: the agent parses every session's output, about 20 MB/s per core. `cat`-ing a large file is capped at that speed (tmux has the same limit); interactive programs produce far less.
+- **The three visible differences are accepted.** top's cell becomes correct once the program redraws it.
+- **A rows-only resize may leave the two sides briefly different**; they converge at the next snapshot (§4).
+- **A page reload downloads one snapshot** (≤ 170 KiB) and in return has 2000 lines of scrollback (AC-5.14 is now served by the agent; the browser no longer stores snapshots).
+- **Shell integration is gone**: no command records, no prompt state. After `ssh` to another machine, the CWD shown is the local ssh process's directory, as before.
+- **While no browser is connected**, programs' terminal queries go unanswered (as before).
 
-## 影响
+### Removed code
 
-### 删除的代码
-
-| 位置 | 内容 |
+| Location | What |
 |---|---|
-| `internal/termstate` | 粘性模式跟踪 |
-| `internal/oscparse`、`internal/shellinit` | OSC 剥离、rcfile |
-| `internal/session` | 集成状态机、活性探测、命令记录、prompt、redraw、抖尺寸、兜底 |
-| `internal/store/commands.go` 与对应迁移 | 命令历史 |
-| `internal/agent` | `/api/commands*`、`/api/fs`、`/api/settings` |
-| `cmd/webterm` | `shell-init` 子命令、`--no-shell-integration`、`--no-history` |
-| `internal/protocol` | `reset` / `redraw` / `cwd` / `prompt` / `command.*` 消息，`ATTR_PREFIX` |
-| `web/src` | `outputqueue`、`budgetwriter`、`interactive`、WebGL 挂载、客户端快照 |
+| `internal/termstate` | Sticky mode tracking |
+| `internal/oscparse`, `internal/shellinit` | OSC stripping, rcfile |
+| `internal/session` | Integration state machine, liveness probes, command records, prompt, redraw, size jiggling, fallback |
+| `internal/store/commands.go` and its migration | Command history |
+| `internal/agent` | `/api/commands*`, `/api/fs`, `/api/settings` |
+| `cmd/webterm` | `shell-init` subcommand, `--no-shell-integration`, `--no-history` |
+| `internal/protocol` | `reset` / `redraw` / `cwd` / `prompt` / `command.*` messages, `ATTR_PREFIX` |
+| `web/src` | `outputqueue`, `budgetwriter`, `interactive`, WebGL mount, client snapshot |
 
-### 文档
+### Docs updated
 
-`websocket-protocol.md`（v2：`SNAPSHOT` 帧、订阅判定、删除的消息）、`http-api.md`、`ring-buffer.md`、`session-manager.md`、`storage-schema.md`、`privacy-history.md`、`shell-integration.md`（删除）、40-frontend 各篇、需求与验收标准、E2E 场景、CLAUDE.md 的不变式与测试要求。
+`websocket-protocol.md` (v2: `SNAPSHOT` frame, subscribe decision, removed messages), `http-api.md`, `ring-buffer.md`, `session-manager.md`, `storage-schema.md`, `privacy-history.md`, `shell-integration.md` (deleted), all of 40-frontend, requirements and acceptance criteria, E2E scenarios, and the invariants and test requirements in CLAUDE.md.
 
-### 验收标准与 E2E（编号不复用）
+### Acceptance criteria and E2E
 
-- **删除**：AC-2.7（`\n` 边界与 `ESC[0m` 前缀）、AC-2.16–2.19（备用屏重画与粘性模式）、AC-5.5、5.9、5.10、5.15、5.16、5.17，AC-6 全部，AC-7.1–7.7；E2E-37 的断言（改为只记录数值的基线）、E2E-38。
-- **改写**：AC-2.3、2.6、2.11、2.14、2.15、4.4、5.14；E2E-2c、4、30、31、36。AC-7.8（会话环境）原地保留，AC-7 一节改名「会话环境」。
-- **新增**：AC-2.21（快照屏幕级一致）、AC-2.22（改列数重发快照）、AC-2.23（中文标点切开不丢）；E2E-42（改列数重发快照）、E2E-43（切开的 UTF-8 不丢字）。
+Numbers are never reused.
+
+- **Deleted**: AC-2.7 (`\n` boundaries and the `ESC[0m` prefix), AC-2.16–2.19 (alternate-screen redraw and sticky modes), AC-5.5, 5.9, 5.10, 5.15, 5.16, 5.17, all of AC-6, AC-7.1–7.7; E2E-37's assertions (it becomes a baseline that only records numbers), E2E-38.
+- **Rewritten**: AC-2.3, 2.6, 2.11, 2.14, 2.15, 4.4, 5.14; E2E-2c, 4, 30, 31, 36. AC-7.8 (session environment) stays where it is, and the AC-7 section is renamed "Session environment".
+- **Added**: AC-2.21 (snapshot is screen-level consistent), AC-2.22 (column change resends a snapshot), AC-2.23 (split CJK punctuation isn't dropped); E2E-42 (column change resends a snapshot), E2E-43 (split UTF-8 isn't dropped).

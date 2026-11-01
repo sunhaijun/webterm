@@ -1,10 +1,11 @@
 /**
- * 手机抽屉一行的左滑（AC-4.12，ADR-0039）：纯状态机，组件只负责把 offset 写到 transform 上。
+ * Swipe-left on a phone drawer row (AC-4.12, ADR-0039): a pure state machine; the
+ * component just writes the offset into a transform.
  */
 
-/** 三个按钮的总宽（各 72px）。 */
+/** Total width of the three buttons (72px each). */
 export const ROW_ACTIONS_PX = 216
-/** 横向位移超过这么多、且横向占优，才算左滑（否则是点、长按或纵向滚动）。 */
+/** A swipe needs more than this much mostly-horizontal movement (otherwise it is a tap, long-press or vertical scroll). */
 export const ROW_SWIPE_SLOP_PX = 10
 
 export class RowSwipe {
@@ -12,10 +13,10 @@ export class RowSwipe {
   private y0 = 0
   private base = 0
   private offset = 0
-  /** null = 还没判方向；true = 横向，接管了；false = 纵向，不管了。 */
+  /** null = direction not decided; true = horizontal, ours; false = vertical, ignored. */
   private horizontal: boolean | null = null
 
-  /** 按下。`open`：这一行此刻是不是开着。 */
+  /** Press. `open`: whether the row is currently open. */
   start(x: number, y: number, open: boolean): void {
     this.x0 = x
     this.y0 = y
@@ -24,7 +25,7 @@ export class RowSwipe {
     this.horizontal = null
   }
 
-  /** 移动：接管了就返回此刻的位移（0 到 −216），否则 null。 */
+  /** Move: returns the current offset (0 to −216) once the swipe is ours, else null. */
   move(x: number, y: number): number | null {
     const dx = x - this.x0
     const dy = y - this.y0
@@ -37,7 +38,7 @@ export class RowSwipe {
     return this.offset
   }
 
-  /** 抬手：接管过就返回停在开还是关（过半算开），没接管返回 null。 */
+  /** Release: if the swipe was ours, returns whether the row rests open or closed (past halfway = open), else null. */
   end(): 'open' | 'closed' | null {
     const took = this.horizontal === true
     this.horizontal = null

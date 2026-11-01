@@ -1,11 +1,12 @@
 /**
- * 会话的列表、行操作与菜单（session-ux.md §切换会话）。
+ * Session list, row actions and menu (session-ux.md §Switching sessions).
  *
- * - `SessionList`：compact 抽屉里的内容（一行一个会话，`[n] 名字  CWD / exit N  ≡`）。
- *   一行左滑或长按露出「保持接收 / 改名 / 关闭」（ADR-0039）；右端的 ≡ 拖动排序（ADR-0040）；
- * - `RenameSheet`：compact 上的改名，一张叠在抽屉上的小 sheet（ADR-0039 §2）；
- * - `SessionMenu`：wide 上右键 / 长按标签弹出的「改名 · 保持接收 · 关闭」；
- * - `RenameInput`：wide 上改名时标签名原地变成的输入框，`Enter` 确认、`Esc` 取消。
+ * - `SessionList`: the compact drawer contents, one row per session
+ *   (`[n] name  CWD / exit N  ≡`). Swipe a row left or long-press it to reveal
+ *   Pin / Rename / Close (ADR-0039); the ≡ on the right drags to reorder (ADR-0040).
+ * - `RenameSheet`: rename on compact, a small sheet over the drawer (ADR-0039 §2).
+ * - `SessionMenu`: Rename · Pin · Close, from right-click / long-press on a wide tab.
+ * - `RenameInput`: on wide the tab name turns into this input; `Enter` commits, `Esc` cancels.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
@@ -21,53 +22,54 @@ import { menuPosition } from '../ui/viewport'
 
 export interface SessionListProps {
   sessions: SessionView[]
-  /** agent 用户的家目录（welcome.home），CWD 里的它缩成 `~`。 */
+  /** The agent user's home directory (welcome.home), shown as `~` in CWDs. */
   home: string | null
   onSelect(sid: number): void
   onTogglePin(sid: number): void
   onRename(sid: number): void
   onClose(sid: number): void
-  /** 拖动排序松手：把 sid 挪到 before 前面（null = 最后）。 */
+  /** Drag-to-reorder drop: move sid in front of `before` (null = to the end). */
   onMove(sid: number, before: number | null): void
 }
 
 interface RowGesture {
   sid: number
   row: HTMLElement
-  /** 这次手势之后的 click 要吞掉（左滑过、长按过）。 */
+  /** Swallow the click after this gesture (it swiped or long-pressed). */
   swallow: boolean
 }
 
 export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, onClose, onMove }: SessionListProps) {
-  // 一次只会有一个按压：整张列表共用一个
+  // Only one press at a time, so the whole list shares one tracker
   const press = useRef(new PressTracker()).current
   const swipe = useRef(new RowSwipe()).current
   const gesture = useRef<RowGesture | null>(null)
   const swallowClick = useRef(false)
   const grip = useRef<DragReorder | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
-  /** 同一时间只开一行（ADR-0039 §1）。 */
+  /** At most one row open at a time (ADR-0039 §1). */
   const [openSid, setOpenSid] = useState<number | null>(null)
   const active = sessions.find((s) => s.active)?.sid ?? null
 
   useLayoutEffect(() => {
-    // 选中项要在可视区里（AC-4.9）；整个已可见则不动
+    // Keep the active row in view (AC-4.9); no-op if it is fully visible
     const el = listRef.current?.querySelector<HTMLElement>(`[data-sid="${active}"]`)
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [active])
 
-  // 开着的那行被关掉了（别处关的）：忘掉
+  // The open row's session was closed elsewhere: forget it
   useEffect(() => {
     if (openSid !== null && !sessions.some((s) => s.sid === openSid)) setOpenSid(null)
   }, [sessions, openSid])
 
-  // 拖到一半列表没了（抽屉被关）：清掉位移
+  // The list went away mid-drag (drawer closed): reset the offsets
   useEffect(() => () => void grip.current?.finish(true), [])
 
   /**
-   * 这次手势（左滑、长按）之后浏览器补发的那个 click 吞掉。【长按尤其要紧】：行被推开之后，
-   * 手指下面已经是按钮了，抬手补发的 click 会落在「改名」甚至「关闭」上（E2E 实测）。
-   * 标记在下一次按下时清掉，免得没有补发 click 时吞掉下一次真点击。
+   * Swallows the click the browser synthesizes after a swipe or long-press. This matters
+   * most for long-press: once the row slides open, a button sits under the finger and the
+   * synthesized click would hit Rename or even Close. The flag is cleared on the next press
+   * so that, when no click is synthesized, the next real click isn't eaten.
    */
   const takeSwallow = () => {
     const s = swallowClick.current
@@ -89,14 +91,14 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
     gesture.current = { sid: s.sid, row, swallow: false }
     const { clientX: x, clientY: y } = e
     press.down(x, y, () => {
-      // 长按 = 打开这一行（和左滑一样，ADR-0039 §1）
+      // Long-press opens the row, same as a swipe (ADR-0039 §1)
       if (gesture.current) gesture.current.swallow = true
       setOpenSid(s.sid)
     })
   }
 
   const onRowMove = (e: PointerEvent) => {
-    if (e.buttons === 0) return // 没按着（鼠标悬停）：不是手势
+    if (e.buttons === 0) return // Nothing pressed (mouse hover): not a gesture
     press.move(e.clientX, e.clientY)
     const g = gesture.current
     if (!g) return
@@ -119,7 +121,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
     const res = swipe.end()
     if (!g) return
     g.row.style.transition = ''
-    g.row.style.transform = '' // 停在哪由 data-open 决定（CSS），带过渡
+    g.row.style.transform = '' // data-open (CSS) decides where it rests, with a transition
     if (res) setOpenSid(res === 'open' ? g.sid : openSid === g.sid ? null : openSid)
     if (g.swallow) swallowClick.current = true
   }
@@ -137,7 +139,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
 
   const onRowClick = (s: SessionView) => {
     if (takeSwallow()) return
-    // 有一行开着：点哪儿都只是把它关上，不切换
+    // A row is open: any click just closes it, no switch
     if (openSid !== null) {
       setOpenSid(null)
       return
@@ -150,7 +152,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
     e.stopPropagation()
     const list = listRef.current
     if (!list) return
-    grip.current?.finish(true) // 上一次没收尾（拖到一半那一行没了）
+    grip.current?.finish(true) // The previous drag never finished (its row disappeared mid-drag)
     setOpenSid(null)
     capturePointer(e.currentTarget as Element, e.pointerId)
     grip.current = new DragReorder({
@@ -192,13 +194,13 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
                 aria-pressed={s.pinned ? 'true' : 'false'}
                 onClick={act(onTogglePin, s.sid)}
               >
-                {s.pinned ? '取消保持' : '保持接收'}
+                {s.pinned ? 'Unpin' : 'Pin'}
               </button>
               <button type="button" class="row-act" data-act="rename" data-testid="row-rename" tabIndex={open ? 0 : -1} onClick={act(onRename, s.sid)}>
-                改名
+                Rename
               </button>
               <button type="button" class="row-act" data-act="close" data-testid="row-close" tabIndex={open ? 0 : -1} onClick={act(onClose, s.sid)}>
-                关闭
+                Close
               </button>
             </div>
             <div
@@ -231,21 +233,21 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
               <span class="sl-idx">[{s.index}]</span>
               <span class="sl-name">
                 {s.pinned && (
-                  <span class="pin-mark" role="img" aria-label="保持接收">
+                  <span class="pin-mark" role="img" aria-label="Pinned">
                     <PinIcon size={12} />
                   </span>
                 )}
                 <span class="sl-text">{s.name}</span>
               </span>
-              {s.unread && <span class="unread-dot" aria-label="有新输出" />}
+              {s.unread && <span class="unread-dot" aria-label="New output" />}
               <span class="sl-meta" data-failed={s.status === 'exited' && s.exitCode !== 0 ? 'true' : 'false'}>
-                {/* 外层 rtl 只为从左边截；路径本身按从左往右排，`~` `/` 才不会被挪到右边（ADR-0042 §3） */}
+                {/* The outer rtl only truncates from the left; the path itself stays ltr so `~` and `/` don't jump to the right (ADR-0042 §3) */}
                 <bdi dir="ltr">{s.status === 'exited' ? `exit ${s.exitCode ?? '?'}` : shortCwd(s.cwd, home)}</bdi>
               </span>
               <span
                 class="row-grip"
                 data-testid={`session-${s.sid}-grip`}
-                aria-label="拖动排序"
+                aria-label="Drag to reorder"
                 onPointerDown={(e) => onGripDown(e, i)}
                 onPointerMove={(e) => grip.current?.move(e.clientY)}
                 onPointerUp={() => onGripUp(false)}
@@ -269,16 +271,17 @@ export interface RenameSheetProps {
 }
 
 /**
- * compact 上的改名（ADR-0039 §2）：叠在抽屉上的小 sheet，一个整行宽的输入框。
- * sheet 贴着键盘上沿（.app 是浮层的包含块），输入框在它最上面，不会被挡。失焦不算取消。
+ * Rename on compact (ADR-0039 §2): a small sheet over the drawer with a full-width input.
+ * The sheet sits on top of the keyboard (.app is the sheets' containing block) with the
+ * input at its top, so it is never covered. Blur does not cancel.
  */
 export function RenameSheet({ name, onCommit, onCancel }: RenameSheetProps) {
   const ref = useRef<HTMLInputElement>(null)
-  // Drawer 自己的 layout effect 先跑（子先于父），已经把焦点收进浮层；这里再落到输入框上
+  // Drawer's own layout effect runs first (children before parents) and pulls focus into the sheet; then move it to the input
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    // 【必须 setAttribute】：autocorrect 在 Chrome 是 boolean IDL 属性（AC-3.10 同理）
+    // Must use setAttribute: in Chrome autocorrect is a boolean IDL attribute (same as AC-3.10)
     el.setAttribute('autocorrect', 'off')
     el.setAttribute('autocapitalize', 'off')
     el.setAttribute('spellcheck', 'false')
@@ -290,7 +293,7 @@ export function RenameSheet({ name, onCommit, onCancel }: RenameSheetProps) {
   const commit = () => onCommit(ref.current?.value ?? '')
   return (
     <Drawer
-      title="改名"
+      title="Rename"
       testid="rename-sheet"
       backdropTestid="rename-backdrop"
       variant="rename"
@@ -298,10 +301,10 @@ export function RenameSheet({ name, onCommit, onCancel }: RenameSheetProps) {
       foot={
         <div class="drawer-actions">
           <button type="button" class="drawer-btn" data-testid="rename-cancel" onClick={onCancel}>
-            取消
+            Cancel
           </button>
           <button type="button" class="drawer-btn primary" data-testid="rename-ok" onClick={commit}>
-            保存
+            Save
           </button>
         </div>
       }
@@ -313,8 +316,8 @@ export function RenameSheet({ name, onCommit, onCancel }: RenameSheetProps) {
           data-testid="rename-input"
           type="text"
           autocomplete="off"
-          placeholder="留空 = 跟随目录"
-          aria-label="会话名（留空 = 跟随目录）"
+          placeholder="Blank = directory name"
+          aria-label="Session name (blank = directory name)"
           onKeyDown={(e) => {
             if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return
             e.preventDefault()
@@ -332,7 +335,7 @@ export interface RenameInputProps {
   onCancel(): void
 }
 
-/** 改名输入框。空字符串 = 恢复跟随 CWD 自动命名。失焦 = 取消。 */
+/** Rename input. Empty restores the automatic CWD-based name; blur cancels. */
 export function RenameInput({ initial, onCommit, onCancel }: RenameInputProps) {
   const ref = useRef<HTMLInputElement>(null)
   const done = useRef(false)
@@ -356,8 +359,8 @@ export function RenameInput({ initial, onCommit, onCancel }: RenameInputProps) {
       data-testid="rename-input"
       data-esc-local
       type="text"
-      placeholder="留空 = 跟随目录"
-      aria-label="会话名（留空 = 跟随目录）"
+      placeholder="Blank = directory name"
+      aria-label="Session name (blank = directory name)"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       onDblClick={(e) => e.stopPropagation()}
@@ -388,7 +391,7 @@ export interface SessionMenuProps {
 
 const MENU_SIZE = { width: 184, height: 152 }
 
-/** 会话菜单：锚在触发点旁边，点外面或 Esc 关闭（不是浮层）。 */
+/** Session menu: anchored next to where it was triggered; click outside or Esc closes it (not a sheet). */
 export function SessionMenu({ session, x, y, onRename, onTogglePin, onClose, onDismiss }: SessionMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
@@ -396,13 +399,14 @@ export function SessionMenu({ session, x, y, onRename, onTogglePin, onClose, onD
     const el = ref.current
     el?.querySelector<HTMLElement>('button')?.focus({ preventScroll: true })
     return () => {
-      // 焦点还在菜单里就还回去（抽屉里打开的菜单，焦点回抽屉）
+      // If focus is still in the menu, give it back (for a menu opened in the drawer, back to the drawer)
       if (prev && prev.isConnected && el?.contains(document.activeElement)) prev.focus({ preventScroll: true })
     }
   }, [])
-  // 【只认菜单出现之后才按下的指针】：打开菜单的那次长按，抬手时浏览器可能补一个 click
-  // （E2E 实测：iPad 触屏模拟下长按标签，click 落在刚出现的遮罩上，菜单一闪就关了），
-  // 落在菜单上则会误点第一项；长按到点时的 contextmenu 同理。键盘触发的 click（detail 0）不受影响。
+  // Only honor pointers pressed after the menu appeared. Releasing the long-press that opened
+  // the menu may synthesize a click: on the scrim it closes the menu instantly (seen with iPad
+  // touch emulation), on the menu it hits the first item. Same for the contextmenu fired at
+  // long-press time. Keyboard clicks (detail 0) are unaffected.
   const pressed = useRef(false)
   const onPress = () => {
     pressed.current = true
@@ -427,7 +431,7 @@ export function SessionMenu({ session, x, y, onRename, onTogglePin, onClose, onD
         data-sid={session.sid}
         data-esc-local
         role="menu"
-        aria-label={`会话 ${session.name}`}
+        aria-label={`Session ${session.name}`}
         ref={ref}
         style={{ left: `${pos.left}px`, top: `${pos.top}px` }}
         onPointerDown={onPress}
@@ -441,7 +445,7 @@ export function SessionMenu({ session, x, y, onRename, onTogglePin, onClose, onD
         }}
       >
         <button role="menuitem" data-testid="session-rename" onClick={(e) => fresh(e) && onRename()}>
-          改名
+          Rename
         </button>
         <button
           role="menuitemcheckbox"
@@ -449,11 +453,11 @@ export function SessionMenu({ session, x, y, onRename, onTogglePin, onClose, onD
           data-testid="session-pin"
           onClick={(e) => fresh(e) && onTogglePin()}
         >
-          <span>保持接收</span>
+          <span>Pin</span>
           <span class="menu-check">{session.pinned && <CheckIcon size={12} />}</span>
         </button>
         <button role="menuitem" class="danger" data-testid="session-close" onClick={(e) => fresh(e) && onClose()}>
-          关闭
+          Close
         </button>
       </div>
     </>

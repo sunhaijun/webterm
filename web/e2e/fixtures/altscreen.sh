@@ -1,17 +1,18 @@
 #!/bin/bash
-# 假的全屏 TUI —— 行为对齐实测到的 claude 2.1.270（ADR-0019 §背景）：
+# A fake full-screen TUI that behaves like claude 2.1.270 as measured (ADR-0019, Context):
 #
-#   * 启动就进备用屏，`ESC[?1049h` 整个生命周期【只发这一次】
-#   * 稳态是差分重画：绝对定位、不清屏、假设屏幕上已经有上一帧
-#   * 只有 SIGWINCH 才整屏重画（`ESC[2J` + 全屏），FRAME 计数 +1
-#   * 退出时回主屏
+#   * enters the alternate screen at start; `ESC[?1049h` is sent exactly once
+#   * steady state is differential redraws: absolute positioning, no clear, relies on the previous frame
+#   * only SIGWINCH triggers a full redraw (`ESC[2J` + whole screen) and bumps FRAME
+#   * returns to the main screen on exit
 #
-# 用法: altscreen.sh [快跑秒数] [完成标记文件]
+# Usage: altscreen.sh [busy-seconds] [done-marker-file]
 #
-# 【两段式】：先快跑几秒把环形缓冲顶掉好几轮（差分帧刻意做大，约 30 KB/s），
-# 然后【转入空闲，一个字节都不产】—— E2E 才能干净地量出"切回来花了多少字节"。
-# 真实的 AI CLI 也是这个形状：干活时刷屏，等人时安静。
-# 快跑结束会 touch 那个标记文件，测试据此知道"积压已经超过窗口了"。
+# Two phases: run busy for a few seconds, overflowing the ring buffer several times
+# (frames are deliberately large, ~30 KB/s), then go idle and emit nothing, so E2E
+# can measure exactly how many bytes switching back costs. Real AI CLIs look like
+# this: busy while working, silent while waiting. The marker file is touched when
+# the busy phase ends, telling the test the backlog now exceeds the window.
 
 busy=${1:-5}
 donefile=${2:-}
@@ -20,12 +21,12 @@ tick=0
 
 paint_all() {
     printf '\033[2J\033[H'
-    printf '\033[1;1H== 假 TUI · 整屏重画 =='
+    printf '\033[1;1H== fake TUI · full redraw =='
     printf '\033[3;1HFRAME %03d' "$frame"
 }
 
 paint_diff() {
-    # 不清屏，逐行绝对定位 —— 离开备用屏上下文就没有意义的那种字节
+    # No clear, absolute positioning per row: bytes that mean nothing outside the alternate screen
     local i
     for ((i = 5; i <= 14; i++)); do
         printf '\033[%d;1Hrow %02d  tick %06d  ....................................' "$i" "$i" "$tick"
@@ -54,7 +55,7 @@ while :; do
     if ((SECONDS - start < busy)); then
         tick=$((tick + 1))
         paint_diff
-        # 后台 sleep + wait：trap 才能在等待期间立刻生效（前台 sleep 会把信号压到它结束）
+        # sleep in the background + wait, so the trap fires immediately (a foreground sleep delays signals)
         sleep 0.02 &
         wait $! 2>/dev/null
     else
@@ -62,7 +63,7 @@ while :; do
             marked=1
             [ -n "$donefile" ] && touch "$donefile"
         fi
-        # 空闲：只等信号，不产字节
+        # Idle: wait for signals, emit nothing
         sleep 3600 &
         wait $! 2>/dev/null
     fi

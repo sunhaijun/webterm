@@ -1,6 +1,6 @@
 /**
- * 装配层的逻辑：连接 ⇄ 会话 ⇄ 输入 ⇄ 界面状态。组件（app.tsx 及其子组件）只做渲染，
- * 状态与动作都在这里 —— 老 app.tsx 把这些和 JSX 搅在一起，积成 1271 行（ADR-0025 §9）。
+ * App logic: connection ⇄ sessions ⇄ input ⇄ UI state. Components (app.tsx and
+ * its children) only render; all state and actions live here (ADR-0025 §9).
  */
 import { Connection, type ConnState, type StateInfo, type WebSocketLike } from '../conn/connection'
 import { inputTrace, viewOf } from '../keys/inputstats'
@@ -33,29 +33,29 @@ export interface AppState {
   coarse: boolean
   conn: ConnState
   connInfo: StateInfo
-  /** 重连也没用的错误（协议不符）。 */
+  /** An error reconnecting won't fix (protocol mismatch). */
   fatal: string | null
-  /** 设备被吊销（AC-1.11）：连接已停，界面要换成配对引导页。 */
+  /** Device revoked (AC-1.11): the connection is stopped and the UI switches to the pairing page. */
   revoked: boolean
-  /** agent 用户的家目录（welcome.home），CWD 里的它缩成 `~`；没有就不缩写。 */
+  /** The agent user's home directory (welcome.home), shown as `~` in CWDs; null means no abbreviation. */
   home: string | null
-  /** 收到过 welcome：之前还不知道有哪些会话，不显示空状态。 */
+  /** A welcome has arrived. Before that the session list is unknown, so no empty state is shown. */
   welcomed: boolean
   sessions: SessionView[]
   active: number | null
   maxSessions: number
   toast: Toast | null
   preview: ImePreviewState | null
-  /** compact 的会话抽屉。 */
+  /** The session drawer (compact). */
   sessionsOpen: boolean
-  /** 设置浮层（AC-5.3，ADR-0037）。 */
+  /** The settings sheet (AC-5.3, ADR-0037). */
   settingsOpen: boolean
-  /** 等用户确认要关的会话（AC-4.11，ADR-0038）。 */
+  /** The session awaiting close confirmation (AC-4.11, ADR-0038). */
   closing: number | null
   theme: Theme
-  /** 终端字号（px）。 */
+  /** Terminal font size in px. */
   fontSize: number
-  /** 当前会话的附加键槽停在哪一页（ADR-0036：每个会话各记一份）。 */
+  /** Which page the extra-keys slot shows for the active session (tracked per session, ADR-0036). */
   page: KeyPage
 }
 
@@ -69,13 +69,13 @@ export class AppController {
   private readonly store: SessionStore
   private readonly enc = new TextEncoder()
   private area: HTMLElement | null = null
-  /** 文本页跟着会话走（AC-3.22，ADR-0036）：各会话的页与草稿。 */
+  /** Per-session page and draft; the text page follows the session (AC-3.22, ADR-0036). */
   private readonly pages = new TextPages()
   private textPage: TextPageEls | null = null
   private untrackText: (() => void) | null = null
-  /** 文本框里此刻是哪个会话的草稿。 */
+  /** The session whose draft is currently in the text box. */
   private textOwner: number | null = null
-  /** 文本框正在组字（输入法候选还没选）。 */
+  /** The text box is in IME composition (no candidate picked yet). */
   private composing = false
   private ime: RawIme | null = null
   private imeEl: HTMLTextAreaElement | null = null
@@ -84,27 +84,29 @@ export class AppController {
   private reqSeq = 0
   private toastSeq = 0
   private toastTimer: ReturnType<typeof setTimeout> | undefined
-  /** 自己发起的 session.create → 建好之后要不要把焦点给它。 */
+  /** session.create requests we sent → whether to focus the session once it exists. */
   private readonly pendingCreate = new Map<string, boolean>()
   /**
-   * 浮层关掉之后要不要把焦点还给输入处（AC-4.8 / ADR-0037 §4 / ADR-0038 §3）：打开时记下。
-   * 抽屉记的是「打开前在不在打字」，选中会话、新建时再按形态算。
+   * Whether to return focus to the input once a sheet closes (AC-4.8 / ADR-0037 §4 /
+   * ADR-0038 §3), recorded when it opens. For the drawer we record whether the user
+   * was typing before it opened, and decide per form factor on select / new.
    */
   private drawerTyping = false
   private settingsRefocus = false
   private closeRefocus = false
   /**
-   * 已经发了 session.close、还没收到 session.closed 的会话（ADR-0038 §5）。agent 先把会话从表里
-   * 删掉、再等进程退出（最多 2s），这段时间里发给它的任何东西都会换来 unknown_session。
+   * Sessions we sent session.close for but haven't seen session.closed (ADR-0038 §5).
+   * The agent drops the session from its table first and then waits up to 2s for the
+   * process to exit; anything sent to it meanwhile gets unknown_session back.
    */
   private closeSent = new Set<number>()
-  /** 附加键 / 文本页正在往终端里送字节：onData 出口别再套一次粘滞修饰。 */
+  /** Extra keys or the text page are feeding the terminal; onData must not apply sticky modifiers again. */
   private keyBypass = false
   private lastW = 0
   private lastH = 0
   private readonly sendResize = debounce(() => this.sendResizeNow(), 100)
 
-  /** 问一次「这台设备还认证着吗」：返回 HTTP 状态码。 */
+  /** Asks whether this device is still authorized; resolves to the HTTP status. */
   private readonly authProbe: () => Promise<number>
   private probing = false
 
@@ -147,17 +149,17 @@ export class AppController {
         onSnapshot: (sid, data) => this.store.snapshot(sid, data),
         onMessage: (msg) => this.onMessage(msg),
         onState: (conn, connInfo) => this.set({ conn, connInfo }),
-        onRecovered: (bytes) => this.toast('recovered', `已恢复 · 补齐 ${formatBytes(bytes)}`),
+        onRecovered: (bytes) => this.toast('recovered', `Resumed · caught up ${formatBytes(bytes)}`),
         onRestart: () => {
           const had = this.store.list().length > 0
           this.store.clear()
-          if (had) this.toast('warn', '会话已结束（agent 可能已重启）')
+          if (had) this.toast('warn', 'Session ended (agent may have restarted)')
         },
         onFatal: (reason) => this.set({ fatal: reason }),
         onUnauthorized: () => this.revoke(),
         onClosed: (welcomed) => {
-          // 一个 welcome 都没收到就断了：升级多半被拒了。浏览器不给 WebSocket 的 HTTP 状态码，
-          // 问一次 REST：401 就是设备被吊销（离线期间被吊销的走这条）
+          // Closed before any welcome: the upgrade was most likely rejected. Browsers hide the
+          // WebSocket HTTP status, so ask REST; 401 means the device was revoked (e.g. while offline).
           if (!welcomed) this.probeAuth()
         },
         onError: (reason) => this.toast('error', reason),
@@ -173,7 +175,7 @@ export class AppController {
     })
   }
 
-  // ---------- 状态 ----------
+  // ---------- State ----------
 
   get(): AppState {
     return this.state
@@ -191,7 +193,7 @@ export class AppController {
 
   private refresh(): void {
     this.syncTextPage()
-    // 确认浮层开着时会话没了（别处关掉、agent 重启）：跟着关，sid 会复用（ADR-0038 §4）
+    // The session behind an open close-confirm is gone (closed elsewhere, agent restart): close it too, sids are reused (ADR-0038 §4)
     const closing = this.state.closing !== null && this.store.has(this.state.closing) ? this.state.closing : null
     this.set({ sessions: this.store.list(), active: this.store.active, page: this.pages.page(this.store.active), closing })
   }
@@ -203,13 +205,13 @@ export class AppController {
   }
 
   /**
-   * 设备被吊销（AC-1.11 / E2E-15）：停止重连，界面换成配对引导页。
-   * 继续重连只会一遍遍被 401 拒掉，用户还以为是网络问题。
+   * Device revoked (AC-1.11 / E2E-15): stop reconnecting and show the pairing page.
+   * Retrying would just collect 401s and look like a network problem.
    */
   private revoke(): void {
     if (this.state.revoked) return
     this.conn.close()
-    this.set({ revoked: true, fatal: '此设备已被吊销' })
+    this.set({ revoked: true, fatal: 'This device has been revoked' })
   }
 
   private probeAuth(): void {
@@ -220,29 +222,30 @@ export class AppController {
         if (status === 401) this.revoke()
       })
       .catch(() => {
-        /* 网络不通：照常重连 */
+        /* Network down: keep reconnecting as usual */
       })
       .finally(() => {
         this.probing = false
       })
   }
 
-  // ---------- 挂载 ----------
+  // ---------- Mount ----------
 
-  /** 终端容器与 `.app` 就位之后调用一次。返回卸载函数。 */
+  /** Call once the terminal container and `.app` exist. Returns the unmount function. */
   mount(area: HTMLElement, root: HTMLElement): () => void {
     this.area = area
 
-    // 【只在容器尺寸真的变了才 fit】：ResizeObserver 会因内容变化、亚像素抖动反复触发
+    // Fit only when the container size actually changes; ResizeObserver also fires on content changes and subpixel jitter
     const ro = new ResizeObserver(() => this.measure())
     ro.observe(area)
     const unfit = installAppFit(root)
-    // 形态在页面加载时算一次，之后不再变（layout.md §形态）：resize 里不重算 ——
-    // 有的环境（Playwright 的设备模拟、部分安卓 WebView）里 screen 会跟着视口变，
-    // 重算就会在弹键盘时把平板翻成 compact。窗口挪到别的显示器上，刷新一次即可。
+    // The form factor is computed once at load and never again (layout.md §Form).
+    // In some environments (Playwright device emulation, some Android WebViews) `screen`
+    // tracks the viewport, so recomputing would flip a tablet to compact when the keyboard
+    // opens. After moving the window to another display, reload.
     const uncoarse = watchCoarse((coarse) => this.set({ coarse }))
 
-    // 网络恢复 / 页面重新可见 → 立即重试或探活（AC-2.9 / AC-2.20）
+    // Network back / page visible again → retry or probe immediately (AC-2.9 / AC-2.20)
     const kick = () => this.conn.retryNow()
     const onVisible = () => {
       if (document.visibilityState === 'visible') kick()
@@ -250,8 +253,8 @@ export class AppController {
     window.addEventListener('online', kick)
     document.addEventListener('visibilitychange', onVisible)
 
-    // 输入路径探针的头两段（AC-3.17）。【必须是捕获阶段】：xterm 处理掉的键会
-    // preventDefault + stopPropagation，冒泡阶段根本收不到
+    // First two stages of the input-path probe (AC-3.17). Must be capture phase: keys xterm
+    // handles get preventDefault + stopPropagation and never bubble.
     const onKeyTrace = () => {
       inputTrace.bump('keydown')
       if (document.activeElement?.classList.contains('xterm-helper-textarea')) inputTrace.bump('toTerm')
@@ -272,8 +275,8 @@ export class AppController {
     })
     const undrag = installDragWheel(area, () => this.activeTerm() ?? null)
 
-    // 主题跟随系统时（AC-5.3）：系统切深浅色时 CSS 变量已经变了，xterm 的要重读一遍。
-    // 强制了浅色 / 深色时重读的结果不变，无害
+    // Theme follows the system (AC-5.3): when the OS switches light/dark the CSS variables
+    // change and xterm must re-read them. Harmless when light or dark is forced.
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
     const onScheme = () => this.store.setTheme(cssTheme())
     mq?.addEventListener('change', onScheme)
@@ -303,8 +306,10 @@ export class AppController {
   }
 
   /**
-   * 附加键组件交上来（或收回）文本页的 DOM。之后切会话时由这里同步翻页、换草稿、给焦点。
-   * 附加键可能晚于会话出现（`pointer: coarse` 在运行中变了），所以交上来时先装上当前会话的那一份。
+   * The extra-keys component hands over (or withdraws) the text page DOM. From then on,
+   * switching sessions flips the page, swaps the draft and moves focus here. Extra keys
+   * can appear after sessions (`pointer: coarse` changed at runtime), so load the active
+   * session's state on registration.
    */
   registerTextPage(els: TextPageEls | null): void {
     const old = this.textPage
@@ -328,13 +333,15 @@ export class AppController {
     }
   }
 
-  // ---------- 会话 ----------
+  // ---------- Sessions ----------
 
   /**
-   * 切到某个会话。焦点跟着会话走（AC-4.8）：`activate()` 把上一个会话的 DOM 摘掉时
-   * 焦点会落回 body，所以先记下「焦点在不在终端或文本框里」，切完还给**新会话的输入处**
-   * （它停在文本页就是文本框，否则是终端，ADR-0036）；非触摸设备无条件还。
-   * `focus` 显式给出时以它为准（从抽屉切换：看打开抽屉之前）。点的就是当前会话时不挪焦点。
+   * Switches to a session. Focus follows the session (AC-4.8): `activate()` detaches the
+   * previous session's DOM and focus drops to body, so first record whether focus was in
+   * the terminal or text box, then hand it to the new session's input (the text box if it
+   * is on the text page, else the terminal, ADR-0036). Non-touch devices always get focus.
+   * An explicit `focus` wins (from the drawer: what it was before the drawer opened).
+   * Selecting the already-active session leaves focus alone.
    */
   select(sid: number, focus?: boolean): void {
     const area = this.area
@@ -355,11 +362,11 @@ export class AppController {
 
   newSession(focus?: boolean): void {
     if (this.state.sessions.length >= this.state.maxSessions) {
-      this.toast('warn', `会话数已达上限 ${this.state.maxSessions}`)
+      this.toast('warn', `Session limit reached (${this.state.maxSessions})`)
       return
     }
     if (this.state.conn !== 'online') {
-      this.toast('warn', '未连接，稍后再新建会话')
+      this.toast('warn', "Not connected; can't create a session yet")
       return
     }
     const reqID = `new-${++this.reqSeq}`
@@ -371,14 +378,14 @@ export class AppController {
       t: T.sessionCreate,
       req_id: reqID,
       name: null,
-      // cwd 默认继承当前会话 —— 通常是想在同一个项目里再开一个
+      // Inherit the active session's cwd: usually you want another shell in the same project
       cwd: cur?.cwd || null,
       cols: t?.cols ?? 80,
       rows: t?.rows ?? 24,
     })
   }
 
-  /** 关闭会话：`running` 的先弹确认浮层（AC-4.11，ADR-0038），`exited` 的直接关。 */
+  /** Closes a session: `running` ones ask for confirmation first (AC-4.11, ADR-0038), `exited` ones close immediately. */
   requestClose(sid: number): void {
     const info = this.store.info(sid)
     if (!info || this.state.closing !== null) return
@@ -386,14 +393,15 @@ export class AppController {
       this.sendClose(sid)
       return
     }
-    // 从抽屉里打开的不还焦点（留在抽屉里）
+    // Opened from the drawer: don't return focus (it stays in the drawer)
     this.closeRefocus = !this.state.sessionsOpen && this.refocus(this.typing())
     this.set({ closing: sid })
   }
 
   /**
-   * 确认关闭。【先还焦点、再发 session.close】：agent 回 session.closed 后切到相邻会话，
-   * 那一步看焦点在不在终端里决定给不给新会话焦点（AC-4.8）；先发再还就被判成「没在打字」。
+   * Confirms the close. Restore focus before sending session.close: on session.closed we
+   * switch to a neighbor and focus it only if focus is in the terminal (AC-4.8). Sending
+   * first would read as "not typing".
    */
   confirmClose(): void {
     const sid = this.state.closing
@@ -414,16 +422,19 @@ export class AppController {
 
   private sendClose(sid: number): void {
     if (this.closeSent.has(sid)) return
-    // 离线时 send 会静默丢掉：别标成关闭中（否则重连后它活着却再也收不到输入）
+    // Offline sends are dropped silently; don't mark it as closing, or after reconnecting it would be alive but ignore input
     if (this.state.conn !== 'online') {
-      this.toast('warn', '未连接，稍后再关闭会话')
+      this.toast('warn', "Not connected; can't close the session yet")
       return
     }
     this.closeSent.add(sid)
     this.conn.send({ t: T.sessionClose, req_id: `close-${++this.reqSeq}`, sid })
   }
 
-  /** 改名；空字符串恢复跟随 CWD 自动命名。没改动（自动名原样确认）不发，免得它停止跟随 CWD。 */
+  /**
+   * Renames a session; an empty name goes back to the automatic CWD-based name. Unchanged
+   * names (confirming the auto name as-is) are not sent, so the session keeps following its CWD.
+   */
   rename(sid: number, name: string): void {
     const trimmed = name.trim()
     const info = this.store.info(sid)
@@ -435,14 +446,14 @@ export class AppController {
     this.store.togglePinned(sid)
   }
 
-  /** 拖动排序松手（ADR-0040）：本地先挪，再告诉 agent；收到 session.order 以它为准。 */
+  /** Drag-to-reorder drop (ADR-0040): move locally, then tell the agent; session.order is authoritative. */
   moveSession(sid: number, before: number | null): void {
     if (!this.store.has(sid)) return
     this.store.move(sid, before)
     this.conn.send({ t: T.sessionMove, req_id: `move-${++this.reqSeq}`, sid, before })
   }
 
-  // ---------- 浮层 ----------
+  // ---------- Sheets ----------
 
   openSessions(): void {
     this.drawerTyping = this.typing()
@@ -453,7 +464,10 @@ export class AppController {
     this.set({ sessionsOpen: false })
   }
 
-  /** 在抽屉里选中一个会话：关抽屉，焦点按「打开抽屉之前」恢复（在这次点击里，iOS 才弹键盘）。 */
+  /**
+   * Picks a session in the drawer: closes it and restores focus as it was before the drawer
+   * opened (inside this click, so iOS shows the keyboard).
+   */
   selectFromDrawer(sid: number): void {
     this.set({ sessionsOpen: false })
     this.select(sid, this.refocus(this.drawerTyping))
@@ -465,21 +479,22 @@ export class AppController {
   }
 
   /**
-   * 打开设置（ADR-0037 §2）。从会话抽屉里打开的，焦点此刻在抽屉里，「之前在哪」看打开抽屉之前。
+   * Opens settings (ADR-0037 §2). When opened from the session drawer, focus is in the
+   * drawer, so "where focus was" means before the drawer opened.
    */
   openSettings(): void {
     this.settingsRefocus = this.refocus(this.state.sessionsOpen ? this.drawerTyping : this.typing())
     this.set({ settingsOpen: true, sessionsOpen: false })
   }
 
-  /** 关掉设置：打开前在打字的、或非触摸设备，焦点还回去（ADR-0037 §4）。 */
+  /** Closes settings; returns focus if the user was typing before or on non-touch devices (ADR-0037 §4). */
   closeSettings(): void {
     if (!this.state.settingsOpen) return
     this.set({ settingsOpen: false })
     if (this.settingsRefocus) this.focusInput()
   }
 
-  // ---------- 偏好（AC-5.3，ADR-0037） ----------
+  // ---------- Preferences (AC-5.3, ADR-0037) ----------
 
   setTheme(theme: Theme): void {
     if (theme === this.state.theme) return
@@ -489,7 +504,7 @@ export class AppController {
     this.store.setTheme(cssTheme())
   }
 
-  /** 改字号：所有实例一起换 → fit → 补一条 resize（容器没变，ResizeObserver 不会响）。 */
+  /** Changes font size: all terminals → fit → explicit resize (the container didn't change, so ResizeObserver stays quiet). */
   setFontSize(px: number): void {
     if (!validFontSize(px) || px === this.state.fontSize) return
     writeFontSize(px)
@@ -498,9 +513,12 @@ export class AppController {
     this.measure(true)
   }
 
-  // ---------- 输入 ----------
+  // ---------- Input ----------
 
-  /** 附加键（在 pointer 事件的派发里调用）：按当前粘滞修饰与 DECCKM 算好字节，走 onData 出口。 */
+  /**
+   * Extra key press (called from the pointer event dispatch): computes bytes from the sticky
+   * modifiers and DECCKM, then goes out through onData.
+   */
   pressKey(id: ExtraKeyId): void {
     const t = this.activeTerm()
     if (!t) return
@@ -515,9 +533,10 @@ export class AppController {
   }
 
   /**
-   * 文本输入页的回车（在 keydown 的派发里调用，ADR-0027）。内容走 paste、回车单独键入：
-   * 「长内容 + \r」一次写进去，claude 会当成整块粘贴把 \r 吞掉。粘滞修饰不碰这两样 ——
-   * ALT 激活时回车会变成 ESC \r，claude 把它当换行。
+   * Enter on the text page (called from the keydown dispatch, ADR-0027). The text goes in as
+   * a paste and Enter is typed separately: written together as "long text + \r", claude
+   * treats it as one paste and swallows the \r. Sticky modifiers apply to neither; with ALT
+   * active, Enter would become ESC \r, which claude reads as a newline.
    */
   sendText(send: TextSend): void {
     const t = this.activeTerm()
@@ -536,8 +555,9 @@ export class AppController {
   }
 
   /**
-   * ✎ 或键区横滑：翻当前会话的页（ADR-0036）。DOM 上的页【同步】翻：下一行的 focus() 要求
-   * 文本框此刻已经可见，而且必须在这次点击 / 抬起的处理函数里聚焦，iOS 才会弹键盘。
+   * ✎ or a horizontal swipe on the key area: flips the active session's page (ADR-0036).
+   * The DOM page flips synchronously: the focus() below needs the text box visible now, and
+   * iOS only shows the keyboard if focus happens inside this click / pointerup handler.
    */
   togglePage(): void {
     const sid = this.store.active
@@ -550,7 +570,7 @@ export class AppController {
     else if (el && document.activeElement === el.text) this.focusTerm()
   }
 
-  /** 焦点给当前会话的输入处：停在文本页（且文本页在界面上）就是文本框，否则是终端。 */
+  /** Focuses the active session's input: the text box if it is on the text page (and that page is mounted), else the terminal. */
   private focusInput(): void {
     const el = this.textPage
     if (el && this.pages.page(this.store.active) === 'text') el.text.focus({ preventScroll: true })
@@ -558,9 +578,11 @@ export class AppController {
   }
 
   /**
-   * 当前会话变了（切换、关掉、agent 重启）就把文本框换成它的草稿、附加键槽翻到它的页
-   * （AC-3.22）。旧会话还在就先把框里的内容存成它的草稿。组字中先失焦，让输入法把组到一半的字
-   * 提交进框里再存 —— 直接改 `value` 会让输入法丢字，或把字补进新会话的草稿（ADR-0036 §3）。
+   * When the active session changes (switch, close, agent restart), load its draft into the
+   * text box and flip the extra-keys slot to its page (AC-3.22). If the old session still
+   * exists, save the box contents as its draft first. During IME composition, blur first so
+   * the IME commits the pending text before we save; setting `value` directly makes the IME
+   * drop characters or append them to the new session's draft (ADR-0036 §3).
    */
   private syncTextPage(): void {
     this.pages.retain((s) => this.store.has(s))
@@ -577,11 +599,11 @@ export class AppController {
   }
 
   private onTermData(sid: number, data: string): void {
-    // 关闭中：键入、焦点上报（tmux / claude 开了 1004）都不再发（ADR-0038 §5）
+    // Closing: send neither keystrokes nor focus reports (tmux / claude enable mode 1004) (ADR-0038 §5)
     if (this.closeSent.has(sid)) return
-    // 组字期间【一个字节都不能发】—— 只在 compositionend 时一次性提交（AC-3.3）
+    // Never send a byte during IME composition; it is committed once on compositionend (AC-3.3)
     if (sid === this.store.active && this.ime?.isComposing) return
-    // 粘滞 CTRL / ALT 对软键盘打出来的下一个字符也生效；附加键自己已经算过了
+    // Sticky CTRL / ALT also applies to the next character from the on-screen keyboard; extra keys already applied it
     const out = inUserInputEvent() && !this.keyBypass ? this.sticky.apply(data) : data
     const info = this.store.info(sid)
     if (!info) return
@@ -621,7 +643,7 @@ export class AppController {
         this.step(1)
         break
       case 'toggleSessions':
-        // wide 上不做任何事：会话在标签栏里
+        // No-op on wide: sessions are in the tab bar
         if (this.state.form === 'compact') {
           if (this.state.sessionsOpen) this.closeSessions()
           else this.openSessions()
@@ -631,8 +653,9 @@ export class AppController {
   }
 
   /**
-   * IME 挂在当前会话的 helper textarea 上。【每个会话有自己的 xterm，也就有自己的
-   * textarea】，切会话必须重新挂，否则组字期间的字节会直通 PTY（AC-3.3）。
+   * Attaches the IME handler to the active session's helper textarea. Every session has its
+   * own xterm and therefore its own textarea, so it must be re-attached on every switch, or
+   * bytes typed during composition would go straight to the PTY (AC-3.3).
    */
   private attachIme(): void {
     const helper = this.area?.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea') ?? null
@@ -640,7 +663,7 @@ export class AppController {
     this.ime?.dispose()
     this.imeEl = helper
     this.ime = new RawIme(helper, {
-      // 同一个 onData 出口：回放门、粘滞修饰、inputStats 一视同仁
+      // Same onData exit as everything else: replay gate, sticky modifiers and inputStats all apply
       onCommit: (text) => this.activeTerm()?.term.input(text, true),
       onPreview: (text) => this.set({ preview: text ? this.previewAt(text) : null }),
     })
@@ -659,11 +682,12 @@ export class AppController {
     return { text, left: s.left - g.left + pos.left, top: s.top - g.top + pos.top }
   }
 
-  // ---------- 尺寸 ----------
+  // ---------- Size ----------
 
   /**
-   * 容器尺寸变了 → fit → 防抖发 resize。`force`：容器没变但字符格变了（改字号），
-   * 尺寸去重会把整次量算吞掉，客户端与 PTY 的 cols/rows 就分了家。
+   * Container size changed → fit → debounced resize. `force` is for when the container is
+   * the same but the cell size changed (font size): size dedup would swallow the whole
+   * measurement and the client and PTY would disagree on cols/rows.
    */
   private measure(force = false): void {
     const area = this.area
@@ -687,7 +711,7 @@ export class AppController {
     this.resizeCount++
   }
 
-  // ---------- 消息 ----------
+  // ---------- Messages ----------
 
   private onMessage(msg: ServerMessage): void {
     switch (msg.t) {
@@ -717,9 +741,9 @@ export class AppController {
         break
       }
       case T.error:
-        // 关闭中、或者本来就没有了的会话：agent 说「会话不存在」是意料之中，不弹（ADR-0038 §5）
+        // Closing or already-gone sessions: unknown_session is expected, no toast (ADR-0038 §5)
         if (msg.code === Code.unknownSession && msg.sid !== undefined && (this.closeSent.has(msg.sid) || !this.store.has(msg.sid))) break
-        if (msg.code === Code.sessionLimit) this.toast('warn', `会话数已达上限 ${this.state.maxSessions}`)
+        if (msg.code === Code.sessionLimit) this.toast('warn', `Session limit reached (${this.state.maxSessions})`)
         else if (msg.code !== Code.unauthorized && msg.code !== Code.protocolUnsupported && msg.code !== Code.sessionExited) {
           this.toast('error', msg.message || msg.code)
         }
@@ -740,15 +764,15 @@ export class AppController {
       if (this.store.has(r.sid)) gone = true
       this.store.remove(r.sid)
     }
-    // 离线期间被关掉的会话
+    // Sessions closed while we were offline
     const live = new Set(w.sessions.map((s) => s.sid))
     for (const s of this.store.list()) if (!live.has(s.sid)) this.store.remove(s.sid)
     for (const s of w.sessions) this.store.upsert(s)
-    // welcome 里还在的会话，它的 session.close 没落地（断线、agent 重启后 sid 复用）：不再算关闭中
+    // A session still in the welcome never got our session.close (disconnect, or sid reused after an agent restart): no longer closing
     this.closeSent.clear()
-    // welcome.sessions[] 的顺序就是显示顺序（ADR-0040）
+    // welcome.sessions[] is in display order (ADR-0040)
     this.store.setOrder(w.sessions.map((s) => s.sid))
-    if (gone) this.toast('warn', '会话已结束（agent 可能已重启）')
+    if (gone) this.toast('warn', 'Session ended (agent may have restarted)')
     this.set({ welcomed: true, maxSessions: w.limits.max_sessions, fatal: null, home: w.home || null })
 
     const active = this.store.active
@@ -758,7 +782,7 @@ export class AppController {
       else if (first) this.newSession()
       return
     }
-    // 重连：离线期间终端尺寸可能变过（键盘、旋转），那几条 resize 没发出去
+    // Reconnect: the terminal may have resized while offline (keyboard, rotation) and those resizes were never sent
     const t = this.activeTerm()?.term
     const info = this.store.info(active)
     if (t && info && (t.cols !== info.cols || t.rows !== info.rows)) this.sendResizeNow()
@@ -768,7 +792,7 @@ export class AppController {
     const wasActive = this.store.active === sid
     const typing = this.typing()
     const next = wasActive ? this.store.neighbourOf(sid) : null
-    // 【先标成关闭中再拆】：dispose 时 xterm 失焦，开了焦点上报的程序会再吐一个 ESC [O
+    // Mark as closing before tearing down: dispose blurs xterm, and programs with focus reporting would emit another ESC [O
     this.closeSent.add(sid)
     this.store.remove(sid)
     this.closeSent.delete(sid)
@@ -780,24 +804,24 @@ export class AppController {
     return sid === null ? undefined : this.store.termOf(sid)
   }
 
-  /** 焦点在不在输入处（终端或文本输入页）里。 */
+  /** Whether focus is in an input (the terminal or the text page). */
   private typing(): boolean {
     const el = document.activeElement
     return (!!this.textPage && el === this.textPage.text) || !!this.area?.contains(el)
   }
 
-  /** 要不要把焦点给输入处：原来在打字的，或者非触摸设备（无条件给，AC-4.8）。 */
+  /** Whether to focus the input: if the user was typing, or always on non-touch devices (AC-4.8). */
   private refocus(typing: boolean): boolean {
     return typing || !this.state.coarse
   }
 
-  // ---------- 调试 / E2E 钩子 ----------
+  // ---------- Debug / E2E hooks ----------
 
-  /** `window.__webterm`（e2e-scenarios.md；inputStats 生产构建里也在，AC-3.17）。 */
+  /** `window.__webterm` (e2e-scenarios.md; inputStats also ships in production builds, AC-3.17). */
   private hooks() {
     const term = () => this.activeTerm()?.term
     return {
-      /** 当前会话的整个缓冲区文本（含 scrollback）。 */
+      /** The active session's full buffer text, scrollback included. */
       text: () => {
         const t = term()
         if (!t) return ''
@@ -806,7 +830,7 @@ export class AppController {
         for (let i = 0; i < buf.length; i++) out.push(buf.getLine(i)?.translateToString(true) ?? '')
         return out.join('\n')
       },
-      /** SerializeAddon 的结果（字节级比较用）。 */
+      /** SerializeAddon output, for byte-level comparisons. */
       serialize: () => this.activeTerm()?.serialize.serialize() ?? '',
       outSeq: () => (this.store.active === null ? 0 : this.conn.outSeqOf(this.store.active)),
       size: () => ({ cols: term()?.cols ?? 0, rows: term()?.rows ?? 0 }),
@@ -817,7 +841,7 @@ export class AppController {
       fontSize: () => term()?.options.fontSize ?? 0,
       altScreen: () => this.activeTerm()?.altScreen() ?? false,
       unread: (sid: number) => this.conn.isUnread(sid),
-      /** 最近收到的二进制帧 `{type, kind, sid, seq, flags, bytes, replay}`。 */
+      /** Recently received binary frames `{type, kind, sid, seq, flags, bytes, replay}`. */
       frames: () => this.conn.frames(),
       scrollLines: (n: number) => term()?.scrollLines(n),
       viewport: () => {
@@ -826,7 +850,7 @@ export class AppController {
         const buf = t.buffer.active
         return { y: buf.viewportY, top: buf.getLine(buf.viewportY)?.translateToString(true) ?? '' }
       },
-      // 打字没反应时按段看断在哪一层（AC-3.17）
+      // When typing does nothing, shows which stage the input stopped at (AC-3.17)
       inputStats: () =>
         viewOf(
           inputTrace.snapshot({
@@ -841,13 +865,13 @@ export class AppController {
 }
 
 /**
- * client_id：输入记账的 key（§4.1 / §5.4）。【每次页面加载一个，只在内存里】——
- * 跨重连稳定靠的是 Connection 对象活着，不需要存。
+ * client_id keys the input accounting (§4.1 / §5.4). One per page load, in memory only;
+ * it stays stable across reconnects because the Connection object lives on.
  *
- * 不能存 sessionStorage：刷新之后标签页还是那个、id 也还是那个，agent 那边这个
- * (client_id, sid) 的 in_ack 还停在刷新前的累计值，而新页面的 in_seq 从 0 重新数 ——
- * 刷新后敲的前 N 个字节全被当成「已处理过的重发」静默丢掉（E2E-36 ⑤ 实测：
- * 27 字节发出去、永远不 ack，命令没执行），违反 ADR-0020。
+ * It must not go in sessionStorage: after a reload the tab and id would be the same, the
+ * agent's in_ack for (client_id, sid) would still hold the pre-reload total, and the new
+ * page's in_seq restarts at 0. The first N bytes typed after the reload would be dropped
+ * silently as already-processed resends (seen in E2E-36 ⑤), violating ADR-0020.
  */
 function clientID(): string {
   return crypto.randomUUID()

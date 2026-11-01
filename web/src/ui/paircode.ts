@@ -1,14 +1,15 @@
 /**
- * 数字配对码的显示与规整（ADR-0017）。16 位十进制，显示成 1234-5678-9012-3456。
- * 输入时空格、-、全角横线都接受，其余字符剥掉 —— 服务端也做同样的规整。
+ * Display and normalization of the numeric pairing code (ADR-0017): 16 decimal digits,
+ * shown as 1234-5678-9012-3456. Input may contain spaces, `-` or full-width dashes; every
+ * non-digit is stripped. The server normalizes the same way.
  */
 
-/** 只留数字。 */
+/** Keeps digits only. */
 export function normalizePairDigits(s: string): string {
   return s.replace(/\D+/g, '')
 }
 
-/** 4 位一组、- 分隔，最多 16 位。 */
+/** Groups of 4 separated by `-`, at most 16 digits. */
 export function formatPairDigits(s: string): string {
   return normalizePairDigits(s)
     .slice(0, 16)

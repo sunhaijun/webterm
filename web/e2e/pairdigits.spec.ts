@@ -1,8 +1,8 @@
 /**
- * E2E-27 手输数字配对码 —— AC-1.15（ADR-0017）。
+ * E2E-27 Typing the numeric pairing code (AC-1.15, ADR-0017).
  *
- * 扫不了码的人打开 /pair 输入终端里那 16 位数字。和二维码是同一次配对的两把钥匙：
- * 任一把用掉，另一把作废。
+ * Users who cannot scan the QR code open /pair and type the 16 digits shown in the terminal. The
+ * digits and the QR code are two keys to the same pairing: using either one invalidates the other.
  */
 import { expect, test } from '@playwright/test'
 
@@ -14,7 +14,7 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-test('E2E-27 /pair 无 fragment 显示输入框；空格分隔的数字码能配上；之后二维码那把作废；输错可重试', async ({ page, browser }) => {
+test('E2E-27 /pair without a fragment shows an input; space-separated digits pair; the QR code is then invalid; a wrong code can be retried', async ({ page, browser }) => {
   const digits = await agent.pairDigits()
   expect(digits).toMatch(/^\d{4}-\d{4}-\d{4}-\d{4}$/)
 
@@ -23,27 +23,27 @@ test('E2E-27 /pair 无 fragment 显示输入框；空格分隔的数字码能配
   const submit = page.getByTestId('pair-submit')
   await expect(input).toBeVisible()
   await expect(input).toHaveAttribute('inputmode', 'numeric')
-  await expect(submit, '不足 16 位不能提交').toBeDisabled()
+  await expect(submit, 'cannot submit fewer than 16 digits').toBeDisabled()
 
-  // 先输一个 16 位但错误的码：401 提示，输入框还在
+  // A 16-digit but wrong code: 401 message, input stays.
   const wrong = digits.replace(/\d$/, (d) => String((Number(d) + 1) % 10))
   await input.fill(wrong)
   await expect(submit).toBeEnabled()
   await submit.click()
-  await expect(page.getByTestId('pair-status')).toContainText('无效')
-  await expect(input, '输错后还能改').toBeVisible()
+  await expect(page.getByTestId('pair-status')).toContainText('Invalid')
+  await expect(input, 'input is still editable after a wrong code').toBeVisible()
 
-  // 用空格分隔粘进去 → 自动按 - 分组 → 配对成功跳到主界面
+  // Paste with spaces -> auto-grouped with dashes -> pairs and lands on the main UI.
   await input.fill(digits.replace(/-/g, ' '))
   await expect(input).toHaveValue(digits)
   await submit.click()
   await page.waitForURL((u) => u.pathname === '/' && !u.hash, { timeout: 20_000 })
   await waitOnline(page)
 
-  // 同一次配对的 URL 码（二维码那把）已经作废
+  // The URL code (the QR code key) for the same pairing is now invalid.
   const ctx2 = await browser.newContext()
   const p2 = await ctx2.newPage()
   await p2.goto(agent.pairLink())
-  await expect(p2.getByTestId('pair-status')).toContainText('无效')
+  await expect(p2.getByTestId('pair-status')).toContainText('Invalid')
   await ctx2.close()
 })

@@ -7,19 +7,20 @@ import (
 	"syscall"
 )
 
-// killSession 给会话 sid 下的所有进程发信号，跳过 self。
+// killSession signals every process in POSIX session sid, skipping the agent
+// itself.
 //
-// 为什么不能只靠 kill(-pgid)：交互式 bash 开着 job control，**每个作业都在
-// 自己的进程组里**（`sleep 300 &` 的 pgid ≠ shell 的 pgid）。所以给 shell
-// 的进程组发信号只能打到 shell 自己。
+// kill(-pgid) is not enough: interactive bash runs with job control, so each
+// job has its own process group (`sleep 300 &` has a different pgid from the
+// shell), and signaling the shell's group reaches only the shell.
 //
-// 优雅路径靠的是 bash 收到 SIGHUP 后自己给所有作业转发 SIGHUP —— 那条路走通
-// 时一切正常。但 SIGKILL 兜底那条路上 bash 已经没机会转发了，作业就会变成
-// 孤儿继续跑。这时必须按【会话】清扫。
+// The graceful path relies on bash forwarding SIGHUP to its jobs, which works
+// fine. On the SIGKILL fallback bash has no chance to forward, and jobs would
+// keep running as orphans, so the whole session has to be swept.
 //
-// pty.Start 已经 setsid，所以 shell 的 sid == shell 的 pid，它的后代都继承
-// 这个 sid。主动 setsid 脱离的进程（nohup / setsid / systemd-run）会逃掉 ——
-// 那是用户明确的意图，符合预期。
+// pty.Start calls setsid, so the shell's session id equals its pid and every
+// descendant inherits it. Processes that detach with setsid (nohup, setsid,
+// systemd-run) escape, which is what the user asked for.
 func killSession(sid int, sig syscall.Signal) {
 	self := os.Getpid()
 	entries, err := os.ReadDir("/proc")
@@ -37,18 +38,20 @@ func killSession(sid int, sig syscall.Signal) {
 	}
 }
 
-// procSessionID 读 /proc/<pid>/stat 的第 6 个字段（session id）。读不到返回 -1。
+// procSessionID returns field 6 (session id) of /proc/<pid>/stat, or -1 if it
+// can't be read.
 func procSessionID(pid int) int {
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
 		return -1
 	}
-	// comm 字段用括号包着且可能含空格与右括号，所以从【最后一个】右括号切。
+	// comm is parenthesized and may contain spaces and ')', so split at the
+	// last ')'.
 	i := strings.LastIndexByte(string(b), ')')
 	if i < 0 || i+2 >= len(b) {
 		return -1
 	}
-	// 右括号之后依次是：state ppid pgrp session …
+	// After ')': state ppid pgrp session ...
 	fields := strings.Fields(string(b[i+2:]))
 	if len(fields) < 4 {
 		return -1

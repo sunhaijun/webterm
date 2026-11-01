@@ -1,57 +1,57 @@
-# ADR-0035 标签栏的 `+` 移出滚动条：常驻可见、与标签隔开、与状态点对齐
+# ADR-0035 Move the tab bar's `+` out of the scrolling strip: always visible, set apart from tabs, aligned with the status dot
 
-状态：已接受（2026-10-31）。**修订 [ADR-0031](0031-tabs-equal-width.md) 的「`+` 紧跟最后一个标签」与 §实现**。标签等宽、120–240px、放不下时横向滚动、滚轮横着滚，这几条不变。
+Status: Accepted (2026-10-31). **Revises [ADR-0031](0031-tabs-equal-width.md)'s "`+` follows the last tab" and its Implementation section.** Equal-width tabs, the 120–240px range, horizontal scrolling on overflow and wheel-to-horizontal scrolling are unchanged.
 
-## 背景
+## Context
 
-用户试用 ADR-0031 之后提了三条，都出在 `+` 上：
+After trying ADR-0031, the user raised three problems, all with `+`:
 
-1. **标签多了 `+` 就看不见。** `+` 放在可横向滚动的标签条里、排在最后一个标签后面。标签放不下时它跟着标签一起被滚出视野，要新建会话得先把标签条滚到头。实测 600px 宽、5 个会话：当前（最后一个）标签被滚进视野之后，`+` 仍有 36px 落在标签条外面。
-2. **`+` 贴着当前标签的 ✕。** 当前标签的 ✕ 常显，它的右边只有标签 4px 的内边距和 1px 的分隔线，再过去就是 `+`。两个按钮相距 5px，想新建却点成了关闭（在跑的会话会先弹确认，但已退出的会话直接就关了）。
-3. **连接状态点和 `+` 不在一条水平线上。** 状态点是 8px 的圆，几何居中；`+` 是一个 18px 的文字字符，它在行框里的上下位置取决于字体的度量。Chromium 默认字体下实测 `+` 的笔画中心比状态点低 1.5px，换个平台、换个字体还会再变。
+1. **With many tabs, `+` disappears.** `+` sat inside the horizontally scrolling tab strip after the last tab. When tabs overflow it scrolls out of view with them, so creating a session means scrolling the strip to the end first. Measured at 600px with 5 sessions: after the current (last) tab is scrolled into view, 36px of `+` is still outside the strip.
+2. **`+` sits right next to the current tab's ✕.** The current tab always shows ✕; to its right are only the tab's 4px padding and a 1px divider, then `+`. With 5px between the two buttons, aiming for "new" can hit "close" (a running session asks for confirmation first, but an exited one closes immediately).
+3. **The connection status dot and `+` aren't on the same horizontal line.** The dot is an 8px circle, geometrically centered; `+` is an 18px text glyph whose vertical position depends on font metrics. With Chromium's default font the center of the `+` strokes measured 1.5px below the dot, and it shifts again on other platforms and fonts.
 
-## 决策
+## Decision
 
-### 1. `+` 不在滚动的标签条里
+### 1. `+` is not inside the scrolling tab strip
 
-顶栏从左到右：**标签条**（只装标签，自己横向滚动）· 间隔 · **`+`** · 空白 · **状态点**。
+The top bar, left to right: **tab strip** (tabs only, scrolls horizontally on its own) · gap · **`+`** · space · **status dot**.
 
-- 标签放得下时，标签条正好是所有标签的宽度，`+` 跟在它后面，看起来和以前一样「紧跟最后一个标签」（只多了间隔）。
-- 标签放不下时，标签条缩到「顶栏宽度减去 `+`、间隔与状态点」，在里面横向滚动；`+` 停在标签条右边，**始终可见、位置不动**。
-- 当前标签滚进视野的规则不变：标签条的矩形就是标签的可视区，`+` 不盖在任何标签上面。
+- When tabs fit, the strip is exactly as wide as the tabs and `+` follows it, looking as before ("right after the last tab"), just with the gap.
+- When tabs overflow, the strip shrinks to "top bar width minus `+`, the gap and the status dot" and scrolls inside that; `+` stays to its right, **always visible and never moving**.
+- Scrolling the current tab into view works as before: the strip's rectangle is the tabs' visible area, and `+` never covers a tab.
 
-### 2. `+` 前面留出不可点的间隔
+### 2. A non-clickable gap before `+`
 
-标签条右边缘到 `+` 的命中区之间留 **12px（鼠标）/ 16px（触屏）** 的空白。这段空白属于顶栏本身，点上去什么都不做，也不把焦点从终端拿走（顶栏上的按下都 `preventDefault`，和标签一样）。连上标签自己 4px 的右内边距，当前标签 ✕ 的命中区到 `+` 的命中区至少 16px（鼠标）/ 20px（触屏）。
+Leave **12px (mouse) / 16px (touch)** of empty space between the strip's right edge and `+`'s hit area. The gap belongs to the top bar itself; tapping it does nothing and doesn't take focus from the terminal (all presses on the top bar `preventDefault`, like tabs). Together with the tab's own 4px right padding, the current tab's ✕ hit area is at least 16px (mouse) / 20px (touch) from `+`'s hit area.
 
-为什么不是更大：间隔只是让手指或鼠标偏一点不出事，再大就把 `+` 推离标签，看不出它是「再加一个标签」。
+Why not larger: the gap is only there so a slightly-off finger or pointer doesn't cause harm. Any wider and `+` drifts away from the tabs and no longer reads as "add a tab".
 
-### 3. `+` 画成图标，与状态点按几何中心对齐
+### 3. `+` is an icon, centered on the same line as the status dot
 
-`+` 换成一个 14px 的内联 SVG（两笔 1.75px 的圆头线段），在 36px（触屏 40px）高的按钮里居中。状态点同样在顶栏高度上居中。两者的几何中心在同一条水平线上，不再依赖字体度量。
+`+` becomes a 14px inline SVG (two 1.75px strokes with round caps), centered in a 36px (touch: 40px) button. The status dot is also centered on the top bar's height. Their geometric centers share a horizontal line, independent of font metrics.
 
-E2E 量的是 SVG 与状态点矩形的垂直中心，差 ≤ 0.5px。
+E2E measures the vertical centers of the SVG and the status dot's rectangle; they must be within 0.5px.
 
-### 实现
+### Implementation
 
-纯 CSS，不需要 JS 量宽度：
+Pure CSS, no JS measuring:
 
 ```css
-.tabbar   { flex: 0 1 auto; min-width: 0; overflow-x: auto }   /* 放得下时 = 标签总宽；放不下时缩 */
-.tab      { flex: 0 1 auto; width: 240px; min-width: 120px }   /* 等宽：同一个基准 240px，一起缩，缩到 120px 停 */
-.tab-new  { flex: none; margin: 0 auto 0 12px }               /* 左 12px 间隔（触屏 16px）；右 auto 把状态点顶到最右 */
-.conn-dot { margin: 0 10px }                                   /* 放不下时与 `+` 至少隔 10px */
+.tabbar   { flex: 0 1 auto; min-width: 0; overflow-x: auto }   /* fits: total tab width; overflow: shrinks */
+.tab      { flex: 0 1 auto; width: 240px; min-width: 120px }   /* equal width: same 240px basis, shrink together, stop at 120px */
+.tab-new  { flex: none; margin: 0 auto 0 12px }               /* 12px gap on the left (16px on touch); auto on the right pushes the dot to the far right */
+.conn-dot { margin: 0 10px }                                   /* at least 10px from `+` on overflow */
 ```
 
-标签条的 max-content 宽度取的是标签的 `width`（240px）之和，所以放得下时它不会被撑满整条顶栏。
+The strip's max-content width is the sum of the tabs' `width` (240px each), so when tabs fit it doesn't stretch across the whole top bar.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **`+` 留在标签条里，用 `position: sticky; right: 0` 钉在右边。** 能做到放不下时常驻，但 `+` 会盖在滚动的标签上面：标签条的矩形不再等于标签的可视区，「当前标签整个可见」的判断和 `scrollIntoView` 都要扣掉 `+` 的宽度；间隔也得画成一块不透明的底，才不会露出底下的标签。挪到标签条外面，这些都不需要。
-- **`+` 固定在顶栏最右（状态点旁边）。** 会话少时 `+` 离标签很远，看不出它和标签的关系。
-- **缩小 ✕ 或只在悬停时显示当前标签的 ✕。** 触屏没有悬停；当前标签的 ✕ 是触屏上关闭会话的可见入口（[ADR-0025](0025-termux-style-ui.md) §4）。
+- **Keep `+` in the strip with `position: sticky; right: 0`.** That keeps it visible on overflow, but `+` would cover scrolling tabs: the strip's rectangle would no longer be the tabs' visible area, so "is the current tab fully visible" and `scrollIntoView` would have to subtract `+`'s width, and the gap would need an opaque background to hide the tabs underneath. Moving `+` out of the strip avoids all of this.
+- **Pin `+` to the far right of the top bar, next to the status dot.** With few sessions it's far from the tabs and no longer reads as related to them.
+- **Shrink ✕, or show the current tab's ✕ only on hover.** Touch has no hover, and the current tab's ✕ is the visible way to close a session on touch ([ADR-0025](0025-termux-style-ui.md) §4).
 
-## 后果
+## Consequences
 
-- AC-4.10：`+` 不在标签条里，放不下时也始终可见，与标签条之间有不可点的间隔；`+` 与状态点垂直居中对齐。
-- E2E-41 ① 改为断言 `new-session` 在顶栏里、不在 `tabbar` 里；⑧ 改为断言放得下时 `+` 在标签条右边缘之后 12px，放不下时 `+` 整个在顶栏内、可见，且仍隔开 12px；新增 `+` 与状态点的垂直对齐。
+- AC-4.10: `+` is not inside the tab strip, stays visible on overflow, has a non-clickable gap from the strip, and is vertically centered with the status dot.
+- E2E-41 ① asserts `new-session` is in the top bar and not inside `tabbar`; ⑧ asserts `+` is 12px past the strip's right edge when tabs fit, and fully inside the top bar, visible and still 12px apart when they overflow; a new step checks vertical alignment of `+` and the status dot.

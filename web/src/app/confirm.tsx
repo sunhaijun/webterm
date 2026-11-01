@@ -1,8 +1,9 @@
 /**
- * 关闭确认（AC-4.11，ADR-0038）：不用浏览器的 `confirm()`。形态同设置：
- * `compact` 贴底 sheet、`wide` 居中浮窗；能叠在会话抽屉上面。
+ * Close confirmation (AC-4.11, ADR-0038), instead of the browser's `confirm()`. Same
+ * shapes as settings: a bottom sheet on `compact`, a centered dialog on `wide`; it can
+ * stack on top of the session drawer.
  *
- * 打开时焦点在「关闭」上：`Enter` 确认、`Esc` 取消，和以前的 `confirm()` 一样。
+ * Focus starts on Close, so `Enter` confirms and `Esc` cancels, just like `confirm()`.
  */
 import { useLayoutEffect, useRef } from 'preact/hooks'
 
@@ -16,11 +17,11 @@ export interface CloseConfirmProps {
 
 export function CloseConfirm(p: CloseConfirmProps) {
   const okRef = useRef<HTMLButtonElement>(null)
-  // Drawer 自己的 layout effect 先跑（子先于父），已经把焦点收进浮层；这里再落到「关闭」上
+  // Drawer's own layout effect runs first (children before parents) and pulls focus into the sheet; then move it to Close
   useLayoutEffect(() => okRef.current?.focus({ preventScroll: true }), [])
   return (
     <Drawer
-      title={`关闭「${p.name}」？`}
+      title={`Close "${p.name}"?`}
       testid="close-confirm"
       backdropTestid="close-confirm-backdrop"
       variant="confirm"
@@ -28,15 +29,15 @@ export function CloseConfirm(p: CloseConfirmProps) {
       foot={
         <div class="drawer-actions">
           <button type="button" class="drawer-btn" data-testid="close-cancel" onClick={p.onCancel}>
-            取消
+            Cancel
           </button>
           <button type="button" class="drawer-btn danger" data-testid="close-ok" ref={okRef} onClick={p.onOk}>
-            关闭
+            Close
           </button>
         </div>
       }
     >
-      <p class="confirm-text">会话里的程序会被结束。</p>
+      <p class="confirm-text">Programs running in it will be terminated.</p>
     </Drawer>
   )
 }

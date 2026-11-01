@@ -8,7 +8,8 @@ import (
 	"time"
 )
 
-// Device 是一次成功配对产生的记录，持有一个长效会话 Cookie。
+// Device is created by a successful pairing and holds a long-lived session
+// cookie.
 type Device struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -18,15 +19,16 @@ type Device struct {
 	RevokedAt  *int64 `json:"revoked_at,omitempty"`
 }
 
-// TokenHash 返回 token 的 SHA-256。
+// TokenHash returns the SHA-256 of token.
 //
-// 库里【只存哈希】（AC-1.10）：库泄露时攻击者拿不到可用的 Cookie。
+// Only hashes are stored (AC-1.10), so a leaked database yields no usable
+// cookies.
 func TokenHash(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
 	return sum[:]
 }
 
-// CreateDevice 记录一台新配对的设备。
+// CreateDevice records a newly paired device.
 func (s *Store) CreateDevice(id, name, token, ip string, now time.Time) (*Device, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -36,12 +38,13 @@ func (s *Store) CreateDevice(id, name, token, ip string, now time.Time) (*Device
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		id, name, TokenHash(token), ms, ms, nullStr(ip))
 	if err != nil {
-		return nil, fmt.Errorf("store: 创建设备: %w", err)
+		return nil, fmt.Errorf("store: create device: %w", err)
 	}
 	return &Device{ID: id, Name: name, CreatedAt: ms, LastSeenAt: ms, LastIP: ip}, nil
 }
 
-// DeviceByToken 按 Cookie token 查设备。已吊销的设备查不到。
+// DeviceByToken looks up a device by its cookie token. Revoked devices are
+// not returned.
 func (s *Store) DeviceByToken(token string) (*Device, error) {
 	row := s.db.QueryRow(`
 		SELECT id, name, created_at, last_seen_at, last_ip
@@ -58,7 +61,7 @@ func (s *Store) DeviceByToken(token string) (*Device, error) {
 	return &d, nil
 }
 
-// ListDevices 返回所有未吊销的设备，按配对时间倒序。
+// ListDevices returns all non-revoked devices, most recently paired first.
 func (s *Store) ListDevices() ([]Device, error) {
 	rows, err := s.db.Query(`
 		SELECT id, name, created_at, last_seen_at, last_ip
@@ -67,7 +70,7 @@ func (s *Store) ListDevices() ([]Device, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Device{} // 同样不能是 nil，否则 JSON 里是 null
+	out := []Device{} // not nil, or it encodes as JSON null
 	for rows.Next() {
 		var d Device
 		var ip sql.NullString
@@ -80,7 +83,7 @@ func (s *Store) ListDevices() ([]Device, error) {
 	return out, rows.Err()
 }
 
-// RenameDevice 改设备名。
+// RenameDevice renames a device.
 func (s *Store) RenameDevice(id, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -88,7 +91,7 @@ func (s *Store) RenameDevice(id, name string) error {
 	return err
 }
 
-// RevokeDevice 吊销一台设备。
+// RevokeDevice revokes a device.
 func (s *Store) RevokeDevice(id string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,7 +101,8 @@ func (s *Store) RevokeDevice(id string, now time.Time) error {
 	return err
 }
 
-// RevokeAllDevices 吊销全部设备（包括发起请求的那台）。
+// RevokeAllDevices revokes every device, including the one making the
+// request.
 func (s *Store) RevokeAllDevices(now time.Time) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,9 +113,10 @@ func (s *Store) RevokeAllDevices(now time.Time) (int64, error) {
 	return res.RowsAffected()
 }
 
-// TouchDevice 更新 last_seen_at / last_ip。
+// TouchDevice updates last_seen_at and last_ip.
 //
-// 调用方负责节流（每设备最多 60 秒一次），避免每个请求都写库。
+// Callers throttle it (at most once per device per 60 seconds) so that not
+// every request writes to the database.
 func (s *Store) TouchDevice(id, ip string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -121,17 +126,19 @@ func (s *Store) TouchDevice(id, ip string, now time.Time) error {
 	return err
 }
 
-// HasAnyDevice 报告是否已经有授权设备（决定启动时要不要自动打配对码）。
+// HasAnyDevice reports whether any device is authorized. Startup uses it to
+// decide whether to print a pairing code.
 func (s *Store) HasAnyDevice() (bool, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE revoked_at IS NULL`).Scan(&n)
 	return n > 0, err
 }
 
-// ---------- 配对码 ----------
+// ---------- Pairing codes ----------
 
-// CreatePairing 记录一次配对的两把钥匙的哈希（ADR-0017）：code 走二维码，digits 手输。
-// digits 为空表示只有 URL 码（老调用方 / 测试）。
+// CreatePairing stores the hashes of both keys for one pairing (ADR-0017):
+// code goes in the QR code, digits are for typing by hand. An empty digits
+// means URL code only (older callers and tests).
 func (s *Store) CreatePairing(code, digits string, now time.Time, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -145,18 +152,23 @@ func (s *Store) CreatePairing(code, digits string, now time.Time, ttl time.Durat
 	return err
 }
 
-// ErrPairingInvalid 表示配对码不存在、已过期或已被用过。
+// ErrPairingInvalid means the pairing code does not exist, has expired or
+// was already used.
 //
-// 三种情况【故意合并成同一个错误】：区分它们等于告诉攻击者"这个码存在过"。
-var ErrPairingInvalid = fmt.Errorf("store: 配对码无效")
+// The three cases share one error on purpose: telling them apart would reveal
+// to an attacker that a code once existed.
+var ErrPairingInvalid = fmt.Errorf("store: invalid pairing code")
 
-// ConsumePairing 校验并作废一个配对码。单次有效，用过即废（AC-1.4）。
+// ConsumePairing validates a pairing code and invalidates it. Codes are
+// single-use (AC-1.4).
 //
-// 比较用 subtle.ConstantTimeCompare 而不是拿哈希去 WHERE 匹配：索引查找的
-// 耗时依赖于键的分布，是一条（虽然微弱但真实的）时序侧信道。有效的配对码
-// 最多只有个位数条，全取出来逐个常数时间比一遍的代价可以忽略。
+// It compares with subtle.ConstantTimeCompare instead of matching the hash in
+// a WHERE clause: index lookup time depends on the key distribution, which is
+// a weak but real timing side channel. There are at most a handful of live
+// codes, so loading them all and comparing each in constant time is cheap.
 //
-// 校验与作废在同一个事务里，防止并发请求把同一个码用两次。
+// Validation and invalidation share one transaction so that concurrent
+// requests cannot use the same code twice.
 func (s *Store) ConsumePairing(code string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,8 +178,9 @@ func (s *Store) ConsumePairing(code string, now time.Time) error {
 	}
 	defer tx.Rollback()
 
-	// 两把钥匙都取出来比（ADR-0017）：presented 可能是 URL 码也可能是数字码，
-	// 调用方已把分隔符剥掉。匹配到任一把，就按主键 code_hash 把整行作废。
+	// Compare against both keys (ADR-0017): the presented code may be the URL
+	// code or the digits (the caller strips separators). A match on either
+	// invalidates the whole row by its primary key, code_hash.
 	rows, err := tx.Query(
 		`SELECT code_hash, digits_hash FROM pairings WHERE used_at IS NULL AND expires_at >= ?`,
 		now.UnixMilli())
@@ -182,7 +195,8 @@ func (s *Store) ConsumePairing(code string, now time.Time) error {
 			rows.Close()
 			return err
 		}
-		// 不短路：每一行两次比较都做完，耗时与命中位置无关
+		// No short-circuit: always do both comparisons on every row so timing
+		// does not depend on where the match is.
 		hit := subtle.ConstantTimeCompare(h, want) == 1
 		if len(dh) == len(want) && subtle.ConstantTimeCompare(dh, want) == 1 {
 			hit = true
@@ -202,12 +216,13 @@ func (s *Store) ConsumePairing(code string, now time.Time) error {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		return ErrPairingInvalid // 并发请求抢先用掉了
+		return ErrPairingInvalid // a concurrent request used it first
 	}
 	return tx.Commit()
 }
 
-// PurgePairings 清理过期与已使用的配对码。启动时和每小时跑一次。
+// PurgePairings deletes expired and used pairing codes. It runs at startup
+// and hourly.
 func (s *Store) PurgePairings(now time.Time) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -219,7 +234,7 @@ func (s *Store) PurgePairings(now time.Time) (int64, error) {
 	return res.RowsAffected()
 }
 
-// nullStr 把空字符串存成 NULL。
+// nullStr stores an empty string as NULL.
 func nullStr(s string) any {
 	if s == "" {
 		return nil

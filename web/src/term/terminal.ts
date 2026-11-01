@@ -1,38 +1,43 @@
 /**
- * xterm 封装 + 浏览器的输出路径（ADR-0026 §7，layout.md §渲染）。
+ * xterm wrapper and the browser's output path (ADR-0026 §7, layout.md).
  *
- * 浏览器只做三件事：
+ * The browser does just this:
  *
- *   每个会话: 一个 TextDecoder('utf-8')，stream 模式
- *   OUTPUT 帧   → term.write(decoder.decode(payload, {stream: true}))
- *   SNAPSHOT 帧 → reset; decoder = new TextDecoder(); term.write(decode(快照))
+ *   per session:   one TextDecoder('utf-8') in stream mode
+ *   OUTPUT frame   → term.write(decoder.decode(payload, {stream: true}))
+ *   SNAPSHOT frame → reset; decoder = new TextDecoder(); term.write(decode(snapshot))
  *
- * 【先解码成字符串再写】。xterm.js 5.5 的 `write(Uint8Array)` 在一个三字节字符被切进
- * 两次写入、且第 2 字节是 0x80、切在第 2 字节之后时会丢掉整个字符（`。` `…` `—`）。
+ * Decode to a string before writing. xterm.js 5.5's `write(Uint8Array)` drops the whole
+ * character when a three-byte character is split across two writes right after a second
+ * byte of 0x80 (`。` `…` `—`).
  *
- * 渲染器用 xterm 默认的 DOM 渲染器；触屏滚动用 xterm 自带的（程序开了鼠标跟踪时
- * 纵向拖转成滚轮，ADR-0029 / 0032）。行列自己算，不用 FitAddon（ADR-0033）。不做回看暂停、
- * 按帧合并、写入预算 —— 都等量过 E2E-37 的基线再说。
+ * Rendering uses xterm's default DOM renderer and xterm's own touch scrolling (vertical
+ * drags become wheel events when the program enables mouse tracking, ADR-0029 / 0032).
+ * Rows and columns are computed here instead of with FitAddon (ADR-0033). No scrollback
+ * pause, frame coalescing or write budget until the E2E-37 baseline says we need them.
  */
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 
 /**
- * 终端字体：系统等宽栈，和 CSS 里的 `--font-mono` 是同一串。尾巴是 CJK 等宽回退 ——
- * 编程字体基本不带汉字，少了它汉字会掉进比例字体，中英混排的列宽当场歪掉。
+ * Terminal font: the system monospace stack, identical to `--font-mono` in CSS. The tail is
+ * a CJK monospace fallback: coding fonts rarely include CJK glyphs, and without it they
+ * fall back to a proportional font and mixed CJK/Latin columns misalign.
  */
 export const FONT_FAMILY =
   'ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", "Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace'
 
-/** scrollback 至少 5000 行（AC-5.1）。 */
+/** At least 5000 lines of scrollback (AC-5.1). */
 export const SCROLLBACK = 5000
 
 /**
- * 硬复位（RIS）。收到快照时用它【在流内】清空终端，而不是直接调 `term.reset()`：
- * 后者是同步的，不清 xterm 的写缓冲 —— 列数一变 agent 就重发快照，那一刻写缓冲里
- * 可能还排着没解析完的旧输出，它们会被解析到 reset 之后、快照之前，画面就错了。
- * RIS 走的是同一条写入队列，顺序天然正确，效果与 `term.reset()` 相同。
+ * Hard reset (RIS). A snapshot clears the terminal in-stream with this instead of calling
+ * `term.reset()`, which is synchronous and doesn't flush xterm's write buffer. The agent
+ * resends a snapshot whenever the column count changes, and at that moment old output may
+ * still be queued unparsed; it would be parsed after the reset but before the snapshot,
+ * corrupting the screen. RIS goes through the same write queue, so ordering is correct by
+ * construction, with the same effect as `term.reset()`.
  */
 export const RIS = '\x1bc'
 
@@ -42,8 +47,9 @@ export interface Size {
 }
 
 /**
- * 行列 = 可用尺寸 ÷ 字符格尺寸，向下取整，最少 2 列 1 行（同 FitAddon）。格子尺寸量不到时 null。
- * 【格子尺寸必须与当前行列无关】—— 见 `fit()`（ADR-0033）。
+ * Rows/cols = available size ÷ cell size, floored, at least 2 cols and 1 row (as in
+ * FitAddon). Null when the cell size can't be measured. The cell size must not depend on
+ * the current rows/cols; see `fit()` (ADR-0033).
  */
 export function proposeSize(avail: Size, cell: Size): { cols: number; rows: number } | null {
   if (!(cell.width > 0 && cell.height > 0)) return null
@@ -53,7 +59,7 @@ export function proposeSize(avail: Size, cell: Size): { cols: number; rows: numb
   }
 }
 
-/** xterm 内部用得上的那几个字段（FitAddon 读的也是它们）。 */
+/** The xterm internals we need (the same ones FitAddon reads). */
 interface XtermCore {
   _renderService: { dimensions: { device: { cell: Size } }; clear(): void }
   _coreBrowserService: { dpr: number }
@@ -62,32 +68,33 @@ interface XtermCore {
 
 export interface TermHandle {
   term: Terminal
-  /** 按容器尺寸重算行列，变了才 resize（ADR-0033）。 */
+  /** Recomputes rows/cols from the container size and resizes only if they changed (ADR-0033). */
   fit(): void
   serialize: SerializeAddon
-  /** 写一段 OUTPUT。replay=true：补课，写入期间 xterm 的自动应答要被回放门拦下。 */
+  /** Writes OUTPUT. replay=true means catch-up: the replay gate blocks xterm's automatic replies while it is written. */
   output(bytes: Uint8Array, replay: boolean): void
-  /** 写一份快照：复位 → 换新解码器 → 当作回放写入。 */
+  /** Writes a snapshot: reset → fresh decoder → write as replay. */
   snapshot(bytes: Uint8Array): void
   /**
-   * 本地写一行（进程结束提示行）。排在已经写进去的输出之后；若这之前又来了快照
-   * （快照会清屏），这一次作废 —— 调用方会在快照之后再写一次。
+   * Writes a local line (the process-exited notice) after any output already written. If a
+   * snapshot arrives first (snapshots clear the screen), this write is dropped; the caller
+   * writes it again after the snapshot.
    */
   local(line: string): void
-  /** 回放门：有回放的字节还没被 xterm 解析完。 */
+  /** Replay gate: replayed bytes are still being parsed by xterm. */
   replaying(): boolean
-  /** 备用屏幕缓冲是否激活。 */
+  /** Whether the alternate screen buffer is active. */
   altScreen(): boolean
-  /** 前台程序开了鼠标跟踪。 */
+  /** The foreground program enabled mouse tracking. */
   mouseTracking(): boolean
-  /** 一行的高度（px）。 */
+  /** Row height in px. */
   rowHeight(): number
-  /** 在视口坐标 (x, y) 处发一次滚轮（ADR-0029）；up = 向上滚。 */
+  /** Dispatches one wheel step at viewport coordinates (x, y) (ADR-0029); up = scroll up. */
   wheel(up: boolean, x: number, y: number): void
   dispose(): void
 }
 
-/** `fontSize` 来自设置（`ui/prefs.ts`，默认 14，ADR-0037）。 */
+/** `fontSize` comes from settings (`ui/prefs.ts`, default 14, ADR-0037). */
 export function createTerminal(theme: ITheme | undefined, fontSize: number): TermHandle {
   const term = new Terminal({
     fontSize,
@@ -102,20 +109,21 @@ export function createTerminal(theme: ITheme | undefined, fontSize: number): Ter
   const serialize = new SerializeAddon()
   term.loadAddon(serialize)
 
-  // 正确计算 CJK 与 emoji 的宽度，否则中英混排会错位
+  // Correct widths for CJK and emoji; otherwise mixed CJK/Latin text misaligns
   term.loadAddon(new Unicode11Addon())
   term.unicode.activeVersion = '11'
 
   let decoder = new TextDecoder('utf-8')
   let replayDepth = 0
-  /** 每来一份快照加一：快照之前排下的本地行作废。 */
+  /** Bumped on every snapshot; local lines queued before it are dropped. */
   let generation = 0
 
   /**
-   * 可用尺寸的算法照 FitAddon：父元素宽高 − `.xterm` 的内边距，宽度再减滚动条。
-   * 【格子尺寸取 device.cell / dpr，不取 css.cell】：DOM 渲染器的 css.cell.width 是
-   * 「整行宽取整 ÷ 当前列数」，随当前列数变 —— FitAddon 拿它去除，900px 宽上每次 fit
-   * 都在 104 / 103 之间翻，只改高度也改列数（ADR-0033）。
+   * Available size follows FitAddon: the parent's size minus `.xterm` padding, and minus
+   * the scrollbar for width. The cell size is device.cell / dpr, not css.cell: the DOM
+   * renderer's css.cell.width is "rounded row width ÷ current cols", so it depends on the
+   * current column count. FitAddon divides by it, and at 900px wide every fit flipped
+   * between 104 and 103 cols, even when only the height changed (ADR-0033).
    */
   const fit = () => {
     const el = term.element
@@ -140,8 +148,8 @@ export function createTerminal(theme: ITheme | undefined, fontSize: number): Ter
   }
 
   const writeReplay = (s: string) => {
-    // 【窗口在入队时就开，解析完才关】：xterm 是分片异步解析的，同步关门会漏掉之后
-    // 才触发的自动应答
+    // Open the window when the write is queued and close it only once parsed: xterm parses
+    // asynchronously in chunks, so closing synchronously would miss replies triggered later
     replayDepth++
     term.write(s, () => {
       replayDepth--
@@ -154,24 +162,24 @@ export function createTerminal(theme: ITheme | undefined, fontSize: number): Ter
     serialize,
     output(bytes, replay) {
       const s = decoder.decode(bytes, { stream: true })
-      if (s === '') return // 整帧都是半个字符，留在解码器里等下一帧
+      if (s === '') return // The whole frame is a partial character; it waits in the decoder for the next frame
       if (replay) writeReplay(s)
       else term.write(s)
     },
     snapshot(bytes) {
       generation++
-      // 新的解码器：旧的里面可能还压着半个字符，那是快照之前的流
+      // Fresh decoder: the old one may hold a partial character from the pre-snapshot stream
       decoder = new TextDecoder('utf-8')
-      // 快照末尾可能是解析到一半的序列（含半个 UTF-8 字符），stream 模式把它留给下一帧
+      // A snapshot may end mid-sequence (including half a UTF-8 character); stream mode keeps it for the next frame
       writeReplay(RIS + decoder.decode(bytes, { stream: true }))
     },
     local(line) {
-      // 进程已经结束：解码器里若还压着半个字符，冲出来（会是 U+FFFD），别让它排到提示行后面
+      // The process exited: flush any partial character from the decoder (it becomes U+FFFD) so it doesn't land after the notice
       const tail = decoder.decode()
       const gen = generation
       term.write(tail, () => {
         if (gen !== generation) return
-        // 光标不在行首就先换行，免得接在提示符后面
+        // Start a new line unless the cursor is at column 0, so the notice doesn't trail the prompt
         term.write((term.buffer.active.cursorX > 0 ? '\r\n' : '') + line)
       })
     },
@@ -183,8 +191,8 @@ export function createTerminal(theme: ITheme | undefined, fontSize: number): Ter
       return Math.max((screen?.getBoundingClientRect().height ?? 0) / Math.max(term.rows, 1), 1)
     },
     wheel(up, x, y) {
-      // 交给 xterm 自己的鼠标跟踪路径：一个 DOM_DELTA_LINE 的滚轮就是一次上报，
-      // 编码（X10 / SGR / URXVT）与行列都按程序要的协议算
+      // Go through xterm's own mouse tracking: one DOM_DELTA_LINE wheel event is one report,
+      // with the encoding (X10 / SGR / URXVT) and cell coordinates the program asked for
       term.element?.dispatchEvent(
         new WheelEvent('wheel', {
           deltaY: up ? -1 : 1,
@@ -203,8 +211,9 @@ export function createTerminal(theme: ITheme | undefined, fontSize: number): Ter
 }
 
 /**
- * xterm 的主题从 CSS 自定义属性读（layout.md §主题）：`--term-bg` `--term-fg`
- * `--term-cursor` `--term-sel` 与 16 色 `--ansi-0` … `--ansi-15`。没定义的项留给 xterm 默认。
+ * Reads the xterm theme from CSS custom properties (layout.md): `--term-bg` `--term-fg`
+ * `--term-cursor` `--term-sel` and the 16 colors `--ansi-0` … `--ansi-15`. Undefined
+ * entries fall back to xterm's defaults.
  */
 export function themeFromCss(get: (name: string) => string): ITheme {
   const v = (name: string) => get(name).trim() || undefined
@@ -240,8 +249,8 @@ export function themeFromCss(get: (name: string) => string): ITheme {
   return theme as ITheme
 }
 
-/** 进程结束的本地提示行（AC-4.5）。暗色显示，与输出区分开。 */
+/** The local process-exited line (AC-4.5), dimmed to set it apart from output. */
 export function exitLine(code: number | null): string {
-  const text = code === null ? '[进程已结束 · 按 Enter 关闭]' : `[进程已结束（退出码 ${code}）· 按 Enter 关闭]`
+  const text = code === null ? '[Exited · Enter to close]' : `[Exited (code ${code}) · Enter to close]`
   return `\x1b[0;2m${text}\x1b[0m`
 }

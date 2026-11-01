@@ -1,8 +1,8 @@
-# 会话交互
+# Session UX
 
-> 状态：Accepted。界面层面的决策见 [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md)，输出链路见 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)。
+> Status: Accepted. UI decisions: [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md); output path: [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md).
 
-## 会话在 client 侧的表示
+## Client-side session model
 
 ```ts
 type Session = {
@@ -15,292 +15,293 @@ type Session = {
   cols: number; rows: number
   createdAt: number
 
-  // 本地状态，不来自服务端
-  term: Terminal               // xterm 实例，切走时不销毁
-  outSeq: number               // 已接收的累计输出字节数
-  headSeq: number              // agent 侧该会话的累计产出字节数（未读 = headSeq > outSeq）
-  inSeqNext: number            // 下一个要分配的输入序号
-  pending: PendingInput[]      // 未 ack 的输入
-  pinnedSubscription: boolean  // 保持接收（见下）
+  // Local state, not from the server
+  term: Terminal               // xterm instance; kept when switching away
+  outSeq: number               // output bytes received so far
+  headSeq: number              // output bytes the agent has produced for this session (unread = headSeq > outSeq)
+  inSeqNext: number            // next input seq to assign
+  pending: PendingInput[]      // unacked input
+  pinnedSubscription: boolean  // pinned (below)
 }
 ```
 
-**关键：切走的会话不销毁 xterm 实例。** 只把它的 DOM 从容器里摘下来。这样切回去时不需要重放缓冲，屏幕内容、滚动位置、选中状态全部保持。
+**Switching away doesn't destroy the xterm instance.** Its DOM is only detached from the container, so switching back needs no replay: screen contents, scroll position, and selection are all preserved.
 
-代价是内存：每个 xterm 实例带 5000 行 scrollback。20 个会话上限下可接受。如果实测有压力，策略是对**最久未访问**的会话销毁实例并在切回时通过 `subscribe{out_seq: base_seq}` 走 reset 路径重建 —— 但这是优化，现在不做。
+The cost is memory: each instance holds 5000 lines of scrollback, which is acceptable at the 20-session limit. If it ever becomes a problem, destroy the instances of the **least recently used** sessions and rebuild them from a snapshot on switch-back. That's an optimization we don't do yet.
 
-## 订阅策略
+## Subscriptions
 
-**只对当前可见会话 `subscribe`。** 未订阅的会话在 agent 侧照常运行、照常喂给 agent 的终端模拟器，只发 `session.updated{head_seq}` 供判未读。**这是移动端的关键省流**：后台会话在跑 `tail -f` 时，那些字节根本不过网络。
+**Only the visible session is subscribed.** Unsubscribed sessions keep running on the agent and keep feeding its terminal emulator; the agent sends only `session.updated{head_seq}` so the client can work out unread. **This is the key bandwidth saver on mobile**: a background session running `tail -f` sends nothing over the network.
 
 ```
-切换到会话 X:
-  1. unsubscribe(当前会话)
-  2. 挂载 X.term 的 DOM → fit()
-  3. subscribe(X, out_seq: X.outSeq, cols, rows)   ← 尺寸【就在这条消息里】
+switch to session X:
+  1. unsubscribe(current session)
+  2. mount X.term's DOM → fit()
+  3. subscribe(X, out_seq: X.outSeq, cols, rows)   ← the size goes IN this message
 ```
 
-agent 的回答只有两种（[协议 §5.1](../30-protocol/websocket-protocol.md)）：
+The agent answers in one of two ways ([protocol §5.1](../30-protocol/websocket-protocol.md)):
 
-| agent 判定 | 浏览器收到 | 浏览器做什么 |
+| Agent decides | Browser receives | Browser does |
 |---|---|---|
-| **增量**：`out_seq > 0` 且仍在 256 KiB 的环形缓冲窗口内 | 从 `out_seq` 起的 OUTPUT 帧 | 接着写，屏幕、回看位置、选区都不动 |
-| **快照**：第一次打开、刷新、切走太久、断线太久、列数变了 | 一份 SNAPSHOT（当前屏 + 至多 2000 行历史 + 模式），随后的 OUTPUT 帧 | 流内 RIS（`ESC c`）复位 → 换新的 UTF-8 解码器 → 写快照 → `outSeq = seq` |
+| **Incremental**: `out_seq > 0` and still inside the 256 KiB ring buffer window | OUTPUT frames starting at `out_seq` | Keeps writing; screen, scrollback position, and selection stay put |
+| **Snapshot**: first open, refresh, away too long, disconnected too long, column count changed | One SNAPSHOT (current screen + up to 2000 lines of history + modes), then OUTPUT frames | In-stream RIS (`ESC c`) reset → fresh UTF-8 decoder → write the snapshot → `outSeq = seq` |
 
-不再区分主屏和备用屏，不再有"历史输出已截断"：快照就是 agent 模拟器里的完整画面，vim / codex / claude 切回来看到的都是它们的当前屏。
+There's no main/alternate screen distinction and no "history truncated" notice: the snapshot is the full picture in the agent's emulator, so vim / codex / claude come back showing their current screen.
 
-**尺寸必须和 `subscribe` 同一条消息**。agent 锁内先决定发什么（列数变了就先改模拟器尺寸、走快照），锁外才 `TIOCSWINSZ`。这样程序因 SIGWINCH 重画的字节一定排在快照或增量之后，不会落在它们前面被跳过。
+**The size must be in the same message as `subscribe`.** Under the lock the agent first decides what to send (if the column count changed, it resizes the emulator and sends a snapshot), and only after releasing the lock calls `TIOCSWINSZ`. So the bytes a program redraws on SIGWINCH always come after the snapshot or incremental output, never before it where they'd be skipped.
 
-**保持接收**（pin 订阅）：对某个会话开启后，切走也保持 `subscribe`，代价是流量。默认关闭，从会话菜单里开（见下）。它让切回时一定走增量：屏幕、回看位置都保持原样。
+**Pin** (pinned subscription): when a session is pinned, the session stays subscribed after you switch away, at the cost of bandwidth. Off by default; toggle it from the session menu (below). Switching back is then always incremental: the screen and scrollback position stay exactly as they were.
 
-## 切换会话（AC-4.10）
+## Switching sessions (AC-4.10)
 
-两种形态只有这一处不同（形态的判定见 [layout.md](layout.md#形态ac-518)）。
+This is the only place the two forms differ (form rules in [layout.md](layout.md#form-ac-518)).
 
-### compact（手机）：会话按钮 → 底部抽屉
+### compact (phone): session button and bottom drawer
 
-附加键左列上格是**会话按钮**（`data-testid="open-sessions"`），样子学手机浏览器的「标签页」按钮：一个圆角方框，框里写着当前有几个会话，新建、关闭时立刻跟着变。点它打开会话抽屉。任一**非当前**会话有未读（`headSeq > outSeq`）时，方框右上角有一个未读点（`data-unread="true"`，强调色，[ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md)）。为什么不用 ☰，见 [ADR-0030](../20-architecture/adr/0030-no-settings.md) §3。
+The top cell of the extra keys' left column is the **session button** (`data-testid="open-sessions"`), modeled on the tabs button in mobile browsers: a rounded box with the number of sessions in it, updated immediately on create and close. Tapping it opens the session drawer. When any **non-current** session has unread output (`headSeq > outSeq`), an unread dot appears at the box's top-right corner (`data-unread="true"`, accent color, [ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md)). Why not ☰: [ADR-0030](../20-architecture/adr/0030-no-settings.md) §3.
 
 ```
 ┌────┐
-│ ┌─┐•     圆角方框 + 会话数；• 是未读点
+│ ┌─┐•     rounded box + session count; • is the unread dot
 │ │3│
 │ └─┘
 ├────┤
-│ ✎  │     铅笔斜出圆角方框（SVG，与上面的方框同大同粗）
+│ ✎  │     pencil coming out of a rounded box (SVG, same size and weight as the box above)
 └────┘
 ```
 
 ```
 ┌─────────────── ═══ ─────────────────┐
-│ 会话                              ✕ │
+│ Sessions                          ✕ │
 ├─────────────────────────────────────┤
-│▎[1] webterm     ~/github/webterm    │  ← 当前：强调色左条 + 底色
-│ [2] api       • ~/srv/api           │  ← 未读点
-│ [3] build       exit 1              │  ← 已退出（非零用警示色）
-│                                     │  ← 至少半屏高：多出来的给列表
+│▎[1] webterm     ~/github/webterm    │  ← current: accent left bar + tint
+│ [2] api       • ~/srv/api           │  ← unread dot
+│ [3] build       exit 1              │  ← exited (nonzero in the warning color)
+│                                     │  ← at least half the screen: extra height goes to the list
 ├─────────────────────────────────────┤
-│  ┌───────────────────────┐ ┌─────┐  │  ← 固定在底部，离拇指最近
-│  │        + 新会话       │ │  ⚙  │  │
+│  ┌───────────────────────┐ ┌─────┐  │  ← pinned to the bottom, closest to the thumb
+│  │     + New session     │ │  ⚙  │  │
 │  └───────────────────────┘ └─────┘  │
-│                                     │  ← 底部留白 max(16px, 安全区)
+│                                     │  ← bottom padding max(16px, safe area)
 └─────────────────────────────────────┘
 ```
 
-- 抽屉就是 `Drawer` 原语（[layout.md](layout.md#浮层)）：贴底整宽的 sheet，`data-testid="session-drawer"`。**高度至少半屏**（50vh，最多 80vh），会话少的时候多出来的高度给列表。
-- 列表（`session-list`）一行一个会话（`session-<sid>`）：编号 `[n]`（按当前顺序，从 1 开始，关掉中间的会话后后面的顺延；顺序可以拖，见 [§排序](#排序ac-413)）、名字、CWD 或退出码、未读点。开着保持接收的会话名前有一个图钉标记（示意图里画成 `⇵`）。行高 52px。
-- **路径**按原样从左往右排（`<bdi dir="ltr">`），放不下时从左边截、省略号在左，保住末尾的目录。**名字优先占地方**：收缩时路径先让，名字放得下就整个显示；路径最少留 `min(6em, 25%)`，名字长到连这点都放不下时才截名字（[ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §3）。
-- 底部固定一行：`+ 新会话`（`new-session`，占满剩下的宽度）与设置（`open-settings`，48px 的方形按钮，⚙ 图标）。两个都是带细边的圆角块，四周留白，不贴 sheet 的边（[layout.md §浮层](layout.md#浮层)）。点设置 = 关掉抽屉、打开设置（[layout.md §设置](layout.md#设置ac-53)）。
-- 点一行 = 切过去并关闭抽屉。**左滑或长按一行 = 露出这一行的按钮**（见 [§行操作](#行操作compact)）。
-- **关闭抽屉**：点遮罩、选中一个会话、`Esc`、✕、系统返回键；下滑只作加速。
-- **系统返回键**：打开时 `history.pushState({drawer: true})`，`popstate` 时关闭抽屉。用别的方式关闭时调用 `history.back()` 把那条记录消掉，不让记录越积越多。少了这一条，Android PWA 里按返回键会直接退出应用。
-- **软键盘**：打开抽屉时焦点进抽屉（模态），键盘收起，抽屉拿到完整高度。打开前先记下「焦点在不在终端」，选中会话后按它恢复（见 [§焦点跟着会话走](#焦点跟着会话走ac-48)）。
-- `Ctrl+Shift+B` 打开 / 关闭抽屉。
-- **不做卡片式列表**，不做输出预览：那要求 client 持有非活动会话的输出，而**只订阅当前会话**是移动端最关键的省流优化。未读点已经回答了"哪个会话有动静"。
+- The drawer is the `Drawer` primitive ([layout.md](layout.md#sheets)): a full-width bottom sheet, `data-testid="session-drawer"`. **At least half the visible area tall** (50%, at most 80%); with few sessions the extra height goes to the list.
+- The list (`session-list`) has one row per session (`session-<sid>`): index `[n]` (current order, starting at 1; closing a session renumbers the ones after it; reorderable, see [Ordering](#ordering-ac-413)), name, CWD or exit code, unread dot. Pinned sessions show a pin icon before the name (drawn as `⇵` in the diagrams). Rows are 52px.
+- **Paths** are laid out left to right as is (`<bdi dir="ltr">`); when they don't fit they're cut from the left, with the ellipsis on the left, so the last directories stay visible. **The name gets space first**: the path gives way first, and the name is shown in full if it fits; the path keeps at least `min(6em, 25%)`, and the name is truncated only when it doesn't fit even then ([ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §3).
+- Pinned bottom row: `+ New session` (`new-session`, fills the remaining width) and settings (`open-settings`, a 48px square button with a ⚙ icon). Both are rounded blocks with a thin border and margins all around, not touching the sheet's edges ([layout.md §Sheets](layout.md#sheets)). Settings closes the drawer and opens settings ([layout.md §Settings](layout.md#settings-ac-53)).
+- Tap a row = switch to it and close the drawer. **Swipe a row left or long-press it = reveal its buttons** (see [Row actions](#row-actions-compact)).
+- **Closing the drawer**: tap the backdrop, pick a session, `Esc`, ✕, the system back button; swiping down is just a shortcut.
+- **System back button**: on open, `history.pushState({drawer: true})`; on `popstate`, close the drawer. When it's closed any other way, call `history.back()` to remove that entry so entries don't pile up. Without this, the back button exits the app in an Android PWA.
+- **On-screen keyboard**: opening the drawer moves focus into it (modal), so the keyboard hides and the drawer gets the full height. Before opening, remember whether focus was in the terminal, and restore based on that after a session is picked (see [Focus follows the session](#focus-follows-the-session-ac-48)).
+- `Ctrl+Shift+B` opens / closes the drawer.
+- **No card list, no output previews**: those would require the client to hold output for inactive sessions, and **subscribing only to the current session** is the most important bandwidth optimization on mobile. The unread dot already answers "which session has activity".
 
-### wide（PC / Pad）：顶部标签栏
-
-```
-┌ ▎[1] webterm ✕ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │   + ──────── ● ⚙ ┐   等宽，120–240px
-┌ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │ ▎[1] webterm ✕ │   + ● ⚙ ┐        放不下：标签条滚动，+ 不动
-```
-
-- 顶栏 `.topbar` 高 36px（`pointer: coarse` 时 40px），常驻。从左到右：可横向滚动的标签条 `data-testid="tabbar"`（**只装标签**）、`+`、空白、连接状态点（`conn-dot`）、设置（`open-settings`）。`+`、状态点、设置都不在标签条里，不跟着滚（[ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)）。
-- 一个标签（`tab-<sid>`）= 编号 + 会话名 + 未读点；开着保持接收的名前有图钉（示意图里画成 `⇵`）；已退出的变灰。名字过长截断加省略号（编号不截），`title` 里是全名与 CWD。
-- **编号**（`tab-<sid>-idx`）就是抽屉里的 `[n]`（按当前顺序，从 1 开始），让同名的标签分得开。**每个标签都带**，改过名的也带，与抽屉一致（[ADR-0041](../20-architecture/adr/0041-tab-index-and-edit-icon.md)）。等宽字体、`--muted` 色，当前标签里跟着用强调色。
-- **宽度**（[ADR-0031](../20-architecture/adr/0031-tabs-equal-width.md)）：每个标签一样宽，等分标签条的可用宽度，最宽 240px、最窄 120px。
-- **`+`**（`new-session`）在标签条右边：放得下时标签条正好是标签的总宽，`+` 跟在最后一个标签后面；放不下时标签条缩到剩下的宽度、自己滚动，`+` 停在它右边，**始终可见**。
-- `+` 与标签条之间留 **12px（触屏 16px）不可点的间隔**，免得想新建却点到当前标签的 ✕。
-- `+` 是一个 SVG 图标，不是文字字符：它和状态点都按几何中心在顶栏里垂直居中，在同一条水平线上。
-- 最右边是连接状态点（`conn-dot`）和设置（`open-settings`，⚙，与 `+` 同宽同高、同一种线条图标，垂直中心与状态点对齐）。
-- **点标签** = 切过去。**中键点标签** = 关闭。
-- **✕**（`tab-<sid>-close`）：鼠标设备上悬停或当前标签显示；触屏上只有当前标签显示，免得误点。
-- **右键（鼠标）/ 长按（触屏）标签** = 弹出会话菜单（触屏是长按后**原地松手**时弹；长按后移动是拖动排序，见 [§排序](#排序ac-413)）。**双击标签** = 直接改名。
-- 标签按当前顺序排列，可以拖动排序（[§排序](#排序ac-413)）。放不下（每个会窄于 120px）时标签保持 120px、标签条横向滚动；当前标签变化时把它滚进视野（整个已可见则不动，不用 `smooth`）。
-- 滚动条隐藏。**鼠标滚轮**在标签条上纵向滚 = 横向滚动标签条（放得下时不拦截）；触控板的横向滑动照常。
-- 切换标签不改终端几何。
-
-### 行操作（compact）
-
-抽屉里的一行左滑，露出三个按钮（[ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md)）：
+### wide (PC / tablet): tab bar
 
 ```
-│ [2] api   • ~/srv/a │  ⇵   │ 改名 │ 关闭 │
+┌ ▎[1] webterm ✕ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │   + ──────── ● ⚙ ┐   equal width, 120–240px
+┌ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │ ▎[1] webterm ✕ │   + ● ⚙ ┐        overflow: the strip scrolls, + stays put
+```
+
+- The top bar `.topbar` is 36px tall (40px with `pointer: coarse`) and always visible. Left to right: the horizontally scrollable tab strip `data-testid="tabbar"` (**tabs only**), `+`, a spacer, the connection dot (`conn-dot`), and settings (`open-settings`). `+`, the dot, and settings are outside the tab strip and don't scroll with it ([ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)).
+- A tab (`tab-<sid>`) = index + session name + unread dot; pinned sessions show a pin icon before the name (drawn as `⇵` in the diagram); exited sessions are grayed out. Long names are truncated with an ellipsis (the index never is); `title` holds the full name and CWD.
+- The **index** (`tab-<sid>-idx`) is the same `[n]` as in the drawer (current order, starting at 1), so tabs with the same name can be told apart. **Every tab has one**, renamed tabs included, matching the drawer ([ADR-0041](../20-architecture/adr/0041-tab-index-and-edit-icon.md)). Monospace, `--muted`, accent on the current tab.
+- **Width** ([ADR-0031](../20-architecture/adr/0031-tabs-equal-width.md)): all tabs are equal width, sharing the strip's available width, between 120px and 240px.
+- **`+`** (`new-session`) sits right of the tab strip. When the tabs fit, the strip is exactly as wide as the tabs and `+` follows the last tab; when they don't, the strip shrinks to the remaining width and scrolls, and `+` stays to its right, **always visible**.
+- A **12px (16px on touch) gap that isn't clickable** separates `+` from the tab strip, so aiming for New doesn't hit the current tab's ✕.
+- `+` is an SVG icon, not a text character: it and the status dot are both vertically centered by their geometric centers, on the same horizontal line.
+- Far right: the connection dot (`conn-dot`) and settings (`open-settings`, ⚙, the same size and line-icon style as `+`, vertically centered with the dot).
+- **Click a tab** = switch. **Middle-click a tab** = close.
+- **✕** (`tab-<sid>-close`): with a mouse, shown on hover and on the current tab; on touch, only on the current tab, to avoid accidental taps.
+- **Right-click (mouse) / long-press (touch) a tab** = session menu (on touch it opens when you **release in place** after the long press; moving after the long press drags to reorder, see [Ordering](#ordering-ac-413)). **Double-click a tab** = rename it directly.
+- Tabs follow the current order and can be dragged to reorder ([Ordering](#ordering-ac-413)). When they don't fit (each would be narrower than 120px), tabs stay at 120px and the strip scrolls horizontally; when the current tab changes, it's scrolled into view (no-op if it's already fully visible; no `smooth`).
+- The scrollbar is hidden. A **vertical mouse wheel** over the strip scrolls it horizontally (not intercepted when everything fits); horizontal trackpad swipes work as usual.
+- Switching tabs doesn't change terminal geometry.
+
+### Row actions (compact)
+
+Swiping a drawer row left reveals three buttons ([ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md)):
+
+```
+│ [2] api   • ~/srv/a │  ⇵   │Rename│Close │
                       └ 72px ┴ 72px ┴ 72px ┘
 ```
 
-| 按钮 | testid | 底色 | 动作 |
+| Button | testid | Background | Action |
 |---|---|---|---|
-| 保持接收 / 取消保持 | `row-pin` | `--line-strong` | 开 / 关 pin 订阅 |
-| 改名 | `row-rename` | `--accent` | 打开改名 sheet（下） |
-| 关闭 | `row-close` | `--err` | 见 [§关闭会话](#关闭会话)；在跑的会话先弹确认，叠在抽屉上 |
+| Pin / Unpin | `row-pin` | `--line-strong` | Toggle the pinned subscription |
+| Rename | `row-rename` | `--accent` | Open the rename sheet (below) |
+| Close | `row-close` | `--err` | See [Closing a session](#closing-a-session); a running session asks for confirmation first, stacked on the drawer |
 
-- **手势**：横向位移 > 10px 且横向占优才接管，行跟手平移（0 到 −216px），过半松手停在打开，否则弹回；打开的行往右滑关上。纵向滑动照常滚动列表（行 `touch-action: pan-y`）。**长按一行也会打开**。
-- 同一时间只开一行：开另一行、点列表别处、点开着那行的正文，都把它关上；点正文**只关不切换**。
-- 点按钮后先关上这一行，再做事。
-- **左滑、长按之后浏览器补发的那个 `click` 吞掉**：长按把行推开后，手指下面已经是按钮了，补发的 `click` 会落在「改名」甚至「关闭」上。这个标记在下一次按下时清掉。
+- **Gesture**: takes over once horizontal travel > 10px and is mostly horizontal; the row follows the finger (0 to −216px); release past halfway and it stays open, otherwise it springs back; swipe an open row right to close it. Vertical swipes scroll the list as usual (rows have `touch-action: pan-y`). **A long press on a row also opens it.**
+- Only one row is open at a time: opening another row, tapping elsewhere in the list, or tapping the open row's body closes it; tapping the body **only closes it, it doesn't switch sessions**.
+- Tapping a button closes the row first, then acts.
+- **Swallow the `click` the browser fires after a swipe or long press**: once a long press has pushed the row open, the finger is over a button, and that synthetic `click` would land on Rename or even Close. The flag clears on the next pointer down.
 
-**改名 sheet**（`rename-sheet`）：叠在抽屉上的小 sheet，只有一个整行宽的输入框（`rename-input`，16px，打开时选中全部）和「取消 / 保存」（`rename-cancel` / `rename-ok`）。`Enter` 或保存确认，留空恢复跟随目录自动命名；`Esc`、✕、点遮罩、下滑、取消都是取消。失焦不算取消。sheet 贴着键盘上沿（[layout.md §浮层](layout.md#浮层)），输入框不会被挡。
+**Rename sheet** (`rename-sheet`): a small sheet stacked on the drawer, with one full-width input (`rename-input`, 16px, all text selected on open) and Cancel / Save (`rename-cancel` / `rename-ok`). `Enter` or Save confirms; an empty name restores automatic naming from the directory; `Esc`, ✕, the backdrop, swiping down, and Cancel all cancel. Losing focus doesn't cancel. The sheet sits right on top of the keyboard ([layout.md §Sheets](layout.md#sheets)), so the input is never covered.
 
-### 排序（AC-4.13）
+### Ordering (AC-4.13)
 
-会话可以拖动调整顺序，顺序存在 agent 上，所有设备一样，刷新、热升级后不变（[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)，协议 `session.move` / `session.order`）。
+Sessions can be dragged into a different order. The order lives on the agent, is the same on every device, and survives refreshes and hot upgrades ([ADR-0040](../20-architecture/adr/0040-session-order-drag.md), protocol `session.move` / `session.order`).
 
-| 在哪 | 怎么开始拖 |
+| Where | How to start a drag |
 |---|---|
-| `wide` 标签栏，鼠标 | 按住标签横移 > 5px |
-| `wide` 标签栏，触屏 | 长按标签后不松手直接移动（原地松手仍是会话菜单） |
-| `compact` 抽屉 | 按住一行右端的拖动柄（`≡`，`session-<sid>-grip`，44px 宽） |
+| `wide` tab bar, mouse | Press a tab and move > 5px horizontally |
+| `wide` tab bar, touch | Long-press a tab and move without lifting (releasing in place still opens the session menu) |
+| `compact` drawer | Press the drag handle at the right end of a row (`≡`, `session-<sid>-grip`, 44px wide) |
 
 ```
-│ [1] webterm     ~/github/webterm   ≡ │  ← ≡ 是拖动柄；行的其余部分照旧点、左滑、长按
+│ [1] webterm     ~/github/webterm   ≡ │  ← ≡ is the drag handle; the rest of the row still taps, swipes, and long-presses as before
 ```
 
-- 被拖的那一项跟着指针、带阴影浮起，其余项让位；松手插到指针处。位置没变不发消息。
-- 拖完的那次 `click` 吞掉，不切会话；`Esc` 取消拖动。
-- 可滚动的标签条、抽屉列表：指针到边缘 32px 以内自动朝那边滚。
-- 松手立刻按新顺序显示，同时发 `session.move`；收到 `session.order` 以它为准。
-- `[n]`、`Ctrl+Shift+↑/↓`、关掉当前会话后切到相邻的，都按当前顺序。
+- The dragged item follows the pointer, lifted with a shadow, and the others move aside; on release it's inserted at the pointer. No message is sent if the position didn't change.
+- The `click` after a drag is swallowed (no session switch); `Esc` cancels the drag.
+- The scrollable tab strip and drawer list auto-scroll when the pointer is within 32px of an edge.
+- On release the new order shows immediately and `session.move` is sent; a received `session.order` is authoritative.
+- `[n]`, `Ctrl+Shift+↑/↓`, and the auto-switch after closing the current session all follow the current order.
 
-### 会话菜单（wide）
+### Session menu (wide)
 
-右键（鼠标）或长按（触屏）一个标签弹出，`data-testid="session-menu"`。`compact` 的抽屉里不用它，用上面的行操作。
+Opened by right-click (mouse) or long-press (touch) on a tab, `data-testid="session-menu"`. The `compact` drawer doesn't use it; it has the row actions above.
 
-| 项 | testid | 动作 |
+| Item | testid | Action |
 |---|---|---|
-| 改名 | `session-rename` | 标签上的名字原地变成输入框（`rename-input`），`Enter` 确认、`Esc` 取消；改成空字符串恢复自动命名 |
-| 保持接收 | `session-pin` | 开 / 关 pin 订阅，带勾选状态 |
-| 关闭 | `session-close` | 见 [§关闭会话](#关闭会话) |
+| Rename | `session-rename` | The name on the tab turns into an input in place (`rename-input`); `Enter` confirms, `Esc` cancels; an empty string restores automatic naming |
+| Pin | `session-pin` | Toggle the pinned subscription, with a check mark |
+| Close | `session-close` | See [Closing a session](#closing-a-session) |
 
-点菜单外面或 `Esc` 关闭菜单。
+Click outside the menu or press `Esc` to close it.
 
-### 选中态（AC-4.9）
+### Current session styling (AC-4.9)
 
-当前会话（当前标签 / 抽屉里的当前行）：**强调色左条或下划线 + 强调色底色 + 名字用 `--accent` 加粗 + `aria-current="true"`**。标签上用 2px 下划线，抽屉列表用 3px 左条。
+The current session (current tab / current drawer row) gets: **an accent left bar or underline + an accent background tint + the name in bold `--accent` + `aria-current="true"`**. Tabs use a 2px underline; drawer rows use a 3px left bar.
 
-- **hover 不能长得像选中。** 选中靠**色相**（`--accent`）区分，hover 保持中性灰（`--fg` 低透明度），两者叠加也读得出。
-- 状态点 / 未读点 / 退出码的颜色语义不动 —— 它们回答的是别的问题（在不在跑、有没有新输出、怎么退的）。
-- **选中项要在可视区里。** 会话上限 20，标签栏和抽屉都可能放不下，而 `Ctrl+Shift+↑/↓`、关掉当前会话后自动切到相邻会话，都可能把选中项换成视区外的一个。已经整个可见时**什么都不做**，否则 `scrollIntoView({ block: 'nearest', inline: 'nearest' })`；**不用 `smooth`**。
-- **选中态不依赖焦点。** 焦点按 AC-4.8 是跟着会话回到终端的，"当前是哪个"只能靠这套样式说清楚。
+- **Hover must not look like selection.** Selection is marked by **hue** (`--accent`); hover stays a neutral gray (`--fg` at low opacity), and the two still read correctly when combined.
+- Status dot / unread dot / exit code colors keep their meanings; they answer other questions (is it running, is there new output, how did it exit).
+- **The current item must be in view.** With up to 20 sessions, neither the tab bar nor the drawer may fit them all, and `Ctrl+Shift+↑/↓` or the auto-switch after closing can make an off-screen item current. If it's already fully visible, **do nothing**; otherwise `scrollIntoView({ block: 'nearest', inline: 'nearest' })`, **without `smooth`**.
+- **Current-session styling doesn't depend on focus.** Per AC-4.8, focus goes back to the terminal along with the session, so only this styling can say which session is current.
 
-## 焦点跟着会话走（AC-4.8）
+## Focus follows the session (AC-4.8)
 
-切会话的第 2 步（挂载新会话的 DOM）里藏着一个陷阱：`activate()` 先把上一个会话的 DOM 从文档里摘掉，**那一刻焦点就落回 `body` 了**。新挂上去的终端没有人给它焦点，于是切过去之后打字彻底没反应，没有任何提示。
+Step 2 of switching (mounting the new session's DOM) hides a trap: `activate()` first removes the previous session's DOM from the document, and **at that moment focus falls back to `body`**. Nothing gives the newly mounted terminal focus, so after switching, typing does nothing at all, with no hint why.
 
-规则（只有终端时；文本页见本节最后一条）：
-
-```
-hadFocus = 打开抽屉之前（或切换之前）终端区里含有 document.activeElement
-切换后：hadFocus || 非触摸设备  →  term.focus()
-```
-
-- **之前焦点在终端里** → 还给新会话的终端。用户本来就在打字，软键盘也开着。在抽屉里选会话时，`focus()` 发生在这次点击的处理函数里，iOS 才会重新弹出键盘。
-- **桌面（非触摸）无条件还给终端。** 那里没有软键盘要顾虑，从标签栏点一个会话之后想直接打字是最自然的预期。
-- **触摸设备上之前焦点不在终端时不动。** 凭空 `focus()` 会弹出软键盘遮掉半屏 —— 用户点的是"切会话"，不是"我要打字"。要打字，点一下终端。
-- **文本输入页也跟着会话走**（[ADR-0036](../20-architecture/adr/0036-text-page-per-session.md)）：每个会话各记自己停在哪一页、文本框里的草稿。上面规则里的「焦点在终端里」扩展为「焦点在终端里**或文本框里**」，还焦点时给的是**新会话的输入处**：它停在文本页就聚焦文本框（里面是它自己的草稿），停在键位页就聚焦终端。
+Rule (terminal only; the text page is covered in the last bullet):
 
 ```
-typing = 切换前焦点在终端里或文本框里
-切换后：typing || 非触摸设备  →  新会话停在文本页 ? 文本框.focus() : term.focus()
+hadFocus = document.activeElement was inside the terminal area before the drawer opened (or before the switch)
+after the switch: hadFocus || no touch  →  term.focus()
 ```
 
-## 未读标记（AC-4.3）
-
-- **未读是 client 推导出来的，不是服务端状态**：`unread = headSeq > outSeq`。
-- agent 对未订阅会话产生输出时发 `session.updated{head_seq}`（每会话最多 1s 一条，节流吞掉的那条要补发最新值）。
-- 不让服务端存 `unread` 布尔量：未读天然是 per-client 的，两个标签页会互相清对方的未读。
-- 显示位置：抽屉列表行与标签上的未读点；`compact` 上另有会话按钮角上的未读点（任一非当前会话未读即亮）。
-- **未读点是强调色**（`--accent`），不是红色：红色只表示出错或破坏性操作（非零退出码、关闭、断线），免得「有新输出」看起来像「出事了」（[ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §1）。
-- 会话退出也算"需要注意"：显示 `exit <code>`，非零用警示色。
-
-## 自动命名（AC-4.4）
+- **Focus was in the terminal** → give it to the new session's terminal. The user was typing, and the on-screen keyboard is open. When a session is picked in the drawer, `focus()` runs inside that tap's handler, so iOS shows the keyboard again.
+- **Desktop (no touch): always focus the terminal.** There's no on-screen keyboard to worry about, and typing right after clicking a tab is the natural expectation.
+- **On touch devices, if focus wasn't in the terminal, leave it alone.** An unprompted `focus()` pops up a keyboard that covers half the screen; the user asked to switch sessions, not to type. To type, tap the terminal.
+- **The text page also follows the session** ([ADR-0036](../20-architecture/adr/0036-text-page-per-session.md)): each session remembers its own page and textarea draft. "Focus was in the terminal" above becomes "focus was in the terminal **or the textarea**", and focus goes to **the new session's input**: the textarea (holding that session's own draft) if it's on the text page, the terminal if it's on the keys page.
 
 ```
-name = nameIsManual ? 手动名
-     : 前台程序设的终端标题 ?? (cwd ? basename(cwd) : "shell")
+typing = focus was in the terminal or the textarea before the switch
+after the switch: typing || no touch  →  new session on text page ? textarea.focus() : term.focus()
 ```
 
-- 会话名由 agent 算：`cwd` 为 home 目录时是 `~`，basename 为空（`/`）时是 `/`。
-- **终端标题**（[ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)）：前台程序（claude、vim、ssh…，不是 shell 本身）用 OSC 0 / 2 设的标题优先，原样显示（claude 的 `✳` 空闲 / `◐` 在干活）。shell 在提示符时设的 `user@host: dir` 不用；程序退出就回到目录名。tmux 默认不转发里面程序的标题（[troubleshooting.md](../80-ops/troubleshooting.md#标签名不跟-claude-的标题变)）。
-- 列表里显示的 CWD 由浏览器缩写：等于 `welcome.home` 或在它下面时换成 `~`；没有 `home` 时原样显示，不去猜 `/home/<user>`。
-- 重名时**不做去重后缀** —— 两个都在 `webterm` 目录下的会话本来就该同名，靠编号 / 顺序和 CWD 全路径区分。
-- 手动改名后 `nameIsManual = true`，停止自动命名（标题与 CWD 都不跟）。改成空字符串则恢复自动。
+## Unread (AC-4.3)
 
-## 新建会话
+- **Unread is derived on the client; it isn't server state**: `unread = headSeq > outSeq`.
+- When an unsubscribed session produces output, the agent sends `session.updated{head_seq}` (at most once per second per session; when throttling swallows an update, the latest value is sent afterwards).
+- The server stores no `unread` flag: unread is inherently per client, and two browser tabs would clear each other's.
+- Shown as an unread dot on drawer rows and tabs; on `compact`, also on the corner of the session button (lit when any non-current session is unread).
+- **The unread dot uses the accent color** (`--accent`), not red: red is reserved for errors and destructive actions (nonzero exit, close, disconnected), so "new output" doesn't look like "something broke" ([ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §1).
+- An exited session also needs attention: show `exit <code>`, in the warning color when nonzero.
 
-入口：`compact` 抽屉底部的 `+ 新会话`；`wide` 标签栏的 `+`；`Ctrl+Shift+Enter`。
+## Auto naming (AC-4.4)
 
-- `cwd` 默认继承**当前会话**的 CWD（通常是想在同一个项目里再开一个）；没有当前会话时用 home。
-- `cols`/`rows` 用当前终端尺寸。
-- 创建后自动切换过去。
-- 达到上限时（AC-4.2）`+` 变为禁用态并在 `title` / toast 里显示 `会话数已达上限 20`，不是点了没反应。
+```
+name = nameIsManual ? manual name
+     : terminal title set by the foreground program ?? (cwd ? basename(cwd) : "shell")
+```
 
-## 关闭会话
+- The agent computes the name: `~` when `cwd` is the home directory, `/` when the basename is empty (`/`).
+- **Terminal title** ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)): a title the foreground program (claude, vim, ssh…, not the shell itself) sets with OSC 0 / 2 takes priority and is shown as is (claude's `✳` idle / `◐` working). Titles the shell sets at the prompt, like `user@host: dir`, are ignored; when the program exits the name goes back to the directory. tmux doesn't forward inner programs' titles by default ([troubleshooting.md](../80-ops/troubleshooting.md#tab-name-doesnt-follow-claudes-title)).
+- The CWD shown in lists is abbreviated by the browser: `~` when it equals or is under `welcome.home`; shown as is when there's no `home`, without guessing `/home/<user>`.
+- **No dedup suffixes** for duplicate names: two sessions in a `webterm` directory should both be called `webterm`; the index / order and the full CWD tell them apart.
+- After a manual rename, `nameIsManual = true` and automatic naming stops (neither the title nor the CWD is followed). Renaming to an empty string turns it back on.
 
-入口：会话菜单的「关闭」、标签上的 ✕ 或中键、`Ctrl+Shift+W`、已退出会话里按 `Enter`。
+## New session
 
-| 会话状态 | 行为 |
+Entry points: `+ New session` at the bottom of the `compact` drawer; `+` in the `wide` tab bar; `Ctrl+Shift+Enter`.
+
+- `cwd` defaults to the **current session's** CWD (usually you want another shell in the same project); with no current session, home.
+- `cols`/`rows` come from the current terminal size.
+- The new session becomes current.
+- At the limit (AC-4.2), `+` is disabled and its `title` / a toast says `Session limit reached (20)`, rather than doing nothing when tapped.
+
+## Closing a session
+
+Entry points: Close in the session menu, ✕ or middle-click on a tab, `Ctrl+Shift+W`, `Enter` in an exited session.
+
+| Session state | Behavior |
 |---|---|
-| `running` | **需要二次确认**，确认后发 `session.close`。确认是自己的浮层，不是浏览器的 `confirm()`（下面） |
-| `exited` | 直接关闭，无需确认 |
+| `running` | **Requires confirmation**, then sends `session.close`. The confirmation is our own sheet, not the browser's `confirm()` (below) |
+| `exited` | Closes immediately, no confirmation |
 
-关闭后切换到相邻会话（优先后一个）；没有其它会话时显示空状态页（带"新建会话"按钮）。
+After closing, switch to an adjacent session (the next one first); if none are left, show the empty state (with a New session button).
 
-### 关闭确认（AC-4.11）
+### Close confirmation (AC-4.11)
 
-用 `Drawer` 原语（[ADR-0038](../20-architecture/adr/0038-close-confirm-sheet.md)），形态同设置：`compact` 是贴底 sheet，`wide` 是居中浮窗。
+Uses the `Drawer` primitive ([ADR-0038](../20-architecture/adr/0038-close-confirm-sheet.md)), shaped like settings: a bottom sheet on `compact`, a centered dialog on `wide`.
 
 ```
 ┌─────────────── ═══ ───────────────┐
-│ 关闭「webterm」？               ✕ │
+│ Close "webterm"?                ✕ │
 ├───────────────────────────────────┤
-│ 会话里的程序会被结束。            │
+│ Programs running in it will be    │
+│ terminated.                       │
 ├───────────────────────────────────┤
 │  ┌─────────────┐ ┌─────────────┐  │
-│  │    取消     │ │    关闭     │  │  close-cancel · close-ok（警示色）
+│  │   Cancel    │ │    Close    │  │  close-cancel · close-ok (warning color)
 │  └─────────────┘ └─────────────┘  │
 └───────────────────────────────────┘
 ```
 
-- `data-testid="close-confirm"`。打开时焦点在「关闭」上：`Enter` 确认，`Esc` 取消。
-- 点遮罩、✕、下滑、「取消」都是取消。
-- 从会话抽屉里关：确认浮层叠在抽屉上面，抽屉不关；`Esc` 只关最上面一层。
-- 焦点：打开前在打字（终端或文本输入页）的、或非触摸设备，确认或取消之后还回去；确认时**先还焦点、再发 `session.close`**，否则切到相邻会话那一步会把用户判成「没在打字」（[§焦点跟着会话走](#焦点跟着会话走ac-48)）。
-- 浮层开着时会话没了（别处关掉、agent 重启），浮层跟着关：`sid` 会复用，不能留着。
+- `data-testid="close-confirm"`. Opens with focus on Close: `Enter` confirms, `Esc` cancels.
+- The backdrop, ✕, swiping down, and Cancel all cancel.
+- Closing from the session drawer: the confirmation stacks on the drawer, which stays open; `Esc` closes only the top layer.
+- Focus: if the user was typing (terminal or text page) before it opened, or the device has no touch, focus goes back after confirm or cancel. On confirm, **restore focus first, then send `session.close`**; otherwise the switch to the adjacent session would judge the user as "not typing" (see [Focus follows the session](#focus-follows-the-session-ac-48)).
+- If the session disappears while the sheet is open (closed elsewhere, agent restarted), the sheet closes too: `sid`s get reused, so it can't stay open.
 
-## 会话结束（AC-4.5）
+## Session exit (AC-4.5)
 
-shell 退出后，会话状态变 `exited`，在终端末尾写一行**本地提示**：
+When the shell exits, the session becomes `exited` and a **local notice** is written at the end of the terminal:
 
 ```
-[进程已结束（退出码 1）· 按 Enter 关闭]
+[Exited (code 1) · Enter to close]
 ```
 
-退出码缺失时写 `[进程已结束 · 按 Enter 关闭]`。
+Without an exit code: `[Exited · Enter to close]`.
 
-- 写的时机：会话状态是 `exited`，**且 `out_seq` 已经追到退出消息里的 `head_seq`**（agent 保证这条消息排在最后一个 OUTPUT 之后，协议 §4.2）。然后直接 `term.write()`，xterm 的写入先进先出，这行自然排在最后一段输出之后。
-- **不计入 seq**：它是纯本地的一次写入，`outSeq` 不变。
-- **缓冲内容保留**，可滚动、可选择、可复制 —— "构建失败了，我要回看最后的报错"是高频场景。
-- 在这个会话里输入 `\r`（终端里按 `Enter`，或文本输入页回车）= 关闭会话。其余输入丢弃：PTY 已经不在了，提示行已经告诉用户该做什么。
-- 不提供「重开」。新会话从 `+` 建，`cwd` 继承这个会话的。
-- 这行**不在 agent 的模拟器里**（它是浏览器本地写的），所以每次写完快照之后，若会话已退出就再写一次。刷新、重连之后**始终只有一行**。
+- When to write it: the session is `exited` **and `out_seq` has caught up to the `head_seq` in the exit message** (the agent guarantees that message comes after the last OUTPUT, protocol §4.2). Then a plain `term.write()`; xterm writes are FIFO, so the line lands after the last output.
+- **Not counted in seq**: it's a purely local write; `outSeq` doesn't change.
+- **The buffer is kept**: scrollable, selectable, copyable. "The build failed and I need to read the last error" is a common case.
+- Typing `\r` in this session (`Enter` in the terminal, or Enter on the text page) closes the session. Other input is dropped: the PTY is gone, and the notice already says what to do.
+- There's no "reopen". Create a new session with `+`; it inherits this session's `cwd`.
+- The line **isn't in the agent's emulator** (the browser writes it locally), so after every snapshot write it's written again if the session has exited. After a refresh or reconnect there's **always exactly one**.
 
-## 连接状态指示（AC-2.10）
+## Connection status (AC-2.10)
 
-| 状态 | compact | wide |
+| State | compact | wide |
 |---|---|---|
-| 在线 | 不显示 | 标签栏右侧绿点；RTT > 300ms 时 `title` 附 `320ms` |
-| 重连中 | 终端顶部横幅：`重连中 · 3s 后重试`（倒计时实时更新） | 橙点脉冲 + 同样的横幅 |
-| 已恢复 | toast：`已恢复 · 补齐 48 KB`，3 秒后消失 | 同左，点变绿 |
-| 会话已不存在（gone） | toast：`会话已结束（agent 可能已重启）` | 同左 |
+| Online | Nothing shown | Green dot at the right of the tab bar; `title` adds `320ms` when RTT > 300ms |
+| Reconnecting | Banner at the top of the terminal: `Reconnecting · retry in 3s` (live countdown) | Pulsing orange dot + the same banner |
+| Resumed | Toast: `Resumed · caught up 48 KB`, gone after 3 seconds | Same; the dot turns green |
+| Session gone | Toast: `Session ended (agent may have restarted)` | Same |
 
-- 横幅与 toast **盖在终端上**（[layout.md](layout.md#盖在终端上的东西)），出现、消失都不改终端几何 —— 网络抖动时 PTY 不该收到 SIGWINCH。
-- 状态文字在 `data-testid="conn-text"` 里，**一直在 DOM 里**：在线时只是视觉隐藏，`aria-live="polite"` 照常播报。
-- 「补齐 N KB」看起来多余，但它让用户**确信没丢东西** —— 这是"永不断线"这个承诺的可见证据。
+- The banner and toast **float over the terminal** ([layout.md](layout.md#floating-over-the-terminal)); showing or hiding them never changes terminal geometry, so network blips don't send the PTY a SIGWINCH.
+- The status text lives in `data-testid="conn-text"`, which is **always in the DOM**: visually hidden while online, still announced through `aria-live="polite"`.
+- "Caught up N KB" may look redundant, but it **assures the user nothing was lost** — visible evidence for the "never disconnects" promise.
 
-## 刷新后的回滚（AC-5.14）
+## Scrollback after refresh (AC-5.14)
 
-刷新把浏览器的状态清空，每会话的 `outSeq` 回到 0。`subscribe{out_seq: 0}` 一律走快照：agent 从它的模拟器里导出当前屏 + 至多 2000 行历史，浏览器写进去就能往回翻。浏览器**不存**任何本地快照（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §7）。
+A refresh clears browser state and every session's `outSeq` goes back to 0. `subscribe{out_seq: 0}` always takes the snapshot path: the agent exports the current screen + up to 2000 lines of history from its emulator, and once the browser writes it you can scroll back. The browser **doesn't store** any local snapshot ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §7).
 
-- 快照最大约 170 KiB（2000 行带颜色的输出），浏览器解析 11–24 ms。
-- agent 重启过（`instance_id` 变了）就没有旧会话可订阅，自然不会张冠李戴（AC-2.13）。
+- A snapshot is at most ~170 KiB (2000 lines of colored output); the browser parses it in 11–24 ms.
+- If the agent restarted (`instance_id` changed), there are no old sessions to subscribe to, so output can't end up attached to the wrong session (AC-2.13).

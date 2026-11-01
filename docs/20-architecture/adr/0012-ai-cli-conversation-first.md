@@ -1,38 +1,41 @@
-# ADR-0012 面向 claude / codex 的「对话优先」读写
+# ADR-0012 Conversation-first reading and writing for claude / codex
 
-> **移动端显示面部分已被 [ADR-0013](0013-terminal-only.md) 取代**（终端成为唯一显示面，块流 / 转录视图 / 视图切换均已移除）。以下保留作历史记录。
+Status: Accepted (2026-09-09). Revises the "bottom bar" and "enter control automatically" rules of [ADR-0011](0011-read-first-layout.md). Mobile display surface superseded by [ADR-0013](0013-terminal-only.md): the terminal became the only display surface, and the block stream, transcript view and view switching were removed.
 
-状态：已接受（2026-09-09）。修订 [ADR-0011](0011-read-first-layout.md) 的「底栏双态」与「占屏自动进控」两条。
+## Context
 
-## 背景
+The user runs Claude Code and Codex CLI through webterm on a phone (iOS Safari), often on a slow network. Measured on a matching viewport (Pixel 5, 393×727, 14 px → 43 columns × 39 rows), the problems come down to two; everything else is a means to them:
 
-用户在手机（iOS Safari）上、常常是慢网下，通过 webterm 使用 Claude Code 与 Codex CLI。真机同款视口实测（Pixel 5，393×727，14px → 43 列 × 39 行）后，问题收敛为两件事，其余都是手段：
+1. **Reading**: scrolling back through long answers must be smooth, even on a slow network. xterm's touch scrolling isn't native scrolling: it converts scroll events into a number of lines and redraws the whole canvas, so it jumps line by line. claude / codex redraw spinners and timers several times a second (codex also redraws the full screen with synchronized output), so the stream is a constant redraw storm that lags and tears on slow links. **As long as you read in the terminal, it can't be smooth and can't save bandwidth.**
+2. **Writing**: long prompts need to be editable like a normal text box. Typing in the terminal goes through xterm's hidden textarea and waits for each keystroke to echo, which is unusable on slow networks, and iOS IMEs barely work on that path. The old per-keystroke direct input line had the same problem.
 
-1. **读**：回看长回答要顺滑，慢网下也能用。xterm 的触摸滚动不是原生滚动 —— 它把滚动事件换算成"滚了几行"后整块重绘画布，按行跳；claude / codex 又以每秒多次的频率重绘 spinner / 计时器（codex 还用同步输出整屏重绘），终端流是常量级的重绘风暴，慢网下画面落后、撕裂。**只要还在终端里读，就顺滑不了，也省不了流量。**
-2. **写**：长 prompt 要能像普通输入框那样编辑。终端里打字走 xterm 的隐藏 textarea，逐键往返等程序回显，慢网下不可用；iOS 输入法在这条路上几乎不可用；原来的逐键「直发输入行」同样如此。
+Verified at the time: both CLIs enable bracketed paste (`?2004h`) and the Kitty keyboard protocol, and neither used the alternate buffer. Claude Code's session JSONL (`~/.claude/projects/<cwd-slug>/*.jsonl`) has one line per content block, with complete Markdown text, flushed as each block completes. Codex's rollout (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) stores assistant messages as `output_text`.
 
-核过的事实：两个 CLI 都开了括号粘贴（`?2004h`）与 Kitty 键盘协议，都不用备用缓冲；Claude Code 的会话 JSONL（`~/.claude/projects/<cwd-slug>/*.jsonl`）每个内容块一行、text 是完整 Markdown、块完成即落盘；Codex 的 rollout（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`）里 assistant 消息是 `output_text`。
+## Decision
 
-## 决定
+1. **Read = the conversation transcript.** The agent tails both CLIs' session files and pushes user / assistant messages to the page as small JSON messages. The read view renders them as native Markdown cards (full-width text, horizontally scrolling code blocks with copy, native scrolling / selection / zoom). Below the cards sits a **terminal tail strip** (the last few lines of the xterm buffer as plain text, throttled) showing spinners, permission prompts and menus; answer with the key bar, or tap it to open the terminal view. Traffic is just the text, independent of terminal width.
+2. **Write = local editing in the Composer.** The Composer no longer hides while a command runs. Submit = `xterm.paste()` of the whole text (wrapped according to the foreground program's bracketed paste mode, newlines converted to CR) plus Enter; long-press Send = paste without Enter. The per-keystroke input line is removed.
+3. **View rules.** Keyboard-protocol programs like claude / codex **stay in the read view**; only alternate-buffer programs (vim / less / top) enter the terminal automatically. The terminal view is the fallback.
+4. **Slow-network relief.** The agent recognizes codex's synchronized-output frames and, when the send queue backs up, keeps only the latest frame (a full frame can be dropped; the next one repaints the same area). claude's spinner traffic is a few KB/s; left alone for now.
+5. **Cleanup.** Removed: the direct input line and its per-key mapping, the "view in terminal" link on blocks (replaced by the transcript view), entering the terminal automatically on keyboard protocols. Kept: screen-ownership detection (for key bar context and whether to show the transcript view), a compact AI key bar (`Esc ^C Enter ⇧Tab / ↑ ↓ Tab Ctrl`), and no "no integration" banner inside full-screen programs.
 
-1. **读 = 对话转录。** agent 跟踪两个 CLI 的会话文件，把 user / assistant 消息以小 JSON 推给页面；读视图渲成原生 Markdown 卡片（全宽正文、代码块横滑加复制、原生滚动 / 选择 / 缩放）。卡片下常驻一条**终端尾巴条**（xterm 缓冲末几行的纯文本，节流）看 spinner / 权限提示 / 菜单，键条作答，点它进终端视图。流量只有文字本身，与终端列宽无关。
-2. **写 = Composer 本地编辑。** 命令在跑时不再隐藏 Composer；提交 = 整段 `xterm.paste()`（按前台程序的括号粘贴模式自动包裹、换行转回车）+ 回车；「发送」长按 = 只粘贴不回车。逐键直发输入行移除。
-3. **视图规则。** claude / codex 这类键盘协议程序**留在读视图**；只有备用缓冲程序（vim / less / top）自动进终端；终端视图作后备。
-4. **慢网减负。** agent 识别 codex 的同步输出整帧，发送队列积压时只保留最新一帧（整帧可丢，下一帧重画同一区域）。claude 的 spinner 流量每秒几 KB，暂不处理。
-5. **清理。** 移除：直发输入行及逐键映射、块里的「在终端里看」门（由转录视图取代）、键盘协议触发的自动进终端。保留：占屏检测（键条上下文、是否显示转录视图）、精简 AI 键条（`Esc ^C Enter ⇧Tab / ↑ ↓ Tab Ctrl`）、占屏程序里不显示「没有集成」横幅。
+Rejected alternatives:
 
-## 否决的方案
+- **Client-side DOM snapshot** (serialize the xterm buffer to HTML for reading): smooth scrolling, but the content is still a 43-column picture, bandwidth is unchanged, and slow-network tearing ends up in the snapshot.
+- **mosh-style server-side terminal state sync**: bounded bandwidth and no tearing, but it needs a terminal emulator inside the agent, the heaviest option. Not now. ([ADR-0026](0026-agent-holds-terminal-state.md) later put an emulator in the agent for resume.)
+- **Widen the PTY to 80 columns**: less wrapping of code; revisit once the transcript view ships.
+- **Local paging keys, copy-screen, a collapsible key bar, a "new output" pill**: all patches for reading in the terminal, replaced by the transcript view.
 
-- **客户端 DOM 快照**（把 xterm 缓冲序列化成 HTML 读）：滚动顺滑了，但内容仍是 43 列画面、带宽不变、慢网撕裂照进快照。
-- **mosh 式服务端终端状态同步**：带宽有界、永不撕裂，但要在 agent 里内置终端模拟器，最重，现在不做。
-- **PTY 放宽到 80 列**：代码少折行，但转录视图上线后再看是否需要。
-- **键条本地翻页键 / 复制屏幕 / 键条收起把手 / 「有新输出」药丸**：都是在终端里读的补丁，转录视图取代之。
+Rollout:
 
-## 分片
-
-| 片 | 内容 |
+| Slice | Scope |
 |---|---|
-| α | 前端：Composer 整段粘贴发送 + 长按只粘贴；移除直发输入行；AI 键条；横幅修正（本 ADR 随此片落地） |
-| β | agent：会话文件跟踪 → `transcript` 消息；`GET /api/transcript`；Go 单测用真实样本 |
-| γ | 前端：转录视图 + 终端尾巴条；视图规则；去门；E2E 用假 `claude` 写临时 JSONL |
-| δ | agent：codex 同步输出整帧丢弃 |
+| α | Frontend: Composer sends the whole text + long-press paste-only; remove the direct input line; AI key bar; banner fix (shipped with this ADR) |
+| β | Agent: tail session files → `transcript` messages; `GET /api/transcript`; Go unit tests on real samples |
+| γ | Frontend: transcript view + terminal tail strip; view rules; remove the link; E2E with a fake `claude` writing a temporary JSONL |
+| δ | Agent: drop stale codex synchronized-output frames |
+
+## Consequences
+
+- Reading and writing for AI CLIs left the terminal entirely: Markdown cards for reading, the Composer for writing.
+- webterm became coupled to two CLIs' private session file formats, which change with their versions. Together with the cost of two display surfaces and automatic view switching, this led [ADR-0013](0013-terminal-only.md) to remove the transcript view and keep only the terminal.

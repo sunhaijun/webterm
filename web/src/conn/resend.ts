@@ -1,12 +1,12 @@
 /**
- * 输入重发队列（协议 §5.3）。
+ * Input resend queue (protocol §5.3).
  *
- * 每会话维护：
- *   inSeqNext —— 下一个要分配的 in_seq
- *   pending   —— 已发送但未被 ack 的输入
+ * Per session:
+ *   inSeqNext: the next in_seq to assign
+ *   pending:   input sent but not yet acked
  */
 
-/** pending 上限。超出时【明确提示】而不是静默丢弃。 */
+/** Cap on pending bytes. Exceeding it raises a visible error instead of dropping silently. */
 export const PENDING_LIMIT = 64 * 1024
 
 export interface PendingItem {
@@ -16,7 +16,7 @@ export interface PendingItem {
 
 export class PendingFullError extends Error {
   constructor() {
-    super('离线输入已满')
+    super('Offline input buffer full')
     this.name = 'PendingFullError'
   }
 }
@@ -39,10 +39,10 @@ export class ResendQueue {
   }
 
   /**
-   * 分配 seq 并入队。返回要发出去的条目。
+   * Assigns a seq and queues the bytes. Returns the item to send.
    *
-   * 队列满时抛 PendingFullError —— 调用方必须在 UI 上明确提示
-   * "离线输入已满"，**不要静默丢弃**。
+   * Throws PendingFullError when full; the caller must tell the user the offline input
+   * buffer is full rather than drop input silently.
    */
   push(bytes: Uint8Array): PendingItem {
     if (this.bytes + bytes.length > PENDING_LIMIT) throw new PendingFullError()
@@ -54,16 +54,17 @@ export class ResendQueue {
   }
 
   /**
-   * 收到 ack：丢弃已确认的部分。
+   * Handles an ack by dropping what was confirmed.
    *
-   * 某项被【部分】ack 时要裁掉它的前部，而不是整条留着或整条丢掉。
+   * A partially acked item has its acked prefix trimmed rather than being kept or dropped
+   * whole.
    */
   ack(inAck: number): void {
     const kept: PendingItem[] = []
     let bytes = 0
     for (const it of this.items) {
       const end = it.seq + it.bytes.length
-      if (end <= inAck) continue // 整条都被确认了
+      if (end <= inAck) continue // Fully acked
       if (it.seq >= inAck) {
         kept.push(it)
         bytes += it.bytes.length
@@ -79,10 +80,11 @@ export class ResendQueue {
   }
 
   /**
-   * 重连后按 welcome.resumed[].in_ack 裁剪，返回要【按 seq 升序重发】的内容。
+   * After a reconnect, trims at welcome.resumed[].in_ack and returns what to resend in
+   * ascending seq order.
    *
-   * inSeqNext 也要跟着回退到 in_ack + 剩余长度 —— 否则下一次 push 分配的
-   * seq 会跳空，agent 会判 input_gap 关连接。
+   * inSeqNext also rewinds to in_ack + remaining bytes; otherwise the next push would skip
+   * seqs and the agent would close the connection with input_gap.
    */
   resumeFrom(inAck: number): readonly PendingItem[] {
     this.ack(inAck)
@@ -90,7 +92,7 @@ export class ResendQueue {
     return this.items
   }
 
-  /** 会话结束（gone）时清空。 */
+  /** Clears the queue when the session is gone. */
   reset(): void {
     this.items = []
     this.bytes = 0

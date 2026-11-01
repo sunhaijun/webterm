@@ -1,4 +1,4 @@
-/** 认证闸门：未配对显示引导页；用着用着被吊销也换成引导页（AC-1.11 / E2E-15）。 */
+/** Auth gate: shows the pairing page when unpaired, and switches to it when revoked mid-use (AC-1.11 / E2E-15). */
 import { h, render } from 'preact'
 import { act } from 'preact/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -10,7 +10,7 @@ async function mount(status: number) {
   const el = document.createElement('div')
   document.body.appendChild(el)
   let revoke: () => void = () => {}
-  // act：把 useEffect（里面发 fetch）冲出来
+  // act flushes the useEffect (which issues the fetch)
   await act(() => {
     render(
       h(Gate, {
@@ -33,26 +33,26 @@ afterEach(() => {
 })
 
 describe('Gate', () => {
-  it('已配对：渲染 children', async () => {
+  it('renders children when paired', async () => {
     const { el } = await mount(200)
     await settle()
     expect(el.querySelector('[data-testid="app"]')).not.toBeNull()
   })
 
-  it('未配对（401）：配对引导页，没有「已被吊销」', async () => {
+  it('shows the pairing page without the revoked notice when unpaired (401)', async () => {
     const { el } = await mount(401)
     await settle()
     expect(el.querySelector('[data-testid="unpaired"]')).not.toBeNull()
     expect(el.querySelector('[data-testid="revoked"]')).toBeNull()
   })
 
-  it('用着用着被吊销：children 卸掉，换成配对引导页并写明「此设备已被吊销」', async () => {
+  it('unmounts children when revoked mid-use and shows the pairing page with the revoked notice', async () => {
     const { el, revoke } = await mount(200)
     await settle()
     await act(() => revoke())
     expect(el.querySelector('[data-testid="app"]')).toBeNull()
     expect(el.querySelector('[data-testid="unpaired"]')).not.toBeNull()
-    expect(el.querySelector('[data-testid="revoked"]')?.textContent).toContain('此设备已被吊销')
+    expect(el.querySelector('[data-testid="revoked"]')?.textContent).toContain('This device has been revoked')
     expect(el.querySelector('a[href="/pair"]')).not.toBeNull()
   })
 })

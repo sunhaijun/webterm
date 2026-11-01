@@ -1,16 +1,18 @@
 package session
 
-// SetChildOOMAdjForTest 改起 shell 时子进程的 oom_score_adj 目标值，返回恢复函数。
-// IT-oom-1 用它在没有特权的情况下走真 /proc：把目标值调到比自己高（调高不需要特权，
-// 调回自己的值也不会低于下限）。
+// SetChildOOMAdjForTest sets the target oom_score_adj for session shells and
+// returns a function that restores it. IT-oom-1 uses it to exercise the real
+// /proc without privileges by setting a target above the agent's own value
+// (raising needs no privilege, and restoring never goes below the floor).
 func SetChildOOMAdjForTest(v int) (restore func()) {
 	old := childOOMAdj
 	childOOMAdj = v
 	return func() { childOOMAdj = old }
 }
 
-// BusyForTest 报告会话的前台是不是 shell 以外的程序。
+// BusyForTest reports whether something other than the shell is in the
+// session's foreground.
 func BusyForTest(s *Session) bool { return s.busy() }
 
-// ShellPIDForTest 返回会话 shell 的 pid。
+// ShellPIDForTest returns the pid of the session's shell.
 func ShellPIDForTest(s *Session) int { return s.proc.Pid }

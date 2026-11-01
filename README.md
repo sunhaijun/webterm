@@ -1,39 +1,54 @@
 # webterm
 
-一个 Go 单二进制的浏览器终端。不是"网页版终端"，而是把终端当数据源、交互范式重新设计过的 Web 应用。
+Your server's shell in the browser — built for phones as much as desktops, and it doesn't lose your place when the network drops.
 
+webterm is a single Go binary. Install it on a Linux server, scan a QR code with your phone, and you have persistent terminal sessions you can reach from any browser over HTTPS.
+
+## Why
+
+SSH from a phone, or over a flaky connection, is painful: sessions drop, IME input is fiddly, and scrolling back means tmux copy-mode. webterm treats the terminal as a data source and builds the interaction around it:
+
+- **Survives disconnects.** Sessions keep running on the server. After a short drop, only the missing bytes are replayed; after a long one, or a page reload, the server-side terminal emulator sends the full screen plus 2000 lines of history.
+- **Made for touch.** A full-screen terminal with two fixed rows of extra keys (Esc, Ctrl, arrows, …), a session drawer on phones and tabs on larger screens. Installable as a PWA.
+- **Input you can trust.** IME composition goes straight to the terminal, a native text page handles long passages, and input typed while offline is queued, not dropped.
+- **Scrollback by dragging.** AI CLIs like Claude Code stay on the main screen so their output scrolls.
+- **Simple and self-contained.** One static binary with the frontend embedded. Automatic Let's Encrypt certificates, for a domain or just the server's IP. Devices pair with a one-time QR code; no passwords.
+- **Upgrades without losing sessions.** The agent re-execs in place and hands its sessions to the new version.
+
+## Install
+
+You need a Linux server (x86_64 or arm64) with a public IPv4 address, a regular user with `sudo`, and inbound TCP 80 and 443 allowed by your cloud firewall. A domain is optional.
+
+```bash
+curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install.sh | bash
 ```
-云安全组放行 80/443  →  scp webterm server:  →  ssh -t server ./webterm install  →  扫码  →  开工
+
+The installer asks for the address (Enter = the server's IP), gets a certificate, sets up a systemd service, and ends with a QR code to scan. If DNS or the cloud firewall isn't ready yet, it tells you exactly what to change and waits.
+
+More options — a domain, other ports, reverse proxies, upgrades: [docs/80-ops/install.md](docs/80-ops/install.md).
+
+Try it locally first:
+
+```bash
+./webterm serve --dev     # http://127.0.0.1:8080
 ```
 
-不需要域名（直接用公网 IP 签证书），有域名就加 `--domain term.example.com`。
-安装会在启动服务之前先把证书签好，安全组没放行当场就报出来。
-手边还没有二进制就从源码构建（Go 1.27+、Node 22+）：`make build`。
-详见 [安装文档](docs/80-ops/install.md)；本地试跑：`./webterm serve --dev`。
+## Documentation
 
-## 它解决什么
+- [Install](docs/80-ops/install.md) · [Troubleshooting](docs/80-ops/troubleshooting.md) · [systemd](docs/80-ops/systemd.md)
+- [Design docs](docs/README.md): vision, requirements, architecture decisions, the WebSocket protocol
+- [Security model](docs/60-security/threat-model.md)
 
-| 痛点 | webterm 的答案 |
-|---|---|
-| SSH 断线丢现场 | 短断线只补增量、屏幕接着长；断得久或刷新页面，agent 自己持有的终端状态给出完整快照 |
-| 终端里中文输入难用 | 输入法组字兜底直送终端；长段中文切到文本输入页，用原生输入框打完再送 |
-| 手机/平板上没法用 | Termux 式界面：全屏终端 + 两行固定附加键；手机用底部会话抽屉，PC / Pad 用顶部标签栏；PWA |
-| 回看输出困难 | 直接滚动回看，刷新后仍有 2000 行历史，不用进 copy-mode |
+## Status
 
-## 状态
+Early (v0.x) but in daily use. Go unit and integration tests, Vitest, and Playwright end-to-end tests (including byte-level resume continuity) cover every change; real-device behavior (IMEs, on-screen keyboards, PWA install) is checked by hand before releases.
 
-v0.1 的七个里程碑（m0–m7）已全部落地。m8 在一个 PR 里做两件事：界面按
-[ADR-0025](docs/20-architecture/adr/0025-termux-style-ui.md) 整体换成 Termux 式；输出链路按
-[ADR-0026](docs/20-architecture/adr/0026-agent-holds-terminal-state.md) 改成 agent 持有终端状态。
-shell 集成与命令历史随之删除。
+The server runs on Linux. Clients are tested with Chrome (desktop, Android) and Safari (iOS).
 
-**自动化验证**：Go 单测与集成测试、前端 144 个单测、30 个 Playwright E2E
-（含 ★ 字节级连续性）。**真机部分**（真实输入法、软键盘、真实网络切换、
-真实证书签发、PWA 安装）仍需按 [手工清单](docs/70-testing/manual-checklist.md)
-过一遍。
+## Contributing
 
-先读 [`docs/README.md`](docs/README.md)。
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately: [SECURITY.md](SECURITY.md).
 
-## 开发方式
+## License
 
-文档驱动 + worktree 分支。任何改动都从改 `docs/` 开始，见 [CLAUDE.md](CLAUDE.md)。
+[Apache License 2.0](LICENSE)

@@ -1,27 +1,21 @@
 name: CI
 
-# 【一个 job 跑完所有检查】。Actions 按 job 分别向上取整计费，拆成五个 job
-# （go / web / static / fmt / docs）光取整就白花两分钟，而 go 与 static 还各跑了
-# 一遍 npm ci && npm run build。合成一个：构建一次，后面全部复用。
+# One job for every check: Actions bills each job rounded up to the minute, and
+# splitting would also rebuild the frontend several times. Build once, reuse.
 #
-# 【只在 PR 上跑】。pull_request 事件跑的本来就是 merge ref（main 与 PR 合并之后的
-# 树），合进 main 再跑一轮是同一棵树跑第二遍。Release 仍在 main 上照跑。
-#
-# E2E 不在这里，也不在 CI 上自动跑：太费 Actions 额度，本地 `make e2e` 跑。
-# e2e.yml 只剩手动触发（gh workflow run E2E）。见 docs/70-testing/strategy.md §CI。
+# Runs on pull requests only: the pull_request event already tests the merge result.
+# E2E runs locally (`make e2e`) or on demand via e2e.yml; see docs/70-testing/strategy.md.
 on:
   pull_request:
 
-# 同一个 PR 连推几个 commit 时，把被顶掉的那一轮取消掉，别并排烧额度
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   check:
-    name: 检查
+    name: Check
     runs-on: ubuntu-latest
-    # 【必须封顶】。Actions 的默认上限是 360 分钟 —— 一个卡住的 job 能把一个月的额度烧掉
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -34,51 +28,46 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      # 【便宜的检查排在前面】：失败得越早，这一轮花掉的分钟数越少
+      # Cheap checks first: fail fast.
       - name: gofmt
         run: |
           out=$(gofmt -l .)
-          if [ -n "$out" ]; then echo "以下文件未格式化:"; echo "$out"; exit 1; fi
-      # docs/ 是唯一事实来源，坏链是文档腐烂的第一个信号
-      - name: 文档链接
+          if [ -n "$out" ]; then echo "These files need gofmt:"; echo "$out"; exit 1; fi
+      - name: Doc links
         run: python3 scripts/check-doc-links.py
       - run: go vet ./...
 
-      - name: 装前端依赖
+      - name: Install web dependencies
         run: npm ci
         working-directory: web
-      - name: 前端类型检查
+      - name: Typecheck
         run: npm run typecheck
         working-directory: web
-      # 协议向量与 Go 侧共用同一份 fixture，两边都跑它防止实现漂移
-      - name: 前端单测
+      # Also runs the protocol vectors shared with the Go tests.
+      - name: Web unit tests
         run: npm test
         working-directory: web
 
-      # 【前端必须先构建】：Go 侧的 HTTP 测试会请求 GET /，而前端是 go:embed
-      # 进来的（不变式 2 同源）。不构建的话嵌进去的是空目录，静态路由返回 503，
-      # IT-auth-1 的「不需要认证的路由 = 200」就挂。
-      # 这一份产物同时也是下面单二进制断言的输入 —— 构建一次，两处都用。
-      - name: 构建前端
+      # Go HTTP tests request GET / from the embedded frontend; without a build the
+      # embed is empty and static routes return 503. The same build feeds the
+      # single-binary checks below.
+      - name: Build frontend
         run: npm run build
         working-directory: web
 
-      # shell 集成测试需要真 bash（m5 起）
       - run: bash --version
-      # 【只跑带 -race 的这一遍】。原先普通跑一遍、带 race 再跑一遍，等于把整套测试
-      # 跑了两次 —— -race 本来就把所有测试都跑了。这个项目 goroutine 很重
-      # （session / wsconn / ringbuf），该丢的是那遍重复，不是竞态检测。
-      - name: Go 测试（含竞态检测）
+      # One pass with -race covers everything; a second plain run would only repeat it.
+      - name: Go tests (race detector)
         run: go test ./... -race -count=1 -timeout 15m
 
-      # 不变式 1：不引入 cgo，GOOS=linux GOARCH=amd64 go build 必须直接出货
-      - name: 单二进制（AC-8.1）
+      # Invariant: no cgo; a plain cross-compile must produce the release binary.
+      - name: Static binary (AC-8.1)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o webterm ./cmd/webterm
-      - name: 断言不是动态可执行文件
+      - name: Not a dynamic executable
         run: ldd webterm 2>&1 | grep -q 'not a dynamic executable'
-      - name: 断言前端真的嵌进去了（AC-8.2 / IT-embed-1）
+      - name: Frontend is embedded (AC-8.2 / IT-embed-1)
         run: |
-          rm -rf internal/webui/dist/assets   # 删掉产物，二进制仍应能提供前端
+          rm -rf internal/webui/dist/assets   # the binary must still serve the frontend
           ./webterm version
           test -x webterm
       - run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./...

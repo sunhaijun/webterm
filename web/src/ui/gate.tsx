@@ -1,11 +1,13 @@
 /**
- * 认证闸门：未配对时展示引导页而不是空白。
+ * Auth gate: shows pairing instructions instead of a blank page when unpaired.
  *
- * 静态资源本身不认证（JS/CSS 里没有秘密），所以判断放在前端：
- * 调 /api/devices 拿到 401 就说明这台设备还没配对。通过后才渲染 children。
+ * Static assets are served without auth (JS/CSS hold no secrets), so the check happens
+ * here: a 401 from /api/devices means this device isn't paired. children render only
+ * after that passes.
  *
- * children 是个函数，拿到 `revoke`：用着用着设备被吊销了（AC-1.11 / E2E-15），
- * 装配层调它，闸门就换成配对引导页，并写明「此设备已被吊销」。
+ * children is a function that receives `revoke`. If the device is revoked mid-use
+ * (AC-1.11 / E2E-15), the app calls it and the gate switches to the pairing page with a
+ * "revoked" notice.
  */
 import type { ComponentChildren } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
@@ -25,34 +27,34 @@ export function Gate({ children }: GateProps) {
       .catch(() => setGate((g) => (g === 'revoked' ? g : 'offline')))
   }, [])
 
-  if (gate === 'checking') return <main class="gate">正在检查配对状态…</main>
+  if (gate === 'checking') return <main class="gate">Checking pairing…</main>
   if (gate === 'authed') return <>{children(() => setGate('revoked'))}</>
   if (gate === 'offline') {
-    // 离线时明确说无法连接，不假装能用
+    // Offline: say so plainly instead of pretending to work
     return (
       <main class="gate" data-testid="offline">
-        <h1>无法连接到 agent</h1>
-        <p>检查网络，或确认 webterm 还在运行。</p>
+        <h1>Can't reach the agent</h1>
+        <p>Check your network and make sure webterm is still running.</p>
       </main>
     )
   }
   return <Unpaired revoked={gate === 'revoked'} />
 }
 
-/** 配对引导页。被吊销时多一行原因。 */
+/** Pairing instructions. When revoked, adds a line saying so. */
 export function Unpaired({ revoked = false }: { revoked?: boolean }) {
   return (
     <main class="gate" data-testid="unpaired">
-      <h1>需要配对</h1>
+      <h1>Pairing required</h1>
       {revoked && (
         <p class="error" data-testid="revoked">
-          此设备已被吊销。
+          This device has been revoked.
         </p>
       )}
-      <p>这台设备还没有获得授权。在服务器上执行：</p>
+      <p>This device isn't authorized yet. On the server, run:</p>
       <pre>webterm pair</pre>
       <p>
-        然后用这台设备扫描终端里打印的二维码；扫不了码就<a href="/pair">打开配对页</a>，输入终端里那 16 位数字。
+        Then scan the QR code it prints with this device. If you can't scan it, <a href="/pair">open the pairing page</a> and enter the 16-digit code.
       </p>
     </main>
   )

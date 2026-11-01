@@ -1,16 +1,16 @@
 #!/bin/bash
-# 确定性输出脚本 —— 用于字节级比较（AC-2.1）。
+# Deterministic output for byte-level comparisons (AC-2.1).
 #
-# 必须【完全确定性】：不含时间戳、不含随机数、不含主机名、不含 $PWD。
-# 否则两次运行的输出本来就不同，字节级比较毫无意义。
+# It must be fully deterministic: no timestamps, random numbers, host names or
+# $PWD, or two runs would differ anyway and the comparison would mean nothing.
 #
-# 用法: emit.sh <总行数> [每行延迟ms] [mono]
+# Usage: emit.sh <lines> [delay-ms-per-line] [mono]
 #
-# 第三个参数为 mono 时整段只有开头一个 SGR（品红）、结尾一个复位：一段跨越很多帧的
-# 同色文本，断点必然落在着色区间内（E2E-2e）。
+# With "mono", one SGR (magenta) at the start and one reset at the end: a colored
+# span across many frames, so the cut always lands inside it (E2E-2e).
 #
-# 内容刻意覆盖：ANSI 颜色（回放起点落在着色区间内时最容易暴露属性修正的
-# bug）、CJK 宽字符（unicode11 宽度计算）、超长行（换行边界裁剪）。
+# Deliberately covers ANSI colors (attribute bugs show when replay starts inside a
+# colored span), CJK wide characters (unicode11 widths) and long lines (wrapping).
 
 lines=${1:-100}
 delay_ms=${2:-0}
@@ -27,12 +27,12 @@ for ((i = 1; i <= lines; i++)); do
         printf '\033[%dmline %05d\033[0m 中文宽字符测试 %s\n' "$color" "$i" "$long"
     fi
     if [ "$delay_ms" -gt 0 ]; then
-        # 用 read 做 sleep，避免每行 fork 一个进程
+        # read as sleep: no fork per line
         read -rt "0.$(printf '%03d' "$delay_ms")" -u 9 || true
     fi
 done 9< /dev/zero
 [ "$mono" = mono ] && printf '\033[0m'
 
-# 完成标记必须【只出现在输出里】，不能出现在被回显的命令行里 ——
-# 否则等待条件会在命令刚敲完时就满足，测的是回显而不是输出。
+# The done marker must appear only in the output, never in the echoed command
+# line; otherwise the wait would end as soon as the command is typed.
 printf 'EMIT-%s\n' DONE

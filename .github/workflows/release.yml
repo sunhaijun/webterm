@@ -1,22 +1,23 @@
 name: Release
 
+# Every push to main refreshes the rolling `dev` prerelease; every v* tag publishes a
+# release. Both ship webterm-linux-{amd64,arm64}, install.sh and SHA256SUMS.
 on:
   push:
     branches: [main]
     tags: ['v*']
 
-# 需要写 release 的权限
 permissions:
   contents: write
 
 jobs:
   build:
-    name: 交叉编译并发布
+    name: Build and publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # git describe 要看到 tag
+          fetch-depth: 0 # git describe needs the tags
 
       - uses: actions/setup-go@v5
         with:
@@ -27,24 +28,21 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      # 顺序不能反：前端产物是 go:embed 的输入
-      - name: 交叉编译到 release/
+      - name: Cross-compile into release/
         run: make release
 
-      - name: 断言不是动态可执行文件（AC-8.1）
+      - name: Not a dynamic executable (AC-8.1)
         run: |
           file release/webterm-linux-amd64 | tee /dev/stderr | grep -q 'statically linked'
           ldd release/webterm-linux-amd64 2>&1 | grep -q 'not a dynamic executable'
 
-      - name: 断言前端真的嵌进去了（AC-8.2）
+      - name: Frontend is embedded (AC-8.2)
         run: |
-          # 没嵌前端时二进制会在首页明说，这里直接查产物里有没有 index.html 的痕迹
           grep -qa 'id="app"' release/webterm-linux-amd64
           release/webterm-linux-amd64 version
 
-      # 版本号错了在别处一点都看不出来（install.sh 的升级提示、诊断、troubleshooting
-      # 全靠它），只有这一步能把它变成红色
-      - name: 断言正式构建的版本号就是 tag
+      # A wrong version string shows up nowhere else, so make it fail loudly here.
+      - name: Release version matches the tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           got="$(release/webterm-linux-amd64 version)"
@@ -56,9 +54,7 @@ jobs:
           name: webterm-binaries
           path: release/
 
-      # main 上的每次提交都刷新一个滚动的 dev 预发布，
-      # 这样安装脚本在正式 tag 之前就能用
-      - name: 更新 dev 预发布
+      - name: Refresh the dev prerelease
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,20 +62,23 @@ jobs:
           gh release delete dev --yes --cleanup-tag 2>/dev/null || true
           gh release create dev release/* \
             --prerelease \
-            --title "dev（main 的滚动构建）" \
-            --notes "main 分支 \`${GITHUB_SHA::7}\` 的自动构建。每次提交都会覆盖。
-          正式版本请用带 \`v\` 前缀的 tag。
+            --title "dev (rolling build of main)" \
+            --notes "Automatic build of main at \`${GITHUB_SHA::7}\`, replaced on every push. Use a \`v*\` release unless you need the latest changes.
 
-          安装：
           \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash -s -- --dev --channel dev
+          curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/dev/install.sh | bash -s -- --channel dev
           \`\`\`"
 
-      - name: 发布正式版本
+      - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" release/* \
             --title "${GITHUB_REF_NAME}" \
+            --notes "Install or upgrade on a Linux server:
+
+          \`\`\`
+          curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.sh | bash
+          \`\`\`" \
             --generate-notes

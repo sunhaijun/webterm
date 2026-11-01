@@ -1,8 +1,8 @@
 /**
- * 设置（layout.md §设置，ADR-0037）：只有两项 —— 主题三选一、终端字号 `−` / `+`。
- * 改了立刻生效，没有「保存」，不写说明文字。
+ * Settings (layout.md, ADR-0037): just two items, a three-way theme choice and the
+ * terminal font size `−` / `+`. Changes apply immediately; no Save button, no help text.
  *
- * 字号不用数字输入框：手机上一点就弹数字键盘。
+ * Font size is not a number input: on phones that pops up the numeric keyboard.
  */
 import { Drawer } from '../ui/drawer'
 import { MinusIcon, PlusIcon } from '../ui/icons'
@@ -17,17 +17,17 @@ export interface SettingsProps {
 }
 
 const THEMES: { id: Theme; label: string }[] = [
-  { id: 'system', label: '跟随系统' },
-  { id: 'light', label: '浅色' },
-  { id: 'dark', label: '深色' },
+  { id: 'system', label: 'System' },
+  { id: 'light', label: 'Light' },
+  { id: 'dark', label: 'Dark' },
 ]
 
 export function Settings(p: SettingsProps) {
   return (
-    <Drawer title="设置" testid="settings" variant="settings" onClose={p.onClose}>
+    <Drawer title="Settings" testid="settings" variant="settings" onClose={p.onClose}>
       <div class="settings-row">
         <span class="settings-label" id="settings-theme">
-          主题
+          Theme
         </span>
         <div class="segmented" role="radiogroup" aria-labelledby="settings-theme">
           {THEMES.map((t) => (
@@ -46,13 +46,13 @@ export function Settings(p: SettingsProps) {
       </div>
       <div class="settings-row">
         <span class="settings-label" id="settings-font">
-          终端字号
+          Font size
         </span>
         <div class="stepper" role="group" aria-labelledby="settings-font">
           <button
             type="button"
             data-testid="font-dec"
-            aria-label="减小字号"
+            aria-label="Decrease font size"
             disabled={p.fontSize <= FONT_MIN}
             onClick={() => p.onFontSize(p.fontSize - 1)}
           >
@@ -64,7 +64,7 @@ export function Settings(p: SettingsProps) {
           <button
             type="button"
             data-testid="font-inc"
-            aria-label="增大字号"
+            aria-label="Increase font size"
             disabled={p.fontSize >= FONT_MAX}
             onClick={() => p.onFontSize(p.fontSize + 1)}
           >

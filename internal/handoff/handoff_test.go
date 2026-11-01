@@ -23,7 +23,7 @@ func sample() *Snapshot {
 	}
 }
 
-// 快照写进 memfd 再读回来，一个字段都不能变。
+// A snapshot written to a memfd and read back must be unchanged.
 func TestWriteReadRoundTrip(t *testing.T) {
 	want := sample()
 	f, err := Write(want)
@@ -35,19 +35,19 @@ func TestWriteReadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.InstanceID != want.InstanceID || got.NextSID != want.NextSID || got.Generation != want.Generation {
-		t.Fatalf("顶层字段变了: %+v", got)
+		t.Fatalf("top-level fields changed: %+v", got)
 	}
 	if len(got.Sessions) != 2 || string(got.Sessions[0].RingData) != "hello\x1b[0m" || got.Sessions[0].InAck["tab"] != 10 {
-		t.Fatalf("会话字段变了: %+v", got.Sessions)
+		t.Fatalf("session fields changed: %+v", got.Sessions)
 	}
 	if string(got.Sessions[0].VTerm) != `{"width":80}` {
-		t.Fatalf("模拟器状态变了: %q", got.Sessions[0].VTerm)
+		t.Fatalf("emulator state changed: %q", got.Sessions[0].VTerm)
 	}
 	if got.Sessions[1].ExitCode == nil || *got.Sessions[1].ExitCode != 3 || got.Sessions[1].PtmxFD != -1 {
-		t.Fatalf("已退出会话变了: %+v", got.Sessions[1])
+		t.Fatalf("exited session changed: %+v", got.Sessions[1])
 	}
 	if len(got.Sessions[0].Pending) != 1 || string(got.Sessions[0].Pending[0].Data) != "ls\r" {
-		t.Fatalf("待写输入变了: %+v", got.Sessions[0].Pending)
+		t.Fatalf("pending input changed: %+v", got.Sessions[0].Pending)
 	}
 }
 
@@ -58,21 +58,22 @@ func TestValidate(t *testing.T) {
 	}
 	s.Schema = Schema + 1
 	if err := Validate(s); err == nil {
-		t.Fatal("更新的 schema 必须被拒绝 —— 那意味着新二进制比快照旧")
+		t.Fatal("a newer schema must be rejected: the new binary is older than the snapshot")
 	}
 	s = sample()
 	s.Sessions[0].PtmxFD = -1
 	if err := Validate(s); err == nil {
-		t.Fatal("运行中的会话没有 fd 必须被拒绝")
+		t.Fatal("a running session without an fd must be rejected")
 	}
 	s = sample()
 	s.Sessions = append(s.Sessions, Session{SID: 1, Status: "exited"})
 	if err := Validate(s); err == nil {
-		t.Fatal("sid 重复必须被拒绝")
+		t.Fatal("a duplicate sid must be rejected")
 	}
 }
 
-// 预检：新二进制说 ok 才放行；拒绝 / 输出不对 / 起不来都要在 exec 之前失败。
+// The pre-flight check passes only when the new binary says ok. A rejection,
+// unexpected output, or a binary that won't start must all fail before exec.
 func TestCheck(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) string {
@@ -84,27 +85,28 @@ func TestCheck(t *testing.T) {
 	}
 	ok := write("ok", "cat >/dev/null; echo '"+CheckOutput()+"'\n")
 	if err := Check(ok, sample(), 5*time.Second); err != nil {
-		t.Fatalf("应当通过: %v", err)
+		t.Fatalf("should pass: %v", err)
 	}
-	bad := write("bad", "cat >/dev/null; echo 'schema 太新' >&2; exit 1\n")
-	if err := Check(bad, sample(), 5*time.Second); err == nil || !strings.Contains(err.Error(), "schema 太新") {
-		t.Fatalf("退出码非零必须失败，并带上它的输出: %v", err)
+	bad := write("bad", "cat >/dev/null; echo 'schema too new' >&2; exit 1\n")
+	if err := Check(bad, sample(), 5*time.Second); err == nil || !strings.Contains(err.Error(), "schema too new") {
+		t.Fatalf("a non-zero exit must fail and include its output: %v", err)
 	}
 	weird := write("weird", "cat >/dev/null; echo 'hello'\n")
 	if err := Check(weird, sample(), 5*time.Second); err == nil {
-		t.Fatal("输出不是 ok schema= 必须失败 —— 可能是个不认识 handoff-check 的老二进制")
+		t.Fatal("output other than ok schema= must fail (likely an old binary without handoff-check)")
 	}
 	if err := Check(filepath.Join(dir, "missing"), sample(), time.Second); err == nil {
-		t.Fatal("二进制不存在必须失败")
+		t.Fatal("a missing binary must fail")
 	}
-	// 卡住的新二进制：到点就失败，不等它（连同它的子进程）自己退
+	// A hung new binary fails at the deadline without waiting for it (or its
+	// children) to exit.
 	slow := write("slow", "sleep 10\n")
 	start := time.Now()
-	if err := Check(slow, sample(), 200*time.Millisecond); err == nil || !strings.Contains(err.Error(), "超时") {
-		t.Fatalf("超时必须失败: %v", err)
+	if err := Check(slow, sample(), 200*time.Millisecond); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("a timeout must fail: %v", err)
 	}
 	if d := time.Since(start); d > 3*time.Second {
-		t.Fatalf("超时之后又等了 %v", d)
+		t.Fatalf("kept waiting %v after the timeout", d)
 	}
 }
 
@@ -123,8 +125,9 @@ func TestStripFlag(t *testing.T) {
 	}
 }
 
-// 从旧版本（schema 1）升级上来：旧字段被忽略，会话照样解得出来，VTerm 为空 ——
-// session 那边据此改用环形缓冲尽力还原模拟器（ADR-0026 §8）。
+// Upgrading from schema 1: old fields are ignored, sessions still decode, and
+// VTerm is empty, which tells the session package to rebuild the emulator
+// best-effort from the ring buffer (ADR-0026 §8).
 func TestDecodeSchema1(t *testing.T) {
 	const old = `{"schema":1,"generation":3,"from_version":"v0.1.0","instance_id":"abc","next_sid":4,
 	"listeners":[],"sessions":[{"sid":2,"ptmx_fd":9,"shell_pid":1234,"rc_path":"/x/rc-2.bash",
@@ -134,9 +137,9 @@ func TestDecodeSchema1(t *testing.T) {
 	"modes":{"alt":true},"cur_cmd_at":"0001-01-01T00:00:00Z","unmarked_runs":1}]}`
 	s, err := Decode(strings.NewReader(old))
 	if err != nil {
-		t.Fatalf("schema 1 必须读得出来（老版本升级上来的那一次）: %v", err)
+		t.Fatalf("schema 1 must decode (the first upgrade from an old version): %v", err)
 	}
 	if len(s.Sessions) != 1 || s.Sessions[0].SID != 2 || string(s.Sessions[0].RingData) != "hi" || s.Sessions[0].VTerm != nil {
-		t.Fatalf("解出来的不对: %+v", s.Sessions)
+		t.Fatalf("wrong decode result: %+v", s.Sessions)
 	}
 }

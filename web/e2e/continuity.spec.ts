@@ -1,14 +1,16 @@
 /**
- * E2E-2 断线续传 ★ 核心 —— AC-2.1 / AC-2.2 / AC-2.3 / AC-2.5 / AC-2.21
- * E2E-3 断线期间的输入不丢 —— AC-2.4 / AC-2.12
- * E2E-4 快照路径的 UI 表现 —— AC-2.6
+ * E2E-2 Resume after disconnect, the core guarantee (AC-2.1 / AC-2.2 / AC-2.3 / AC-2.5 / AC-2.21)
+ * E2E-3 Input typed while disconnected is not lost (AC-2.4 / AC-2.12)
+ * E2E-4 UI behavior on the snapshot path (AC-2.6)
  *
- * 它不测"重连能不能连上"（那太弱），而是测【最终屏幕状态是否与从未断线时
- * 完全一致】。任何 seq 记账错误、切片偏移、重复回放、丢帧，都会让两次结果
- * 不同。这是"永不断线"这个承诺的机械化证据。
+ * These tests do not check that reconnecting works (too weak); they check that the final screen is
+ * identical to a run that never disconnected. Any seq bookkeeping error, slice offset, duplicate
+ * replay or dropped frame makes the two differ. This is the mechanical evidence behind "never lose
+ * the session".
  *
- * 每一轮都在【新会话】里跑，命令前先 `printf '\033c'`（RIS）把回显的命令行清掉 ——
- * 基准与对照的每行延迟不同（命令行不同），清掉之后剩下的就只有 emit.sh 的输出。
+ * Each round runs in a new session and starts with `printf '\033c'` (RIS) to clear the echoed
+ * command line. Baseline and test runs use different per-line delays (different command lines);
+ * after the clear only emit.sh output remains.
  */
 import { expect, test, type Page } from '@playwright/test'
 
@@ -32,11 +34,12 @@ import {
   type WSControl,
 } from './harness'
 
-// 【不录 trace】：routeWebSocket 中继的每一条消息都会被记成一个 trace 动作，几千帧输出
-// 能把 Playwright 的协议通道堵上几十秒（实测一次 waitForTimeout(300) 拖了 44 秒）
+// No trace: every message relayed by routeWebSocket is recorded as a trace action, and thousands of
+// output frames can clog Playwright's protocol channel for tens of seconds (one waitForTimeout(300)
+// once took 44s).
 test.use({ trace: 'off' })
 
-/** 等输出彻底停下来（outSeq 与缓冲文本都不再变），给两轮一个确定的截止点。 */
+/** waitQuiet waits until output has fully stopped (outSeq and buffer text unchanged), giving each round a fixed cutoff. */
 async function waitQuiet(page: Page, quietMs = 700): Promise<void> {
   let last = ''
   let since = Date.now()
@@ -51,13 +54,13 @@ async function waitQuiet(page: Page, quietMs = 700): Promise<void> {
     }
     await page.waitForTimeout(50)
   }
-  throw new Error('超时等待：输出静默')
+  throw new Error('timed out waiting for: output to go quiet')
 }
 
-/** 序列化结果截到完成标记为止 —— 之后的提示符与光标不属于这段输出。 */
+/** untilDone truncates the serialization at the done marker; the prompt and cursor after it are not part of the output. */
 function untilDone(s: string): string {
   const i = s.indexOf('EMIT-DONE')
-  if (i < 0) throw new Error('序列化结果里没有 EMIT-DONE')
+  if (i < 0) throw new Error('serialization has no EMIT-DONE')
   return s.slice(0, i + 'EMIT-DONE'.length)
 }
 
@@ -66,90 +69,90 @@ function assertSame(got: string, want: string, what: string): void {
   let i = 0
   while (i < got.length && i < want.length && got[i] === want[i]) i++
   throw new Error(
-    `${what}：第 ${i} 字节起分歧\n` +
-      `基准长度 ${want.length}，实际长度 ${got.length}\n` +
-      `基准 …${JSON.stringify(want.slice(Math.max(0, i - 60), i + 60))}\n` +
-      `实际 …${JSON.stringify(got.slice(Math.max(0, i - 60), i + 60))}`,
+    `${what}: diverges at byte ${i}\n` +
+      `baseline length ${want.length}, actual length ${got.length}\n` +
+      `baseline ...${JSON.stringify(want.slice(Math.max(0, i - 60), i + 60))}\n` +
+      `actual   ...${JSON.stringify(got.slice(Math.max(0, i - 60), i + 60))}`,
   )
 }
 
-/** 在一个新会话里清屏后跑 emit，返回会话号。 */
+/** startEmit runs emit in a new session after clearing the screen and returns the session ID. */
 async function startEmit(page: Page, args: string): Promise<number> {
   const sid = await newSession(page)
   await submit(page, `printf '\\033c'; ${EMIT} ${args}`)
   return sid
 }
 
-/** 跑完一轮并取序列化结果。 */
+/** finish waits for the round to complete and returns the serialized buffer. */
 async function finish(page: Page): Promise<string> {
-  await waitText(page, 'EMIT-DONE', '输出跑完', 90_000)
+  await waitText(page, 'EMIT-DONE', 'output finished', 90_000)
   await waitQuiet(page)
   return untilDone(await serialize(page))
 }
 
-/** 切断一次：等横幅出「重连中」，按需多等一会儿，再恢复并等回到「在线」。 */
+/** cut drops the connection once: waits for the reconnecting banner, optionally holds, then restores and waits for online. */
 async function cut(page: Page, net: WSControl, holdMs = 0): Promise<void> {
   await net.goOffline()
-  await expect(page.getByTestId('conn-text')).toContainText('重连中', { timeout: 10_000 })
+  await expect(page.getByTestId('conn-text')).toContainText('Reconnecting', { timeout: 10_000 })
   if (holdMs) await page.waitForTimeout(holdMs)
   net.goOnline()
   await waitOnline(page, 30_000)
 }
 
-test.describe('E2E-2 字节级连续性（默认 ring 256 KiB，走增量）', () => {
+test.describe('E2E-2 byte-level continuity (default 256 KiB ring, incremental path)', () => {
   let agent: Agent
   test.beforeEach(async () => {
     agent = await Agent.start()
   })
   test.afterEach(() => agent.stop())
 
-  test('E2E-2a/2b/2d 断开 1 次 / 断开 5 秒 / 快速断开 10 次：屏幕与从未断线时逐字节一致', async ({ page }) => {
+  test('E2E-2a/2b/2d one disconnect / 5s disconnect / 10 rapid disconnects: screen is byte-identical to a run without disconnects', async ({ page }) => {
     test.setTimeout(240_000)
     const net = await installWSControl(page)
     await agent.open(page)
 
-    // 基准：不断开
+    // Baseline: no disconnect.
     await startEmit(page, '2000 0')
     const baseline = await finish(page)
-    expect(baseline.length, '基准输出太少，测不出东西').toBeGreaterThan(100_000)
+    expect(baseline.length, 'baseline output too small to prove anything').toBeGreaterThan(100_000)
 
-    // 2a：输出进行到约一半时切断
+    // 2a: cut about halfway through the output.
     {
       await startEmit(page, '2000 2')
-      await waitText(page, 'line 01000', '输出过半')
+      await waitText(page, 'line 01000', 'output past halfway')
       await cut(page, net)
-      // 恢复的 toast 报出补了多少（AC-2.10）
-      await expect(page.getByTestId('toast')).toContainText('已恢复')
-      expect((await lastWelcome(page))!.resumed.every((r) => r.status === 'ok'), '没溢出就该走增量').toBe(true)
-      assertSame(await finish(page), baseline, 'E2E-2a 断开一次后字节级连续性被破坏')
+      // The restore toast reports how much was caught up (AC-2.10).
+      await expect(page.getByTestId('toast')).toContainText('Resumed')
+      expect((await lastWelcome(page))!.resumed.every((r) => r.status === 'ok'), 'no overflow, so incremental').toBe(true)
+      assertSame(await finish(page), baseline, 'E2E-2a byte-level continuity broken after one disconnect')
     }
 
-    // 2b：断开 5 秒（每行 5ms：断开期间最多产 ~1100 行 ≈ 180 KiB，不溢出 256 KiB 的 ring）
+    // 2b: disconnect for 5s. At 5ms per line that is at most ~1100 lines ≈ 180 KiB, which fits the 256 KiB ring.
     {
       await startEmit(page, '2000 5')
-      await waitText(page, 'line 00200', '输出开始')
+      await waitText(page, 'line 00200', 'output started')
       await cut(page, net, 5000)
-      expect((await lastWelcome(page))!.resumed.every((r) => r.status === 'ok'), '5 秒不溢出，仍走增量').toBe(true)
-      assertSame(await finish(page), baseline, 'E2E-2b 断开 5 秒后字节级连续性被破坏')
+      expect((await lastWelcome(page))!.resumed.every((r) => r.status === 'ok'), '5s does not overflow, still incremental').toBe(true)
+      assertSame(await finish(page), baseline, 'E2E-2b byte-level continuity broken after a 5s disconnect')
     }
 
-    // 2d：连续快速断开 10 次，每次间隔 300ms —— 验证没有累积错位
+    // 2d: 10 rapid disconnects, 300ms apart, to check that misalignment does not accumulate.
     {
-      // 每行 10ms ≈ 20 秒：10 次断开（每次连退避约 0.7 秒）全落在输出期间
+      // 10ms per line ≈ 20s, so all 10 disconnects (~0.7s each including backoff) land during output.
       await startEmit(page, '2000 10')
-      await waitText(page, 'line 00050', '输出开始')
+      await waitText(page, 'line 00050', 'output started')
       for (let i = 0; i < 10; i++) {
         await net.goOffline()
         await page.waitForTimeout(300)
         net.goOnline()
         await waitOnline(page, 30_000)
       }
-      expect(await terminalText(page), '10 次断开应当都落在输出期间').not.toContain('EMIT-DONE')
-      assertSame(await finish(page), baseline, 'E2E-2d 连续断开 10 次后字节级连续性被破坏')
+      expect(await terminalText(page), 'all 10 disconnects should land during output').not.toContain('EMIT-DONE')
+      assertSame(await finish(page), baseline, 'E2E-2d byte-level continuity broken after 10 rapid disconnects')
     }
   })
 
-  test('E2E-2e 断点落在着色区间内：走增量，字节原样续上，颜色与基准一致', async ({ page }) => {
+  test('E2E-2e cut inside a colored span: incremental path resumes the bytes verbatim, colors match the baseline', async ({ page }) => {
     test.setTimeout(120_000)
     const net = await installWSControl(page)
     await agent.open(page)
@@ -158,173 +161,180 @@ test.describe('E2E-2 字节级连续性（默认 ring 256 KiB，走增量）', (
     const baseline = await finish(page)
 
     const sid = await startEmit(page, '1500 3 mono')
-    await waitText(page, 'line 00500', '同色区间已经开始')
+    await waitText(page, 'line 00500', 'colored span has started')
     await net.goOffline()
-    await expect(page.getByTestId('conn-text')).toContainText('重连中')
+    await expect(page.getByTestId('conn-text')).toContainText('Reconnecting')
     const cutAt = await outSeq(page)
     const read = await framesSince(page)
     net.goOnline()
     await waitOnline(page)
 
     const w = (await lastWelcome(page))!
-    expect(w.resumed.find((r) => r.sid === sid)?.status, '断点在 ring 窗口内，必须走增量').toBe('ok')
+    expect(w.resumed.find((r) => r.sid === sid)?.status, 'the cut is within the ring window, so incremental is required').toBe('ok')
 
-    // agent 不改写输出流（AC-2.5）：续上的第一帧从断点（或之前，重叠部分客户端去重）开始，
-    // 中间没有快照。【趁早读】：frames() 只留最近 512 帧，跑完再读就只剩尾巴了
+    // The agent does not rewrite the output stream (AC-2.5): the first resumed frame starts at the
+    // cut (or earlier; the client dedups the overlap) with no snapshot in between. Read early:
+    // frames() keeps only the last 512 frames, so after the run only the tail would be left.
     let fs: Awaited<ReturnType<typeof read>> = []
     await waitFor(async () => {
       fs = (await read()).filter((f) => f.sid === sid)
       return fs.length > 0
-    }, '重连后收到第一帧')
-    expect(fs.some((f) => f.kind === 'SNAPSHOT'), '增量路径不该有快照').toBe(false)
-    expect(fs[0]!.seq, `续传的第一帧应当从断点 ${cutAt} 接上`).toBeLessThanOrEqual(cutAt)
-    expect(fs[0]!.seq + fs[0]!.bytes, '第一帧覆盖断点').toBeGreaterThan(cutAt)
+    }, 'first frame after reconnect')
+    expect(fs.some((f) => f.kind === 'SNAPSHOT'), 'incremental path must not include a snapshot').toBe(false)
+    expect(fs[0]!.seq, `first resumed frame should start at the cut ${cutAt}`).toBeLessThanOrEqual(cutAt)
+    expect(fs[0]!.seq + fs[0]!.bytes, 'first frame covers the cut').toBeGreaterThan(cutAt)
 
     const after = await finish(page)
-    assertSame(after, baseline, 'E2E-2e 断点落在着色区间内，续上的颜色/字节与基准不同')
+    assertSame(after, baseline, 'E2E-2e cut inside a colored span: resumed colors/bytes differ from the baseline')
   })
 })
 
-test.describe('E2E-2c / E2E-4 断开期间输出超过 ring_bytes → 快照', () => {
+test.describe('E2E-2c / E2E-4 output during disconnect exceeds ring_bytes -> snapshot', () => {
   let agent: Agent
   test.beforeEach(async () => {
-    agent = await Agent.start({ ringBytes: 65536 }) // 调小，让快照路径可测
+    agent = await Agent.start({ ringBytes: 65536 }) // small enough to exercise the snapshot path
   })
   test.afterEach(() => agent.stop())
 
-  test('E2E-2c 重连走快照：最后 2000 行 + 当前屏与基准逐行一致，无截断提示，之后的输出正确', async ({ page }) => {
+  test('E2E-2c reconnect via snapshot: last 2000 lines + current screen match the baseline line by line, no truncation notice, later output correct', async ({ page }) => {
     test.setTimeout(180_000)
     const net = await installWSControl(page)
     await agent.open(page)
 
-    // 基准：同一条命令，不断开。【先 sleep 3】：对照那一轮要在这 3 秒里把线掐掉，
-    // 整段输出才落在断线期间；基准用同一条命令，命令行回显也一样
+    // Baseline: same command, no disconnect. The leading `sleep 3` gives the test run time to cut
+    // the line so all output lands while disconnected; the baseline uses the same command so the
+    // echoed command line matches too.
     const cmd = `sleep 3; ${EMIT} 5000 0`
     await newSession(page)
     await submit(page, cmd)
-    await waitText(page, 'EMIT-DONE', '基准跑完', 90_000)
+    await waitText(page, 'EMIT-DONE', 'baseline finished', 90_000)
     await waitQuiet(page)
     const base = (await terminalText(page)).split('\n').map((l) => l.trimEnd())
 
-    // 对照：新会话里起同一条命令，立刻断线
+    // Test run: same command in a new session, disconnect immediately.
     const sid = await newSession(page)
     await submit(page, `printf 'OLD-%s\\n' SCREEN; ${cmd}`)
     await waitText(page, 'OLD-SCREEN')
-    // 回看位置先挪上去：快照之后应当回到底部（E2E-4）
+    // Scroll up first: after the snapshot the view should return to the bottom (E2E-4).
     await hooks.scrollLines(page, -5)
     await net.goOffline()
-    await expect(page.getByTestId('conn-text')).toContainText('重连中')
-    // 断线期间：3 秒后开始产出 5000 行 ≈ 800 KiB，远超 64 KiB
+    await expect(page.getByTestId('conn-text')).toContainText('Reconnecting')
+    // While disconnected: after 3s, 5000 lines ≈ 800 KiB, far more than 64 KiB.
     const read = await framesSince(page)
     await page.waitForTimeout(7000)
     net.goOnline()
     await waitOnline(page)
 
     const w = (await lastWelcome(page))!
-    expect(w.resumed.find((r) => r.sid === sid)?.status, '积压超过 ring_bytes 必须走快照').toBe('snapshot')
+    expect(w.resumed.find((r) => r.sid === sid)?.status, 'backlog over ring_bytes must use a snapshot').toBe('snapshot')
     const snap = await waitSnapshot(read, sid)
     expect(snap.length).toBeGreaterThan(0)
-    await waitText(page, 'EMIT-DONE', '跑完', 60_000)
+    await waitText(page, 'EMIT-DONE', 'finished', 60_000)
     await waitQuiet(page)
 
-    // 没有「历史输出已截断」之类的提示（快照就是完整画面）
+    // No "history truncated" notice: the snapshot is the complete picture.
     await expect(page.getByTestId('truncated')).toHaveCount(0)
-    await expect(page.getByText(/截断/)).toHaveCount(0)
+    await expect(page.getByText(/truncated/i)).toHaveCount(0)
 
-    // 屏幕级一致（AC-2.21）：最后 2000 行历史 + 当前屏，逐行比。
-    // 【行尾空白不算差异】：程序写出的空格与空格子在屏幕上一样，快照里行尾的空格
-    // 记成空格子（translateToString 只裁空格子、不裁写出来的空格）—— 单测的逐格比较
-    // 也把两者归一（web/tests/snapshot-xterm.test.ts 的 cellKey）
+    // Screen-level consistency (AC-2.21): last 2000 lines of history + current screen, line by line.
+    // Trailing whitespace is not a difference: spaces written by a program look the same as empty
+    // cells, and a snapshot records trailing spaces as empty cells (translateToString trims empty
+    // cells but not written spaces). The cell-by-cell unit test normalizes both the same way
+    // (cellKey in web/tests/snapshot-xterm.test.ts).
     const got = (await terminalText(page)).split('\n').map((l) => l.trimEnd())
     const { rows } = await hooks.size(page)
     const n = 2000 + rows
-    expect(got.length, `快照带回来的行数（历史 ≤ 2000 + 当前屏 ${rows}）`).toBeLessThanOrEqual(n)
-    expect(got.length, '快照应当带满 2000 行历史').toBeGreaterThanOrEqual(n - 1)
+    expect(got.length, `lines restored by the snapshot (history <= 2000 + current screen ${rows})`).toBeLessThanOrEqual(n)
+    expect(got.length, 'snapshot should carry the full 2000 lines of history').toBeGreaterThanOrEqual(n - 1)
     const tail = (a: string[]) => a.slice(-Math.min(got.length, n))
     const g = tail(got)
     const b = tail(base)
     for (let i = 0; i < g.length; i++) {
-      if (g[i] !== b[i]) throw new Error(`快照后第 ${i} 行与基准不同\n基准 ${JSON.stringify(b[i])}\n实际 ${JSON.stringify(g[i])}`)
+      if (g[i] !== b[i]) throw new Error(`line ${i} after snapshot differs from the baseline\nbaseline ${JSON.stringify(b[i])}\nactual   ${JSON.stringify(g[i])}`)
     }
 
-    // E2E-4：写快照之前清了屏 —— 断线前的旧内容不会被接在快照前面
+    // E2E-4: the screen is cleared before writing the snapshot, so pre-disconnect content is not
+    // left in front of it.
     const text = got.join('\n')
-    expect(count(text, 'OLD-SCREEN'), '快照之前的旧屏幕应当被清掉').toBe(0)
-    expect(count(text, 'line 05000'), '同一段内容只该有一份').toBe(1)
-    // E2E-4：回看位置回到底部
-    expect((await hooks.viewport(page)).y, '快照之后回看位置应当回到底部').toBeGreaterThanOrEqual(got.length - rows)
+    expect(count(text, 'OLD-SCREEN'), 'old screen should be cleared before the snapshot').toBe(0)
+    expect(count(text, 'line 05000'), 'same content appears once').toBe(1)
+    // E2E-4: the view returns to the bottom.
+    expect((await hooks.viewport(page)).y, 'view should return to the bottom after the snapshot').toBeGreaterThanOrEqual(got.length - rows)
 
-    // 重连后新产生的输出完全正确
+    // Output produced after reconnecting is correct.
     await submit(page, "printf 'marker-%s\\n' xyz")
     await waitFor(
       async () => (await terminalText(page)).split('\n').some((l) => l.trimEnd() === 'marker-xyz'),
-      '快照之后的输出仍然正确',
+      'output after the snapshot is still correct',
     )
   })
 })
 
-test.describe('E2E-3 断线期间的输入不丢', () => {
+test.describe('E2E-3 input typed while disconnected is not lost', () => {
   let agent: Agent
   test.beforeEach(async () => {
     agent = await Agent.start()
   })
   test.afterEach(() => agent.stop())
 
-  test('断线期间敲的三条命令在重连后按序执行，不重不丢，in_ack 跨重连存活', async ({ page }) => {
+  test('three commands typed while disconnected run in order after reconnect, no duplicates or losses, in_ack survives the reconnect', async ({ page }) => {
     const net = await installWSControl(page)
     await agent.open(page)
     const sid = (await hooks.sid(page))!
 
-    // 断开之前先有过输入：in_ack > 0 才验得出它没被清零（AC-2.12）
+    // Type something before disconnecting: only with in_ack > 0 can we tell it was not reset (AC-2.12).
     await submit(page, "printf 'PRE-%s\\n' CUT")
     await waitText(page, 'PRE-CUT')
-    await waitFor(async () => (await hooks.inputStats(page)).unackedBytes === 0, '断开前的输入都被 ack 了')
+    await waitFor(async () => (await hooks.inputStats(page)).unackedBytes === 0, 'input before the disconnect was all acked')
 
     await net.goOffline()
-    await expect(page.getByTestId('conn-text')).toContainText('重连中', { timeout: 20_000 })
+    await expect(page.getByTestId('conn-text')).toContainText('Reconnecting', { timeout: 20_000 })
 
-    // 断线期间直接在终端里连打三条。输出是 `A1-OK`：命令回显里只有 `A%s-OK`，不会被误认成输出
+    // Type three commands straight into the terminal while disconnected. The output is `A1-OK`; the
+    // echoed command contains only `A%s-OK`, so it cannot be mistaken for output.
     await submit(page, 'printf "A%s-OK\\n" 1')
     await submit(page, 'printf "A%s-OK\\n" 2')
     await submit(page, 'printf "A%s-OK\\n" 3')
 
-    // 它们处于「待发送」：横幅还在、字节记在未 ack 里，而不是被静默吞掉
+    // They are pending: the banner is still up and the bytes are counted as unacked, not silently dropped.
     await expect(page.getByTestId('conn-banner')).toBeVisible()
     const pending = (await hooks.inputStats(page)).unackedBytes
-    expect(pending, '离线期间的输入应当挂在待发送队列里').toBeGreaterThan(0)
+    expect(pending, 'input typed offline should wait in the send queue').toBeGreaterThan(0)
 
     net.goOnline()
     await waitOnline(page, 40_000)
 
     const w = (await lastWelcome(page))!
     const r = w.resumed.find((x) => x.sid === sid)
-    expect(r, '重连应当续传当前会话').toBeTruthy()
-    expect(r!.in_ack, 'in_ack 必须是断开前的累计值，不能归零（否则 input_gap）').toBeGreaterThan(0)
+    expect(r, 'reconnect should resume the current session').toBeTruthy()
+    expect(r!.in_ack, 'in_ack must be the pre-disconnect total, not reset to zero (otherwise input_gap)').toBeGreaterThan(0)
 
-    await waitFor(async () => (await terminalText(page)).includes('A3-OK'), '三条都执行了', 30_000)
-    // 【按子串找，不按整行比】：三条在重连后一批到达，bash 跑第一条时内核把后两条的预输入
-    // 回显出来，readline 重画后输出行上会留下回显的零头（`A1p`、`inA1`），整行比就误报
+    await waitFor(async () => (await terminalText(page)).includes('A3-OK'), 'all three ran', 30_000)
+    // Search by substring, not whole lines: the three arrive as one batch after reconnect. While
+    // bash runs the first, the kernel echoes the type-ahead of the other two, and after readline
+    // redraws, fragments of that echo (`A1p`, `inA1`) remain on output lines, which would break a
+    // whole-line comparison.
     const out = await terminalText(page)
     const at = (s: string) => out.indexOf(s)
-    // 顺序正确
+    // In order.
     expect(at('A1-OK')).toBeGreaterThan(-1)
     expect(at('A1-OK')).toBeLessThan(at('A2-OK'))
     expect(at('A2-OK')).toBeLessThan(at('A3-OK'))
-    // 不重复：每个标记只出现一次
+    // No duplicates: each marker appears once.
     for (const m of ['A1-OK', 'A2-OK', 'A3-OK']) {
-      expect(count(out, m), `${m} 输出了不止一次 —— 输入被重复写入了`).toBe(1)
+      expect(count(out, m), `${m} printed more than once; input was written twice`).toBe(1)
     }
-    await expect.poll(async () => (await hooks.inputStats(page)).unackedBytes, { message: '重发之后全部被 ack' }).toBe(0)
+    await expect.poll(async () => (await hooks.inputStats(page)).unackedBytes, { message: 'all acked after resend' }).toBe(0)
   })
 
-  test('变体：断开期间提交超过 64 KiB 的输入 → 明确提示「离线输入已满」', async ({ page }) => {
+  test('variant: more than 64 KiB of input submitted while disconnected -> clear "offline input full" notice', async ({ page }) => {
     const net = await installWSControl(page)
     await agent.open(page)
 
     await net.goOffline()
-    await expect(page.getByTestId('conn-text')).toContainText('重连中', { timeout: 20_000 })
+    await expect(page.getByTestId('conn-text')).toContainText('Reconnecting', { timeout: 20_000 })
 
-    // 70 KB 粘贴进终端（xterm 的 paste 事件 → onData 一次性送出）
+    // Paste 70 KB into the terminal (xterm's paste event -> one onData call).
     await page.evaluate(() => {
       const ta = document.querySelector<HTMLTextAreaElement>('.term .xterm-helper-textarea')!
       ta.focus()
@@ -332,6 +342,6 @@ test.describe('E2E-3 断线期间的输入不丢', () => {
       dt.setData('text/plain', 'x'.repeat(70 * 1024))
       ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
     })
-    await expect(page.getByTestId('toast')).toContainText('离线输入已满')
+    await expect(page.getByTestId('toast')).toContainText('Offline input buffer full')
   })
 })

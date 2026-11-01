@@ -5,7 +5,7 @@
 [0mMiB Swap:[0;1m   2048.0 [0mtotal,[0;1m   1274.2 [0mfree,[0;1m    773.8 [0mused.[0;1m   1798.8 [0mavail Mem[0m
 
 [0;7m    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND                     [0m
-[0;1m2963523 usr       30  10 2010400  47996  11848 R  81.8   1.2  23:33.37 awtto-node                  [0m
+[0;1m2963523 usr       30  10 2010400  47996  11848 R  81.8   1.2  23:33.37 myapp-node                  [0m
 [0m3031181 postgres  20   0  226804 142012 134288 D  63.6   3.5   0:01.52 postgres[0m
 [0m3031194 usr       20   0   25.2g 103808  43784 S  36.4   2.6   0:00.67 workerd[0m
 [0;1m3029138 usr       20   0   68.1g 701216  73396 R  27.3  17.5   0:49.50 MainThread                  [0m

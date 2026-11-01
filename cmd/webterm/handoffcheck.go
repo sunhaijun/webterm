@@ -7,9 +7,11 @@ import (
 	"github.com/sunhaijun/webterm/internal/handoff"
 )
 
-// handoff-check：热升级预检（ADR-0016）。旧进程在 exec 之前以子进程跑【新二进制】的
-// 这个子命令，把元数据快照从 stdin 喂进来 —— 读得懂就打 "ok schema=N" 退 0。
-// 读不懂在这里失败，旧进程就中止升级、照常服务；exec 之后没有回头路。
+// runHandoffCheck implements handoff-check, the hot-upgrade preflight
+// (ADR-0016). Before exec, the old process runs this subcommand of the new
+// binary and feeds the metadata snapshot on stdin. If the new binary can decode
+// it, it prints "ok schema=N" and exits 0. A failure here lets the old process
+// abort the upgrade and keep serving; after exec there is no way back.
 func runHandoffCheck() error {
 	if _, err := handoff.Decode(os.Stdin); err != nil {
 		return err

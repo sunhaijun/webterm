@@ -1,9 +1,9 @@
 /**
- * WebSocket 连接层 —— 协议 §5 的客户端一侧（v2）。
+ * WebSocket connection layer: the client side of protocol §5 (v2).
  *
- * 它负责：seq 记账、快照分帧拼装、回放区间（catchup_to）、输入重发队列、
- * 指数退避重连、心跳。"永不断线"这个承诺在客户端这边就落在这个文件里
- * （AC-2.1 / AC-2.4 / AC-2.6）。
+ * Handles seq accounting, snapshot reassembly, the replay window (catchup_to), the input
+ * resend queue, exponential-backoff reconnects and heartbeats. On the client, the "never
+ * lose the session" promise lives in this file (AC-2.1 / AC-2.4 / AC-2.6).
  */
 import {
   PROTOCOL_VERSION,
@@ -28,82 +28,84 @@ import { inputTrace } from '../keys/inputstats'
 import { Backoff } from './backoff'
 import { PendingFullError, ResendQueue } from './resend'
 
-/** 心跳与判死（协议 §5.5 / AC-2.8）。 */
+/** Heartbeat and dead-connection detection (protocol §5.5 / AC-2.8). */
 export const PING_INTERVAL = 30_000
 export const PONG_TIMEOUT = 10_000
-/** 回到前台 / 网络恢复时那一次即时探活的超时（协议 §5.5 / AC-2.20）。 */
+/** Timeout for the immediate probe when the page returns to the foreground or the network comes back (protocol §5.5 / AC-2.20). */
 export const PROBE_TIMEOUT = 2_000
-/** `frames()` 留最近多少帧（E2E 用来看收到的是 OUTPUT 还是 SNAPSHOT）。 */
+/** How many recent frames `frames()` keeps (E2E uses it to tell OUTPUT from SNAPSHOT). */
 export const FRAME_LOG = 512
 
 export type ConnState = 'connecting' | 'online' | 'reconnecting' | 'closed'
 
-/** 每会话的客户端侧记账。 */
+/** Per-session client-side accounting. */
 interface SessionState {
-  /** 已接收的累计输出字节数。续传时上报的就是它。 */
+  /** Total output bytes received; this is what we report when resuming. */
   outSeq: number
-  /** agent 侧该会话的累计产出字节数，未读 = headSeq > outSeq。 */
+  /** Total output bytes the agent has produced for this session; unread = headSeq > outSeq. */
   headSeq: number
-  /** 回放门（§5.3）：outSeq 追到它之前收到的 OUTPUT 都算回放。 */
+  /** Replay gate (§5.3): OUTPUT received before outSeq reaches this counts as replay. */
   catchupTo: number
   resend: ResendQueue
   subscribed: boolean
 }
 
-/** 一份正在收的快照：同一个 seq，除最后一帧外都带 MORE（§3）。 */
+/** A snapshot being received: all frames share one seq; all but the last carry MORE (§3). */
 interface SnapshotAssembly {
   seq: number
   parts: Uint8Array[]
 }
 
-/** 收到的一帧（`__webterm.frames()`）。 */
+/** A received frame (`__webterm.frames()`). */
 export interface FrameRecord {
   type: number
   kind: 'OUTPUT' | 'SNAPSHOT'
   sid: number
   seq: number
   flags: number
-  /** payload 字节数。 */
+  /** Payload size in bytes. */
   bytes: number
-  /** 这一帧是否按回放写入（快照恒为 true）。 */
+  /** Whether the frame was written as replay (always true for snapshots). */
   replay: boolean
 }
 
 export interface ConnectionHandlers {
   /**
-   * 一段输出（OUTPUT 帧去重之后的新字节）。isReplay=true：这段在 `catchup_to` 之前，
-   * 是补课 —— 写进终端时要拦住 xterm 对历史查询的自动应答（§5.3）。
+   * New output bytes (OUTPUT frames after dedup). isReplay=true means the bytes precede
+   * `catchup_to` and are catch-up: xterm's automatic replies to old queries must be
+   * suppressed when writing them (§5.3).
    */
   onOutput(sid: number, data: Uint8Array, isReplay: boolean): void
   /**
-   * 一份收齐的快照（§3）。消费方：reset → 换新的 UTF-8 解码器 → 当作回放写入。
-   * 调用之前 outSeq 已经置为 seq。
+   * A complete snapshot (§3). The consumer resets, swaps in a fresh UTF-8 decoder, and
+   * writes it as replay. outSeq is already set to seq when this is called.
    */
   onSnapshot(sid: number, data: Uint8Array, seq: number): void
   onMessage(msg: ServerMessage): void
   onState(state: ConnState, info: StateInfo): void
-  /** 重连后，所有续传的会话都追平了：这一次补齐了多少字节（补课 + 快照）。首次连接不报。 */
+  /** After a reconnect, every resumed session has caught up; reports the bytes fetched (catch-up + snapshots). Not called on the first connect. */
   onRecovered?(bytes: number): void
   /**
-   * agent 的 instance_id 变了（真重启过，§5.3）：本地每个会话都作废了。
-   * 在把 welcome 交给 onMessage 之前调用。
+   * The agent's instance_id changed (it really restarted, §5.3), so every local session is
+   * void. Called before the welcome is passed to onMessage.
    */
   onRestart?(): void
-  /** agent 判了致命错误（协议版本不符）：重连也没用，要用户处理。 */
+  /** The agent reported a fatal error (protocol version mismatch); reconnecting won't help, the user must act. */
   onFatal?(reason: string): void
-  /** 设备被吊销（`error{code:"unauthorized"}`，AC-1.11）。agent 随后会关连接。 */
+  /** Device revoked (`error{code:"unauthorized"}`, AC-1.11). The agent closes the connection next. */
   onUnauthorized?(message: string): void
-  /** 可恢复的错误（seq 空洞、非法帧 → 已关连接走续传；离线输入已满）：提示一下即可。 */
+  /** Recoverable errors worth a notice: seq gap or bad frame (connection closed, will resume), offline input full. */
   onError?(reason: string): void
   /**
-   * 连接断了（不是 close() 主动关的）。welcomed=false：这条连接一个 welcome 都没收到 ——
-   * 升级被拒（401 / 403）在浏览器里就长这样，WebSocket 不给 HTTP 状态码。
+   * The connection dropped (not via close()). welcomed=false means this socket never got a
+   * welcome, which is how a rejected upgrade (401 / 403) looks in a browser: WebSocket
+   * doesn't expose the HTTP status.
    */
   onClosed?(welcomed: boolean): void
 }
 
 export interface StateInfo {
-  /** 重连中：距下次重试还有多少毫秒。 */
+  /** While reconnecting: milliseconds until the next attempt. */
   retryInMs?: number
   rttMs?: number
 }
@@ -113,12 +115,12 @@ export interface ConnectionOptions {
   clientID: string
   handlers: ConnectionHandlers
   backoff?: Backoff
-  /** 仅供测试注入。 */
+  /** Test injection only. */
   now?: () => number
   socketFactory?: (url: string) => WebSocketLike
 }
 
-/** WebSocket 的最小接口，方便单测替身。 */
+/** The minimal WebSocket surface, so unit tests can substitute a fake. */
 export interface WebSocketLike {
   binaryType: string
   readyState: number
@@ -138,7 +140,7 @@ export class Connection {
   private state: ConnState = 'closed'
   private sessions = new Map<number, SessionState>()
   private snapshots = new Map<number, SnapshotAssembly>()
-  /** agent 实例 id。重连时带回去，不符说明 agent 重启过（协议 §5.3）。 */
+  /** Agent instance id. Sent back on reconnect; a mismatch means the agent restarted (protocol §5.3). */
   private instanceID: string | undefined
   private pingTimer: ReturnType<typeof setInterval> | undefined
   private pongTimer: ReturnType<typeof setTimeout> | undefined
@@ -147,9 +149,9 @@ export class Connection {
   private lastPingAt = 0
   private stopped = false
   private welcomed = false
-  /** 当前这条 socket 收到过 welcome 没有。 */
+  /** Whether the current socket has received a welcome. */
   private socketWelcomed = false
-  /** 重连后还没追平的会话 → 要追到的 seq（-1 = 等快照），以及已经补了多少字节。 */
+  /** After a reconnect: sessions not caught up yet → target seq (-1 = awaiting snapshot), plus bytes fetched so far. */
   private recovery: { targets: Map<number, number>; bytes: number } | null = null
   private readonly log: FrameRecord[] = []
 
@@ -163,23 +165,23 @@ export class Connection {
     return this.state
   }
 
-  /** 某会话的接收进度（续传时上报它）。 */
+  /** How far a session has been received (reported when resuming). */
   outSeqOf(sid: number): number {
     return this.sessions.get(sid)?.outSeq ?? 0
   }
 
-  /** agent 侧该会话已产出到哪里（已知的最大值）。 */
+  /** How far the agent has produced output for a session (highest known). */
   headSeqOf(sid: number): number {
     return this.sessions.get(sid)?.headSeq ?? 0
   }
 
-  /** 未读 = agent 侧已产出的字节数 超过 本地已收到的。 */
+  /** Unread = the agent has produced more bytes than we have received. */
   isUnread(sid: number): boolean {
     const s = this.sessions.get(sid)
     return s ? s.headSeq > s.outSeq : false
   }
 
-  /** 最近收到的二进制帧（只读副本）。 */
+  /** Recently received binary frames (a copy). */
   frames(): FrameRecord[] {
     return this.log.slice()
   }
@@ -197,9 +199,9 @@ export class Connection {
     this.setState('closed')
   }
 
-  // ---------- 发送 ----------
+  // ---------- Sending ----------
 
-  /** 发一段输入。分配 in_seq、入重发队列、写线上。 */
+  /** Sends input: assigns in_seq, queues it for resend, writes it to the wire. */
   sendInput(sid: number, bytes: Uint8Array): void {
     const st = this.ensure(sid)
     let item
@@ -207,17 +209,17 @@ export class Connection {
       item = st.resend.push(bytes)
     } catch (e) {
       if (e instanceof PendingFullError) {
-        this.opts.handlers.onError?.('离线输入已满，请等待重连后再输入')
+        this.opts.handlers.onError?.('Offline input buffer full; wait for reconnect')
         return
       }
       throw e
     }
-    // 输入路径探针的"发给 agent"那一段（AC-3.17）
+    // The "sent to agent" stage of the input-path probe (AC-3.17)
     inputTrace.bump('sent')
     this.writeFrame(sid, item.seq, item.bytes)
   }
 
-  /** 发了但 agent 还没 ack 的字节数（排障用，AC-3.17）：涨着不降 = 没送到。 */
+  /** Bytes sent but not yet acked by the agent (for debugging, AC-3.17); growing and never shrinking means they aren't arriving. */
   unackedOf(sid: number): number {
     return this.sessions.get(sid)?.resend.pendingBytes ?? 0
   }
@@ -227,15 +229,17 @@ export class Connection {
   }
 
   /**
-   * 订阅某个会话。cols/rows 是当前终端尺寸 —— **必须和 subscribe 在同一条消息里**
-   * （协议 §4.1）：agent 锁内先按尺寸决定走增量还是快照，锁外才 TIOCSWINSZ，
-   * 程序因 SIGWINCH 重画的字节才一定排在后面。
+   * Subscribes to a session. cols/rows are the current terminal size and must travel in the
+   * same message as subscribe (protocol §4.1): under its lock the agent picks delta or
+   * snapshot by size, and only then applies TIOCSWINSZ, so the program's SIGWINCH redraw is
+   * guaranteed to come after.
    */
   subscribe(sid: number, cols = 0, rows = 0): void {
     const st = this.ensure(sid)
     st.subscribed = true
-    // 切回时 agent 补的那一段是回放：outSeq 追到已知 head 之前的都拦自动应答（§5.3）。
-    // agent 若改走快照，快照到达时 catchupTo 会重置成快照的 seq
+    // What the agent sends on switch-back is replay: suppress automatic replies until outSeq
+    // reaches the known head (§5.3). If the agent sends a snapshot instead, catchupTo is reset
+    // to the snapshot's seq when it arrives.
     st.catchupTo = Math.max(st.catchupTo, st.headSeq)
     const msg: Record<string, unknown> = { t: T.subscribe, sid, out_seq: st.outSeq }
     if (cols > 0 && rows > 0) {
@@ -251,7 +255,7 @@ export class Connection {
     this.send({ t: T.unsubscribe, sid })
   }
 
-  /** 会话已销毁：丢掉它的全部记账。 */
+  /** The session is gone: drop all its accounting. */
   forget(sid: number): void {
     this.sessions.delete(sid)
     this.snapshots.delete(sid)
@@ -259,11 +263,11 @@ export class Connection {
   }
 
   private writeFrame(sid: number, seq: number, bytes: Uint8Array): void {
-    if (!this.ws || this.ws.readyState !== 1) return // 离线：留在 pending 里，重连后重发
+    if (!this.ws || this.ws.readyState !== 1) return // Offline: it stays pending and is resent after reconnecting
     this.ws.send(encodeFrame({ type: TYPE_INPUT, flags: 0, sid, seq: BigInt(seq), payload: bytes }))
   }
 
-  // ---------- 连接生命周期 ----------
+  // ---------- Connection lifecycle ----------
 
   private open(): void {
     this.clearTimers()
@@ -275,8 +279,9 @@ export class Connection {
     this.ws = ws
 
     ws.onopen = () => {
-      // 只把【订阅中】的会话（当前可见的 + 保持接收的）列进 resume，避免重连瞬间
-      // 涌入大量数据。其余会话在用户切过去时用 subscribe{out_seq} 补齐（协议 §5.3）。
+      // Only subscribed sessions (the visible one plus pinned ones) go into resume, to avoid
+      // a flood of data on reconnect. Others catch up via subscribe{out_seq} when the user
+      // switches to them (protocol §5.3).
       const resume: ResumeReq[] = []
       for (const [sid, st] of this.sessions) {
         if (st.subscribed) resume.push({ sid, out_seq: st.outSeq })
@@ -295,13 +300,13 @@ export class Connection {
     this.socketWelcomed = false
     ws.onmessage = (ev) => this.onMessage(ev.data)
     ws.onerror = () => {
-      /* onclose 会跟着来，统一在那里处理 */
+      /* onclose follows; everything is handled there */
     }
     ws.onclose = () => {
       if (this.ws !== ws) return
       this.ws = null
       this.clearTimers()
-      // 半份快照没用了：重连后 agent 会按 out_seq 重新判定
+      // A partial snapshot is useless; after reconnecting the agent decides again from out_seq
       this.snapshots.clear()
       this.recovery = null
       if (this.stopped) {
@@ -317,7 +322,7 @@ export class Connection {
     const delay = this.backoff.next()
     const until = this.now() + delay
     this.setState('reconnecting', { retryInMs: delay })
-    // 倒计时实时更新，让"重连中 · 3s 后重试"这个提示是真的在走（AC-2.10）
+    // Tick the countdown so "Reconnecting · retry in 3s" actually counts down (AC-2.10)
     this.countdownTimer = setInterval(() => {
       const left = Math.max(0, until - this.now())
       this.opts.handlers.onState('reconnecting', { retryInMs: left })
@@ -326,11 +331,13 @@ export class Connection {
   }
 
   /**
-   * 网络恢复 / 页面重新可见：立即重试一次并重置退避（AC-2.9）。
+   * Network back / page visible again: retry immediately and reset the backoff (AC-2.9).
    *
-   * **自认在线时不能直接返回**（AC-2.20 / ADR-0020）：线路断了不一定有 `onclose`
-   * （息屏、切网、NAT 回收），这种僵尸连接只有心跳戳得穿。`online` / 重新可见是
-   * 已知的可疑时刻，立刻探一次，2 秒没有 pong 就判死。判错的代价只是多一次无损重连。
+   * Don't just return when we think we're online (AC-2.20 / ADR-0020): a dead link doesn't
+   * always fire `onclose` (screen off, network switch, NAT timeout), and only a heartbeat
+   * exposes such a zombie connection. `online` and becoming visible are known suspicious
+   * moments, so probe right away and declare it dead after 2s without a pong. A false
+   * positive only costs one lossless reconnect.
    */
   retryNow(): void {
     if (this.stopped) return
@@ -343,12 +350,12 @@ export class Connection {
     this.open()
   }
 
-  // ---------- 接收 ----------
+  // ---------- Receiving ----------
 
   private onMessage(data: unknown): void {
     if (typeof data === 'string') {
       const msg = decodeMessage(data)
-      if (!msg) return // 未知 t 值：忽略，不关连接（前向兼容）
+      if (!msg) return // Unknown t: ignore without closing (forward compatibility)
       this.handleControl(msg)
       return
     }
@@ -360,11 +367,11 @@ export class Connection {
     try {
       f = decodeFrame(raw)
     } catch {
-      this.fail('收到非法的二进制帧')
+      this.fail('Received a malformed binary frame')
       return
     }
     if (f.type === TYPE_INPUT) {
-      this.fail('agent 发来了 INPUT 帧')
+      this.fail('Agent sent an INPUT frame')
       return
     }
     const st = this.ensure(f.sid)
@@ -374,35 +381,35 @@ export class Connection {
       return
     }
 
-    // agent 保证一份快照的各帧之间不夹杂同一会话的其它帧（§3）
+    // The agent guarantees no other frames for the session interleave with a snapshot (§3)
     if (this.snapshots.has(f.sid)) {
-      this.fail(`会话 ${f.sid} 的快照还没收齐就来了 OUTPUT`)
+      this.fail(`Session ${f.sid}: OUTPUT arrived before the snapshot was complete`)
       return
     }
     if (seq > st.outSeq) {
-      // 出现空洞 —— 不该发生。【立即关闭连接并走重连续传】，不要自行修补。
-      this.fail(`会话 ${f.sid} 的输出流出现空洞（期望 ${st.outSeq}，收到 ${seq}）`)
+      // A gap should never happen. Close the connection and resume via reconnect; don't try to patch it.
+      this.fail(`Session ${f.sid}: gap in the output stream (expected seq ${st.outSeq}, got ${seq})`)
       return
     }
-    if (seq + f.payload.length <= st.outSeq) return // 完全重复的数据，丢弃
-    // 部分重叠：只取没收过的那一段
+    if (seq + f.payload.length <= st.outSeq) return // Entirely duplicate data: drop it
+    // Partial overlap: keep only the part we haven't seen
     const skip = st.outSeq - seq
     const fresh = skip > 0 ? f.payload.subarray(skip) : f.payload
     const freshSeq = st.outSeq
     st.outSeq += fresh.length
     st.headSeq = Math.max(st.headSeq, st.outSeq)
-    // outSeq 追到 catchupTo 之前的这些输出都是补课 —— 拦自动应答
+    // Output before outSeq reaches catchupTo is catch-up: suppress automatic replies
     const replay = freshSeq < st.catchupTo
     this.record(f, seq, replay)
     this.recovered(f.sid, fresh.length, st.outSeq)
     this.opts.handlers.onOutput(f.sid, fresh, replay)
   }
 
-  /** 收快照：同一 seq 的帧拼齐（最后一帧不带 MORE）再交出去。 */
+  /** Receives a snapshot: collects frames with the same seq until one without MORE, then delivers it. */
   private handleSnapshot(st: SessionState, f: Frame, seq: number): void {
     let asm = this.snapshots.get(f.sid)
     if (asm && asm.seq !== seq) {
-      this.fail(`会话 ${f.sid} 的快照帧 seq 不一致（${asm.seq} / ${seq}）`)
+      this.fail(`Session ${f.sid}: snapshot frames disagree on seq (${asm.seq} / ${seq})`)
       return
     }
     if (!asm) {
@@ -415,7 +422,7 @@ export class Connection {
 
     this.snapshots.delete(f.sid)
     const data = concat(asm.parts)
-    // 快照的字节不计入 out_seq：它就是 seq 那一刻的完整画面，之后从 seq 接 OUTPUT
+    // Snapshot bytes don't count toward out_seq: it is the full screen as of seq, and OUTPUT continues from seq
     st.outSeq = seq
     st.headSeq = Math.max(st.headSeq, seq)
     st.catchupTo = seq
@@ -447,10 +454,10 @@ export class Connection {
       }
 
       case T.error:
-        // 致命错误由服务端随后关连接；这里只把原因透出去
+        // For fatal errors the server closes the connection next; just pass the reason on
         if (msg.code === Code.unauthorized) this.opts.handlers.onUnauthorized?.(msg.message)
         if (msg.code === Code.protocolUnsupported) {
-          this.opts.handlers.onFatal?.(`agent 已升级，请刷新页面（${msg.message}）`)
+          this.opts.handlers.onFatal?.(`Agent was upgraded; reload the page (${msg.message})`)
         }
         break
     }
@@ -463,13 +470,13 @@ export class Connection {
     this.backoff.reset()
 
     if (restarted) {
-      // agent 真重启过：sid 会被重新分配，本地的进度一个都不能再用（AC-2.13）
+      // The agent really restarted: sids get reassigned and no local progress is usable (AC-2.13)
       this.sessions.clear()
       this.snapshots.clear()
       this.opts.handlers.onRestart?.()
     }
 
-    // 先记 head：status=ok 的补课要追到这里，回放门也按它划（§5.3 的表）
+    // Record heads first: status=ok catch-up runs up to here, and the replay gate is drawn here too (table in §5.3)
     for (const s of w.sessions) {
       const st = this.ensure(s.sid)
       st.headSeq = Math.max(st.headSeq, s.head_seq)
@@ -480,13 +487,13 @@ export class Connection {
     for (const r of w.resumed) {
       const st = this.ensure(r.sid)
       if (r.status === 'gone') {
-        // agent 重启过、或会话已销毁
+        // The agent restarted or the session is gone
         this.forget(r.sid)
         continue
       }
       if (r.status === 'snapshot') targets.set(r.sid, -1)
       else if (st.outSeq < st.headSeq) targets.set(r.sid, st.headSeq)
-      // 按 in_ack 裁剪重发队列，然后【按 seq 升序】重发其后的全部输入（§5.4）
+      // Trim the resend queue at in_ack, then resend everything after it in ascending seq order (§5.4)
       for (const item of st.resend.resumeFrom(r.in_ack)) {
         this.writeFrame(r.sid, item.seq, item.bytes)
       }
@@ -501,7 +508,7 @@ export class Connection {
     this.recovered(-1, 0, 0)
   }
 
-  /** 续传进度：某会话补到了 outSeq（快照传 Infinity）。全部追平时报一次。 */
+  /** Resume progress: a session reached outSeq (Infinity for a snapshot). Reports once when all have caught up. */
   private recovered(sid: number, bytes: number, outSeq: number): void {
     const r = this.recovery
     if (!r) return
@@ -528,7 +535,7 @@ export class Connection {
     if (this.log.length > FRAME_LOG) this.log.splice(0, this.log.length - FRAME_LOG)
   }
 
-  // ---------- 心跳 ----------
+  // ---------- Heartbeat ----------
 
   private startHeartbeat(): void {
     if (this.pingTimer) clearInterval(this.pingTimer)
@@ -536,8 +543,9 @@ export class Connection {
   }
 
   /**
-   * 发一个 ping 并武装判死定时器：`timeout` 内没有 pong 就主动关闭并重连。
-   * 心跳（10 秒）与即时探活（2 秒）问的是同一个问题，只是等的时间不同。
+   * Sends a ping and arms the dead-connection timer: no pong within `timeout` closes the
+   * socket and reconnects. The heartbeat (10s) and the immediate probe (2s) ask the same
+   * question with different patience.
    */
   private sendPing(timeout: number): void {
     if (!this.ws || this.ws.readyState !== 1) return
@@ -547,7 +555,7 @@ export class Connection {
     this.pongTimer = setTimeout(() => this.ws?.close(4000, 'pong timeout'), timeout)
   }
 
-  // ---------- 杂项 ----------
+  // ---------- Misc ----------
 
   private ensure(sid: number): SessionState {
     let st = this.sessions.get(sid)

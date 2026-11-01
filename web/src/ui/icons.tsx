@@ -1,12 +1,13 @@
 /**
- * 界面上自己画的图标（layout.md §图标，ADR-0037 §3）：内联 SVG，只描边不填充，
- * `currentColor`，线宽 1.75px，端点与拐角都是圆的。14×14 同一个框，按几何中心对齐。
+ * Hand-drawn UI icons (layout.md, ADR-0037 §3): inline SVG, stroke only, `currentColor`,
+ * 1.75px lines with round caps and joins. All share a 14×14 box and are centered
+ * geometrically.
  *
- * 不用 Unicode 符号当图标：`⚙` 之类各平台字形不同，有的渲染成彩色 emoji，
- * 上下位置也随字体度量变（ADR-0035 §3）。
+ * No Unicode symbols as icons: glyphs like `⚙` differ per platform, some render as color
+ * emoji, and their vertical position depends on font metrics (ADR-0035 §3).
  */
 
-/** `size`：画在多大的框里（默认 14px）；路径总在 14×14 的坐标里，线宽跟着等比缩放。 */
+/** `size`: the box to draw in (default 14px). Paths always use 14×14 coordinates and the stroke scales with them. */
 function Icon({ d, size = 14 }: { d: string; size?: number }) {
   return (
     <svg
@@ -30,21 +31,23 @@ export const PlusIcon = () => <Icon d="M7 1.5v11M1.5 7h11" />
 
 export const MinusIcon = () => <Icon d="M1.5 7h11" />
 
-/** 关闭（ADR-0042 §2）：两笔交叉。标签上 12px，浮层标题栏 16px。 */
+/** Close (ADR-0042 §2): two crossed strokes. 12px on tabs, 16px in sheet headers. */
 export const CloseIcon = ({ size = 14 }: { size?: number }) => <Icon d="M3.5 3.5l7 7M10.5 3.5l-7 7" size={size} />
 
-/** 保持接收（ADR-0042 §2）：图钉 —— 顶上一横、钉身往下收窄再张开成底座、钉尖。 */
+/** Pin (ADR-0042 §2): a pushpin. A bar on top, a body that narrows then flares into a base, and the point. */
 export const PinIcon = ({ size = 14 }: { size?: number }) => (
   <Icon d="M4.75 1.75h4.5M5.75 1.75v3.5L3.5 8.25h7L8.25 5.25v-3.5M7 8.25v4" size={size} />
 )
 
-/** 菜单里的勾（会话菜单「保持接收」开着时）。 */
+/** The menu check mark (shown when Pin is on in the session menu). */
 export const CheckIcon = ({ size = 14 }: { size?: number }) => <Icon d="M2.5 7.5l3 3 6-6.5" size={size} />
 
 /**
- * 文本页按钮（附加键左列，ADR-0041 §2）：圆角方框缺掉右上角，一支铅笔从框中间斜向右上伸出缺口。
- * 比别的图标大一号：22×22、线宽 2px，与上面会话按钮的方框（22px、2px 边框、圆角 6px）同大同粗。
- * 线居中画在路径上，所以方框的路径缩进 1px、圆角半径 5，外沿正好是 22px、圆角 6px。
+ * Text page button (left column of the extra keys, ADR-0041 §2): a rounded square missing
+ * its top-right corner, with a pencil reaching diagonally out of the gap. One size up from
+ * the other icons, 22×22 with a 2px stroke, matching the sessions button's box above it
+ * (22px, 2px border, 6px radius). The stroke is centered on the path, so the square's path
+ * is inset 1px with radius 5, making the outer edge exactly 22px with a 6px radius.
  */
 export const EditIcon = () => (
   <svg
@@ -64,27 +67,27 @@ export const EditIcon = () => (
   </svg>
 )
 
-/** 方框：从上边中间起，逆时针绕到右边中间，右上角留空给铅笔。 */
+/** The square: from the middle of the top edge counterclockwise to the middle of the right edge, leaving the top-right corner for the pencil. */
 export const EDIT_BOX = 'M10 1H6a5 5 0 0 0-5 5v10a5 5 0 0 0 5 5h10a5 5 0 0 0 5-5v-4'
 
-/** 铅笔：笔尖在框中间偏左下，笔杆 45° 斜向右上，笔尾是半圆。 */
+/** The pencil: tip slightly below-left of center, body at 45° toward the top right, rounded end. */
 export const EDIT_PENCIL = 'M8 14l.7-3.4 8.3-8.3a2 2 0 0 1 2.7 2.7l-8.3 8.3z'
 
-/** 拖动柄（ADR-0040）：三条横线。 */
+/** Drag handle (ADR-0040): three horizontal lines. */
 export const GripIcon = () => <Icon d="M2 3.5h10M2 7h10M2 10.5h10" />
 
-/** 六齿齿轮：外轮廓一笔画完，中间一个圆孔（两段弧画成整圆）。 */
+/** Six-tooth gear: the outline in one stroke and a round hole in the middle (two arcs forming a circle). */
 export const GearIcon = () => <Icon d={GEAR} />
 
 /**
- * 齿轮的轮廓：中心 (7,7)，齿顶半径 6.1、齿根半径 4.6，六个齿，齿顶与齿根各占约一半角度；
- * 圆孔半径 1.9。模块加载时算一次。
+ * The gear outline: center (7,7), tip radius 6.1, root radius 4.6, six teeth with tips and
+ * roots each taking about half the angle; hole radius 1.9. Computed once at module load.
  */
 export const GEAR = gearPath()
 
 export function gearPath(teeth = 6, outer = 6.1, inner = 4.6, hole = 1.9, cx = 7, cy = 7): string {
   const step = (Math.PI * 2) / teeth
-  // 每个齿：齿顶占 step 的 0.36，两侧斜边各 0.12，齿根占 0.4
+  // Per tooth: tip 0.36 of the step, each flank 0.12, root 0.4
   const top = step * 0.36
   const flank = step * 0.12
   const pt = (r: number, a: number) => `${round(cx + r * Math.sin(a))} ${round(cy - r * Math.cos(a))}`
@@ -106,7 +109,7 @@ export function gearPath(teeth = 6, outer = 6.1, inner = 4.6, hole = 1.9, cx = 7
   return parts.join('')
 }
 
-// 函数声明而不是 const：`GEAR` 在模块加载时就调 gearPath()，那时下面的 const 还没初始化
+// A function declaration, not a const: `GEAR` calls gearPath() at module load, before the consts below are initialized
 function round(n: number): number {
   return Math.round(n * 100) / 100
 }

@@ -1,32 +1,29 @@
-# ADR-0013 终端唯一显示面
+# ADR-0013 The terminal is the only display surface
 
-> **§2–§5 已被 [ADR-0025](0025-termux-style-ui.md) 取代**（输入条、占屏换键条、视觉缩放 + PTY 固定 43 列、移动端 chrome）。§1「终端是唯一显示面」由 ADR-0025 继承。以下保留作历史记录。
+Status: Accepted (2026-09-10). Supersedes every mobile display decision in [ADR-0011](0011-read-first-layout.md) (read-first three states) and [ADR-0012](0012-ai-cli-conversation-first.md) (conversation-first). §2 was refined by [ADR-0014](0014-input-toggle.md). §2–§5 (input bar, context key bars, visual zoom with a fixed 43-column PTY, mobile chrome) were superseded by [ADR-0025](0025-termux-style-ui.md); §1, the terminal as the only display surface, carries over into ADR-0025.
 
-状态：已接受（2026-09-10）。**取代 [ADR-0011](0011-read-first-layout.md)（读优先三态）与 [ADR-0012](0012-ai-cli-conversation-first.md)（对话优先）中关于移动端显示面的全部决定。** OSC-133 解析、命令历史、输入模式自动切换（ADR-0007）、续传（ADR-0003）不变。
+Unchanged at the time: OSC 133 parsing, command history, automatic input mode switching (ADR-0007), resume (ADR-0003).
 
-## 背景
+## Context
 
-ADR-0011 给手机做了「读（块流）/ 写（sheet）/ 控（终端）」三态；ADR-0012 又为 claude / codex 加了转录卡片视图。真机迭代下来，两套显示面（块流 + 转录）+ 视图自动切换带来的复杂度，没有换来相称的体验：块的呈现始终不理想，转录卡片耦合了两个 CLI 的私有会话文件格式（版本一变就要跟），而用户要的其实只有两件事 —— **读**顺、**写**方便。用户拍板：砍到只剩终端显示 + 一个输入栏，再针对这两件事优化。
+ADR-0011 gave phones three states (read: block stream / write: sheet / control: terminal); ADR-0012 added a transcript card view for claude / codex. After iterating on real devices, two display surfaces (blocks + transcript) plus automatic view switching added complexity without a matching gain: blocks never looked quite right, and transcript cards depended on two CLIs' private session file formats, which change with every version. What the user actually wanted was two things: comfortable **reading** and easy **writing**. The user decided to cut down to the terminal plus one input bar, then optimize those two.
 
-## 决定
+## Decision
 
-1. **终端是唯一的显示面。** xterm 始终铺满画布、始终可见。删除块流（ReadView / BlockList / BlockStore）、转录视图（TranscriptView / 转录 store / Markdown 渲染）、块↔终端定位（locate / marks）、读↔控视图切换与占屏自动切换、块面板、agent 侧转录跟踪（`internal/transcript`、`GET /api/transcript`、`transcript` 消息、`CommandObserver`）。约 2500+ 行代码及其测试随之移除。
-2. **输入按触摸位置全自动判定，没有「输入模式」这个概念**（取代 [ADR-0007](0007-dual-mode-input.md) 的用户可见模式）。⚠️ **[ADR-0014](0014-input-toggle.md) 已把这条细化为一个显式互切键（终端输入 ⇄ 编辑面板，默认终端输入）——下面「底栏形态自动变、无切换」的描述以 0014 为准**：
-   - **点终端区打字 = 逐键直送 PTY**（`onTermData` 无条件转发；点终端即聚焦 xterm）。这替代了旧的「Raw 逐键直通」和「⌨ 打字」按钮——点终端就是它。
-   - **用底部输入条 = 编辑好整段再发送**（`xterm.paste` 括号粘贴 + 回车；长按发送 = 只粘贴不回车）。长 prompt 本地编辑、一次送出。
-   - 底栏形态按「在跑什么」自动变，无标签、无切换、无锁定：**提示符** = 只输入框；**普通命令在跑 / 占屏 / 集成降级** = 输入框 + 功能键条（Esc ^C 方向键；claude/codex 换 AI 键条）；**全屏 TUI（备用缓冲，vim/top/less）** = 只键条、隐输入框。
-   - 内部仍保留一个「命令是否在跑」的信号（ADR-0007 的状态机，驱动键条出现），但对用户不可见。
-3. **占屏不再切视图，只换键条上下文。** 占屏检测（备用缓冲 / 富键盘协议 / DECCKM / 鼠标）仍在，但只用来：把视口钉到底、按前台程序换键条（less→分页器、top→top、claude/codex→AI、其余→通用 TUI）、决定是否显示「⌨ 打字」。占屏程序里不显示「没有集成」横幅。
-4. **读长回答 = 双指缩放。** PTY 固定 43 列（claude / codex 的界面按设计宽度显示、不二次折行）。读的时候双指放大是**纯视觉** transform（只作用在 `.xterm-screen`，不 fit、不发 resize、PTY 尺寸不变）；放大【锚在双指中点】（按住哪儿放大哪儿，捏合时那一点不跑），放大后单指平移；双击在点下处放大到 2×、再双击复位；缩回 1× 或换命令 / 切会话自动复位。见 `web/src/term/pinch.ts`。单指手势的完整仲裁（纵向滚 / 横向切会话 / 放大态平移）见 [session-ux.md §左右滑动切换](../../40-frontend/session-ux.md)。
-5. **移动端 chrome 走原生模式,尽量省屏**:⋯ 打开的是从底部滑起的**操作面板**(action sheet:抓手 + 整宽大行 + 图标,会话/历史/命令面板/设置),不再是桌面式下拉;**状态栏收薄,全屏程序占屏(备用缓冲)时自隐**,把那条也让给终端。
-5. **桌面**保留经典底栏（模式条 + Composer + 快捷条 + 键条），只是去掉了「读 / 终端」切换与「块」入口。
+1. **The terminal is the only display surface.** xterm always fills the canvas and is always visible. Removed: the block stream (ReadView / BlockList / BlockStore), the transcript view (TranscriptView, transcript store, Markdown rendering), block ↔ terminal location (locate / marks), read ↔ control view switching and automatic switching on screen ownership, the blocks panel, and agent-side transcript tailing (`internal/transcript`, `GET /api/transcript`, the `transcript` message, `CommandObserver`). About 2,500 lines of code plus their tests.
+2. **Input is routed by where you touch; there is no "input mode" concept** (replaces ADR-0007's user-visible modes). [ADR-0014](0014-input-toggle.md) later replaced the "bar changes shape automatically, no toggle" part below with an explicit toggle.
+   - **Tap the terminal and type = keystrokes go straight to the PTY** (`onTermData` forwards unconditionally; tapping the terminal focuses xterm). This replaces Raw mode and the "⌨ type" button.
+   - **Use the bottom input bar = edit the whole text, then send** (`xterm.paste` with bracketed paste, plus Enter; long-press Send = paste without Enter). Long prompts are edited locally and sent at once.
+   - The bar changes shape with what's running, with no labels, toggles or locks: **at a prompt** = input box only; **ordinary command running / program owns the screen / integration degraded** = input box + key bar (Esc ^C arrows; the AI key bar for claude / codex); **full-screen TUI on the alternate buffer (vim / top / less)** = key bar only, input box hidden.
+   - The internal "is a command running" signal (ADR-0007's state machine) remains to drive the key bar, invisible to the user.
+3. **Screen ownership no longer switches views, only the key bar context.** Detection (alternate buffer / rich keyboard protocol / DECCKM / mouse) remains, used only to pin the viewport to the bottom, pick the key bar by foreground program (less → pager, top → top, claude / codex → AI, others → generic TUI), and decide whether to show "⌨ type". No "no integration" banner inside full-screen programs.
+4. **Read long answers with pinch zoom.** The PTY is fixed at 43 columns, so claude / codex lay out at their design width without rewrapping. Pinch zoom is a **purely visual** transform on `.xterm-screen` (no fit, no resize, PTY size unchanged), **anchored at the pinch midpoint** (the point under your fingers stays put); one finger pans when zoomed; double-tap zooms to 2× at the tap point and again to reset; zoom resets on returning to 1×, on a new command or on a session switch. See `web/src/term/pinch.ts`. Single-finger gesture arbitration (vertical scroll / horizontal session switch / panning when zoomed) is in [session-ux.md](../../40-frontend/session-ux.md).
+5. **Native-style mobile chrome that saves space.** ⋯ opens an **action sheet** sliding up from the bottom (grabber, full-width rows with icons: sessions / history / command palette / settings) instead of a desktop-style dropdown. The **status bar is thinner and hides itself while a full-screen program owns the alternate buffer**, giving that line to the terminal too.
+   **Desktop** keeps the classic bottom bar (mode bar + Composer + snippet bar + key bar), minus the read / terminal toggle and the blocks entry.
 
-## 代价与取舍
+## Consequences
 
-- **读长回答回到终端形态**：等宽、按行滚、43 列折行，靠双指缩放缓解；不再有 Markdown 卡片的重排与原生选择。这是用户在知情下的选择 —— 用可读性的一点让步，换一个单一、稳、可维护的显示面。
-- **慢网下 spinner / 整屏重绘的带宽**没有被这次改动削减。真正的削减（丢弃被后续整屏重绘覆盖的中间帧）要么改协议、要么做 mosh 式服务端终端状态同步，都会动到字节级续传（AC-2.1 ★）这条最敏感的路径，不塞进本次改动，留作专门的一次设计。
-- **刷新页面后打不了字** 仍是已知问题（见 troubleshooting），与本次无关。
-
-## 影响
-
-被取代的验收项：AC-3.12 / 3.13 / 3.14 / 3.15 / 3.16（三态、写态 sheet 三档、占屏自动进控、转录视图）、AC-5.6 / 5.7 / 5.8（在终端里看 / 块最大化 / 最新块自动展开）。被移除的 E2E：E2E-11b / 12b / 19 / 20 / 23。新增 AC-3.12（终端唯一显示 + Composer 粘贴发送 + 占屏换键条）、AC-3.13（双指缩放读）、E2E-24（双指缩放）。control.spec 重定位为「占屏 → 键条上下文」。
+- **Reading long answers is back to terminal form**: monospace, line-by-line scrolling, 43-column wrapping, eased by pinch zoom. No more Markdown reflow or native selection. The user chose this knowingly: a little readability in exchange for one stable, maintainable display surface.
+- **Bandwidth for spinners and full-screen redraws on slow networks is not reduced.** A real reduction (dropping intermediate frames overwritten by later full redraws) needs either a protocol change or mosh-style server-side terminal state sync. Both touch byte-level resume (AC-2.1), the most sensitive path, so they were left for a dedicated design.
+- **Not being able to type after a page reload** remained a known, unrelated issue (see troubleshooting).
+- Acceptance criteria superseded: AC-3.12 / 3.13 / 3.14 / 3.15 / 3.16 (three states, write sheet heights, automatic control, transcript view), AC-5.6 / 5.7 / 5.8 (view in terminal, block maximize, auto-expanding the latest block). E2E removed: E2E-11b / 12b / 19 / 20 / 23. Added: AC-3.12 (terminal only + Composer paste-send + context key bar), AC-3.13 (pinch zoom for reading), E2E-24 (pinch zoom). `control.spec` refocused on screen ownership → key bar context.

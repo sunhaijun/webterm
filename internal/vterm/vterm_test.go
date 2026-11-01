@@ -16,12 +16,15 @@ import (
 	"tuios.dev/vt/snapshot"
 )
 
-// update 重新生成快照金样：go test ./internal/vterm -update（或 UPDATE_GOLDEN=1）。
+// update regenerates the snapshot golden files:
+// go test ./internal/vterm -update (or UPDATE_GOLDEN=1).
 //
-// 金样是给前端的裁判用的（AC-2.21）：Vitest 用 @xterm/headless 比较「xterm 直接吃
-// 原始字节」与「xterm 先吃这里的快照、再吃截断点之后的字节」，逐格必须一致。
-// Go 这边负责两件事：快照是【确定性】的（同一输入逐字节相同），以及模拟器自洽。
-var update = flag.Bool("update", false, "重新生成 testdata/snap 下的快照金样")
+// The goldens are the reference for the frontend check (AC-2.21): Vitest uses
+// @xterm/headless to compare xterm fed the raw bytes against xterm fed the
+// snapshot plus the bytes after the cut point, cell by cell. The Go side
+// guarantees two things: snapshots are deterministic (same input, same bytes)
+// and the emulator is self-consistent.
+var update = flag.Bool("update", false, "regenerate the snapshot golden files in testdata/snap")
 
 func updating() bool { return *update || os.Getenv("UPDATE_GOLDEN") == "1" }
 
@@ -30,7 +33,7 @@ const (
 	snapDir = "testdata/snap"
 )
 
-// recording 是一段真实程序的原始输出（已脱敏，不要改）。
+// recording is raw output captured from a real program (scrubbed; do not edit).
 type recording struct {
 	name       string
 	data       []byte
@@ -44,7 +47,7 @@ func loadRecordings(t *testing.T) []recording {
 		t.Fatal(err)
 	}
 	if len(bins) == 0 {
-		t.Fatal("testdata/rec 下没有录制夹具")
+		t.Fatal("no recordings in testdata/rec")
 	}
 	sort.Strings(bins)
 	out := make([]recording, 0, len(bins))
@@ -67,21 +70,23 @@ func loadRecordings(t *testing.T) []recording {
 			t.Fatalf("%s.json: %v", name, err)
 		}
 		if meta.Cols <= 0 || meta.Rows <= 0 {
-			t.Fatalf("%s.json 缺 cols/rows", name)
+			t.Fatalf("%s.json is missing cols/rows", name)
 		}
 		if meta.Bytes != 0 && meta.Bytes != len(data) {
-			t.Fatalf("%s.bin 有 %d 字节，json 说是 %d —— 夹具被改过？", name, len(data), meta.Bytes)
+			t.Fatalf("%s.bin has %d bytes but its json says %d; was the fixture edited?", name, len(data), meta.Bytes)
 		}
 		out = append(out, recording{name: name, data: data, cols: meta.Cols, rows: meta.Rows})
 	}
 	return out
 }
 
-// cutPoints 是一段录制的截断点：12 个等分点 + 10 个确定性随机点 + 末尾，去重升序。
+// cutPoints returns the cut points for a recording: 12 evenly spaced points,
+// 10 deterministic random points, and the end, deduplicated and sorted.
 //
-// 随机点故意不对齐任何边界 —— 一部分会切在转义序列、多字节字符的中间，那正是
-// 快照要带上"解析到一半的序列"的理由。种子由名字长度与总长决定，任何人重跑都
-// 得到同一组点。
+// The random points deliberately ignore boundaries, so some land inside escape
+// sequences or multibyte characters; that is why snapshots carry partially
+// parsed sequences. The seed comes from the name length and total size, so
+// every run gets the same points.
 func cutPoints(name string, n int) []int {
 	pts := make([]int, 0, 23)
 	for i := 1; i <= 12; i++ {
@@ -96,8 +101,9 @@ func cutPoints(name string, n int) []int {
 	return slices.Compact(pts)
 }
 
-// cutEntry 是 cuts.json 的一项：k 是截断点（录制里的字节偏移），snap_bytes 是
-// 快照文件长度。前端拿 <name>.<k>.snap 当快照、rec/<name>.bin[k:] 当之后的流。
+// cutEntry is one entry of cuts.json: k is the cut point (byte offset into the
+// recording) and snap_bytes is the snapshot file length. The frontend uses
+// <name>.<k>.snap as the snapshot and rec/<name>.bin[k:] as the stream after it.
 type cutEntry struct {
 	K         int `json:"k"`
 	SnapBytes int `json:"snap_bytes"`
@@ -107,7 +113,8 @@ func snapPath(name string, k int) string {
 	return filepath.Join(snapDir, name+"."+strconv.Itoa(k)+".snap")
 }
 
-// generate 跑一遍全部录制，返回 文件名 → 内容（含 cuts.json）。
+// generate runs every recording and returns file name -> contents, including
+// cuts.json.
 func generate(t *testing.T, recs []recording) map[string][]byte {
 	t.Helper()
 	files := map[string][]byte{}
@@ -121,7 +128,7 @@ func generate(t *testing.T, recs []recording) map[string][]byte {
 			cuts[rec.name] = append(cuts[rec.name], cutEntry{K: k, SnapBytes: len(snap)})
 		}
 	}
-	idx, err := json.MarshalIndent(cuts, "", "  ") // map 键有序：输出确定
+	idx, err := json.MarshalIndent(cuts, "", "  ") // map keys are sorted, so output is deterministic
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,8 +136,9 @@ func generate(t *testing.T, recs []recording) map[string][]byte {
 	return files
 }
 
-// TestSnapshotGolden：快照金样。不带 -update 时校验重新生成的结果与仓库里的
-// 文件逐字节相同 —— 也就是快照是确定性的，且没人悄悄改了模拟器版本。
+// TestSnapshotGolden checks, without -update, that regenerated snapshots match
+// the checked-in files byte for byte: snapshots are deterministic and nobody
+// quietly changed the emulator version.
 func TestSnapshotGolden(t *testing.T) {
 	recs := loadRecordings(t)
 	files := generate(t, recs)
@@ -147,47 +155,50 @@ func TestSnapshotGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		t.Logf("重新生成了 %d 个金样文件", len(files))
+		t.Logf("regenerated %d golden files", len(files))
 		return
 	}
 
 	for p, want := range files {
 		got, err := os.ReadFile(p)
 		if err != nil {
-			t.Errorf("缺金样 %s（go test ./internal/vterm -update 生成）: %v", p, err)
+			t.Errorf("missing golden %s (generate with go test ./internal/vterm -update): %v", p, err)
 			continue
 		}
 		if !bytes.Equal(got, want) {
-			t.Errorf("%s 与重新生成的结果不同（%d vs %d 字节）—— 快照不确定，或模拟器行为变了", p, len(got), len(want))
+			t.Errorf("%s differs from the regenerated result (%d vs %d bytes): snapshot is nondeterministic or emulator behavior changed", p, len(got), len(want))
 		}
 	}
-	// 多出来的文件也是错：前端会拿它们当裁判
+	// Extra files are errors too: the frontend would treat them as references.
 	on, err := filepath.Glob(filepath.Join(snapDir, "*"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range on {
 		if _, ok := files[p]; !ok {
-			t.Errorf("多余的金样 %s（-update 会清掉）", p)
+			t.Errorf("stray golden %s (-update removes it)", p)
 		}
 	}
 }
 
-// TestSnapshotIsDeterministic：同一输入生成两次，逐字节相同。金样校验的前提。
+// TestSnapshotIsDeterministic: the same input yields identical snapshots. The
+// golden check depends on it.
 func TestSnapshotIsDeterministic(t *testing.T) {
 	for _, rec := range loadRecordings(t) {
 		a, b := New(rec.cols, rec.rows), New(rec.cols, rec.rows)
 		a.Write(rec.data)
 		b.Write(rec.data)
 		if !bytes.Equal(a.Snapshot(), b.Snapshot()) {
-			t.Errorf("%s：同一输入两次快照不同", rec.name)
+			t.Errorf("%s: two snapshots of the same input differ", rec.name)
 		}
 	}
 }
 
-// TestSnapshotSelfConsistent：模拟器 A 吃全部字节；模拟器 B 先吃 k 处的快照、
-// 再吃 k 之后的字节。两者的屏幕与快照必须一致 —— 这是快照路径"能接上"的 Go 侧证明。
-// 屏幕级的最终裁判是浏览器的 xterm（前端 Vitest 跑同一批金样）。
+// TestSnapshotSelfConsistent: emulator A consumes all bytes; emulator B
+// consumes the snapshot at k and then the bytes after k. Their screens and
+// snapshots must match, which shows on the Go side that the snapshot path
+// joins up. The final screen-level check is xterm in the browser (frontend
+// Vitest runs the same goldens).
 func TestSnapshotSelfConsistent(t *testing.T) {
 	for _, rec := range loadRecordings(t) {
 		t.Run(rec.name, func(t *testing.T) {
@@ -203,19 +214,20 @@ func TestSnapshotSelfConsistent(t *testing.T) {
 				b.Write(src.Snapshot())
 				b.Write(rec.data[k:])
 				if got := b.String(); got != wantScreen {
-					t.Errorf("k=%d：快照 + 剩余字节的屏幕与直接吃全部字节不同\n直接:\n%s\n快照:\n%s", k, wantScreen, got)
+					t.Errorf("k=%d: snapshot + remaining bytes renders a different screen than all bytes\ndirect:\n%s\nsnapshot:\n%s", k, wantScreen, got)
 					continue
 				}
 				if !bytes.Equal(b.Snapshot(), wantSnap) {
-					t.Errorf("k=%d：屏幕相同但状态不同（模式 / 画笔 / 历史）", k)
+					t.Errorf("k=%d: same screen but different state (modes / pen / history)", k)
 				}
 			}
 		})
 	}
 }
 
-// TestExportImportRoundTrip：热升级交接的那一半（ADR-0026 §8）。导入后的快照与
-// 导出前逐字节相等，且之后的输出照常接得上。
+// TestExportImportRoundTrip covers the emulator half of hot-upgrade handoff
+// (ADR-0026 §8): the snapshot after Import matches the one before Export, and
+// later output continues normally.
 func TestExportImportRoundTrip(t *testing.T) {
 	for _, rec := range loadRecordings(t) {
 		t.Run(rec.name, func(t *testing.T) {
@@ -231,12 +243,12 @@ func TestExportImportRoundTrip(t *testing.T) {
 					t.Fatalf("k=%d: %v", k, err)
 				}
 				if !bytes.Equal(a.Snapshot(), b.Snapshot()) {
-					t.Fatalf("k=%d：导入后的快照与导出前不同", k)
+					t.Fatalf("k=%d: snapshot after Import differs from before Export", k)
 				}
 				a.Write(rec.data[k:])
 				b.Write(rec.data[k:])
 				if !bytes.Equal(a.Snapshot(), b.Snapshot()) {
-					t.Fatalf("k=%d：导入之后再吃同样的字节，结果分歧", k)
+					t.Fatalf("k=%d: diverged after feeding the same bytes post-Import", k)
 				}
 			}
 		})
@@ -246,12 +258,12 @@ func TestExportImportRoundTrip(t *testing.T) {
 func TestImportRejectsGarbage(t *testing.T) {
 	for _, in := range [][]byte{nil, []byte("{"), []byte(`{"width":0,"height":0}`)} {
 		if _, err := Import(in); err == nil {
-			t.Errorf("Import(%q) 应当失败", in)
+			t.Errorf("Import(%q) should fail", in)
 		}
 	}
 }
 
-// 历史上限是 HistoryLines：存多了也发不出去。
+// Scrollback is capped at HistoryLines.
 func TestHistoryBounded(t *testing.T) {
 	term := New(20, 5)
 	var b bytes.Buffer
@@ -262,21 +274,23 @@ func TestHistoryBounded(t *testing.T) {
 	}
 	term.Write(b.Bytes())
 	if got := term.HistoryLen(); got != HistoryLines {
-		t.Fatalf("历史 %d 行，want %d", got, HistoryLines)
+		t.Fatalf("history has %d lines, want %d", got, HistoryLines)
 	}
 }
 
-// 模拟器自己的查询应答必须丢掉：查询由浏览器回答（ADR-0026 §5）。
-// 这里只验证 Write 之后不会有应答积压在里面（DA / CPR / 颜色查询）。
+// The emulator's own query replies must be discarded; the browser answers
+// queries (ADR-0026 §5). This checks that no replies (DA / CPR / color query)
+// are left pending after Write.
 func TestResponsesDiscarded(t *testing.T) {
 	term := New(80, 24)
 	term.Write([]byte("\x1b[c\x1b[6n\x1b]11;?\x07\x1b[>c"))
 	if r := term.t.TakeResponses(); len(r) != 0 {
-		t.Fatalf("应答没被丢掉: %q", r)
+		t.Fatalf("replies were not discarded: %q", r)
 	}
 }
 
-// 改尺寸之后快照按新尺寸画（改列数以 agent 为准，ADR-0026 §4）。
+// After a resize the snapshot draws at the new size (the agent is authoritative
+// on column count, ADR-0026 §4).
 func TestResize(t *testing.T) {
 	term := New(80, 24)
 	term.Write([]byte("hello"))
@@ -287,16 +301,17 @@ func TestResize(t *testing.T) {
 	b := New(100, 30)
 	b.Write(term.Snapshot())
 	if b.String() != term.String() {
-		t.Fatal("改尺寸之后的快照画不出同一屏")
+		t.Fatal("snapshot after resize does not reproduce the screen")
 	}
 	term.Resize(0, 0)
 	if c, r := term.Size(); c != 1 || r != 1 {
-		t.Fatalf("小于 1 的尺寸应当按 1 算，得到 %dx%d", c, r)
+		t.Fatalf("sizes below 1 should clamp to 1, got %dx%d", c, r)
 	}
 }
 
-// denseWide 是快照的极端输入：宽终端、满历史、每 10 格换一次颜色。
-// 400 列不加上限时快照约 1.6 MiB（ADR-0026 §3 的实测）。
+// denseWide is worst-case snapshot input: wide terminal, full history, a color
+// change every 10 cells. At 400 columns an uncapped snapshot is about 1.6 MiB
+// (measured in ADR-0026 §3).
 func denseWide(cols, lines int) []byte {
 	var b bytes.Buffer
 	for i := range lines {
@@ -310,8 +325,9 @@ func denseWide(cols, lines int) []byte {
 	return b.Bytes()
 }
 
-// 快照上限 1 MiB（协议 §5.2）：超过就按比例少带历史，当前屏与模式不减。
-// 画面（当前屏）仍与直接吃全部字节一致，之后的输出照常接得上。
+// Snapshots are capped at 1 MiB (protocol §5.2). Over the cap, history is
+// trimmed proportionally while the screen and modes are kept. The screen still
+// matches feeding all bytes directly, and later output continues normally.
 func TestSnapshotCappedAtOneMiB(t *testing.T) {
 	const cols, rows = 400, 50
 	data := denseWide(cols, HistoryLines+100)
@@ -320,32 +336,33 @@ func TestSnapshotCappedAtOneMiB(t *testing.T) {
 	full := New(cols, rows)
 	full.Write(data)
 	if full.HistoryLen() != HistoryLines {
-		t.Fatalf("测试前提：历史应当是满的，得到 %d 行", full.HistoryLen())
+		t.Fatalf("precondition: history should be full, got %d lines", full.HistoryLen())
 	}
 	if n := len(snapshot.Replay(full.capture(HistoryLines))); n <= MaxSnapshotBytes {
-		t.Fatalf("测试前提：不加上限的快照应当超过 1 MiB，只有 %d 字节", n)
+		t.Fatalf("precondition: uncapped snapshot should exceed 1 MiB, got only %d bytes", n)
 	}
 
 	snap := full.Snapshot()
 	if len(snap) > MaxSnapshotBytes {
-		t.Fatalf("快照 %d 字节，超过上限 %d", len(snap), MaxSnapshotBytes)
+		t.Fatalf("snapshot is %d bytes, over the %d cap", len(snap), MaxSnapshotBytes)
 	}
 	b := New(cols, rows)
 	b.Write(snap)
 	if b.String() != full.String() {
-		t.Fatal("减了历史之后当前屏不一致")
+		t.Fatal("screen differs after trimming history")
 	}
 	if b.HistoryLen() == 0 || b.HistoryLen() >= HistoryLines {
-		t.Fatalf("历史应当按比例减少而不是全丢或不减，得到 %d 行", b.HistoryLen())
+		t.Fatalf("history should shrink proportionally, not vanish or stay full; got %d lines", b.HistoryLen())
 	}
 	full.Write(tail)
 	b.Write(tail)
 	if b.String() != full.String() {
-		t.Fatal("快照之后的输出接不上")
+		t.Fatal("output after the snapshot does not continue correctly")
 	}
 }
 
-// 历史全减掉仍超限（当前屏本身就很大）时，不带历史、照常出快照：当前屏不能减。
+// When even a history-free snapshot is over the cap (the screen itself is huge),
+// it is still produced without history; the screen is never trimmed.
 func TestSnapshotCapNeverDropsScreen(t *testing.T) {
 	const cols, rows = 1000, 1000
 	term := New(cols, rows)
@@ -354,34 +371,35 @@ func TestSnapshotCapNeverDropsScreen(t *testing.T) {
 	b := New(cols, rows)
 	b.Write(snap)
 	if b.String() != term.String() {
-		t.Fatal("当前屏被减了")
+		t.Fatal("screen was trimmed")
 	}
 }
 
-// UT-name-2（模拟器一侧）：标题与写入次数（ADR-0043 §2）。同样的标题再写一次也计数 ——
-// 会话靠次数判断「前台程序设过标题」，新进程设了一模一样的标题也要认得出来。
-// 导出 / 导入带着标题，计数从导入后重新开始。
+// UT-name-2 (emulator side): title and write count (ADR-0043 §2). Rewriting the
+// same title still counts, because the session uses the count to tell that the
+// foreground program set a title, even when a new process sets an identical
+// one. Export / Import keeps the title and restarts the count.
 func TestTitleAndWrites(t *testing.T) {
 	term := New(80, 24)
 	if title, n := term.Title(); title != "" || n != 0 {
-		t.Fatalf("新模拟器 = (%q, %d)", title, n)
+		t.Fatalf("new emulator = (%q, %d)", title, n)
 	}
 	term.Write([]byte("\x1b]0;✳ Claude Code\x07"))
 	if title, n := term.Title(); title != "✳ Claude Code" || n != 1 {
-		t.Fatalf("OSC 0 之后 = (%q, %d)", title, n)
+		t.Fatalf("after OSC 0 = (%q, %d)", title, n)
 	}
-	term.Write([]byte("\x1b]2;✳ Claude Code\x1b\\")) // 同样的标题、OSC 2、ST 结尾
+	term.Write([]byte("\x1b]2;✳ Claude Code\x1b\\")) // same title, OSC 2, ST-terminated
 	if title, n := term.Title(); title != "✳ Claude Code" || n != 2 {
-		t.Fatalf("再写一次同样的标题 = (%q, %d)，次数要加 1", title, n)
+		t.Fatalf("same title again = (%q, %d), count should go up by 1", title, n)
 	}
 	term.Write([]byte("\x1b]0;◐ Claude"))
-	term.Write([]byte(" Code\x07")) // 切在两次写入之间
+	term.Write([]byte(" Code\x07")) // split across two writes
 	if title, n := term.Title(); title != "◐ Claude Code" || n != 3 {
-		t.Fatalf("切开的 OSC = (%q, %d)", title, n)
+		t.Fatalf("split OSC = (%q, %d)", title, n)
 	}
-	term.Write([]byte("\x1b]1;icon only\x07")) // 只改图标名，不是标题
+	term.Write([]byte("\x1b]1;icon only\x07")) // icon name only, not the title
 	if title, n := term.Title(); title != "◐ Claude Code" || n != 3 {
-		t.Fatalf("OSC 1 之后 = (%q, %d)", title, n)
+		t.Fatalf("after OSC 1 = (%q, %d)", title, n)
 	}
 
 	data, err := term.Export()
@@ -393,10 +411,10 @@ func TestTitleAndWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	if title, n := back.Title(); title != "◐ Claude Code" || n != 0 {
-		t.Fatalf("导入之后 = (%q, %d)，标题要在、计数从 0 起", title, n)
+		t.Fatalf("after Import = (%q, %d), want title kept and count at 0", title, n)
 	}
 	back.Write([]byte("\x1b]0;✳ Claude Code\x07"))
 	if _, n := back.Title(); n != 1 {
-		t.Fatalf("导入之后再写一次，次数 = %d", n)
+		t.Fatalf("count after one write post-Import = %d", n)
 	}
 }

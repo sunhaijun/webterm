@@ -1,7 +1,6 @@
-// Command webterm 是 agent 的入口。
-//
-// 一个二进制就是完整的服务：自带前端资源、自己终结 TLS、自己做认证、
-// 自己管会话（ADR-0002）。
+// Command webterm is the agent. One binary is the whole service: it embeds the
+// frontend, terminates TLS, authenticates devices and owns the sessions
+// (ADR-0002).
 package main
 
 import (
@@ -10,36 +9,36 @@ import (
 	"os"
 )
 
-// version 由构建时注入：
+// version is set at build time:
 //
 //	go build -ldflags "-X main.version=v0.1.0"
 //
-// 默认值只在从源码直接 go build 时出现。
+// The default only appears in binaries built straight from source.
 var version = "dev"
 
-var usage = "webterm " + version + ` —— 浏览器终端 agent
+var usage = "webterm " + version + ` - browser terminal agent
 
-用法:
-  webterm install [选项]         用这个二进制本身装成系统服务（不给 --domain 就用公网 IP）
-  webterm serve [选项]           启动服务
-  webterm pair                   生成新的配对码（打印 URL + 二维码）
-  webterm devices [子命令]        设备管理：list | revoke <id> | revoke-all
-  webterm doctor [--acme]        检查部署前置条件；--acme 再把证书签好
-  webterm update                 升级到最新版（按上次的安装参数重装；默认热升级，会话保留）
-  webterm reload [--when-idle]   让运行中的 agent 原地换成磁盘上的新二进制，会话保留
-  webterm version                版本信息
+Usage:
+  webterm install [flags]         Install this binary as a system service (uses the public IP without --domain)
+  webterm serve [flags]           Run the server
+  webterm pair                    Create a pairing code (prints a URL and QR code)
+  webterm devices [command]       Manage devices: list | revoke <id> | revoke-all
+  webterm doctor [--acme]         Check deployment prerequisites; --acme also obtains the certificate
+  webterm update                  Upgrade to the latest release using the last install's flags (hot upgrade; sessions survive)
+  webterm reload [--when-idle]    Swap the running agent for the binary on disk; sessions survive
+  webterm version                 Print the version
 
-不带子命令直接跑 webterm，会打印一张状态总览（服务、证书、设备、地址）。
+Run webterm with no command for a status overview (service, URL, certificate, devices).
 
-"webterm serve --help" 查看 serve 的全部选项。
+Run "webterm serve --help" for all serve flags.
 `
 
 func main() {
-	// 裸跑给一张状态总览而不是用法 —— 日常要问的是"现在正常吗"。
-	// 用法用 --help 拿。
+	// With no arguments, show the status overview rather than usage: the
+	// everyday question is "is it working?". Usage is behind --help.
 	if len(os.Args) < 2 {
 		if err := runStatus(); err != nil {
-			fmt.Fprintf(os.Stderr, "\n错误：%v\n", err)
+			fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -67,7 +66,7 @@ func main() {
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
-		fmt.Fprintf(os.Stderr, "未知子命令 %q\n\n%s", os.Args[1], usage)
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], usage)
 		os.Exit(2)
 	}
 	var code exitCode
@@ -75,7 +74,7 @@ func main() {
 		os.Exit(int(code))
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\n错误：%v\n", err)
+		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 		os.Exit(1)
 	}
 }

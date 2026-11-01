@@ -20,46 +20,52 @@ import (
 )
 
 const (
-	// ptyReadBuf 是 PTY 读缓冲大小。
 	ptyReadBuf = 32 << 10
-	// killGrace 是 SIGHUP 到 SIGKILL 之间的宽限。
+	// killGrace is the grace period between SIGHUP and SIGKILL.
 	killGrace = 2 * time.Second
-	// drainGrace：shell 退出之后等 readLoop 读到 EOF 的上限。后台进程还占着 PTY
-	// 从端时 EOF 不会来，到点照样宣布退出。
+	// drainGrace bounds how long to wait, after the shell exits, for readLoop to
+	// hit EOF. A background process holding the PTY slave keeps EOF from
+	// arriving, so the exit is announced anyway when it expires.
 	drainGrace = 500 * time.Millisecond
-	// maxDim 是 cols / rows 的上限。
+	// maxDim is the upper bound for cols and rows.
 	maxDim = 1000
 )
 
 var (
-	ErrInputGap       = errors.New("session: 输入序列号出现空洞")
-	ErrSessionExited  = errors.New("session: 会话已退出")
-	ErrUnknownSession = errors.New("session: 会话不存在")
-	ErrBadSize        = errors.New("session: cols/rows 必须在 1..1000")
+	ErrInputGap       = errors.New("session: gap in input sequence")
+	ErrSessionExited  = errors.New("session: session has exited")
+	ErrUnknownSession = errors.New("session: no such session")
+	ErrBadSize        = errors.New("session: cols/rows must be in 1..1000")
 )
 
-// Session 是一个 PTY + 它上面跑的 shell + 输出的环形缓冲 + 终端模拟器。
+// Session is a PTY, the shell running on it, an output ring buffer, and a
+// terminal emulator.
 //
-// 会话不跨 agent【重启】存活（ADR-0003），但跨【热升级】存活（ADR-0016）：
-// 原地 exec 时 ptmx fd 与 shell 进程原样交给新进程，状态走 export / restore。
-// 新增字段时先问一句"要不要进交接"（handoff.Session 是那张清单）。
+// Sessions do not survive an agent restart (ADR-0003) but do survive a hot
+// upgrade (ADR-0016): the in-place exec hands the ptmx fd and shell process to
+// the new process, and state travels through export / restore. When adding a
+// field, decide whether it must be handed over (handoff.Session is the list).
 type Session struct {
 	mgr *Manager
 	sid uint16
-	// ptmx 是【可轮询】的 master：dup 出来、置 O_NONBLOCK、os.NewFile 包起来。
-	// 只有可轮询的文件 SetReadDeadline 才管用，热升级冻结靠它打断阻塞读。
-	// 【不要对它调 Fd()】—— 那会把它切回阻塞模式（见 winsize.go）。fd 单独记着。
+	// ptmx is a pollable master: dup'ed, set O_NONBLOCK, wrapped with
+	// os.NewFile. SetReadDeadline works only on pollable files, and the
+	// hot-upgrade freeze relies on it to interrupt blocked reads. Never call
+	// Fd() on it; that switches it back to blocking mode (see winsize.go). The
+	// raw fd is kept separately.
 	ptmx      *os.File
 	fd        int
-	proc      *os.Process // shell；交接过来的会话用 os.FindProcess 接回
+	proc      *os.Process // the shell; handed-over sessions reattach via os.FindProcess
 	createdAt time.Time
 
-	mu         sync.RWMutex // 保护以下所有字段
+	mu         sync.RWMutex // guards all fields below
 	name       string
 	nameManual bool
-	// 终端标题作自动名（ADR-0043）：title 是此刻采用的（已清洗，"" = 不用），
-	// titlePgrp 是它的归属（最近一次写标题时在前台的进程组），titleSeen 是上一轮
-	// 轮询看到的写入次数。前两个进交接，titleSeen 跟着模拟器从导入后重新算。
+	// Terminal title as automatic name (ADR-0043): title is the one in use
+	// (sanitized, "" = none), titlePgrp is the foreground process group when
+	// it was last written, and titleSeen is the write count seen by the last
+	// poll. title and titlePgrp are handed over; titleSeen restarts with the
+	// imported emulator.
 	title      string
 	titlePgrp  int
 	titleSeen  uint64
@@ -67,32 +73,34 @@ type Session struct {
 	status     string
 	exitCode   *int
 	cols, rows uint16
-	// ring 与 term 【在同一把锁下、对同一段字节】更新：任何时刻模拟器吃到的
-	// 字节数都等于 ring.HeadSeq()，快照的 seq 直接取它（ADR-0026 §1）。
+	// ring and term are updated with the same bytes under the same lock, so
+	// the bytes the emulator has consumed always equal ring.HeadSeq(), which a
+	// snapshot uses as its seq (ADR-0026 §1).
 	ring *ringbuf.Buffer
 	term *vterm.Terminal
 	subs map[Subscriber]struct{}
-	// inAck/inQueued 按 client_id 记账，【跨重连存活】（协议 §5.4）。
-	// inQueued 是已接受入队的字节数（用于校验 seq 连续性），
-	// inAck 是已真正写进 PTY 的字节数（用于 ack 与重连后的重发起点）。
+	// inQueued and inAck are kept per client_id and survive reconnects
+	// (protocol §5.4). inQueued counts bytes accepted into the queue (for seq
+	// continuity checks); inAck counts bytes actually written to the PTY (for
+	// acks and the resend point after a reconnect).
 	inQueued map[string]uint64
 	inAck    map[string]uint64
 
 	inputQ    *inputQueue
 	done      chan struct{}
-	readDone  chan struct{} // readLoop 退出（读到 EOF / EIO）时关闭
+	readDone  chan struct{} // closed when readLoop exits (EOF / EIO)
 	closeOnce sync.Once
 
-	// 热升级冻结（ADR-0016）：见 freeze.go
+	// Hot-upgrade freeze (ADR-0016); see freeze.go.
 	fz         freezer
 	readAlive  atomic.Bool
 	writeAlive atomic.Bool
 }
 
-// SID 返回会话 id。
+// SID returns the session id.
 func (s *Session) SID() uint16 { return s.sid }
 
-// Info 返回会话的元数据（welcome.sessions[] / session.created）。
+// Info returns session metadata (welcome.sessions[] / session.created).
 func (s *Session) Info() protocol.SessionInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -111,8 +119,10 @@ func (s *Session) Info() protocol.SessionInfo {
 	}
 }
 
-// displayNameLocked 实现自动命名（AC-4.4）：手动名 > 前台程序设的终端标题（ADR-0043）>
-// CWD 的 basename。不做重名去重 —— 两个都在 webterm 目录下的会话本来就该同名。
+// displayNameLocked implements automatic naming (AC-4.4): manual name, then the
+// terminal title set by the foreground program (ADR-0043), then the CWD
+// basename. Duplicates are not disambiguated; two sessions in the same
+// directory should share a name.
 func (s *Session) displayNameLocked() string {
 	if s.nameManual {
 		return s.name
@@ -132,36 +142,39 @@ func (s *Session) displayNameLocked() string {
 	return "/"
 }
 
-// Status 返回会话状态。
+// Status returns the session status.
 func (s *Session) Status() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.status
 }
 
-// HeadSeq 返回该会话累计的 PTY 输出字节数。
+// HeadSeq returns the total PTY output bytes of the session.
 func (s *Session) HeadSeq() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ring.HeadSeq()
 }
 
-// InAck 返回某个 client 在本会话上已写入 PTY 的累计字节数。
+// InAck returns how many of a client's input bytes have been written to the
+// PTY.
 func (s *Session) InAck(clientID string) uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.inAck[clientID]
 }
 
-// TermSnapshot 返回此刻的快照与它对应的 seq（= head_seq）。测试与排障用 ——
-// 协议路径上快照只经 Subscribe / Resize 发出。
+// TermSnapshot returns a snapshot and its seq (head_seq), for tests and
+// debugging. On the protocol path snapshots go out only through Subscribe and
+// Resize.
 func (s *Session) TermSnapshot() (seq uint64, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ring.HeadSeq(), s.term.Snapshot()
 }
 
-// Rename 设置手动名。传 nil 恢复自动命名（终端标题 / CWD）。
+// Rename sets a manual name. nil restores automatic naming (terminal title /
+// CWD).
 func (s *Session) Rename(name *string) {
 	s.mu.Lock()
 	if name == nil || *name == "" {
@@ -184,12 +197,15 @@ func validSize(cols, rows uint16) bool {
 	return cols > 0 && rows > 0 && cols <= maxDim && rows <= maxDim
 }
 
-// Resize 调整终端尺寸（协议 §4.1 resize）。
+// Resize changes the terminal size (protocol §4.1 resize).
 //
-//	列数变了：锁内 模拟器.Resize → 生成快照（seq = head_seq）→ 推给【每个】订阅者；
-//	          锁外 TIOCSWINSZ。两边各自重排的结果不一致，以 agent 的为准（ADR-0026 §4）
-//	只改行数：模拟器.Resize + TIOCSWINSZ，不发快照 —— 手机每弹一次软键盘就改
-//	          一次行数，每次重发上百 KiB、清掉浏览器的回看位置，代价太大
+//	Columns changed: under the lock, resize the emulator, take a snapshot
+//	    (seq = head_seq), and push it to every subscriber; TIOCSWINSZ outside
+//	    the lock. Agent and browser reflow differently; the agent wins
+//	    (ADR-0026 §4).
+//	Rows only: resize the emulator and TIOCSWINSZ, no snapshot. Phones change
+//	    rows every time the on-screen keyboard opens; resending hundreds of
+//	    KiB and resetting the browser's scrollback each time costs too much.
 func (s *Session) Resize(cols, rows uint16) error {
 	if !validSize(cols, rows) {
 		return ErrBadSize
@@ -199,16 +215,19 @@ func (s *Session) Resize(cols, rows uint16) error {
 	running := s.status == protocol.StatusRunning
 	s.mu.Unlock()
 	if changed && running {
-		// 【锁外、入队之后】：程序因 SIGWINCH 重画的字节一定排在快照之后
+		// Outside the lock and after enqueueing, so bytes redrawn on SIGWINCH
+		// always follow the snapshot.
 		return setWinsize(s.ptmx, cols, rows)
 	}
 	return nil
 }
 
-// applySizeLocked 把尺寸应用到模拟器（须持写锁），返回尺寸是否变了。
+// applySizeLocked applies the size to the emulator and reports whether it
+// changed. The caller holds the write lock.
 //
-// 列数变了就生成一份快照推给每个订阅者，以及 extra（还没进集合的新订阅者）。
-// TIOCSWINSZ 由调用方在锁外做。
+// If the column count changed, it pushes a snapshot to every subscriber and to
+// extra (a new subscriber not yet in the set). The caller does TIOCSWINSZ
+// outside the lock.
 func (s *Session) applySizeLocked(cols, rows uint16, extra Subscriber) bool {
 	if cols == s.cols && rows == s.rows {
 		return false
@@ -230,31 +249,35 @@ func (s *Session) applySizeLocked(cols, rows uint16, extra Subscriber) bool {
 	return true
 }
 
-// ---------- 订阅 ----------
+// ---------- subscriptions ----------
 
-// Subscribe 把 sub 加入订阅者集合，并按协议 §5.1 补齐它缺的输出：
+// Subscribe adds sub to the subscriber set and fills in the output it is
+// missing, per protocol §5.1:
 //
-//	cols/rows 带来的列数与会话当前不同 → 模拟器.Resize → 快照（发给每个订阅者）
-//	outSeq > 0 且 base_seq ≤ outSeq ≤ head_seq → 增量：推 [outSeq, head_seq) 的原始字节
-//	其余（outSeq == 0、落出窗口、领先于 head） → 快照
+//	cols differ from the session's        -> resize emulator, snapshot to every subscriber
+//	outSeq > 0 and base <= outSeq <= head -> incremental: push raw bytes [outSeq, head)
+//	otherwise (outSeq 0, out of window, ahead of head) -> snapshot
 //
-// 返回走了哪条路（protocol.ResumeOK / ResumeSnapshot）与 from_seq（增量时是
-// outSeq，快照时是快照的 seq）。cols/rows 为 0 或越界表示沿用会话当前尺寸 ——
-// hello.resume 不带尺寸。
+// It returns the path taken (protocol.ResumeOK / ResumeSnapshot) and from_seq
+// (outSeq for incremental, the snapshot's seq for snapshot). cols/rows that
+// are 0 or out of range keep the session's size; hello.resume carries no size.
 //
-// 【判定、推送、加入订阅者集合在同一把锁下完成】—— 分开做的话，中间到达的
-// 一批输出要么被发两遍（重复），要么两边都漏（空洞），而协议 §3 规定客户端
-// 遇到空洞直接关连接。推送按契约是非阻塞的，所以这里不会卡住 PTY 读取。
+// Deciding, pushing, and joining the set happen under one lock. Done
+// separately, output arriving in between would be sent twice or not at all,
+// and per protocol §3 a client closes the connection on a gap. Push is
+// non-blocking by contract, so this never stalls PTY reads.
 //
-// 尺寸变化的 TIOCSWINSZ 在锁外、入队之后：程序因 SIGWINCH 重画的字节因此
-// 一定排在快照或增量之后。反过来的话，那批重画字节会进入快照之前的位置，
-// 客户端拿不到那一屏（协议 §4.1）。
+// TIOCSWINSZ for a size change happens outside the lock, after enqueueing, so
+// bytes a program redraws on SIGWINCH always follow the snapshot or delta.
+// In the other order they would land before the snapshot and the client would
+// miss that screen (protocol §4.1).
 func (s *Session) Subscribe(sub Subscriber, outSeq uint64, cols, rows uint16) (status string, fromSeq uint64) {
 	s.mu.Lock()
 	resized, colsChanged := false, false
 	if validSize(cols, rows) {
 		colsChanged = cols != s.cols
-		// 列数变了：快照已经推给了每个订阅者，包括 sub
+		// On a column change this pushes the snapshot to every subscriber,
+		// sub included.
 		resized = s.applySizeLocked(cols, rows, sub)
 	}
 	if colsChanged {
@@ -285,20 +308,24 @@ func (s *Session) Subscribe(sub Subscriber, outSeq uint64, cols, rows uint16) (s
 	return status, fromSeq
 }
 
-// Unsubscribe 把 sub 从订阅者集合里摘掉。会话在 agent 侧照常运行、照常喂模拟器。
+// Unsubscribe removes sub from the subscriber set. The session keeps running
+// and feeding its emulator.
 func (s *Session) Unsubscribe(sub Subscriber) {
 	s.mu.Lock()
 	delete(s.subs, sub)
 	s.mu.Unlock()
 }
 
-// DetachClient 在连接断开时调用：丢弃该 client 已入队但尚未写入 PTY 的输入。
+// DetachClient is called when a connection drops. It discards the client's
+// input that was queued but not yet written to the PTY.
 //
-// 这些字节从未被 ack，客户端仍持在 pending 里，重连后会按 in_ack 重发。
-// 不丢的话它们会被写进 PTY 一次、重发时再写一次。
+// Those bytes were never acked, so the client still holds them as pending and
+// resends from in_ack after reconnecting. Keeping them would write them twice.
 //
-// 记账只减掉丢掉的字节，【不是回到 in_ack】：writeLoop 已经取走、正写着的那段
-// （PTY 输入满时会卡很久）还算已接受，重发时按重复跳过，否则它会写两遍。
+// Accounting subtracts only the dropped bytes rather than resetting to
+// in_ack: the chunk writeLoop has already taken and is writing (which can
+// block for a long time when the PTY input buffer is full) still counts as
+// accepted, so the resend skips it as a duplicate instead of writing it twice.
 func (s *Session) DetachClient(clientID string) {
 	dropped := s.inputQ.dropClient(clientID)
 	if dropped == 0 {
@@ -309,15 +336,15 @@ func (s *Session) DetachClient(clientID string) {
 	s.mu.Unlock()
 }
 
-// ---------- 输入 ----------
+// ---------- input ----------
 
-// Write 接受一个 INPUT 帧的负载。
+// Write accepts the payload of an INPUT frame.
 //
-// seq 校验（协议 §3，in_ack 属于 (client_id, sid)）：
+// seq check (protocol §3; in_ack is per (client_id, sid)):
 //
-//	seq == 已接受字节数 → 正常
-//	seq <  已接受字节数 → 重发的已处理数据，丢弃前面重复的部分（重连时的正常情况）
-//	seq >  已接受字节数 → 空洞 → ErrInputGap，调用方关连接
+//	seq == accepted bytes -> normal
+//	seq <  accepted bytes -> resend of processed data; drop the duplicate prefix (normal on reconnect)
+//	seq >  accepted bytes -> gap: ErrInputGap, caller closes the connection
 func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 	s.mu.Lock()
 	if s.status == protocol.StatusExited {
@@ -326,10 +353,11 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 	}
 	queued := s.inQueued[clientID]
 	if seq == 0 && queued > 0 {
-		// 【client 把 in_seq 重置了，这边的记账却还在】。正常重连不是这个形状：client 按
-		// in_ack 裁剪后从 in_ack 起重发（协议 §5.4）。照旧按重发
-		// 处理，但这类丢弃在浏览器一侧毫无迹象（ADR-0020 第 5 条），宁可吵也要留痕。
-		slog.Warn("输入的 in_seq 从 0 重来，但这个 client_id 已有记账 —— 重复部分按重发丢弃（协议 §5.4）",
+		// The client reset in_seq while we still hold its accounting. A normal
+		// reconnect looks different: the client trims to in_ack and resends
+		// from there (protocol §5.4). Treat it as a resend anyway, but the drop
+		// is invisible in the browser (ADR-0020 item 5), so log it loudly.
+		slog.Warn("input in_seq restarted at 0 but this client_id already has accounting; dropping the overlap as a resend (protocol §5.4)",
 			"sid", s.sid, "client", clientID, "accepted", queued, "len", len(data))
 	}
 	switch {
@@ -339,7 +367,7 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 	case seq < queued:
 		skip := queued - seq
 		if skip >= uint64(len(data)) {
-			s.mu.Unlock() // 整段都是已处理过的重发
+			s.mu.Unlock() // the whole chunk is an already-processed resend
 			return nil
 		}
 		data = data[skip:]
@@ -350,7 +378,9 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 	cp := make([]byte, len(data))
 	copy(cp, data)
 	if err := s.inputQ.push(clientID, cp); err != nil {
-		// 入队失败：回滚记账，让重连后的重发能对上。用减法：期间 DetachClient 可能已改过它
+		// Enqueue failed: roll back the accounting so a resend after reconnect
+		// lines up. Subtract rather than restore, since DetachClient may have
+		// changed it meanwhile.
 		s.mu.Lock()
 		s.inQueued[clientID] -= uint64(len(data))
 		s.mu.Unlock()
@@ -359,21 +389,26 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 	return nil
 }
 
-// ---------- goroutine ----------
+// ---------- goroutines ----------
 
-// consume 处理一次 PTY 读到的字节：进环形缓冲、喂模拟器、推给订阅者。
+// consume handles one PTY read: append to the ring buffer, feed the emulator,
+// push to subscribers.
 //
-// 【agent 不改写输出流】：seq 就是 PTY 输出的累计字节数（ADR-0026 §2）。
+// The agent never rewrites the output stream; seq is the cumulative PTY output
+// byte count (ADR-0026 §2).
 //
-// 推送也在锁内。Push 按契约非阻塞，放在锁内的代价只是几次入队；换来的是同一
-// 会话的所有帧（实时输出、订阅补齐、改列数的快照）按锁的次序进入每条连接的
-// 写队列。放到锁外的话，一段已经算进快照的输出可能排在那份快照【之后】才到
-// 客户端，违反协议 §3 的 seq 连续性。
+// Pushing happens under the lock too. Push is non-blocking by contract, so the
+// cost is a few enqueues, and in exchange every frame of a session (live
+// output, subscribe catch-up, column-change snapshots) enters each connection's
+// write queue in lock order. Outside the lock, output already included in a
+// snapshot could reach the client after that snapshot, breaking seq
+// continuity (protocol §3).
 func (s *Session) consume(chunk []byte) {
 	if len(chunk) == 0 {
 		return
 	}
-	// 必须拷贝：chunk 是 readLoop 复用的缓冲，订阅者的写队列会持有它
+	// Copy: chunk is readLoop's reused buffer and subscriber write queues keep
+	// a reference.
 	data := make([]byte, len(chunk))
 	copy(data, chunk)
 
@@ -385,12 +420,14 @@ func (s *Session) consume(chunk []byte) {
 	}
 	s.mu.Unlock()
 
-	// 未订阅的连接靠 head_seq 推导未读（连接层做 1s 节流，已订阅的直接丢掉）
+	// Unsubscribed connections derive unread state from head_seq. The
+	// connection layer throttles this to 1s and drops it for subscribers.
 	head := seq + uint64(len(data))
 	s.emit(&protocol.SessionUpdated{SID: s.sid, HeadSeq: &head})
 }
 
-// startLoops 起四个 goroutine。alive 标记要在 go 之前置好：freeze 靠它数要等几个循环。
+// startLoops starts the four goroutines. The alive flags are set before the go
+// statements because freeze counts them to know how many loops to wait for.
 func (s *Session) startLoops() {
 	s.readAlive.Store(true)
 	s.writeAlive.Store(true)
@@ -414,24 +451,27 @@ func (s *Session) readLoop() {
 		}
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
-				// 热升级冻结：deadline 只有 freeze 会设。停在这里 —— consume 已做完，
-				// ring、模拟器与 out_seq 一致 —— 等解冻再回去读
+				// Hot-upgrade freeze: only freeze sets a deadline. Park here, with
+				// consume finished so ring, emulator, and out_seq agree, and
+				// resume reading after thaw.
 				s.fz.park()
 				continue
 			}
-			return // EIO = shell 退出
+			return // EIO: the shell exited
 		}
 	}
 }
 
-// writeLoop：从输入队列取数据 → PTY.Write() → 更新 in_ack。
+// writeLoop takes input from the queue, writes it to the PTY, and updates
+// in_ack.
 func (s *Session) writeLoop() {
 	defer func() {
 		s.fz.exiting()
 		s.writeAlive.Store(false)
 	}()
 	for {
-		// 冻结点在 pop 之前：队里的东西原样进快照，inAck 与已写字节一致
+		// Park before pop: queued input goes into the handoff snapshot as is,
+		// and inAck matches the bytes written.
 		s.fz.park()
 		it, ok := s.inputQ.pop()
 		if !ok {
@@ -439,7 +479,7 @@ func (s *Session) writeLoop() {
 			case <-s.inputQ.notify:
 				continue
 			case <-s.fz.wake:
-				continue // 去 park
+				continue // go park
 			case <-s.done:
 				return
 			}
@@ -450,13 +490,15 @@ func (s *Session) writeLoop() {
 			s.inAck[it.clientID] += uint64(n)
 			ack := s.inAck[it.clientID]
 			s.mu.Unlock()
-			// ack 只发给同一个 client —— 记账是 per-client 的
+			// Acks go only to the same client; accounting is per client.
 			s.emitTo(it.clientID, &protocol.Ack{SID: s.sid, InAck: ack})
 		}
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
-				// 冻结时写被打断（前台程序不读 stdin、PTY 输入缓冲满）：
-				// 没写完的部分放回队首，随快照走，别丢也别重
+				// The freeze interrupted a write (the foreground program isn't
+				// reading stdin and the PTY input buffer is full). Put the
+				// unwritten rest back at the head of the queue so it travels with
+				// the snapshot, neither lost nor duplicated.
 				if n < len(it.data) {
 					s.inputQ.pushFront(inputItem{clientID: it.clientID, data: it.data[n:]})
 				}
@@ -467,22 +509,26 @@ func (s *Session) writeLoop() {
 	}
 }
 
-// waitLoop：等 shell 退出，设置 exited 状态与退出码。
+// waitLoop waits for the shell to exit and records the exited status and
+// exit code.
 //
-// 【先等 readLoop 把 PTY 里剩下的输出读完】，再宣布退出：shell 退出时内核里往往
-// 还躺着最后几行输出，readLoop 还没读到。先发 exited 的话，这几行 OUTPUT 会排在
-// 它后面，前端的「进程结束」提示行就插到了输出前面。读到 EOF（EIO）说明从端都
-// 关了、输出读完了；后台进程还占着从端时 EOF 不会来，最多等 drainGrace。
+// It first lets readLoop drain the PTY. When the shell exits, the kernel often
+// still holds its last lines of output; announcing the exit first would queue
+// those OUTPUT frames behind it, and the frontend's "process exited" line
+// would appear above them. EOF (EIO) means every slave fd is closed and the
+// output is drained. A background process holding the slave keeps EOF from
+// arriving, so the wait is capped at drainGrace.
 //
-// 这条 session.updated 带上此刻的 head_seq：客户端据此知道「已退出」之前的输出
-// 一共有多少，与最后一帧 OUTPUT 的末尾对得上。
+// The session.updated carries head_seq at that moment, so the client knows how
+// much output precedes the exit; it matches the end of the last OUTPUT frame.
 func (s *Session) waitLoop() {
-	// 用 *os.Process 而不是 exec.Cmd.Wait：交接过来的会话只有 pid（os.FindProcess），
-	// 同 PID exec 之后它们仍是子进程，Wait 照常拿退出码。
+	// Use *os.Process rather than exec.Cmd.Wait: a handed-over session has only
+	// a pid (os.FindProcess). Since exec keeps the PID, the shell is still our
+	// child and Wait returns its exit code as usual.
 	st, err := s.proc.Wait()
 	code := -1
 	if err == nil && st != nil {
-		code = st.ExitCode() // 被信号杀掉时是 -1
+		code = st.ExitCode() // -1 when killed by a signal
 	}
 
 	select {
@@ -496,7 +542,7 @@ func (s *Session) waitLoop() {
 	head := s.ring.HeadSeq()
 	s.mu.Unlock()
 
-	s.inputQ.close() // 停止接受输入
+	s.inputQ.close() // stop accepting input
 	close(s.done)
 
 	s.emit(&protocol.SessionUpdated{
@@ -505,37 +551,39 @@ func (s *Session) waitLoop() {
 		ExitCode: &code,
 		HeadSeq:  &head,
 	})
-	// ring 与模拟器保留，不释放：构建失败了要能回看报错（AC-4.5），切回、刷新
-	// 都还能拿到快照。
+	// Keep the ring and emulator: after a failed build the user must be able to
+	// scroll back to the error (AC-4.5), and switching back or reloading still
+	// gets a snapshot.
 }
 
-// emit 把一条控制消息发给【所有连接】，不只是订阅者。
+// emit sends a control message to every connection, not just subscribers.
 //
-// 未订阅的连接也要收 session.updated —— 侧栏里的会话名、未读标记都靠它。
-// 订阅只决定收不收 OUTPUT / SNAPSHOT 帧。
+// Unsubscribed connections need session.updated too, for session names and
+// unread dots. Subscribing only controls OUTPUT / SNAPSHOT frames.
 func (s *Session) emit(msg any) {
 	if s.mgr != nil {
 		s.mgr.fanout(msg)
 	}
 }
 
-// emitTo 只发给某个 client 的连接。
+// emitTo sends a message only to one client's connections.
 func (s *Session) emitTo(clientID string, msg any) {
 	if s.mgr != nil {
 		s.mgr.fanoutTo(clientID, msg)
 	}
 }
 
-// ---------- 关闭 ----------
+// ---------- close ----------
 
-// close 结束会话：SIGHUP → 2 秒 → SIGKILL。
+// close ends the session: SIGHUP, wait 2 seconds, then SIGKILL.
 //
-// 优雅路径是给 shell 的进程组发 SIGHUP，让 bash 自己把 SIGHUP 转发给它的
-// 所有作业 —— 交互式 shell 开着 job control，每个作业都在自己的进程组里，
-// 光靠 kill(-pgid) 打不到它们。
+// The graceful path sends SIGHUP to the shell's process group and lets bash
+// forward it to all its jobs. An interactive shell runs with job control, so
+// each job has its own process group that kill(-pgid) does not reach.
 //
-// 兜底路径（宽限期内没退干净）必须按【会话】清扫：那时 bash 已经没机会
-// 转发了，不扫的话作业会变成孤儿继续跑。见 killSession。
+// The fallback (not gone within the grace period) must sweep the whole
+// session: bash no longer gets a chance to forward, and unswept jobs would
+// keep running as orphans. See killSession.
 func (s *Session) close() {
 	s.closeOnce.Do(func() {
 		if s.Status() == protocol.StatusRunning && s.proc != nil {
@@ -551,8 +599,9 @@ func (s *Session) close() {
 				case <-time.After(killGrace):
 				}
 			}
-			// shell 退出后再扫一遍：它转发 SIGHUP 之后有作业没死（比如
-			// 忽略 SIGHUP 的程序）时，这是最后一道。
+			// Sweep again after the shell exits. This is the last line of
+			// defense for jobs that survived the forwarded SIGHUP (programs
+			// that ignore it).
 			killSession(pid, syscall.SIGKILL)
 		}
 		if s.ptmx != nil {
@@ -565,18 +614,21 @@ func (s *Session) close() {
 	})
 }
 
-// export 拍会话的交接快照（ADR-0016 / ADR-0026 §8）。【必须在 freeze 之后调用】：
-// readLoop 停了，ring 与模拟器不会再变。
+// export captures the session's handoff state (ADR-0016 / ADR-0026 §8). It must
+// be called after freeze, when readLoop has stopped and the ring and emulator
+// no longer change.
 //
-// ptmx 交出去的是一个【dup】：新 fd 号、已清 CLOEXEC。会话自己那份保持原样 ——
-// 交接中止时不用改回来；同进程内恢复（测试）也不会撞上 epoll 里已登记的同一个 fd。
+// The ptmx handed over is a dup with a new fd number and CLOEXEC cleared. The
+// session's own fd is untouched, so an aborted handoff needs no undo, and an
+// in-process restore (tests) doesn't collide with the fd already registered
+// in epoll.
 func (s *Session) export() (handoff.Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	base, data := s.ring.Export()
 	vt, err := s.term.Export()
 	if err != nil {
-		return handoff.Session{}, fmt.Errorf("session %d: 导出模拟器状态: %w", s.sid, err)
+		return handoff.Session{}, fmt.Errorf("session %d: export emulator state: %w", s.sid, err)
 	}
 	h := handoff.Session{
 		SID: s.sid, PtmxFD: -1, CreatedAt: s.createdAt,

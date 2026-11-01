@@ -1,45 +1,37 @@
-# webterm 文档
+# webterm documentation
 
-`docs/` 是 webterm 的唯一事实来源。代码是文档的实现，不是反过来。
+`docs/` is the source of truth: code implements these documents, not the other way round.
 
-## 怎么读
+## Start here
 
-第一次接触，按这个顺序：
+1. [Vision](00-overview/vision.md) — what webterm is, and why it isn't another ttyd
+2. [Non-goals](00-overview/non-goals.md) — what we deliberately don't do, and the trade-offs we accept
+3. [User stories](10-requirements/user-stories.md)
+4. [Architecture](20-architecture/overview.md) — components and data flow
+5. [WebSocket protocol](30-protocol/websocket-protocol.md) ★ — the client/agent contract
 
-1. [`00-overview/vision.md`](00-overview/vision.md) — 这东西是什么，为什么不是又一个 ttyd
-2. [`00-overview/non-goals.md`](00-overview/non-goals.md) — **明确不做什么**，以及已接受的取舍
-3. [`10-requirements/user-stories.md`](10-requirements/user-stories.md) — 用户故事
-4. [`20-architecture/overview.md`](20-architecture/overview.md) — 整体架构与数据流
-5. [`30-protocol/websocket-protocol.md`](30-protocol/websocket-protocol.md) — ★ 前后端契约
+## Layout
 
-## 目录
-
-| 目录 | 内容 |
+| Directory | Contents |
 |---|---|
-| [`00-overview/`](00-overview/) | 愿景、非目标、术语表 |
-| [`10-requirements/`](10-requirements/) | 用户故事、验收标准、设备与布局矩阵 |
-| [`20-architecture/`](20-architecture/) | 架构总览、架构决策记录（ADR） |
-| [`30-protocol/`](30-protocol/) | ★ WebSocket 协议、HTTP API |
-| [`40-frontend/`](40-frontend/) | 布局与形态、输入（附加键 / 文本输入页 / IME）、会话交互、快捷键 |
-| [`50-backend/`](50-backend/) | 会话管理、PTY 与终端模拟器、环形缓冲、存储模型 |
-| [`60-security/`](60-security/) | 威胁模型、认证与配对、隐私 |
-| [`70-testing/`](70-testing/) | 测试策略、E2E 场景清单、手工测试清单 |
-| [`80-ops/`](80-ops/) | 安装、开发与测试、TLS、systemd、排障 |
-| [`90-roadmap/`](90-roadmap/) | 里程碑与分支计划 |
+| [00-overview](00-overview/) | Vision, non-goals, glossary |
+| [10-requirements](10-requirements/) | User stories, acceptance criteria, device and layout matrix |
+| [20-architecture](20-architecture/) | Architecture overview and decision records (ADRs) |
+| [30-protocol](30-protocol/) | WebSocket protocol ★, HTTP API |
+| [40-frontend](40-frontend/) | Layout, input (extra keys, text page, IME), session UX, shortcuts |
+| [50-backend](50-backend/) | Session manager, PTY and terminal emulator, ring buffer, storage |
+| [60-security](60-security/) | Threat model, authentication and pairing, privacy |
+| [70-testing](70-testing/) | Test strategy, E2E scenarios, manual checklist |
+| [80-ops](80-ops/) | Install, troubleshooting, systemd, development |
+| [90-roadmap](90-roadmap/) | Milestones and roadmap |
 
-★ = 前后端契约，改动必须先改文档。
+★ The contract between frontend and agent: change the document first.
 
-## 维护规则
+## Rules
 
-- **协议先行**：任何影响 `/ws` 消息格式的改动，先改 `30-protocol/websocket-protocol.md`，再改代码。前后端不允许一边先改。
-- **决策留档**：架构层面的选择写成 ADR（`20-architecture/adr/NNNN-*.md`），一个决策一篇，包含被否决的方案和否决理由。ADR 一旦合入不改写，要推翻就写新的一篇并把旧的标记为 `Superseded`。
-- **需求可测**：`10-requirements/acceptance-criteria.md` 里的每一条都必须能落到 `70-testing/` 的一个具体测试上。写不出测试的需求 = 还没想清楚。
-- **同步更新**：改需求就改验收标准，改验收标准就改 E2E 场景。三者不允许漂移。
+- **Protocol first.** Any change to `/ws` messages starts in `30-protocol/websocket-protocol.md`; then both sides change together.
+- **One decision, one ADR.** Architectural choices go in `20-architecture/adr/NNNN-*.md`, including rejected options and why. Accepted ADRs aren't rewritten; a new ADR supersedes an old one.
+- **Testable requirements.** Every acceptance criterion maps to a concrete test in `70-testing/`. A requirement you can't test isn't ready.
+- **Keep them in sync.** A requirement change updates the acceptance criteria, which update the E2E scenarios.
 
-## 文档状态标记
-
-每篇文档头部有状态：
-
-- `Draft` — 讨论中，不可据此写代码
-- `Accepted` — 已确认，实现以此为准
-- `Superseded by X` — 已被取代
+Each document states its status: `Draft` (under discussion, don't build on it), `Accepted`, or `Superseded by …`.

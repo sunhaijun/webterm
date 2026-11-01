@@ -1,8 +1,9 @@
--- webterm 初始 schema。
+-- webterm initial schema.
 --
--- 会话【不持久化】（ADR-0003：会话随 agent 进程消亡），所以没有 sessions 表。
--- 终端输出【不落盘】（不变式 3），所以只有命令元数据。
--- 快捷命令不是独立实体，就是 commands 上的 pinned 标记（ADR-0008）。
+-- Sessions are not persisted (ADR-0003: they die with the agent process), so
+-- there is no sessions table. Terminal output never touches disk (invariant 3),
+-- so only command metadata is stored. Quick commands are not a separate
+-- entity, just the pinned flag on commands (ADR-0008).
 
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
@@ -10,35 +11,35 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 CREATE TABLE IF NOT EXISTS devices (
-    id           TEXT PRIMARY KEY,      -- 随机 16 字节 hex
-    name         TEXT NOT NULL,         -- 从 User-Agent 推断，可改
-    token_hash   BLOB NOT NULL,         -- SHA-256(session token)，不存原文
+    id           TEXT PRIMARY KEY,      -- 16 random bytes, hex
+    name         TEXT NOT NULL,         -- inferred from User-Agent, editable
+    token_hash   BLOB NOT NULL,         -- SHA-256(session token); plaintext never stored
     created_at   INTEGER NOT NULL,      -- unix ms
     last_seen_at INTEGER NOT NULL,
     last_ip      TEXT,
-    revoked_at   INTEGER                -- NULL = 有效
+    revoked_at   INTEGER                -- NULL = active
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token  ON devices(token_hash);
 CREATE INDEX IF NOT EXISTS        idx_devices_active ON devices(revoked_at) WHERE revoked_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS pairings (
-    code_hash  BLOB PRIMARY KEY,        -- SHA-256(配对码)
+    code_hash  BLOB PRIMARY KEY,        -- SHA-256(pairing code)
     created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,        -- created_at + 5 分钟
-    used_at    INTEGER                  -- NULL = 未使用
+    expires_at INTEGER NOT NULL,        -- created_at + 5 minutes
+    used_at    INTEGER                  -- NULL = unused
 );
 
 CREATE TABLE IF NOT EXISTS commands (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     text         TEXT    NOT NULL,
-    session_name TEXT,                  -- 快照，非外键（会话不持久化）
+    session_name TEXT,                  -- copied value, not a foreign key (sessions are not persisted)
     cwd          TEXT,
-    exit_code    INTEGER,               -- NULL = 未完成 或 手动新建的快捷命令
+    exit_code    INTEGER,               -- NULL = still running, or a manually created quick command
     started_at   INTEGER NOT NULL,      -- unix ms
-    duration_ms  INTEGER,               -- NULL 同上
-    pinned       INTEGER NOT NULL DEFAULT 0,   -- 1 = 快捷命令
-    label        TEXT,                  -- 快捷命令的短名
-    pin_order    INTEGER                -- 置顶排序，非置顶为 NULL
+    duration_ms  INTEGER,               -- NULL: same as above
+    pinned       INTEGER NOT NULL DEFAULT 0,   -- 1 = quick command
+    label        TEXT,                  -- quick command short name
+    pin_order    INTEGER                -- pinned sort order; NULL when not pinned
 );
 CREATE INDEX IF NOT EXISTS idx_cmd_started ON commands(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cmd_pinned  ON commands(pin_order) WHERE pinned = 1;

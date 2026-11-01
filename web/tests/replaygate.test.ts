@@ -1,11 +1,13 @@
 /**
- * UT-replay-2：回放门只吞【自动应答】，不吞【用户输入】（AC-2.15 / ADR-0020，input.md §回放门）。
+ * UT-replay-2: the replay gate swallows automatic replies, never user input (AC-2.15 /
+ * ADR-0020, input.md).
  *
- * 两样东西都从 xterm 的 onData 出来，区别在于谁产生的：
- *   · 自动应答（DSR / DA …）同步发生在 term.write() 的解析里；
- *   · 用户按键、附加键、文本页同步发生在一次 DOM 输入事件的派发里。
- * 按"此刻是否在回放"一刀切，就会把用户正在敲的字一起吞掉。这组用例把两者摆在同一个
- * 回放窗口里，一次断言两边。回放 = 补课的 OUTPUT（catchup_to 之前）与 SNAPSHOT。
+ * Both come out of xterm's onData; what differs is who produced them:
+ *   · automatic replies (DSR / DA …) happen synchronously while term.write() parses;
+ *   · keystrokes, extra keys and the text page happen synchronously inside a DOM input event.
+ * Gating on "are we replaying right now" alone would also swallow what the user is typing.
+ * These cases put both in the same replay window and assert on both. Replay = catch-up
+ * OUTPUT (before catchup_to) and SNAPSHOT.
  */
 import { describe, expect, it } from 'vitest'
 
@@ -16,7 +18,7 @@ import { info } from './helpers'
 
 const enc = (s: string) => new TextEncoder().encode(s)
 
-/** 一个能逼出自动应答的查询：DSR-CPR，xterm 会回 `ESC[行;列R`。 */
+/** A query that forces an automatic reply: DSR-CPR, answered by xterm with `ESC[row;colR`. */
 const CPR_QUERY = '\x1b[6n'
 
 const fakeConn: ConnLike = {
@@ -42,8 +44,8 @@ function makeStore() {
 }
 
 /**
- * 模拟"用户在某个事件的派发里产生了输入"：xterm 的 onData 是在 keydown 派发里【同步】
- * 触发的，附加键是在 pointerup 里同步调 term.input()。这里用同一个形状。
+ * Simulates user input produced inside an event dispatch: xterm fires onData synchronously
+ * inside keydown, and extra keys call term.input() synchronously inside pointerup. Same shape here.
  */
 function inputInside(store: SessionStore, type: string, text: string): void {
   const el = document.createElement('div')
@@ -53,28 +55,28 @@ function inputInside(store: SessionStore, type: string, text: string): void {
   el.remove()
 }
 
-/** 等 xterm 把排着的 write 解析完（它是 setTimeout 分片的）。 */
+/** Waits for xterm to parse queued writes (it chunks with setTimeout). */
 const parsed = () => new Promise((r) => setTimeout(r, 30))
 
-describe('UT-replay-2 回放门', () => {
-  it('补课期间：历史查询的自动应答不进 PTY，并计入 gated', async () => {
+describe('UT-replay-2 replay gate', () => {
+  it('during catch-up, automatic replies to old queries stay out of the PTY and count as gated', async () => {
     const { store, sent } = makeStore()
     const before = inputTrace.snapshot({ unackedBytes: 0, focus: '', sid: 1 }).gated
     store.output(1, enc(CPR_QUERY), true)
     await parsed()
-    expect(sent, 'CPR 应答是终端自己答的，不是用户输入').toEqual([])
+    expect(sent, 'the CPR reply came from the terminal, not the user').toEqual([])
     expect(inputTrace.snapshot({ unackedBytes: 0, focus: '', sid: 1 }).gated).toBe(before + 1)
   })
 
-  it('补课期间：用户的按键照常进 PTY', async () => {
+  it('during catch-up, user keystrokes still reach the PTY', async () => {
     const { store, sent } = makeStore()
-    store.output(1, enc(CPR_QUERY), true) // 回放窗口打开，且还没解析
+    store.output(1, enc(CPR_QUERY), true) // replay window open and not parsed yet
     inputInside(store, 'keydown', 'x')
     await parsed()
-    expect(sent, '回放窗口里敲的字不能被吞掉').toEqual(['x'])
+    expect(sent, 'typing during the replay window must not be swallowed').toEqual(['x'])
   })
 
-  it('补课期间：附加键（pointerdown / pointerup 里的 term.input）照常进 PTY', async () => {
+  it('during catch-up, extra keys (term.input inside pointerdown / pointerup) still reach the PTY', async () => {
     const { store, sent } = makeStore()
     store.output(1, enc(CPR_QUERY), true)
     inputInside(store, 'pointerup', '\x1b[A')
@@ -83,7 +85,7 @@ describe('UT-replay-2 回放门', () => {
     expect(sent).toEqual(['\x1b[A', '\t'])
   })
 
-  it('写快照期间同样开门：用户输入放行', async () => {
+  it('opens the gate while writing a snapshot too, letting user input through', async () => {
     const { store, sent } = makeStore()
     store.snapshot(1, enc('\x1b[H\x1b[2Jhello' + CPR_QUERY))
     inputInside(store, 'keydown', 'y')
@@ -91,7 +93,7 @@ describe('UT-replay-2 回放门', () => {
     expect(sent).toEqual(['y'])
   })
 
-  it('不在回放时：自动应答照常回 —— 那是实时输出，程序在等这个答复', async () => {
+  it('lets automatic replies through outside replay: that is live output and the program is waiting for the answer', async () => {
     const { store, sent } = makeStore()
     store.output(1, enc(CPR_QUERY), false)
     await parsed()
@@ -99,7 +101,7 @@ describe('UT-replay-2 回放门', () => {
     expect(sent[0]).toMatch(/^\x1b\[\d+;\d+R$/)
   })
 
-  it('回放解析完之后，自动应答恢复正常', async () => {
+  it('lets automatic replies through again once the replay is parsed', async () => {
     const { store, sent } = makeStore()
     store.output(1, enc(CPR_QUERY), true)
     await parsed()
@@ -107,11 +109,11 @@ describe('UT-replay-2 回放门', () => {
 
     store.output(1, enc(CPR_QUERY), false)
     await parsed()
-    expect(sent.length, '回放门只管回放那一段').toBe(1)
+    expect(sent.length, 'the gate only covers the replayed part').toBe(1)
   })
 })
 
-describe('UT-replay-2 判据：正在派发的是不是用户输入事件', () => {
+describe('UT-replay-2 the test: is a user input event being dispatched', () => {
   const fire = (type: string, ctor: (t: string) => Event) => {
     const el = document.createElement('div')
     document.body.appendChild(el)
@@ -122,7 +124,7 @@ describe('UT-replay-2 判据：正在派发的是不是用户输入事件', () =
     return seen
   }
 
-  it('键盘 / 粘贴 / 组字 / 附加键的指针事件里为真', () => {
+  it('is true inside keyboard / paste / composition / extra-key pointer events', () => {
     expect(fire('keydown', (t) => new KeyboardEvent(t))).toBe(true)
     expect(fire('keypress', (t) => new KeyboardEvent(t))).toBe(true)
     expect(fire('beforeinput', (t) => new InputEvent(t))).toBe(true)
@@ -133,22 +135,22 @@ describe('UT-replay-2 判据：正在派发的是不是用户输入事件', () =
     expect(fire('pointerup', (t) => new Event(t))).toBe(true)
   })
 
-  it('表里至少有 input.md 列的那九个', () => {
+  it('includes at least the nine listed in input.md', () => {
     for (const t of ['keydown', 'keypress', 'beforeinput', 'input', 'paste', 'compositionend', 'compositionupdate', 'pointerdown', 'pointerup']) {
       expect(USER_INPUT_EVENTS.has(t), t).toBe(true)
     }
   })
 
-  it('WebSocket 的 message 事件里为假 —— 回放就是从那儿灌进来的', () => {
+  it('is false inside a WebSocket message event, which is where replay comes from', () => {
     expect(fire('message', (t) => new MessageEvent(t))).toBe(false)
   })
 
-  it('不产生输入的事件里为假', () => {
+  it('is false inside events that produce no input', () => {
     expect(fire('scroll', (t) => new Event(t))).toBe(false)
     expect(fire('resize', (t) => new Event(t))).toBe(false)
   })
 
-  it('没有正在派发的事件时为假（定时器分片解析走的就是这条）', async () => {
+  it('is false with no event being dispatched (the timer-driven chunked parsing path)', async () => {
     expect(inUserInputEvent()).toBe(false)
     const inTimer = await new Promise<boolean>((r) => setTimeout(() => r(inUserInputEvent()), 0))
     expect(inTimer).toBe(false)

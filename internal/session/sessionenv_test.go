@@ -7,7 +7,8 @@ import (
 	"github.com/sunhaijun/webterm/internal/session"
 )
 
-// unsetEnv 在本测试期间去掉一个环境变量，结束后恢复（t.Setenv 只能设、不能删）。
+// unsetEnv removes an environment variable for the duration of the test and
+// restores it afterward (t.Setenv can set but not unset).
 func unsetEnv(t *testing.T, key string) {
 	t.Helper()
 	old, had := os.LookupEnv(key)
@@ -18,8 +19,9 @@ func unsetEnv(t *testing.T, key string) {
 	t.Cleanup(func() { os.Setenv(key, old) })
 }
 
-// envHarness 起一个不读 dotfile 的会话：bash --norc --noprofile，
-// 环境里只有我们注入的那些，断言才有确定性。
+// envHarness starts a session that reads no dotfiles (bash --norc
+// --noprofile), so the environment holds only what we inject and assertions
+// are deterministic.
 func envHarness(t *testing.T, cfg session.Config) (*session.Session, *fakeConn) {
 	t.Helper()
 	cfg.MaxSessions, cfg.RingBytes, cfg.Shell, cfg.ShellArgs = 5, 1<<20, "bash", testShellArgs
@@ -33,10 +35,11 @@ func envHarness(t *testing.T, cfg session.Config) (*session.Session, *fakeConn) 
 	return s, c
 }
 
-// showEnv 让会话把某个变量打出来。
+// showEnv makes the session print a variable.
 //
-// 【标记只能出现在输出里】：命令原文会被 PTY 回显，所以打印的是
-// `KEY[值]` 而命令里写的是 `KEY[%s]` —— 回显那一份不会撞上断言。
+// The marker must appear only in the output. The PTY echoes the command, so
+// the output is `KEY[value]` while the command says `KEY[%s]`, and the echo
+// can't match the assertion.
 func showEnv(t *testing.T, s *session.Session, c *fakeConn, key string) {
 	t.Helper()
 	if err := c.Send(s, "printf '"+key+"[%s]\\n' \"$"+key+"\"\r"); err != nil {
@@ -44,7 +47,7 @@ func showEnv(t *testing.T, s *session.Session, c *fakeConn, key string) {
 	}
 }
 
-// IT-sessionenv-1：--session-env 注入到会话 PTY（AC-7.8）。
+// IT-sessionenv-1: --session-env is injected into the session PTY (AC-7.8).
 func TestITSessionEnv1_Injected(t *testing.T) {
 	s, c := envHarness(t, session.Config{
 		SessionEnv: []string{"WEBTERM_TEST_ONE=hello", "WEBTERM_TEST_TWO=world"},
@@ -55,19 +58,23 @@ func TestITSessionEnv1_Injected(t *testing.T) {
 	waitScreen(t, c, "WEBTERM_TEST_TWO[world]")
 }
 
-// IT-sessionenv-2：内置兼容清单默认生效，--no-altscreen-compat 能关掉（AC-7.8）。
+// IT-sessionenv-2: the built-in compat list applies by default and
+// --no-altscreen-compat turns it off (AC-7.8).
 //
-// 这条是 ADR-0024 第 1 步的全部意义所在：claude 不进备用屏，输出才是追加流，
-// 用户才有 scrollback 可以往回拖。
+// This is the point of ADR-0024 step 1: only when claude stays off the
+// alternate screen is its output an append-only stream the user can scroll
+// back through.
 func TestITSessionEnv2_AltScreenCompat(t *testing.T) {
-	t.Run("默认注入", func(t *testing.T) {
+	t.Run("injected by default", func(t *testing.T) {
 		s, c := envHarness(t, session.Config{})
 		showEnv(t, s, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
 		waitScreen(t, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN[1]")
 	})
-	t.Run("--no-altscreen-compat 关掉", func(t *testing.T) {
-		// 会话继承 agent 的环境。在 webterm 会话里跑测试时，这个进程自己就带着
-		// 清单注入的这个变量 —— 先清掉，断言的才是「关掉之后不再注入」。
+	t.Run("--no-altscreen-compat disables it", func(t *testing.T) {
+		// Sessions inherit the agent's environment. When tests run inside a
+		// webterm session, this process already has the variable from the
+		// list; clear it so the assertion checks that disabling stops the
+		// injection.
 		unsetEnv(t, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
 		s, c := envHarness(t, session.Config{NoAltScreenCompat: true})
 		showEnv(t, s, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
@@ -75,25 +82,27 @@ func TestITSessionEnv2_AltScreenCompat(t *testing.T) {
 	})
 }
 
-// IT-sessionenv-3：用户已经设过的不被覆盖；--session-env 压过清单；
-// TERM / WEBTERM_SESSION 由 webterm 定死（AC-7.8）。
+// IT-sessionenv-3: values the user already set are not overridden,
+// --session-env overrides the compat list, and TERM / WEBTERM_SESSION are fixed
+// by webterm (AC-7.8).
 func TestITSessionEnv3_Precedence(t *testing.T) {
-	t.Run("用户环境里已有 → 清单不覆盖", func(t *testing.T) {
+	t.Run("user env wins over compat list", func(t *testing.T) {
 		t.Setenv("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "0")
 		s, c := envHarness(t, session.Config{})
 		showEnv(t, s, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
 		waitScreen(t, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN[0]")
 	})
-	t.Run("--session-env 压过清单", func(t *testing.T) {
+	t.Run("--session-env overrides compat list", func(t *testing.T) {
 		s, c := envHarness(t, session.Config{
 			SessionEnv: []string{"CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0"},
 		})
 		showEnv(t, s, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN")
 		waitScreen(t, c, "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN[0]")
 	})
-	t.Run("TERM 改不动", func(t *testing.T) {
-		// flag 层已经拒了 --session-env TERM=...，这里守的是第二道：
-		// 直接构造 Config 的调用方（测试、将来的别的入口）也不能把它改歪。
+	t.Run("TERM cannot be overridden", func(t *testing.T) {
+		// The flag layer already rejects --session-env TERM=...; this is the
+		// second guard, for callers that build Config directly (tests, future
+		// entry points).
 		s, c := envHarness(t, session.Config{SessionEnv: []string{"TERM=dumb"}})
 		showEnv(t, s, c, "TERM")
 		waitScreen(t, c, "TERM[xterm-256color]")

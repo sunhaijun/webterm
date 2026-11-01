@@ -1,6 +1,6 @@
-/* webterm —— Termux 式界面（ADR-0025，docs/40-frontend/layout.md）。
-   主题三态：跟随系统 / 浅色 / 深色（ADR-0037，ui/prefs.ts）。所有颜色都是 :root 上的自定义属性，
-   xterm 的主题也从这里读（--term-* / --ansi-*，term/terminal.ts::themeFromCss）。 */
+/* webterm: Termux-style UI (ADR-0025, docs/40-frontend/layout.md).
+   Three themes: system / light / dark (ADR-0037, ui/prefs.ts). Every color is a custom property on
+   :root, and xterm's theme is read from here too (--term-* / --ansi-*, term/terminal.ts::themeFromCss). */
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
@@ -11,8 +11,9 @@
   --surface: #f6f7f8;
   --ring: rgba(26, 26, 26, 0.35);
   --link: #2563eb;
-  /* 强调色 = 「选中的是这个」：当前标签、抽屉里的当前会话、CTRL / ALT 的激活态。
-     写成 var(--link)，深浅色切换时跟着变。hover 用中性灰，靠色相与选中分开。 */
+  /* Accent = "this is the selected one": the active tab, the active session in the drawer, active
+     CTRL / ALT. Defined as var(--link) so it follows light/dark. Hover uses neutral gray, so hue
+     alone separates it from selection. */
   --accent: var(--link);
   --hover: color-mix(in srgb, var(--fg) 7%, transparent);
   --ok: #2ea043;
@@ -23,7 +24,7 @@
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
     Arial, 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 
-  /* 终端（浅色） */
+  /* Terminal (light) */
   --term-bg: #fbfbfc;
   --term-fg: #1f2328;
   --term-cursor: #1f2328;
@@ -77,7 +78,7 @@
     --ansi-15: #ffffff;
   }
 }
-/* 设置里选了深色（ADR-0037）：和上面同一份，让手动选择在两个方向都生效 */
+/* Dark chosen in settings (ADR-0037): same values as above, so a manual choice works in both directions */
 :root[data-theme='dark'] {
   --bg: #0d1117;
   --fg: #e6edf3;
@@ -108,12 +109,12 @@
   --ansi-14: #56d4dd;
   --ansi-15: #ffffff;
 }
-/* 强制的那一种也管滚动条与原生控件 */
+/* A forced theme also applies to scrollbars and native controls */
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-/* 整个 app 是固定视口，页面本就不该滚；overscroll-behavior:none 掐掉 iOS 的文档级橡皮筋 */
+/* The app is a fixed viewport and the page never scrolls; overscroll-behavior:none kills iOS document-level rubber-banding */
 html, body, #app { height: 100%; margin: 0; overscroll-behavior: none; }
 body {
   background: var(--bg);
@@ -122,7 +123,7 @@ body {
 }
 button { font: inherit; color: inherit; }
 
-/* 视觉隐藏，读屏仍然读得到（conn-text 在线时就是这样） */
+/* Visually hidden but still read by screen readers (conn-text while online) */
 .sr-only {
   position: absolute !important;
   width: 1px; height: 1px; padding: 0 !important; margin: -1px;
@@ -130,16 +131,17 @@ button { font: inherit; color: inherit; }
   white-space: nowrap; border: 0 !important;
 }
 
-/* ---------- 外壳（layout.md §几何） ---------- */
+/* ---------- Shell (layout.md, geometry) ---------- */
 
 .app {
-  /* JS 起来之前的兜底。真正的高度由 ui/viewport.ts::installAppFit 写成 inline style ——
-     唯一真相来源是 visualViewport，不是 100vh（iOS Safari 上 100vh 不随键盘变化）。 */
+  /* Fallback until JS runs. The real height is set inline by ui/viewport.ts::installAppFit; the only
+     source of truth is visualViewport, not 100vh (on iOS Safari 100vh ignores the keyboard). */
   height: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  /* 安全区由 .app 的 padding 吃掉；写成自定义属性，E2E 能在没有刘海的 Chromium 里覆盖，
-     软键盘弹起时 JS 把 --sa-bottom 置 0。盖在 .app 里的东西不要再自己加一次 env()。 */
+  /* .app's padding absorbs the safe areas. They are custom properties so E2E can override them in a
+     notch-less Chromium, and JS sets --sa-bottom to 0 while the keyboard is up. Anything inside .app
+     must not add env() again. */
   --sa-top: env(safe-area-inset-top, 0px);
   --sa-right: env(safe-area-inset-right, 0px);
   --sa-bottom: env(safe-area-inset-bottom, 0px);
@@ -147,20 +149,21 @@ button { font: inherit; color: inherit; }
   padding: var(--sa-top) var(--sa-right) var(--sa-bottom) var(--sa-left);
   overflow: hidden;
   background: var(--term-bg);
-  /* fixed 定位的浮层以 .app 为包含块（ADR-0039 §3）：.app 跟着 visualViewport 走，
-     浮层的遮罩就盖住可见区，sheet 贴着键盘上沿。少了它，Android 弹键盘只缩可视视口，
-     贴着布局视口底边的 sheet 整个在键盘后面 */
+  /* Fixed-position sheets use .app as their containing block (ADR-0039 §3). .app tracks
+     visualViewport, so the backdrop covers the visible area and the sheet sits on top of the
+     keyboard. Without this, Android only shrinks the visual viewport when the keyboard opens and a
+     sheet pinned to the layout viewport's bottom ends up entirely behind the keyboard. */
   contain: layout;
 }
-/* 网格行：标签栏（wide）· 终端（剩余全部）· 附加键（80px，显示时） */
+/* Grid rows: tab bar (wide) · terminal (all remaining space) · extra keys (80px, when shown) */
 .app[data-form='compact'] { grid-template-rows: minmax(0, 1fr) auto; }
 .app[data-form='wide'] { grid-template-rows: auto minmax(0, 1fr) auto; }
 
-/* ---------- 终端与盖在上面的东西 ---------- */
+/* ---------- Terminal and its overlays ---------- */
 
 .stage { position: relative; min-height: 0; overflow: hidden; background: var(--term-bg); }
-/* 触摸手势：纵向拖是 xterm 自带的滚动（它在 JS 里改 scrollTop），点一下是 term/gestures.ts。
-   touch-action:none 让浏览器别抢（也挡住页面级的双指缩放），tap 不受影响。 */
+/* Touch: vertical drag is xterm's own scrolling (it sets scrollTop in JS); tap is term/gestures.ts.
+   touch-action:none keeps the browser out of it (and blocks page-level pinch zoom); taps still work. */
 .term {
   position: absolute; inset: 0;
   padding: 4px;
@@ -171,14 +174,15 @@ button { font: inherit; color: inherit; }
 .term-host { height: 100%; }
 .term .xterm { height: 100%; }
 .term .xterm-viewport { overscroll-behavior: contain; background-color: transparent !important; }
-/* 【文字层不接指针】：xterm 的 DOM 渲染器每次刷新都换掉行里的元素。触摸事件的 target 在
-   touchstart 时就定死了 —— 手指按在一个字上，那个元素一被换掉，之后的 touchmove / touchend
-   全派发到一个已经脱离文档的节点上，冒泡不到 .xterm（它的触摸滚动）和 .term（点按切键盘）：
-   拖一下只滚第一帧的几个像素（E2E-37 实测 240px 的拖动只滚了 1 行）。让指针落在不会被换掉的
-   .xterm-screen 上；选区、链接、鼠标上报都按坐标算，不依赖 target。 */
+/* The text layer ignores pointers. xterm's DOM renderer replaces the row elements on every refresh,
+   and a touch's target is fixed at touchstart. Once the element under the finger is replaced, all
+   later touchmove / touchend events go to a detached node and never bubble to .xterm (touch
+   scrolling) or .term (tap to toggle the keyboard), so a drag scrolls only the first frame's few
+   pixels (in E2E-37 a 240px drag scrolled 1 line). Let the pointer land on .xterm-screen, which is
+   never replaced; selection, links and mouse reports all work from coordinates, not the target. */
 .term .xterm-rows { pointer-events: none; }
 
-/* 连接横幅：盖在终端顶部一行，不改几何（AC-2.10）。在线时整条视觉隐藏（.sr-only） */
+/* Connection banner: one line over the top of the terminal, no geometry change (AC-2.10). Visually hidden while online (.sr-only) */
 .conn-banner {
   position: absolute; z-index: 6; top: 0; left: 0; right: 0;
   display: flex; gap: 10px; align-items: center;
@@ -203,7 +207,7 @@ button { font: inherit; color: inherit; }
 }
 .toast[data-kind='error'] { background: var(--err); color: #fff; }
 
-/* 组字预览：绝对定位到终端光标处，让用户知道自己在打什么 */
+/* IME composition preview: positioned at the terminal cursor so the user sees what they are typing */
 .ime-preview {
   position: absolute; z-index: 5;
   padding: 1px 4px;
@@ -224,20 +228,21 @@ button { font: inherit; color: inherit; }
   border: 1px solid var(--line-strong); background: var(--bg); cursor: pointer;
 }
 
-/* ---------- wide：顶部标签栏（session-ux.md §wide） ---------- */
+/* ---------- wide: top tab bar (session-ux.md §wide) ---------- */
 
 .topbar {
   position: relative; z-index: 1;
   display: flex; align-items: stretch;
   height: 36px;
   background: var(--surface);
-  /* 分隔线画在外面（盖住终端顶上 1px 的内边距），标签条自己正好 36 / 40px */
+  /* The divider is drawn outside (over the terminal's 1px top padding) so the strip itself is exactly 36 / 40px */
   box-shadow: 0 1px 0 var(--line);
   color: var(--fg);
 }
 .app[data-coarse='true'] .topbar { height: 40px; }
-/* 标签条只装标签，自己横向滚动（滚动条隐藏，滚轮由 tabs.tsx 转成横向）。放得下时正好是标签的
-   总宽，`+` 跟在后面；放不下时缩到剩下的宽度，`+` 与状态点钉在右边不跟着滚（ADR-0035） */
+/* The strip holds only tabs and scrolls horizontally (hidden scrollbar; tabs.tsx turns the wheel
+   sideways). When everything fits it is exactly as wide as the tabs and `+` follows; otherwise it
+   shrinks to the remaining width and `+` and the status dot stay pinned on the right (ADR-0035) */
 .tabbar {
   flex: 0 1 auto; min-width: 0;
   display: flex; align-items: stretch;
@@ -247,8 +252,8 @@ button { font: inherit; color: inherit; }
   touch-action: pan-x;
 }
 .tabbar::-webkit-scrollbar { display: none; }
-/* 等宽，120–240px（ADR-0031）：同一个基准 240px 一起缩，缩到 120px 停，再放不下标签条就滚。
-   基准写在 width 上而不是 flex-basis：标签条的 max-content 宽度取的是 width（ADR-0035） */
+/* Equal widths, 120–240px (ADR-0031): all shrink from a 240px basis down to 120px, then the strip
+   scrolls. The basis is on width, not flex-basis, because the strip's max-content width uses width (ADR-0035) */
 .tab {
   flex: 0 1 auto; width: 240px;
   display: flex; align-items: center; gap: 5px;
@@ -262,7 +267,7 @@ button { font: inherit; color: inherit; }
 .tab:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
 .tab-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab:hover:not([aria-current='true']) { background: var(--hover); }
-/* 选中：强调色 2px 下划线 + 强调色底色 + 名字加粗（AC-4.9） */
+/* Selected: 2px accent underline + accent background + bold name (AC-4.9) */
 .tab[aria-current='true'] {
   background: color-mix(in srgb, var(--accent) 14%, var(--surface));
   box-shadow: inset 0 -2px 0 var(--accent);
@@ -270,7 +275,7 @@ button { font: inherit; color: inherit; }
   font-weight: 600;
 }
 .tab[data-exited='true'] :is(.tab-name, .tab-idx) { opacity: 0.5; }
-/* 编号同抽屉的 [n]（ADR-0041）：等宽、灰色、不加粗；当前标签里跟着强调色 */
+/* The index matches the drawer's [n] (ADR-0041): monospace, gray, not bold; accent on the active tab */
 .tab-idx { flex: none; color: var(--muted); font-family: var(--font-mono); font-size: 12px; font-weight: 400; }
 .tab[aria-current='true'] .tab-idx { color: inherit; }
 .tab-close {
@@ -281,14 +286,14 @@ button { font: inherit; color: inherit; }
   visibility: hidden;
 }
 .tab-close:hover { background: var(--hover); color: var(--fg); }
-/* ✕：鼠标设备上悬停或当前标签显示；触屏上只有当前标签显示（免得误点） */
+/* ✕: shown on hover or on the active tab with a mouse; on touch only on the active tab (to avoid mis-taps) */
 .tab[aria-current='true'] .tab-close { visibility: visible; }
 @media (hover: hover) and (pointer: fine) {
   .tab:hover .tab-close { visibility: visible; }
 }
 .app[data-coarse='true'] .tab-close { width: 30px; height: 30px; }
 .tab .rename-input { flex: 1 1 auto; min-width: 60px; }
-/* `+` 与最右的 ⚙：同宽同高、同一种线条图标（ADR-0035 §3、ADR-0037 §2–3） */
+/* `+` and the rightmost ⚙: same size, same line icon style (ADR-0035 §3, ADR-0037 §2–3) */
 .tab-new, .topbar-btn {
   flex: none; width: 36px;
   display: flex; align-items: center; justify-content: center;
@@ -297,11 +302,11 @@ button { font: inherit; color: inherit; }
 }
 :is(.tab-new, .topbar-btn):hover:not(:disabled) { background: var(--hover); color: var(--fg); }
 .tab-new:disabled { opacity: 0.35; cursor: default; }
-/* `+` 前 12px（触屏 16px）是顶栏自己的空白，点上去什么都不做：免得想新建却点到当前标签的 ✕（ADR-0035）。
-   右边的 auto 把状态点与 ⚙ 顶到最右 */
+/* The 12px (16px on touch) before `+` is dead top bar space, so reaching for New session never hits the
+   active tab's ✕ (ADR-0035). The auto margin on the right pushes the status dot and ⚙ to the far right */
 .tab-new { margin: 0 auto 0 12px; }
 .app[data-coarse='true'] .tab-new { margin-left: 16px; }
-/* 线条图标（ui/icons.tsx，layout.md §图标）：块级，按几何中心对齐 */
+/* Line icons (ui/icons.tsx, layout.md): block-level, centered geometrically */
 .icon { display: block; flex: none; }
 
 .conn-dot {
@@ -315,11 +320,11 @@ button { font: inherit; color: inherit; }
 .conn-dot[data-state='closed'] { background: var(--err); }
 @keyframes pulse { 50% { opacity: 0.3; } }
 
-/* 保持接收的图钉与未读点（ADR-0042）：未读是强调色，红色只表示出错 */
+/* The pin mark and the unread dot (ADR-0042): unread uses the accent; red only means error */
 .pin-mark { flex: none; display: inline-flex; color: var(--muted); margin-right: 3px; }
 .unread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 
-/* ---------- 附加键（input.md §附加键） ---------- */
+/* ---------- Extra keys (input.md) ---------- */
 
 .extrakeys {
   position: relative; z-index: 1;
@@ -327,8 +332,9 @@ button { font: inherit; color: inherit; }
   grid-template-columns: 44px minmax(0, 1fr);
   height: 80px;
   background: var(--surface);
-  /* 分隔线画在外面（盖住终端底下 1px 的内边距），同标签栏。写成 border-top 的话
-     border-box 下槽里只剩 79px，两行 40px 的键区溢出 1px，第二行的底边被视口裁掉 */
+  /* The divider is drawn outside (over the terminal's 1px bottom padding), like the tab bar. As a
+     border-top, border-box would leave 79px in the slot, the two 40px key rows would overflow by 1px
+     and the viewport would clip the second row's bottom edge */
   box-shadow: 0 -1px 0 var(--line);
   user-select: none; -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -344,21 +350,21 @@ button { font: inherit; color: inherit; }
 }
 .ek-side-btn:active { background: var(--hover); }
 .ek-side-btn[aria-pressed='true'] { color: var(--accent); }
-/* 会话按钮：圆角方框里写会话数，学手机浏览器的「标签页」按钮（ADR-0030 §3） */
+/* Sessions button: the count in a rounded box, like a mobile browser's tabs button (ADR-0030 §3) */
 .ek-count {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 22px; height: 22px; padding: 0 3px;
   border: 2px solid currentColor; border-radius: 6px;
   font: 700 12px/1 var(--font-ui);
 }
-/* 未读小红点挂在方框右上角，描一圈底色和方框的边线分开 */
+/* The unread dot sits on the box's top-right corner, outlined in the background color to separate it from the border */
 .ek-side-btn[data-unread='true']::after {
   content: ''; position: absolute; top: 5px; right: 4px;
   width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   box-shadow: 0 0 0 2px var(--surface);
 }
 .ek-main { position: relative; min-width: 0; }
-/* 7 列 × 2 行，等宽，任何宽度下都不横向滚动 */
+/* 7 columns × 2 rows, equal widths, never scrolls horizontally at any width */
 .ek-keys {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -376,11 +382,12 @@ button { font: inherit; color: inherit; }
   white-space: nowrap; overflow: hidden;
 }
 .ek-key:active { background: var(--hover); }
-/* CTRL / ALT：激活与锁定都用强调色，锁定再加一条底线 —— 一眼看得出下一个键会变成什么 */
+/* CTRL / ALT: accent when armed or locked, plus an underline when locked, so the effect on the next key is obvious */
 .ek-key[data-sticky='armed'] { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); font-weight: 700; }
 .ek-key[data-sticky='locked'] { background: var(--accent); color: var(--bg); font-weight: 700; box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--bg) 60%, transparent); }
-/* 文本输入页：两行高、四边有框的 textarea，与槽四周留 6px，整个框落在 80px 槽内 ——
-   原先无框、占满槽，下边直接贴着视口底边，看着像缺了下边框。字号 ≥ 16px：iOS 聚焦不放大页面 */
+/* Text page: a two-row, fully bordered textarea with 6px around it, entirely inside the 80px slot
+   (borderless and slot-filling, its bottom met the viewport edge and looked cut off). Font size
+   ≥ 16px so iOS doesn't zoom on focus */
 .ek-text {
   display: block; width: calc(100% - 12px); height: 68px; margin: 6px;
   padding: 8px 10px;
@@ -394,7 +401,7 @@ button { font: inherit; color: inherit; }
 .extrakeys[data-page='keys'] .ek-text { display: none; }
 .extrakeys[data-page='text'] .ek-keys { display: none; }
 
-/* ---------- 浮层（ADR-0018 / ADR-0037 §4，layout.md §浮层）：wide 居中浮窗，compact 贴底 sheet ---------- */
+/* ---------- Sheets (ADR-0018 / ADR-0037 §4, layout.md): centered dialog on wide, bottom sheet on compact ---------- */
 
 .drawer-backdrop {
   position: fixed; inset: 0; z-index: 40;
@@ -430,7 +437,7 @@ button { font: inherit; color: inherit; }
 .drawer-close:hover, .drawer-close:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
 .drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 
-/* 底部留出呼吸空间（ADR-0037 §5）：上 12、左右 16、下 16；sheet 的下边还要让出 Home 指示条 */
+/* Breathing room at the bottom (ADR-0037 §5): 12 top, 16 sides, 16 bottom; sheets also clear the home indicator */
 .drawer:not([data-foot]) { padding-bottom: 16px; }
 .drawer-foot { flex: none; border-top: 1px solid var(--line); padding: 12px 16px 16px; }
 .drawer-actions { display: flex; gap: 12px; }
@@ -448,11 +455,11 @@ button { font: inherit; color: inherit; }
 .drawer-btn:disabled { opacity: 0.4; cursor: default; }
 .drawer-btn.danger { color: var(--err); font-weight: 600; }
 .drawer-btn.primary { color: var(--accent); font-weight: 600; }
-/* 会话抽屉底部：「+ 新会话」占满，⚙ 是方块 */
+/* Session drawer footer: "+ New session" fills the row, ⚙ is a square */
 .drawer-new .icon { color: var(--muted); }
 .drawer-settings { flex: none; width: 48px; color: var(--muted); }
 
-/* compact：贴底整宽 sheet，抓手 + 下滑关闭 */
+/* compact: full-width bottom sheet with grab handle, swipe down to close */
 .app[data-form='compact'] .drawer-backdrop { align-items: flex-end; padding: 0; }
 .app[data-form='compact'] .drawer {
   width: 100%; max-height: 80%;
@@ -465,11 +472,11 @@ button { font: inherit; color: inherit; }
   margin: 8px auto 2px;
 }
 .app[data-form='compact'] .drawer-head { padding-top: 4px; }
-/* 浮层盖在 .app 的 padding 上，自己让出 Home 指示条。用 --sa-bottom 不用 env()：
-   键盘弹起时它被置 0（键盘已经盖住了指示条） */
+/* Sheets cover .app's padding, so they clear the home indicator themselves. --sa-bottom rather than
+   env(), because it drops to 0 while the keyboard is up (the keyboard already covers the indicator) */
 .app[data-form='compact'] .drawer:not([data-foot]),
 .app[data-form='compact'] .drawer-foot { padding-bottom: max(16px, var(--sa-bottom)); }
-/* 会话抽屉至少半屏（iOS sheet 的「中等」档）：多出来的高度给列表，底部一行贴着 sheet 底部 */
+/* The session drawer is at least half the screen (iOS "medium" detent): extra height goes to the list, the footer stays at the sheet's bottom */
 .app[data-form='compact'] .drawer[data-variant='sessions'] { min-height: 50%; }
 
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
@@ -478,11 +485,11 @@ button { font: inherit; color: inherit; }
   .conn-dot { animation: none; }
 }
 
-/* ---------- 会话列表（compact 抽屉） ---------- */
+/* ---------- Session list (compact drawer) ---------- */
 
-/* --row-actions = rowswipe.ts 的 ROW_ACTIONS_PX（三个按钮各 72px） */
+/* --row-actions = ROW_ACTIONS_PX in rowswipe.ts (three 72px buttons) */
 .session-list { list-style: none; margin: 0; padding: 4px 0; --row-actions: 216px; }
-/* 一行 = 底下的三个按钮 + 盖在上面的正文；左滑把正文推开（ADR-0039 §1） */
+/* A row = three buttons underneath + the content on top; swiping left slides the content away (ADR-0039 §1) */
 .sl-item { position: relative; overflow: hidden; }
 .row-actions {
   position: absolute; top: 0; right: 0; bottom: 0;
@@ -502,15 +509,15 @@ button { font: inherit; color: inherit; }
   background: var(--bg);
   cursor: pointer; outline: none;
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
-  /* 纵向交给列表滚动，横向归左滑 */
+  /* Vertical goes to list scrolling, horizontal to the row swipe */
   touch-action: pan-y;
   transition: transform 180ms ease;
 }
 .sl-item[data-open='true'] .session-row { transform: translateX(calc(-1 * var(--row-actions))); }
-/* 底色必须不透明：半透明的 hover 会把底下的按钮透出来 */
+/* The background must be opaque: a translucent hover would show the buttons underneath */
 .session-row:hover:not([aria-current='true']) { background: color-mix(in srgb, var(--fg) 7%, var(--bg)); }
 .session-row:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
-/* 当前：强调色 3px 左条 + 强调色底色 + 名字用 --accent 加粗（AC-4.9） */
+/* Active: 3px accent bar on the left + accent background + bold name in --accent (AC-4.9) */
 .session-row[aria-current='true'] {
   background: color-mix(in srgb, var(--accent) 12%, var(--bg));
   box-shadow: inset 3px 0 0 var(--accent);
@@ -519,7 +526,7 @@ button { font: inherit; color: inherit; }
 .session-row[data-exited='true'] .sl-name { opacity: 0.55; }
 .sl-idx { flex: none; color: var(--muted); font-family: var(--font-mono); font-size: 13px; }
 .sl-name { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; overflow: hidden; font-size: 15px; }
-/* 名字优先（ADR-0042 §3）：收缩时路径的权重远大于名字，路径先让；路径最少留 min(6em, 25%)，看得到最后一段 */
+/* Name first (ADR-0042 §3): the path shrinks much faster than the name; it keeps at least min(6em, 25%) so the last segment stays visible */
 .sl-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sl-meta {
   flex: 1 1000 auto; min-width: min(6em, 25%); text-align: right;
@@ -527,13 +534,13 @@ button { font: inherit; color: inherit; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl;
 }
 .sl-meta[data-failed='true'] { color: var(--err); font-weight: 600; direction: ltr; }
-/* 拖动柄（ADR-0040）：一行右端 44px，按住就拖，不让浏览器拿去滚动 */
+/* Drag handle (ADR-0040): 44px at the row's right end; press to drag, never handed to browser scrolling */
 .row-grip {
   flex: none; align-self: stretch; width: 44px;
   display: flex; align-items: center; justify-content: center;
   color: var(--muted); touch-action: none; cursor: grab;
 }
-/* 拖动中：被拖的浮起来跟手，其余的带过渡让位 */
+/* While dragging: the dragged row lifts and follows the finger, the others animate out of the way */
 [data-reordering] .sl-item, [data-reordering] .tab { transition: transform 150ms ease; }
 .sl-item[data-dragging], .tab[data-dragging] {
   position: relative; z-index: 3; transition: none !important;
@@ -543,11 +550,11 @@ button { font: inherit; color: inherit; }
 .sl-item[data-dragging] .row-grip { cursor: grabbing; }
 .tab[data-armed='true'] { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); }
 
-/* 改名 sheet（ADR-0039 §2）：一个整行宽的输入框 */
+/* Rename sheet (ADR-0039 §2): one full-width input */
 .rename-field { padding: 16px; }
 .rename-sheet-input {
   display: block; width: 100%; height: 44px; padding: 0 12px;
-  font: inherit; font-size: 16px; /* iOS 小于 16px 会在聚焦时放大页面 */
+  font: inherit; font-size: 16px; /* iOS zooms the page on focus below 16px */
   border: 1px solid var(--line-strong); border-radius: 10px;
   background: var(--bg); color: var(--fg); outline: none;
 }
@@ -561,7 +568,7 @@ button { font: inherit; color: inherit; }
   background: var(--bg); color: var(--fg); outline: none;
 }
 
-/* ---------- 会话菜单：锚在触发点旁边的小菜单，不是浮层 ---------- */
+/* ---------- Session menu: a small menu anchored at the trigger point, not a sheet ---------- */
 
 .menu-scrim { position: fixed; inset: 0; z-index: 69; }
 .session-menu {
@@ -582,7 +589,7 @@ button { font: inherit; color: inherit; }
 .session-menu .danger { color: var(--err); }
 .menu-check { color: var(--accent); font-weight: 700; }
 
-/* ---------- 设置（layout.md §设置，ADR-0037） ---------- */
+/* ---------- Settings (layout.md, ADR-0037) ---------- */
 
 .settings-row {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -590,7 +597,7 @@ button { font: inherit; color: inherit; }
 }
 .settings-row + .settings-row { border-top: 1px solid var(--line); }
 .settings-label { font-size: 15px; }
-/* 主题：三段分段按钮，选中的用强调色（「选中的是这个」） */
+/* Theme: a three-way segmented control; the selected one uses the accent */
 .segmented {
   flex: none; display: inline-flex; gap: 2px; padding: 2px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
@@ -607,7 +614,7 @@ button { font: inherit; color: inherit; }
 }
 .segmented button:focus-visible, .stepper button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .app[data-coarse='true'] .segmented button { height: 40px; padding: 0 14px; }
-/* 字号：− 值 + */
+/* Font size: − value + */
 .stepper { flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .stepper button {
   width: 36px; height: 36px; padding: 0;
@@ -620,14 +627,14 @@ button { font: inherit; color: inherit; }
 .stepper button:disabled { opacity: 0.35; cursor: default; }
 .stepper-value { min-width: 3ch; text-align: center; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-/* 关闭确认（ADR-0038）：正文一句 */
+/* Close confirmation (ADR-0038): one line of body text */
 .confirm-text { margin: 0; padding: 16px; font-size: 15px; color: var(--muted); }
 
-/* ---------- 配对 / 闸门 ---------- */
+/* ---------- Pairing / gate ---------- */
 
 .gate, .pair { padding: 2rem; max-width: 32rem; margin: 0 auto; }
 .gate pre, .pair pre { background: #111; color: #e6e6e6; padding: 8px 12px; border-radius: 6px; }
-/* 手输配对码（ADR-0017）：大号等宽、居中、4 位分组；16px 起免得 iOS 聚焦放大 */
+/* Manual pairing code entry (ADR-0017): large monospace, centered, groups of 4; at least 16px so iOS doesn't zoom on focus */
 .pair-form { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
 .pair-form code { font-family: var(--font-mono); background: var(--surface); padding: 1px 5px; border-radius: 4px; }
 .pair-code {

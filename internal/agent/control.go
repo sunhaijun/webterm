@@ -11,14 +11,15 @@ import (
 	"time"
 )
 
-// 本机控制 socket（ADR-0016）：`<data-dir>/run/agent.sock`，0600。
+// Local control socket (ADR-0016): `<data-dir>/run/agent.sock`, mode 0600.
 //
-// 给 `webterm reload` / install.sh 用：探测运行中的 agent 支不支持热升级、
-// 问它忙不忙（--when-idle）、让它 reexec。一行 JSON 请求，一行 JSON 应答。
-// 不走 HTTP：那条路要设备 Cookie，而升级脚本跑在服务器本机、以同一个用户
-// 身份 —— 文件权限就是它的认证。
+// `webterm reload` and install.sh use it to check whether the running agent
+// supports hot upgrade, ask whether it is busy (--when-idle), and tell it to
+// re-exec. One line of JSON in, one line of JSON out. It is not HTTP because
+// HTTP needs a device cookie, while the upgrade script runs on the server as
+// the same user; file permissions are the authentication.
 
-// ControlStatus 是 status 应答。
+// ControlStatus is the reply to status.
 type ControlStatus struct {
 	Version    string `json:"version"`
 	PID        int    `json:"pid"`
@@ -26,13 +27,14 @@ type ControlStatus struct {
 	InstanceID string `json:"instance_id"`
 	Sessions   int    `json:"sessions"`
 	Busy       int    `json:"busy"`
-	Handoff    bool   `json:"handoff"` // 支持热升级交接
-	// LastError 是最近一次热升级中止的原因（成功接手的新进程里为空）。
-	// webterm reload 靠它立刻报错，而不是等到超时。
+	Handoff    bool   `json:"handoff"` // supports hot upgrade handoff
+	// LastError is why the last hot upgrade was aborted (empty in a new
+	// process that took over successfully). webterm reload uses it to fail
+	// immediately instead of waiting for a timeout.
 	LastError string `json:"last_error,omitempty"`
 }
 
-// ControlRequest / ControlResponse 是线格式。
+// ControlRequest and ControlResponse are the wire format.
 type ControlRequest struct {
 	Op string `json:"op"` // "status" | "reexec"
 }
@@ -43,22 +45,24 @@ type ControlResponse struct {
 	Status *ControlStatus `json:"status,omitempty"`
 }
 
-// ControlDeps 是控制面需要的两个回调。Reexec 只负责【触发】（把请求交给 serve 的
-// 主循环），不等它完成 —— 完成的标志是新进程接手后 status.generation +1。
+// ControlDeps holds the two callbacks the control socket needs. Reexec only
+// triggers the upgrade (hands the request to serve's main loop) and does not
+// wait for it; completion shows up as status.generation + 1 once the new
+// process takes over.
 type ControlDeps struct {
 	Status func() ControlStatus
 	Reexec func() error
 }
 
-// ControlServer 是监听中的控制 socket。
+// ControlServer is a listening control socket.
 type ControlServer struct {
 	ln   net.Listener
 	path string
 	log  *slog.Logger
 }
 
-// ServeControl 在 path 上开控制 socket。残留的旧 socket 文件先删（上次崩溃、或
-// 刚被 exec 掉的旧进程留下的）。
+// ServeControl opens the control socket at path. A stale socket file (left by
+// a crash, or by the old process that just exec'd) is removed first.
 func ServeControl(path string, deps ControlDeps, log *slog.Logger) (*ControlServer, error) {
 	if log == nil {
 		log = slog.Default()
@@ -66,21 +70,21 @@ func ServeControl(path string, deps ControlDeps, log *slog.Logger) (*ControlServ
 	_ = os.Remove(path)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
-		return nil, fmt.Errorf("控制 socket %s: %w", path, err)
+		return nil, fmt.Errorf("control socket %s: %w", path, err)
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		ln.Close()
-		return nil, fmt.Errorf("控制 socket 权限: %w", err)
+		return nil, fmt.Errorf("chmod control socket: %w", err)
 	}
 	cs := &ControlServer{ln: ln, path: path, log: log}
 	go cs.accept(deps)
 	return cs, nil
 }
 
-// Path 返回 socket 路径。
+// Path returns the socket path.
 func (c *ControlServer) Path() string { return c.path }
 
-// Close 停止监听并删掉 socket 文件。
+// Close stops listening and removes the socket file.
 func (c *ControlServer) Close() error {
 	err := c.ln.Close()
 	_ = os.Remove(c.path)
@@ -91,7 +95,7 @@ func (c *ControlServer) accept(deps ControlDeps) {
 	for {
 		conn, err := c.ln.Accept()
 		if err != nil {
-			return // 关了
+			return // closed
 		}
 		go c.handle(conn, deps)
 	}
@@ -106,7 +110,7 @@ func (c *ControlServer) handle(conn net.Conn, deps ControlDeps) {
 		return
 	}
 	if err := json.Unmarshal(line, &req); err != nil {
-		c.reply(conn, ControlResponse{Error: "请求不是合法 JSON"})
+		c.reply(conn, ControlResponse{Error: "request is not valid JSON"})
 		return
 	}
 	switch req.Op {
@@ -115,7 +119,7 @@ func (c *ControlServer) handle(conn net.Conn, deps ControlDeps) {
 		c.reply(conn, ControlResponse{OK: true, Status: &st})
 	case "reexec":
 		if deps.Reexec == nil {
-			c.reply(conn, ControlResponse{Error: "此进程不支持热升级"})
+			c.reply(conn, ControlResponse{Error: "this process does not support hot upgrade"})
 			return
 		}
 		if err := deps.Reexec(); err != nil {
@@ -125,7 +129,7 @@ func (c *ControlServer) handle(conn net.Conn, deps ControlDeps) {
 		st := deps.Status()
 		c.reply(conn, ControlResponse{OK: true, Status: &st})
 	default:
-		c.reply(conn, ControlResponse{Error: "未知操作 " + req.Op})
+		c.reply(conn, ControlResponse{Error: "unknown op " + req.Op})
 	}
 }
 
@@ -135,8 +139,9 @@ func (c *ControlServer) reply(conn net.Conn, resp ControlResponse) {
 	_, _ = conn.Write(raw)
 }
 
-// ControlCall 是客户端：连 socket、发一条请求、读一条应答。
-// socket 不存在 / 连不上 → ErrNoControl（运行中的 agent 是老版本，或根本没在跑）。
+// ControlCall is the client: it connects, sends one request and reads one
+// reply. If the socket is missing or refuses the connection it returns
+// ErrNoControl (the running agent is too old, or not running at all).
 func ControlCall(path string, req ControlRequest, timeout time.Duration) (*ControlResponse, error) {
 	conn, err := net.DialTimeout("unix", path, timeout)
 	if err != nil {
@@ -150,11 +155,11 @@ func ControlCall(path string, req ControlRequest, timeout time.Duration) (*Contr
 	}
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil && len(line) == 0 {
-		return nil, fmt.Errorf("控制 socket 没有应答: %w", err)
+		return nil, fmt.Errorf("no reply from control socket: %w", err)
 	}
 	var resp ControlResponse
 	if err := json.Unmarshal(line, &resp); err != nil {
-		return nil, fmt.Errorf("控制 socket 应答不是合法 JSON: %w", err)
+		return nil, fmt.Errorf("control socket reply is not valid JSON: %w", err)
 	}
 	if !resp.OK {
 		return &resp, errors.New(resp.Error)
@@ -162,5 +167,5 @@ func ControlCall(path string, req ControlRequest, timeout time.Duration) (*Contr
 	return &resp, nil
 }
 
-// ErrNoControl：连不上控制 socket。
-var ErrNoControl = errors.New("连不上 agent 的控制 socket")
+// ErrNoControl means the control socket could not be reached.
+var ErrNoControl = errors.New("cannot reach the agent's control socket")

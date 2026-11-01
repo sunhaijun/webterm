@@ -7,39 +7,43 @@ import (
 	"github.com/sunhaijun/webterm/internal/handoff"
 )
 
-// maxInputQueueBytes 是每会话输入队列的上限（协议 §5.5）。
+// maxInputQueueBytes caps each session's input queue (protocol §5.5).
 //
-// 触到它意味着前台程序已经很久不读 stdin 了。此时【关闭那条连接】而不是
-// 阻塞：一条 WebSocket 复用所有会话，阻塞入队会把整条连接的读循环卡死 ——
-// ping/pong、resize、其它会话的输入全停。
+// Hitting it means the foreground program hasn't read stdin in a long time.
+// The connection is closed instead of blocking: one WebSocket carries every
+// session, so a blocked enqueue would stall the connection's read loop and
+// with it ping/pong, resize, and input to every other session.
 const maxInputQueueBytes = 256 << 10
 
-// ErrInputStalled 表示输入队列已满，调用方应当回 input_stalled 并关闭连接。
-var ErrInputStalled = errors.New("session: 输入队列已满")
+// ErrInputStalled means the input queue is full. The caller should reply with
+// input_stalled and close the connection.
+var ErrInputStalled = errors.New("session: input queue is full")
 
 type inputItem struct {
 	clientID string
 	data     []byte
 }
 
-// inputQueue 是一个按字节计量的 FIFO，支持按 client 丢弃。
+// inputQueue is a byte-counted FIFO that can drop one client's items.
 //
-// 用自己的队列而不是 channel，是因为断连时必须能把【那个 client 已入队但
-// 还没写进 PTY】的字节丢掉：它们从未被 ack，客户端仍持在 pending 里，
-// 重连后会重发。不丢的话就会重复写入。
+// It is a custom queue rather than a channel because on disconnect the
+// client's queued-but-unwritten bytes must be dropped: they were never acked,
+// the client still holds them as pending and resends them after reconnecting,
+// and keeping them would write them twice.
 type inputQueue struct {
 	mu     sync.Mutex
 	items  []inputItem
 	bytes  int
 	closed bool
-	notify chan struct{} // cap 1，边沿通知
+	notify chan struct{} // cap 1, edge-triggered
 }
 
 func newInputQueue() *inputQueue {
 	return &inputQueue{notify: make(chan struct{}, 1)}
 }
 
-// push 非阻塞入队。队列满返回 ErrInputStalled，已关闭返回 nil（静默丢弃）。
+// push enqueues without blocking. It returns ErrInputStalled when the queue is
+// full and nil (silently dropping data) when it is closed.
 func (q *inputQueue) push(clientID string, data []byte) error {
 	q.mu.Lock()
 	if q.closed {
@@ -61,7 +65,7 @@ func (q *inputQueue) push(clientID string, data []byte) error {
 	return nil
 }
 
-// pop 取出队首。空则返回 ok=false。
+// pop removes the head item. It returns ok=false when empty.
 func (q *inputQueue) pop() (inputItem, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -75,8 +79,9 @@ func (q *inputQueue) pop() (inputItem, bool) {
 	return it, true
 }
 
-// dropClient 丢弃某个 client 尚未写入 PTY 的输入，返回丢弃的字节数。
-// 断连时调用 —— 这些字节从未被 ack，重连后客户端会重发。
+// dropClient discards a client's input not yet written to the PTY and returns
+// the number of bytes dropped. Called on disconnect: those bytes were never
+// acked and the client resends them after reconnecting.
 func (q *inputQueue) dropClient(clientID string) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -106,8 +111,9 @@ func (q *inputQueue) close() {
 	}
 }
 
-// pushFront 把一段没写完的输入放回队首（写被 deadline 打断时用，ADR-0016）。
-// 不受字节上限约束 —— 它本来就在队里。
+// pushFront puts a partially written item back at the head, used when a
+// deadline interrupts a write (ADR-0016). It ignores the byte limit since the
+// data was already in the queue.
 func (q *inputQueue) pushFront(it inputItem) {
 	q.mu.Lock()
 	if q.closed {
@@ -123,7 +129,8 @@ func (q *inputQueue) pushFront(it inputItem) {
 	}
 }
 
-// snapshot 导出还没写进 PTY 的全部输入（热升级交接）。
+// snapshot returns all input not yet written to the PTY, for hot-upgrade
+// handoff.
 func (q *inputQueue) snapshot() []handoff.PendingInput {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -137,8 +144,8 @@ func (q *inputQueue) snapshot() []handoff.PendingInput {
 	return out
 }
 
-// restore 在新进程里把交接过来的输入原样排回队列。记账（inQueued）随会话一起
-// 恢复，这里不再计。
+// restore requeues handed-over input in the new process. Accounting
+// (inQueued) is restored with the session, so it is not counted again here.
 func (q *inputQueue) restore(items []handoff.PendingInput) {
 	q.mu.Lock()
 	for _, it := range items {

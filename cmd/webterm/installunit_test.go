@@ -8,12 +8,13 @@ import (
 	"testing"
 )
 
-// UT-install-unit（ADR-0034）：install.sh --print-unit 打印将要写入的系统单元，
-// 不联网、不需要 sudo。断言的都是踩了就出事的行：漏了 OOM 两行等于没迁；
-// uid 写成 %U 会变成 0（PID 1 的 UID），会话里的 systemctl --user 全挂。
+// UT-install-unit (ADR-0034): install.sh --print-unit prints the system unit
+// without network or sudo. Every asserted line matters: without the OOM lines the
+// migration is pointless, and %U instead of the literal UID would be 0 (PID 1's)
+// and break systemctl --user inside sessions.
 func TestInstallScriptPrintUnit(t *testing.T) {
 	if os.Geteuid() == 0 {
-		t.Skip("install.sh 拒绝以 root 运行")
+		t.Skip("install.sh refuses to run as root")
 	}
 	u, err := user.Current()
 	if err != nil {
@@ -31,7 +32,7 @@ func TestInstallScriptPrintUnit(t *testing.T) {
 	}
 	unit := string(out)
 
-	// 只看生效的行：注释里会提到 %U（解释为什么不能用它）
+	// Only effective lines: the comments mention %U to explain why it is not used.
 	lines := map[string]bool{}
 	var body strings.Builder
 	for _, l := range strings.Split(unit, "\n") {
@@ -58,16 +59,16 @@ func TestInstallScriptPrintUnit(t *testing.T) {
 		"WantedBy=multi-user.target",
 	} {
 		if !lines[want] {
-			t.Errorf("单元里缺这一行：%s", want)
+			t.Errorf("unit lacks line: %s", want)
 		}
 	}
 	for _, bad := range []string{"%U", "%u", "default.target"} {
 		if strings.Contains(body.String(), bad) {
-			t.Errorf("单元里不该出现 %q", bad)
+			t.Errorf("unit must not contain %q", bad)
 		}
 	}
-	// 只打印单元：不能混进安装步骤的输出
-	if strings.Contains(unit, "检查环境") || strings.Contains(unit, "下载") {
-		t.Errorf("--print-unit 跑了安装步骤：\n%s", unit)
+	// Only the unit: no output from install steps.
+	if strings.Contains(unit, "Checking this machine") || strings.Contains(unit, "Downloading") {
+		t.Errorf("--print-unit ran install steps:\n%s", unit)
 	}
 }

@@ -14,12 +14,12 @@ import (
 	"github.com/sunhaijun/webterm/scripts"
 )
 
-// install.sh 的行为测试（ADR-0045）。全都不联网、不需要 sudo、不碰 systemd：
-// --print-unit 只打印；真跑的几条都带 --no-service --no-setcap，装到临时目录。
+// Behavior tests for install.sh (ADR-0045). No network, no sudo, no systemd:
+// --print-unit only prints, and real runs use --no-service --no-setcap and a temp prefix.
 
 const installScript = "../../scripts/install.sh"
 
-// sandbox 是一个干净的 HOME：install-state / 配置文件都落在这里，不读开发机上的。
+// sandbox is a clean HOME, so install-state and config never touch the developer's.
 type sandbox struct {
 	home, config, prefix string
 }
@@ -27,7 +27,7 @@ type sandbox struct {
 func newSandbox(t *testing.T) sandbox {
 	t.Helper()
 	if os.Geteuid() == 0 {
-		t.Skip("install.sh 拒绝以 root 运行")
+		t.Skip("install.sh refuses to run as root")
 	}
 	home := t.TempDir()
 	return sandbox{home: home, config: filepath.Join(home, ".config", "webterm"), prefix: filepath.Join(home, "bin")}
@@ -47,13 +47,13 @@ func (sb sandbox) writeState(t *testing.T, lines ...string) {
 	if err := os.MkdirAll(sb.config, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := "# 测试写的\n" + strings.Join(lines, "\n") + "\n"
+	body := "# written by a test\n" + strings.Join(lines, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(sb.config, "install-state"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// execStart 从 --print-unit 的输出里取出 ExecStart 那一行。
+// execStart returns the ExecStart line from --print-unit output.
 func execStart(t *testing.T, unit string) string {
 	t.Helper()
 	for _, l := range strings.Split(unit, "\n") {
@@ -61,17 +61,17 @@ func execStart(t *testing.T, unit string) string {
 			return l
 		}
 	}
-	t.Fatalf("单元里没有 ExecStart：\n%s", unit)
+	t.Fatalf("no ExecStart in unit:\n%s", unit)
 	return ""
 }
 
-// fakeBinary 写一个假的 webterm：version 报版本；install 把收到的参数记进 $FAKE_LOG。
-// withInstall=false 模拟 v0.1.0 那种不认 install 的旧版本。
+// fakeBinary writes a fake webterm: `version` prints a version, `install` records
+// its arguments in $FAKE_LOG. withInstall=false mimics v0.1.0, which has no install.
 func fakeBinary(t *testing.T, path string, withInstall bool) {
 	t.Helper()
 	install := `shift; printf '%s\n' "$@" > "$FAKE_LOG"; exit 0`
 	if !withInstall {
-		install = `echo "未知子命令 \"install\"" >&2; exit 2`
+		install = `echo "unknown command \"install\"" >&2; exit 2`
 	}
 	script := "#!/bin/bash\ncase \"$1\" in\n" +
 		"  version) echo 'webterm fake-1' ;;\n" +
@@ -83,26 +83,26 @@ func fakeBinary(t *testing.T, path string, withInstall bool) {
 	}
 }
 
-// UT-install-embed：嵌进二进制的就是 scripts/install.sh，一个字节都不差。
+// UT-install-embed: the binary embeds scripts/install.sh byte for byte.
 func TestInstallScriptIsEmbedded(t *testing.T) {
 	disk, err := os.ReadFile(installScript)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(disk, scripts.InstallSH) {
-		t.Fatal("嵌入的 install.sh 与磁盘上的不一致")
+		t.Fatal("embedded install.sh differs from the file on disk")
 	}
 	if got := withSelfBinary("/x/webterm", []string{"--domain", "a"}); strings.Join(got, " ") != "--binary /x/webterm --domain a" {
-		t.Errorf("webterm install 没把自己作为 --binary 传给脚本: %v", got)
+		t.Errorf("webterm install should pass itself as --binary: %v", got)
 	}
 	if got := withSelfBinary("/x/webterm", []string{"--binary", "/y"}); strings.Join(got, " ") != "--binary /y" {
-		t.Errorf("用户给了 --binary 时不该再补一个: %v", got)
+		t.Errorf("an explicit --binary must not get a second one: %v", got)
 	}
 }
 
-// UT-install-default-addr：不给 --domain 时，没装过就用公网 IP，装过就沿用 install-state。
+// UT-install-default-addr: without --domain, reuse install-state if present, else the public IP.
 func TestInstallScriptDefaultAddress(t *testing.T) {
-	t.Run("没装过 → 公网 IP", func(t *testing.T) {
+	t.Run("fresh machine uses the public IP", func(t *testing.T) {
 		sb := newSandbox(t)
 		out, err := sb.run(t, []string{"WEBTERM_PUBLIC_IP=203.0.113.9"}, "--print-unit")
 		if err != nil {
@@ -113,7 +113,7 @@ func TestInstallScriptDefaultAddress(t *testing.T) {
 		}
 	})
 
-	t.Run("装过 → 沿用上次的参数，命令行覆盖同名项", func(t *testing.T) {
+	t.Run("previous install is reused; the command line wins", func(t *testing.T) {
 		sb := newSandbox(t)
 		sb.writeState(t, "--domain", "term.example.com", "--https-port", "8443")
 		out, err := sb.run(t, []string{"WEBTERM_PUBLIC_IP=203.0.113.9"}, "--print-unit")
@@ -121,7 +121,7 @@ func TestInstallScriptDefaultAddress(t *testing.T) {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		if got := execStart(t, out); got != "ExecStart=/usr/local/bin/webterm serve --domain term.example.com --https-port 8443" {
-			t.Errorf("没沿用 install-state: %q", got)
+			t.Errorf("install-state not reused: %q", got)
 		}
 
 		out, err = sb.run(t, nil, "--print-unit", "--https-port", "9443")
@@ -129,11 +129,11 @@ func TestInstallScriptDefaultAddress(t *testing.T) {
 			t.Fatalf("%v\n%s", err, out)
 		}
 		if got := execStart(t, out); got != "ExecStart=/usr/local/bin/webterm serve --domain term.example.com --https-port 9443" {
-			t.Errorf("命令行没覆盖 install-state: %q", got)
+			t.Errorf("command line did not override install-state: %q", got)
 		}
 	})
 
-	t.Run("给了 --domain 就不看 install-state", func(t *testing.T) {
+	t.Run("explicit --domain ignores install-state", func(t *testing.T) {
 		sb := newSandbox(t)
 		sb.writeState(t, "--domain", "old.example.com", "--https-port", "8443")
 		out, err := sb.run(t, nil, "--print-unit", "--domain", "203.0.113.5")
@@ -145,16 +145,16 @@ func TestInstallScriptDefaultAddress(t *testing.T) {
 		}
 	})
 
-	t.Run("IPv6 拒绝", func(t *testing.T) {
+	t.Run("IPv6 is rejected", func(t *testing.T) {
 		sb := newSandbox(t)
 		out, err := sb.run(t, nil, "--print-unit", "--domain", "2001:db8::1")
 		if err == nil || !strings.Contains(out, "IPv4") {
-			t.Fatalf("IPv6 应当被拒并说明，err=%v\n%s", err, out)
+			t.Fatalf("IPv6 should be rejected with a reason, err=%v\n%s", err, out)
 		}
 	})
 }
 
-// UT-install-config-sync：重装时地址和端口同步进配置文件，其它键原样保留。
+// UT-install-config-sync: reinstalling syncs address and ports into the config and keeps other keys.
 func TestInstallScriptSyncsConfig(t *testing.T) {
 	sb := newSandbox(t)
 	bin := filepath.Join(sb.home, "webterm-new")
@@ -163,7 +163,7 @@ func TestInstallScriptSyncsConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := filepath.Join(sb.config, "config")
-	old := "# 我的配置\ndomain = 203.0.113.9\nhttps-port = 8443\nsession-env = FOO=1\n"
+	old := "# my config\ndomain = 203.0.113.9\nhttps-port = 8443\nsession-env = FOO=1\n"
 	if err := os.WriteFile(cfg, []byte(old), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -178,30 +178,30 @@ func TestInstallScriptSyncsConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(got)
-	for _, want := range []string{"# 我的配置", "domain = term.example.com", "http-port = 8080", "session-env = FOO=1"} {
+	for _, want := range []string{"# my config", "domain = term.example.com", "http-port = 8080", "session-env = FOO=1"} {
 		if !strings.Contains(s, want) {
-			t.Errorf("配置里缺 %q：\n%s", want, s)
+			t.Errorf("config lacks %q:\n%s", want, s)
 		}
 	}
 	for _, bad := range []string{"203.0.113.9", "https-port"} {
 		if strings.Contains(s, bad) {
-			t.Errorf("配置里不该还有 %q（地址换了、端口回到默认）：\n%s", bad, s)
+			t.Errorf("config still has %q (address changed, port back to default):\n%s", bad, s)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(sb.prefix, "webterm")); err != nil {
-		t.Errorf("--binary 的二进制没装到 --prefix: %v", err)
+		t.Errorf("--binary was not installed to --prefix: %v", err)
 	}
-	if strings.Contains(out, "2/6 下载") || strings.Contains(out, "来源:") {
-		t.Errorf("--binary 不该下载：\n%s", out)
+	if strings.Contains(out, "Downloading") || strings.Contains(out, "From:") {
+		t.Errorf("--binary must not download:\n%s", out)
 	}
 }
 
-// UT-install-handover：网上取的脚本下载、校验之后，交给下载来的二进制的 install，
-// 参数原样传过去；不认 install 的旧版本被拒绝。
+// UT-install-handover: a downloaded script verifies the binary, then hands over to
+// its `install` with the original arguments; binaries without install are refused.
 func TestInstallScriptHandsOverToDownloadedBinary(t *testing.T) {
 	arch := map[string]string{"amd64": "amd64", "arm64": "arm64"}[runtime.GOARCH]
 	if arch == "" {
-		t.Skip("install.sh 只认 amd64 / arm64")
+		t.Skip("install.sh supports amd64 and arm64 only")
 	}
 	setup := func(t *testing.T, withInstall bool) (sandbox, string, string) {
 		sb := newSandbox(t)
@@ -223,7 +223,7 @@ func TestInstallScriptHandsOverToDownloadedBinary(t *testing.T) {
 		return sb, dl, filepath.Join(sb.home, "fake.log")
 	}
 
-	t.Run("交给下载来的二进制", func(t *testing.T) {
+	t.Run("hands over to the downloaded binary", func(t *testing.T) {
 		sb, dl, log := setup(t, true)
 		args := []string{"--base-url", "file://" + dl, "--no-service", "--no-setcap",
 			"--prefix", sb.prefix, "--domain", "term.example.com"}
@@ -231,37 +231,37 @@ func TestInstallScriptHandsOverToDownloadedBinary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
-		if !strings.Contains(out, "校验通过") || !strings.Contains(out, "交给 webterm fake-1 自带的安装脚本继续") {
-			t.Errorf("没有校验或没有交接：\n%s", out)
+		if !strings.Contains(out, "Checksum OK") || !strings.Contains(out, "Handing over to webterm fake-1") {
+			t.Errorf("no verification or no handover:\n%s", out)
 		}
 		got, err := os.ReadFile(log)
 		if err != nil {
-			t.Fatalf("下载来的二进制没被调用 install: %v\n%s", err, out)
+			t.Fatalf("the downloaded binary's install was not called: %v\n%s", err, out)
 		}
 		if strings.TrimSpace(string(got)) != strings.Join(args, "\n") {
-			t.Errorf("交接的参数 = %q，想要原样的 %q", got, args)
+			t.Errorf("handed-over args = %q, want them unchanged: %q", got, args)
 		}
 		if _, err := os.Stat(filepath.Join(sb.prefix, "webterm")); err == nil {
-			t.Error("外层脚本自己装了二进制 —— 交接之后它不该再做任何事")
+			t.Error("the outer script installed the binary itself; after handover it must do nothing")
 		}
 	})
 
-	t.Run("旧版本不认 install → 拒绝", func(t *testing.T) {
+	t.Run("old binary without install is refused", func(t *testing.T) {
 		sb, dl, log := setup(t, false)
 		out, err := sb.run(t, []string{"FAKE_LOG=" + log}, "--base-url", "file://"+dl, "--no-service", "--no-setcap",
 			"--prefix", sb.prefix, "--domain", "term.example.com")
 		if err == nil {
-			t.Fatalf("旧版本应当被拒：\n%s", out)
+			t.Fatalf("old binary should be refused:\n%s", out)
 		}
-		if !strings.Contains(out, "早于这份安装脚本") || !strings.Contains(out, "--channel dev") {
-			t.Errorf("拒绝的说明不清楚：\n%s", out)
+		if !strings.Contains(out, "predates this installer") || !strings.Contains(out, "v0.2.0") {
+			t.Errorf("refusal doesn't say why:\n%s", out)
 		}
 		if _, err := os.Stat(filepath.Join(sb.prefix, "webterm")); err == nil {
-			t.Error("被拒之后不该装上任何东西")
+			t.Error("nothing should be installed after a refusal")
 		}
 	})
 
-	t.Run("校验和不对 → 中止、不交接", func(t *testing.T) {
+	t.Run("bad checksum aborts before handover", func(t *testing.T) {
 		sb, dl, log := setup(t, true)
 		if err := os.WriteFile(filepath.Join(dl, "SHA256SUMS"),
 			[]byte(strings.Repeat("0", 64)+"  webterm-linux-"+arch+"\n"), 0o644); err != nil {
@@ -269,11 +269,11 @@ func TestInstallScriptHandsOverToDownloadedBinary(t *testing.T) {
 		}
 		out, err := sb.run(t, []string{"FAKE_LOG=" + log}, "--base-url", "file://"+dl, "--no-service", "--no-setcap",
 			"--prefix", sb.prefix, "--domain", "term.example.com")
-		if err == nil || !strings.Contains(out, "校验和不匹配") {
-			t.Fatalf("校验和不对应当中止，err=%v\n%s", err, out)
+		if err == nil || !strings.Contains(out, "Checksum mismatch") {
+			t.Fatalf("a bad checksum should abort, err=%v\n%s", err, out)
 		}
 		if _, err := os.Stat(log); err == nil {
-			t.Error("校验没过却交接了")
+			t.Error("handed over despite a failed checksum")
 		}
 	})
 }

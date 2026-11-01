@@ -1,47 +1,42 @@
-# ADR-0015 底栏单行键行：互切键永远在行首，程序键不盖终端
+# ADR-0015 One bottom key row: the toggle always comes first, program keys never cover the terminal
 
-> **已被 [ADR-0025](0025-termux-style-ui.md) 取代**（单行上下文键行换成两行静态附加键）。以下保留作历史记录。
+Status: Accepted (2026-09-11). Refines the bottom bar of [ADR-0014](0014-input-toggle.md): the toggle, ⋯ and the key bar merge into **one key row**, and the edit panel's header merges into its own key row. Superseded by [ADR-0025](0025-termux-style-ui.md): the single context-dependent key row became two static rows of extra keys.
 
-状态：已接受（2026-09-11）。**细化 [ADR-0014](0014-input-toggle.md) 的「底栏形态」**：互切键、⋯ 与功能键条并成**一条键行**；编辑面板的头部同样并进它自己的键行。终端唯一显示面（ADR-0013）、互切模型、点终端逐键直送 / 编辑面板整段发送这些语义都不变。
+The terminal as the only display surface (ADR-0013), the toggle model, direct keystrokes from the terminal and whole-text sending from the edit panel were unchanged.
 
-## 背景
+## Context
 
-ADR-0014 落地后在 Pixel 5（393×727）、横屏（802×293）、iPhone SE（320×568）上逐状态截图测量：
+After ADR-0014 we screenshotted and measured every state on a Pixel 5 (393×727), in landscape (802×293) and on an iPhone SE (320×568):
 
-- **互切键独占一行，行内 72% 空白。** 终端态第一行只有 `⌨▸编辑`（65px）和 `⋯`（44px），393px 里空 284px，横屏 802px 里空 693px。
-- **命令在跑 / 占屏时两行叠加，盖掉终端最下约 3 行。** 槽位 `.bottom-slot` 固定 56px，底栏长到 109px，多出的 53px 绝对定位盖在终端上（≈3.2 行 @16.5px/行）。less 的 `:` 状态行、vim 的命令行、claude 输入框的底边和快捷键提示行都在那儿 —— 很可能就是 ADR-0014 记录的「进 claude 找不到输入条」的一部分。
-- **互切键在两种态里位置、尺寸都不一致。** 终端态是 65×44 的键条键；编辑态是 69×34 塞在 24px 的把手行里，上下各凸出 5px 压在面板圆角上。
-- **编辑态命令在跑时又是两排键。** 编辑键条 52px + 程序键条 56px = 108px；键盘弹出（视口 520px 仿真）时输入框只剩 92px（≈3.8 行），它下面的 chrome 却有 140px。
-- **全屏编辑面板里输入框不填满。** `.composer` 的 `max-height: 40vh` 在 sheet 里仍生效：面板给了 614px，输入框只长到 291px，下面 323px 空白。
-- **终端态里 claude / codex 拿到的是通用键条。** 终端态 `KeyBar` 传的是 `altScreen`，编辑态传的是 `interactive`；同一个 claude，终端态 21 个通用键、没有程序名，切到编辑面板才变成 AI 键。
+- **The toggle had a row to itself, 72% empty.** In terminal state the first row held only `⌨▸Edit` (65 px) and `⋯` (44 px): 284 px of 393 px empty, 693 px of 802 px in landscape.
+- **With a command running or a program owning the screen, two stacked rows covered the bottom ~3 terminal lines.** The `.bottom-slot` was fixed at 56 px; the bar grew to 109 px, and the extra 53 px were absolutely positioned over the terminal (≈3.2 rows at 16.5 px per row). That's where less's `:` status line, vim's command line, and the bottom edge and shortcut hints of claude's input box live; likely part of "can't find the input bar in claude" from ADR-0014.
+- **The toggle differed in position and size between states.** A 65×44 key in terminal state; 69×34 squeezed into a 24 px grabber row in edit state, sticking out 5 px above and below over the panel's rounded corner.
+- **Edit state with a running command had two key rows again.** Edit keys 52 px + program keys 56 px = 108 px. With the keyboard up (520 px viewport emulation), the input box had 92 px (≈3.8 lines) and the chrome below it 140 px.
+- **The full-height edit panel's input didn't fill it.** `.composer`'s `max-height: 40vh` still applied inside the sheet: given 614 px, the box grew to 291 px and left 323 px empty.
+- **In terminal state claude / codex got the generic key bar.** Terminal state passed `altScreen` to `KeyBar`, edit state passed `interactive`; the same claude showed 21 generic keys without the program name in terminal state, and AI keys only after opening the edit panel.
 
-用户要的是：空间的极致利用，简洁与效率并存；互切键都放到按钮行首位。
+What the user wanted: the most out of every pixel, simple and efficient, with the toggle first in the button row.
 
-## 决定
+## Decision
 
-1. **底栏永远只有一条键行**，结构固定：**行首互切键 · 上下文标签 · 横向滚动的键区 · 行尾固定键**。终端态行尾是 `⋯`，编辑态行尾是 `发送`。键行高度 = 槽位高度（56px；`short` 布局 40px）。**终端态 `.bottom` 不得高于槽位** —— 底栏不再盖终端。
-2. **键区按「谁在占屏」换内容，高度不变**：
-   - 停在提示符 → **提示符键集** `Tab ↑ ↓ ^C ^L | ~ / - _ ← →`（这一行本来就在，空着不如放软键盘最缺的几个键）；
-   - 命令在跑 / 集成降级 → 通用键集 `Esc ^C Tab Ctrl ↑ ↓ ← → Alt …`；
-   - 占屏 → 按前台程序换（less / top / vim / nano / AI / 通用 TUI）。**终端态与编辑态都按 `interactive` 判定**，claude / codex 在两种态拿到同一套 AI 键。
-3. **编辑面板**：头部只剩 16px 抓手条（整条可拖；点一下半屏 ⇄ 全屏）；**去掉「收起」**（拖到底、空输入再按 Esc、互切键都能收）；输入框填满剩余高度（sheet 内取消 40vh 上限）；chips 为空时不占高度；底部是同一条键行：`✎ 终端` · （命令在跑时）`Esc ^C` · 编辑键 · `发送`。其余程序键（方向键、⇧Tab、Enter）属于逐键交互，切回终端态用。
-4. **互切键在两种态里是同一尺寸（44px 高）的键，永远是键行的第一个键。**
-5. **免滚区承诺从「前 8 个键」改为「前 5 个键」**（393px；320px 下 4 个），`^C` 仍在第 2 位。
-6. **触摸设备在 ≥ 1024px 也用键行，不用经典底栏**（iPad mini 横屏是 1133px）。宽度只决定**栅格**（侧栏常驻还是抽屉），触摸能力（`pointer: coarse`）决定**输入层**：`classic = desktop && !coarse`。iPad 横屏因此是「侧栏常驻 + 键行 / 编辑面板」，而不是「模式条 + 常驻输入框 + 键条」—— 后者是给鼠标键盘设计的，触屏上键盘一弹终端只剩 14 行，且没有终端直输这个默认态。
-7. **⋯ 在 tablet / desktop 是锚在键行行尾上方的弹出菜单**（280px，无遮罩变暗、无抓手），只有 phone 才是整宽的底部操作表单 —— 744px 宽的平板上整宽 258px 的四行表单是浪费。
-8. **半屏高度上限 420px**：`max(190, min(46% × 主区高, 420))`。手机 46% 本来就不到 420；平板竖屏 46% 是 521px，输入框 443px 用不了那么多，多出来的留给终端。键盘弹出时主区变矮，46% 自然落回上限以下。
+1. **The bottom bar is always exactly one key row**, with a fixed structure: **toggle · context label · horizontally scrolling key area · fixed trailing key**. The trailing key is `⋯` in terminal state and `Send` in edit state. Row height = slot height (56 px; 40 px in the `short` layout). **In terminal state `.bottom` must not be taller than the slot**, so the bar never covers the terminal.
+2. **The key area changes with who owns the screen; its height doesn't:**
+   - at a prompt → **prompt keys** `Tab ↑ ↓ ^C ^L | ~ / - _ ← →` (the row is there anyway, so fill it with what on-screen keyboards lack most);
+   - command running / integration degraded → generic keys `Esc ^C Tab Ctrl ↑ ↓ ← → Alt …`;
+   - program owns the screen → per foreground program (less / top / vim / nano / AI / generic TUI). **Both states decide by `interactive`**, so claude / codex get the same AI keys in both.
+3. **Edit panel**: the header is just a 16 px grabber strip (drag anywhere on it; tap to toggle half ⇄ full). **No "collapse" button** (drag to the bottom, Esc again on empty input, or the toggle all close it). The input box fills the remaining height (no 40vh cap inside the sheet); empty chips take no height. The bottom is the same kind of key row: `✎ Terminal` · `Esc ^C` (while a command runs) · edit keys · `Send`. Other program keys (arrows, ⇧Tab, Enter) are per-keystroke interactions and belong to terminal state.
+4. **The toggle is the same 44 px-tall key in both states and is always the first key in the row.**
+5. **The no-scroll promise drops from the first 8 keys to the first 5** (at 393 px; 4 at 320 px). `^C` stays in second place.
+6. **Touch devices use the key row even at ≥ 1024 px**, not the classic bottom bar (iPad mini in landscape is 1133 px). Width decides only the **grid** (permanent sidebar or drawer); touch capability (`pointer: coarse`) decides the **input layer**: `classic = desktop && !coarse`. iPad landscape therefore gets "permanent sidebar + key row / edit panel" rather than "mode bar + permanent input box + key bar". The latter was designed for mouse and keyboard: on touch, the keyboard leaves 14 terminal rows and there is no default direct terminal input.
+7. **On tablet / desktop, ⋯ is a 280 px popover anchored above the end of the key row** (no dimming scrim, no grabber). Only phones get the full-width bottom action sheet; a 258 px-tall, full-width four-row sheet on a 744 px tablet is a waste.
+8. **Half height is capped at 420 px**: `max(190, min(46% × main area height, 420))`. On phones 46% is under 420 anyway. On a portrait tablet 46% is 521 px, more than the 443 px input box needs, and the rest goes to the terminal. With the keyboard up the main area shrinks and 46% naturally falls under the cap.
 
-## 代价与取舍
+## Consequences
 
-- **免滚区少了 3 个键。** 换来终端多 3 行可见、互切键位置一致、⋯ 永远可点。键区滚到最右仍是全部键。
-- **去掉「收起」。** 「收起」= 关面板并收键盘，`✎ 终端` = 关面板并聚焦终端。只想读终端时拖到底或（空输入）Esc；留着它就得再占一个 44px 位或塞回把手行。
-- **编辑态只并入 `Esc ^C`。** 编辑面板的职责是整段写好一次发；逐键操控 claude 的菜单本来就是终端态的事，互切键一下就到。
-- **提示符态多了一排键。** 视觉上比「只有两个键」密，但高度不增，且这几个键（Tab 补全、↑↓ 翻历史、`|` `~`）正是软键盘打 shell 命令最缺的。
-- **触屏宽屏失去经典底栏的「输入框常驻」。** 换来的是与手机一致的心智模型（默认终端直输、一键编辑面板）和键盘弹出时多出的两条 chrome 高度。接了外接键盘的 iPad（`pointer: fine`）不受影响，仍是经典底栏。
-
-## 影响
-
-- 文档：[input.md](../../40-frontend/input.md) §底栏 / §功能键条 / §编辑键行；[layout.md](../../40-frontend/layout.md) 底栏高度与 short 叠加；[acceptance-criteria.md](../../10-requirements/acceptance-criteria.md) AC-3.9 改为前 5 个、新增 AC-3.14；[e2e-scenarios.md](../../70-testing/e2e-scenarios.md) E2E-10 与新增 E2E-25。
-- 前端：`web/src/ui/app.tsx`（`termLead` 并入 `KeyBar` 的 `leading` / `trailing`；终端态 context 改传 `interactive`；`classic = desktop && !coarse`）、`web/src/input/keybar.tsx`（`trailing` 与 `keys` 槽，键区独立滚动）、`web/src/input/keymap.ts`（`PROMPT_KEYS`、`PROGRAM_EDIT_KEYS`）、`web/src/input/sheet.tsx`（头部改抓手条、去 `sheet-close`、键行接互切键 / 程序键 / 发送、槽位高度改测量）、`web/src/style.css`（`--slot-h`、键行、取消 sheet 内 40vh 上限）。
-- 测试：E2E `inputmodel` / `sheet` / `input` 与 `escape`（前 8 → 前 5）/ `control` / `commands` / `mobile`（滚的是 `.keybar-scroll`）；新增 `tablet.spec`（iPad mini 横竖屏）；单测 `keymap.test.ts`。testid：保留 `to-edit` / `to-terminal` / `term-bar` / `keybar` / `editkeys` / `send` / `open-more`，**移除 `sheet-close` / `term-lead`**；编辑键行里的程序键复用 `key-Escape` / `key-CtrlC`。
-- 不触及协议、重连、连接层。画布几何仍不因底栏变化而 resize（ADR-0011 约束、ADR-0013）。
+- **Three fewer keys in the no-scroll zone**, in exchange for three more visible terminal rows, a consistent toggle position and an always-reachable ⋯. Scrolling the key area to the end still reaches every key.
+- **No "collapse" button.** "Collapse" closed the panel and the keyboard; `✎ Terminal` closes the panel and focuses the terminal. To just read the terminal, drag down or press Esc on empty input. Keeping the button would cost another 44 px slot or a spot back in the grabber row.
+- **Edit state only adds `Esc ^C`.** The edit panel's job is writing a whole message and sending it once; driving claude's menus key by key belongs to terminal state, one toggle away.
+- **An extra row of keys at the prompt.** Visually denser than two keys, but no taller, and those keys (Tab completion, ↑↓ history, `|` `~`) are exactly what on-screen keyboards lack for shell commands.
+- **Wide touch screens lose the classic bar's permanent input box**, in exchange for the same mental model as phones (direct terminal input by default, one tap for the edit panel) and two fewer chrome bars when the keyboard is up. iPads with an external keyboard (`pointer: fine`) are unaffected and keep the classic bar.
+- Docs touched: [input.md](../../40-frontend/input.md) (bottom bar, key bars, edit key row), [layout.md](../../40-frontend/layout.md) (bottom bar height, `short` overlay), [acceptance-criteria.md](../../10-requirements/acceptance-criteria.md) (AC-3.9 changed to the first 5 keys, new AC-3.14), [e2e-scenarios.md](../../70-testing/e2e-scenarios.md) (E2E-10, new E2E-25; new `tablet.spec` for iPad mini in both orientations).
+- Protocol, reconnect and connection layer untouched. Canvas geometry still never resizes because of the bottom bar (ADR-0011's constraint, ADR-0013).

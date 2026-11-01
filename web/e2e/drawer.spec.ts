@@ -1,9 +1,11 @@
 /**
- * E2E-28 浮层与手机会话抽屉 —— AC-4.10 / AC-4.11 / AC-5.11 / AC-4.8。
+ * E2E-28 Sheets and the phone session drawer (AC-4.10 / AC-4.11 / AC-5.11 / AC-4.8).
  *
- * 手机会话抽屉：贴底整宽 + 抓手 + 标题栏 + ✕，浮层【不挤终端】；会话按钮的方框里是会话数。
- * 至少半屏高、底部一行四周留白（ADR-0037 §5）；关闭确认叠在抽屉上（ADR-0038）；从抽屉进设置。
- * 抽屉有约 170ms 的进场动画，量矩形前先等它落位。
+ * Phone session drawer: bottom-anchored, full width, grab handle, title bar with ✕; sheets overlay
+ * the terminal instead of squeezing it; the sessions button shows the session count. At least half
+ * the screen tall, bottom row padded on all sides (ADR-0037 §5); the close confirmation stacks on
+ * the drawer (ADR-0038); settings opens from the drawer. The drawer has a ~170ms enter animation, so
+ * wait for it to settle before measuring rects.
  */
 import { mkdirSync, rmSync } from 'node:fs'
 
@@ -24,7 +26,7 @@ const vp = (p: Page) => p.evaluate(() => ({ w: innerWidth, h: innerHeight }))
 const activeInDrawer = (p: Page) => p.evaluate(() => document.activeElement?.closest('.drawer') !== null && document.activeElement !== null)
 const activeClass = (p: Page) => p.evaluate(() => (document.activeElement as HTMLElement | null)?.className ?? '')
 
-/** CDP 长按（触摸）。 */
+/** longPress performs a CDP touch long-press. */
 async function longPress(page: Page, x: number, y: number, ms = 700) {
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] })
@@ -33,7 +35,7 @@ async function longPress(page: Page, x: number, y: number, ms = 700) {
   await cdp.detach()
 }
 
-/** CDP 触摸拖动：按下 → 分 steps 步移到终点 → 抬起。 */
+/** touchDrag performs a CDP touch drag: press, move to `to` in `steps` steps, release. */
 async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: number; y: number }, steps = 8, holdMs = 0) {
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [from] })
@@ -47,20 +49,20 @@ async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: nu
   await cdp.detach()
 }
 
-/** 左滑一行 dx 像素（从行的右侧三分之二处起手）。 */
+/** swipeRow swipes a row horizontally by dx pixels, starting two thirds of the way across. */
 async function swipeRow(page: Page, sid: number, dx: number) {
   const b = (await page.getByTestId(`session-${sid}`).boundingBox())!
   const from = { x: b.x + b.width * 0.66, y: b.y + b.height / 2 }
   await touchDrag(page, from, { x: from.x + dx, y: from.y })
 }
 
-/** 一行正文此刻的横向位移（打开 = −216）。等过渡结束。 */
+/** rowShift returns a row body's current horizontal offset (open = -216) after the transition ends. */
 async function rowShift(page: Page, sid: number): Promise<number> {
   await page.waitForTimeout(260)
   return page.getByTestId(`session-${sid}`).evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).m41)
 }
 
-/** 终端几何快照：矩形、cols/rows、resize 计数。 */
+/** termGeo captures terminal geometry: rect, cols/rows, resize count. */
 async function termGeo(page: Page) {
   return { rect: await rectOf(page, '[data-testid=terminal]'), size: await hooks.size(page), resizes: await hooks.resizes(page) }
 }
@@ -68,37 +70,37 @@ async function termGeo(page: Page) {
 test.describe('Pixel 5', () => {
   test.use(PIXEL)
 
-  test('E2E-28 ①②④ 会话抽屉：会话数、贴底整宽、抓手、✕、底部固定行；焦点进浮层；不挤终端', async ({ page }) => {
+  test('E2E-28 (1)(2)(4) session drawer: session count, bottom-anchored full width, grab handle, ✕, fixed bottom row; focus moves into the sheet; terminal not squeezed', async ({ page }) => {
     await agent.open(page)
-    await page.waitForTimeout(300) // 让首屏的 resize 防抖落定
+    await page.waitForTimeout(300) // let the first-screen resize debounce settle
     const before = await termGeo(page)
     const button = page.getByTestId('open-sessions')
-    await expect(button, '会话按钮的方框里是会话数').toHaveText('1')
+    await expect(button, 'sessions button shows the session count').toHaveText('1')
 
     await button.click()
     await settled(page, 'session-drawer')
     const r = (await rectOf(page, '[data-testid=session-drawer]'))!
     const v = await vp(page)
-    expect(Math.abs(r.bottom - v.h), '贴底').toBeLessThanOrEqual(1)
+    expect(Math.abs(r.bottom - v.h), 'anchored to the bottom').toBeLessThanOrEqual(1)
     expect(r.left).toBeLessThanOrEqual(0)
-    expect(r.right, '整宽').toBeGreaterThanOrEqual(v.w)
-    await expect(page.getByTestId('session-drawer').locator('.drawer-grab'), '触屏有抓手').toBeVisible()
-    await expect(page.getByTestId('session-drawer').getByTestId('drawer-close'), '标题栏有 ✕').toBeVisible()
-    // 底部固定一行：新会话与设置，各有一个线条图标（ADR-0037）
+    expect(r.right, 'full width').toBeGreaterThanOrEqual(v.w)
+    await expect(page.getByTestId('session-drawer').locator('.drawer-grab'), 'touch shows a grab handle').toBeVisible()
+    await expect(page.getByTestId('session-drawer').getByTestId('drawer-close'), 'title bar has ✕').toBeVisible()
+    // Fixed bottom row: new session and settings, each with a line icon (ADR-0037).
     const foot = page.getByTestId('session-drawer').locator('.drawer-foot')
     await expect(foot.getByTestId('new-session')).toBeVisible()
     await expect(foot.getByTestId('open-settings')).toBeVisible()
     await expect(foot.locator('button')).toHaveCount(2)
     await expect(foot.locator('button svg')).toHaveCount(2)
-    expect(await activeInDrawer(page), '打开时焦点进浮层').toBe(true)
+    expect(await activeInDrawer(page), 'focus moves into the sheet on open').toBe(true)
 
-    expect(await termGeo(page), '开抽屉不改终端几何、不发 resize').toEqual(before)
+    expect(await termGeo(page), 'opening the drawer keeps terminal geometry and sends no resize').toEqual(before)
     await page.getByTestId('drawer-close').click()
     await expect(page.getByTestId('session-drawer')).toHaveCount(0)
 
-    // 会话数跟着新建 / 关闭即时变
+    // The session count updates immediately on create and close.
     const b = await newSession(page)
-    await expect(button, '新建之后').toHaveText('2')
+    await expect(button, 'after creating').toHaveText('2')
     let dialogs = 0
     page.on('dialog', (d) => {
       dialogs++
@@ -110,149 +112,150 @@ test.describe('Pixel 5', () => {
       await page.getByTestId(`session-${b}`).locator('xpath=..').getByTestId('row-close').click()
       await settled(page, 'close-confirm')
     }
-    // 关闭确认：贴底 sheet，叠在抽屉上；Esc 只关最上面那层（AC-4.11）
+    // Close confirmation: a bottom sheet stacked on the drawer; Esc closes only the top layer (AC-4.11).
     await closeFromMenu()
     const c = (await rectOf(page, '[data-testid=close-confirm]'))!
-    expect(Math.abs(c.bottom - v.h), '确认也是贴底 sheet').toBeLessThanOrEqual(1)
-    expect(c.right - c.left, '整宽').toBeGreaterThanOrEqual(v.w)
-    await expect(page.locator('.drawer'), '叠在会话抽屉上').toHaveCount(2)
-    await expect(page.getByTestId('close-confirm')).toContainText('关闭「')
+    expect(Math.abs(c.bottom - v.h), 'confirmation is a bottom sheet too').toBeLessThanOrEqual(1)
+    expect(c.right - c.left, 'full width').toBeGreaterThanOrEqual(v.w)
+    await expect(page.locator('.drawer'), 'stacked on the session drawer').toHaveCount(2)
+    await expect(page.getByTestId('close-confirm')).toContainText('Close "')
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('close-confirm')).toHaveCount(0)
-    await expect(page.getByTestId('session-drawer'), 'Esc 只关确认，抽屉还在').toBeVisible()
+    await expect(page.getByTestId('session-drawer'), 'Esc closes only the confirmation; the drawer stays').toBeVisible()
     await expect(page.getByTestId(`session-${b}`)).toBeVisible()
     await closeFromMenu()
     await page.getByTestId('close-ok').click()
     await expect(page.getByTestId(`session-${b}`)).toHaveCount(0)
-    await expect(page.getByTestId('session-drawer'), '确认之后仍在列表里').toBeVisible()
-    await expect(button, '关掉之后').toHaveText('1')
-    expect(dialogs, '不用浏览器对话框').toBe(0)
+    await expect(page.getByTestId('session-drawer'), 'still on the list after confirming').toBeVisible()
+    await expect(button, 'after closing').toHaveText('1')
+    expect(dialogs, 'no browser dialogs').toBe(0)
   })
 
-  test('E2E-28 ③ 会话抽屉五种关法：遮罩 / Esc / ✕ / 选中会话 / 返回键；历史记录不累积', async ({ page }) => {
+  test('E2E-28 (3) five ways to close the session drawer: backdrop / Esc / ✕ / selecting a session / back button; history does not accumulate', async ({ page }) => {
     await agent.open(page)
     const sid = (await hooks.sid(page))!
     const h0 = await page.evaluate(() => history.length)
     const drawer = page.getByTestId('session-drawer')
 
-    // 遮罩：点抽屉上方的空白
+    // Backdrop: tap the empty area above the drawer.
     await openDrawer(page)
     await page.getByTestId('drawer-backdrop').click({ position: { x: 20, y: 20 } })
     await expect(drawer).toHaveCount(0)
 
-    // Esc
+    // Esc.
     await openDrawer(page)
     await page.keyboard.press('Escape')
     await expect(drawer).toHaveCount(0)
 
-    // ✕
+    // ✕.
     await openDrawer(page)
     await page.getByTestId('drawer-close').click()
     await expect(drawer).toHaveCount(0)
 
-    // 选中一个会话
+    // Select a session.
     await openDrawer(page)
     await page.getByTestId(`session-${sid}`).click()
     await expect(drawer).toHaveCount(0)
 
-    // 系统返回键：只关抽屉，不离开页面
+    // System back button: closes only the drawer and stays on the page.
     await openDrawer(page)
     await page.goBack()
     await expect(drawer).toHaveCount(0)
-    expect(new URL(page.url()).pathname, '返回键之后仍在 /').toBe('/')
+    expect(new URL(page.url()).pathname, 'still on / after back').toBe('/')
     await expect(page.getByTestId('terminal')).toBeVisible()
 
-    await page.waitForTimeout(300) // history.back() 是异步的
+    await page.waitForTimeout(300) // history.back() is async
     const h1 = await page.evaluate(() => history.length)
-    expect(h1 - h0, `五次开关之后 history.length 从 ${h0} 变成 ${h1}`).toBeLessThanOrEqual(1)
+    expect(h1 - h0, `history.length went from ${h0} to ${h1} after five open/close cycles`).toBeLessThanOrEqual(1)
   })
 
-  test('E2E-28 ⑤ 焦点恢复：开抽屉前焦点在终端，选会话后在新会话的终端；不在则不给', async ({ page }) => {
+  test("E2E-28 (5) focus restore: if the terminal had focus before opening the drawer, the selected session's terminal gets it; otherwise no one does", async ({ page }) => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
     const b = await newSession(page)
     expect(b).not.toBe(a)
 
-    // 终端有焦点 → 开抽屉 → 选 A → 焦点在 A 的 helper textarea
+    // Terminal focused -> open drawer -> pick A -> focus on A's helper textarea.
     await focusTerm(page)
     await openDrawer(page)
     expect(await activeInDrawer(page)).toBe(true)
     await page.getByTestId(`session-${a}`).click()
-    await waitFor(async () => (await hooks.sid(page)) === a, '切到 A')
+    await waitFor(async () => (await hooks.sid(page)) === a, 'switched to A')
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.closest('.term-host')?.getAttribute('data-sid') ?? null))
       .toBe(String(a))
     expect(await activeClass(page)).toContain('xterm-helper-textarea')
 
-    // 终端失焦 → 开抽屉 → 选 B → 焦点【不】在终端（触屏上凭空 focus 会弹键盘）
+    // Terminal blurred -> open drawer -> pick B -> focus is not in the terminal (focusing out of
+    // nowhere on touch would pop the keyboard).
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
     await openDrawer(page)
     await page.getByTestId(`session-${b}`).click()
-    await waitFor(async () => (await hooks.sid(page)) === b, '切到 B')
+    await waitFor(async () => (await hooks.sid(page)) === b, 'switched to B')
     await page.waitForTimeout(200)
-    expect(await activeClass(page), '之前不在终端，切过去也不该给终端焦点').not.toContain('xterm-helper-textarea')
+    expect(await activeClass(page), 'terminal was not focused before, so it must not get focus after switching').not.toContain('xterm-helper-textarea')
   })
 
-  test('E2E-28 ⑥ 行操作：左滑 / 长按露出保持接收 · 改名 · 关闭；改名是叠在抽屉上的小 sheet（ADR-0039）', async ({ page }) => {
+  test('E2E-28 (6) row actions: swipe left / long-press reveals keep receiving, rename, close; rename is a small sheet stacked on the drawer (ADR-0039)', async ({ page }) => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
     const b = await newSession(page)
     await openDrawer(page)
     const item = (sid: number) => page.getByTestId(`session-${sid}`).locator('xpath=..')
 
-    // 左滑过半 → 停在打开；不到一半 → 弹回；打开后右滑 → 关上
+    // Swipe left past halfway -> stays open; less than halfway -> springs back; swipe right when open -> closes.
     await swipeRow(page, b, -120)
-    expect(await rowShift(page, b), '过半停在打开').toBe(-216)
+    expect(await rowShift(page, b), 'past halfway stays open').toBe(-216)
     for (const t of ['row-pin', 'row-rename', 'row-close']) await expect(item(b).getByTestId(t)).toBeVisible()
     await swipeRow(page, b, 120)
-    expect(await rowShift(page, b), '右滑关上').toBe(0)
+    expect(await rowShift(page, b), 'swipe right closes').toBe(0)
     await swipeRow(page, b, -60)
-    expect(await rowShift(page, b), '不到一半弹回').toBe(0)
-    // 纵向拖不打开任何一行（往上拖：往下拖到顶会是下滑关抽屉）
+    expect(await rowShift(page, b), 'less than halfway springs back').toBe(0)
+    // A vertical drag opens no row (drag up: dragging down at the top would close the drawer).
     const rb = (await page.getByTestId(`session-${b}`).boundingBox())!
     await touchDrag(page, { x: rb.x + rb.width / 2, y: rb.y + 30 }, { x: rb.x + rb.width / 2 - 6, y: rb.y - 80 })
     expect(await rowShift(page, a)).toBe(0)
     expect(await rowShift(page, b)).toBe(0)
 
-    // 长按 = 打开，不出锚定菜单；再左滑另一行 → 前一行关上
+    // Long-press = open, with no anchored menu; swiping another row closes the previous one.
     const box = (await page.getByTestId(`session-${a}`).boundingBox())!
     await longPress(page, box.x + box.width / 2, box.y + box.height / 2)
-    expect(await rowShift(page, a), '长按也打开').toBe(-216)
-    await expect(page.getByTestId('session-menu'), '抽屉里不再弹锚定菜单').toHaveCount(0)
+    expect(await rowShift(page, a), 'long-press also opens').toBe(-216)
+    await expect(page.getByTestId('session-menu'), 'the drawer no longer shows an anchored menu').toHaveCount(0)
     await swipeRow(page, b, -150)
     expect(await rowShift(page, b)).toBe(-216)
-    expect(await rowShift(page, a), '同一时间只开一行').toBe(0)
-    // 点开着那行的正文：只关上，不切换
+    expect(await rowShift(page, a), 'only one row open at a time').toBe(0)
+    // Tapping the open row's body only closes it; no switch.
     const cur = await hooks.sid(page)
-    // 行被推开了 216px：点它还露在屏幕上的那一段（元素坐标 216 之后）
+    // The row is shifted 216px; tap the part still on screen (element x beyond 216).
     await page.getByTestId(`session-${b}`).click({ position: { x: 216 + 40, y: 20 } })
     expect(await rowShift(page, b)).toBe(0)
-    expect(await hooks.sid(page), '点正文只关不切').toBe(cur)
+    expect(await hooks.sid(page), 'tapping the body closes without switching').toBe(cur)
     await expect(page.getByTestId('session-drawer')).toBeVisible()
 
-    // 保持接收
+    // Keep receiving.
     await swipeRow(page, b, -150)
     await item(b).getByTestId('row-pin').click()
-    await expect(page.getByTestId(`session-${b}`).locator('.pin-mark svg'), '名前出现图钉（SVG，ADR-0042）').toBeVisible()
-    expect(await rowShift(page, b), '点完按钮行关上').toBe(0)
+    await expect(page.getByTestId(`session-${b}`).locator('.pin-mark svg'), 'a pin appears before the name (SVG, ADR-0042)').toBeVisible()
+    expect(await rowShift(page, b), 'row closes after tapping an action').toBe(0)
 
-    // 改名：叠在抽屉上的小 sheet，输入框有焦点、全选、16px
+    // Rename: a small sheet stacked on the drawer; the input is focused, fully selected, 16px.
     await swipeRow(page, b, -150)
     await item(b).getByTestId('row-rename').click()
     const sheet = page.getByTestId('rename-sheet')
     await expect(sheet).toBeVisible()
-    await expect(page.locator('.drawer'), '叠在抽屉上').toHaveCount(2)
+    await expect(page.locator('.drawer'), 'stacked on the drawer').toHaveCount(2)
     const input = page.getByTestId('rename-input')
     await expect(input).toBeFocused()
     const sel = await input.evaluate((el: HTMLInputElement) => ({ s: el.selectionStart, e: el.selectionEnd, n: el.value.length, fs: getComputedStyle(el).fontSize }))
-    expect(sel, '打开时全选').toMatchObject({ s: 0, e: sel.n })
+    expect(sel, 'text fully selected on open').toMatchObject({ s: 0, e: sel.n })
     expect(sel.fs).toBe('16px')
     await input.fill('RENAMED')
     await input.press('Enter')
     await expect(sheet).toHaveCount(0)
-    await expect(page.getByTestId('session-drawer'), '改名不关抽屉').toBeVisible()
+    await expect(page.getByTestId('session-drawer'), 'renaming does not close the drawer').toBeVisible()
     await expect(page.getByTestId(`session-${b}`).locator('.sl-text')).toHaveText('RENAMED')
-    // 清空保存 → 恢复自动命名；Esc → 只关改名
+    // Saving empty restores the automatic name; Esc closes only the rename sheet.
     await swipeRow(page, b, -150)
     await item(b).getByTestId('row-rename').click()
     await input.fill('')
@@ -263,10 +266,10 @@ test.describe('Pixel 5', () => {
     await expect(sheet).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(sheet).toHaveCount(0)
-    await expect(page.getByTestId('session-drawer'), 'Esc 只关改名').toBeVisible()
+    await expect(page.getByTestId('session-drawer'), 'Esc closes only the rename sheet').toBeVisible()
   })
 
-  test('E2E-28 ⑨ 浮层跟着可视区：可视区变矮，改名 sheet 贴着它的底边（ADR-0039 §3）', async ({ page }) => {
+  test('E2E-28 (9) sheets follow the visible area: when it shrinks, the rename sheet stays on its bottom edge (ADR-0039 §3)', async ({ page }) => {
     await agent.open(page)
     const sid = (await hooks.sid(page))!
     await openDrawer(page)
@@ -274,43 +277,43 @@ test.describe('Pixel 5', () => {
     await page.getByTestId(`session-${sid}`).locator('xpath=..').getByTestId('row-rename').click()
     await settled(page, 'rename-sheet')
     const v = await vp(page)
-    // 模拟键盘压缩可视视口：视口变矮，.app 的高度跟着 visualViewport 变
+    // Simulate the keyboard shrinking the visual viewport: the viewport gets shorter and .app follows visualViewport.
     await page.setViewportSize({ width: v.w, height: v.h - 300 })
     await waitFor(async () => {
       const app = (await rectOf(page, '.app'))!
       return Math.abs(app.bottom - (v.h - 300)) <= 1
-    }, '.app 跟着变矮')
+    }, '.app shrinks with it')
     await page.waitForTimeout(300)
     const app = (await rectOf(page, '.app'))!
     const sheet = (await rectOf(page, '[data-testid=rename-sheet]'))!
     const input = (await rectOf(page, '[data-testid=rename-input]'))!
-    expect(Math.abs(sheet.bottom - app.bottom), 'sheet 贴着可见区底边').toBeLessThanOrEqual(1)
+    expect(Math.abs(sheet.bottom - app.bottom), 'sheet sits on the bottom edge of the visible area').toBeLessThanOrEqual(1)
     expect(input.top).toBeGreaterThanOrEqual(app.top)
-    expect(input.bottom, '输入框整个在可见区里').toBeLessThanOrEqual(app.bottom)
+    expect(input.bottom, 'input is fully inside the visible area').toBeLessThanOrEqual(app.bottom)
     const drawer = (await rectOf(page, '[data-testid=session-drawer]'))!
-    expect(drawer.bottom - drawer.top, '抽屉不超过可见区的 80%').toBeLessThanOrEqual((app.bottom - app.top) * 0.8 + 1)
+    expect(drawer.bottom - drawer.top, 'drawer is at most 80% of the visible area').toBeLessThanOrEqual((app.bottom - app.top) * 0.8 + 1)
   })
 
-  test('E2E-28 ⑦ 会话抽屉至少半屏；底部一行四周留白（ADR-0037 §5）', async ({ page }) => {
+  test('E2E-28 (7) session drawer is at least half the screen; bottom row padded on all sides (ADR-0037 §5)', async ({ page }) => {
     await agent.open(page)
     await openDrawer(page)
     const v = await vp(page)
     const d = (await rectOf(page, '[data-testid=session-drawer]'))!
-    expect(d.bottom - d.top, '只有 1 个会话也至少半屏').toBeGreaterThanOrEqual(v.h / 2 - 1)
+    expect(d.bottom - d.top, 'at least half the screen even with one session').toBeGreaterThanOrEqual(v.h / 2 - 1)
     const foot = (await rectOf(page, '[data-testid=session-drawer] .drawer-foot'))!
-    expect(Math.abs(foot.bottom - d.bottom), '底部一行贴着 sheet 底部').toBeLessThanOrEqual(1)
+    expect(Math.abs(foot.bottom - d.bottom), 'bottom row sits at the bottom of the sheet').toBeLessThanOrEqual(1)
     const n = (await rectOf(page, '[data-testid=session-drawer] [data-testid=new-session]'))!
     const s = (await rectOf(page, '[data-testid=session-drawer] [data-testid=open-settings]'))!
-    expect(d.bottom - n.bottom, '按钮与 sheet 底边留白').toBeGreaterThanOrEqual(16 - 0.5)
-    expect(Math.abs(n.left - d.left - 16), '左边 16px').toBeLessThanOrEqual(1)
-    expect(Math.abs(d.right - s.right - 16), '右边 16px').toBeLessThanOrEqual(1)
-    expect(Math.abs(s.left - n.right - 12), '按钮之间 12px').toBeLessThanOrEqual(1)
+    expect(d.bottom - n.bottom, 'padding between buttons and the sheet bottom').toBeGreaterThanOrEqual(16 - 0.5)
+    expect(Math.abs(n.left - d.left - 16), '16px on the left').toBeLessThanOrEqual(1)
+    expect(Math.abs(d.right - s.right - 16), '16px on the right').toBeLessThanOrEqual(1)
+    expect(Math.abs(s.left - n.right - 12), '12px between buttons').toBeLessThanOrEqual(1)
     expect(Math.round(n.bottom - n.top)).toBe(48)
     expect(Math.round(s.bottom - s.top)).toBe(48)
-    expect(Math.round(s.right - s.left), '设置是方块').toBe(48)
+    expect(Math.round(s.right - s.left), 'settings button is square').toBe(48)
   })
 
-  test('E2E-28 ⑧ 从抽屉进设置：抽屉关、设置是贴底 sheet，不套半屏最小高度，底部留白', async ({ page }) => {
+  test('E2E-28 (8) settings from the drawer: drawer closes, settings is a bottom sheet without the half-screen minimum, bottom padding', async ({ page }) => {
     await agent.open(page)
     await openDrawer(page)
     await page.getByTestId('session-drawer').getByTestId('open-settings').click()
@@ -318,18 +321,19 @@ test.describe('Pixel 5', () => {
     await settled(page, 'settings')
     const v = await vp(page)
     const r = (await rectOf(page, '[data-testid=settings]'))!
-    expect(Math.abs(r.bottom - v.h), '贴底').toBeLessThanOrEqual(1)
-    expect(r.right - r.left, '整宽').toBeGreaterThanOrEqual(v.w)
+    expect(Math.abs(r.bottom - v.h), 'anchored to the bottom').toBeLessThanOrEqual(1)
+    expect(r.right - r.left, 'full width').toBeGreaterThanOrEqual(v.w)
     await expect(page.getByTestId('settings').locator('.drawer-grab')).toBeVisible()
-    expect(r.bottom - r.top, '两行设置，不撑到半屏').toBeLessThan(v.h / 2)
+    expect(r.bottom - r.top, 'two rows of settings, not stretched to half the screen').toBeLessThan(v.h / 2)
     const inc = (await rectOf(page, '[data-testid=font-inc]'))!
-    expect(r.bottom - inc.bottom, '底部留白').toBeGreaterThanOrEqual(16)
-    await page.mouse.click(v.w / 2, 40) // 点遮罩
+    expect(r.bottom - inc.bottom, 'bottom padding').toBeGreaterThanOrEqual(16)
+    await page.mouse.click(v.w / 2, 40) // tap the backdrop
     await expect(page.getByTestId('settings')).toHaveCount(0)
   })
 
-  test('E2E-28 ⑩ 路径按原样从左往右排、放不下从左截；名字优先（ADR-0042 §3）', async ({ page }) => {
-    // 一定很长、又不在家目录下的路径：前面那几段放不下，名字 project 仍要整个显示
+  test('E2E-28 (10) paths render left to right as-is and are clipped on the left when too long; the name takes priority (ADR-0042 §3)', async ({ page }) => {
+    // A path that is long and outside the home directory: the leading segments do not fit, but the
+    // name `project` must still be shown in full.
     const root = `/tmp/wt-e2e-${process.pid}-${Date.now()}`
     const deep = `${root}/aaaaaaaaaaaa/bbbbbbbbbbbb/cccccccccccc/dddddddddddd/project`
     mkdirSync(deep, { recursive: true })
@@ -337,16 +341,16 @@ test.describe('Pixel 5', () => {
       await agent.open(page)
       await submit(page, 'cd /usr/local/share')
       await newSession(page)
-      await submit(page, `cd ${FIXTURES}`) // 通常在家目录下：显示成 ~/…
+      await submit(page, `cd ${FIXTURES}`) // usually under the home directory, so shown as ~/...
       await newSession(page)
       await submit(page, `cd ${deep}`)
       await openDrawer(page)
       const metas = page.locator('.session-row .sl-meta')
       await expect
-        .poll(() => metas.allTextContents(), { message: '三行的路径都更新了' })
+        .poll(() => metas.allTextContents(), { message: 'paths updated on all three rows' })
         .toEqual([expect.stringMatching(/\/usr\/local\/share$/), expect.stringMatching(/\/fixtures$/), expect.stringMatching(/\/project$/)])
 
-      // 量字符实际画在哪：只比 textContent 测不出 rtl 造成的颠倒
+      // Measure where characters are actually drawn: comparing textContent cannot detect rtl reversal.
       const geo = await metas.evaluateAll((els) =>
         els.map((meta) => {
           const node = meta.querySelector('bdi')?.firstChild ?? meta.firstChild!
@@ -364,17 +368,17 @@ test.describe('Pixel 5', () => {
         }),
       )
       for (const g of geo) {
-        expect(g.firstLeft, `${g.text}：第一个字符在最后一个字符左边`).toBeLessThan(g.lastLeft)
-        expect(g.lastRight, `${g.text}：末尾看得见`).toBeLessThanOrEqual(g.boxRight + 0.5)
-        expect(g.lastLeft, `${g.text}：末尾看得见`).toBeGreaterThanOrEqual(g.boxLeft - 0.5)
+        expect(g.firstLeft, `${g.text}: first character is left of the last`).toBeLessThan(g.lastLeft)
+        expect(g.lastRight, `${g.text}: end is visible`).toBeLessThanOrEqual(g.boxRight + 0.5)
+        expect(g.lastLeft, `${g.text}: end is visible`).toBeGreaterThanOrEqual(g.boxLeft - 0.5)
       }
-      expect(geo[2]!.firstLeft, '长路径放不下：开头被截在框外').toBeLessThan(geo[2]!.boxLeft)
+      expect(geo[2]!.firstLeft, 'long path does not fit: its start is clipped outside the box').toBeLessThan(geo[2]!.boxLeft)
 
       const names = await page.locator('.session-row .sl-text').evaluateAll((els) =>
         els.map((e) => ({ text: e.textContent, fits: e.scrollWidth <= e.clientWidth })),
       )
       expect(names.map((n) => n.text)).toEqual(['share', 'fixtures', 'project'])
-      for (const n of names) expect(n.fits, `名字「${n.text}」整个可见`).toBe(true)
+      for (const n of names) expect(n.fits, `name "${n.text}" fully visible`).toBe(true)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

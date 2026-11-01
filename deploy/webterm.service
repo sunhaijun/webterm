@@ -1,17 +1,20 @@
-# webterm 系统服务 —— 以【普通用户】运行（ADR-0034）。scripts/install.sh 会替你生成这一份。
+# webterm as a systemd system service running as a regular user (ADR-0034).
+# scripts/install.sh generates this for you; see docs/80-ops/systemd.md.
 #
-# 手工安装：把下面的 sun / 1000 换成你的用户名与 `id -u`（uid 不能写 %U ——
-# 系统单元里它是 PID 1 的 UID，也就是 0），改掉 --domain，然后：
+# To install by hand, replace `alice` and `1000` with your user name and `id -u`
+# (the UID must be literal: %U in a system unit is PID 1's UID, i.e. 0), set
+# --domain, then:
 #   sudo cp deploy/webterm.service /etc/systemd/system/
-#   sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm
+#   sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/webterm   # again after every binary update
 #   sudo systemctl daemon-reload && sudo systemctl enable --now webterm
-#   sudo loginctl enable-linger $USER      # 让用户管理器常驻：会话里的 systemctl --user 要用
+#   sudo loginctl enable-linger $USER   # keeps your user manager (systemctl --user in sessions)
 #
-# 为什么是系统服务而不是 ~/.config/systemd/user：OOM 优先级。用户服务的
-# oom_score_adj 最低 100，内存一紧就比登录会话先被杀，所有会话跟着没了。
+# A system service rather than a user service because of OOM priority: a user
+# service can't go below oom_score_adj 100, so it would be killed before your login.
 #
-# 完整说明见 docs/80-ops/systemd.md。
-# 注意：每次替换二进制后 setcap 都要重做（capability 附在文件上，不在路径上）。
+# No ProtectHome/ProtectSystem/NoNewPrivileges/PrivateTmp on purpose: they would
+# confine the shells you open, and NoNewPrivileges breaks sudo. Running as a regular
+# user is the hardening that counts (docs/60-security/threat-model.md).
 
 [Unit]
 Description=webterm — browser terminal agent
@@ -21,25 +24,25 @@ Wants=network-online.target user@1000.service
 
 [Service]
 Type=simple
-User=sun
-Group=sun
+User=alice
+Group=alice
 ExecStart=/usr/local/bin/webterm serve --domain term.example.com
 Restart=on-failure
 RestartSec=3
 
-# 会话里的 systemctl --user / journalctl --user / 走 D-Bus 的工具要用
+# For systemctl --user, journalctl --user and D-Bus tools inside sessions.
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 
-# OOM（ADR-0034）：agent 最后才被挑，起 shell 时它把会话设回 0；
-# continue：会话里某个进程被 OOM 杀掉只死它自己，不会停掉整个 unit
+# The agent is the OOM killer's last choice; sessions run at 0. "continue": an
+# OOM-killed process in one session doesn't stop the unit.
 OOMScoreAdjust=-900
 OOMPolicy=continue
 
-# 热升级（ADR-0016）：reload = 原地 exec 新二进制，会话保留
+# Hot upgrade (ADR-0016): re-exec the new binary in place; sessions survive.
 ExecReload=/bin/kill -USR2 $MAINPID
 
-# 优雅关闭：给 agent 时间广播"即将重启"并关闭会话
+# Give the agent time to tell clients it's going away.
 KillSignal=SIGTERM
 TimeoutStopSec=15
 KillMode=mixed
@@ -47,11 +50,6 @@ KillMode=mixed
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=webterm
-
-# 刻意【不】启用 ProtectHome / ProtectSystem / NoNewPrivileges / PrivateTmp：
-# 它们会连会话里的 shell 一起限制，而用户开 webterm 就是为了操作自己的文件；
-# NoNewPrivileges 还会让 sudo 失效。沙箱化 shell 是自欺欺人 —— 用户本来就有
-# 这台机器的 shell 权限。唯一有效的加固是以普通用户运行（见 threat-model.md）。
 
 [Install]
 WantedBy=multi-user.target

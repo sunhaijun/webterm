@@ -18,24 +18,27 @@ import (
 	"github.com/sunhaijun/webterm/internal/store"
 )
 
-// 裸跑 webterm 给一张状态总览。
+// Running webterm with no arguments prints a status overview.
 //
-// 日常真正要问的只有一句"现在正常吗"。以前得去 journalctl 里 grep 证书状态、
-// 再跑 devices 看有没有授权设备 —— 三个地方拼一个答案。这里一次说完。
+// The everyday question is "is it working?". Without the overview, answering it
+// means piecing together systemctl, the certificate state in journalctl, and
+// webterm devices.
 //
-// 【刻意不做交互式菜单】：配对、吊销都是低频操作，有明确命令就够，
-// 菜单只是多一层；而且 TUI 要引依赖，和单二进制的取向相冲。
+// There is deliberately no interactive menu: pairing and revoking are rare and
+// have their own commands, and a TUI would add dependencies, against the
+// single-binary goal.
 
-// status 是总览要用到的全部事实。取数据与渲染分开，渲染就能当纯函数测。
+// status holds everything the overview shows. Collecting and rendering are
+// separate so rendering can be tested as a pure function.
 type status struct {
 	running    bool
-	runningVia string   // "systemd" 或 "" —— 只是为了让"怎么知道的"透明
-	unit       unitKind // 装的是哪种 systemd 单元：决定提示里的命令，以及要不要提示迁移
+	runningVia string   // "systemd" or ""; shows how "running" was determined
+	unit       unitKind // installed systemd unit: picks the commands in hints and whether to suggest migrating
 	url        string
 	certOK     bool
-	certStart  time.Time // NotBefore：「快到期」的阈值随有效期缩放（ADR-0044 §4）
+	certStart  time.Time // NotBefore; the "expiring soon" threshold scales with validity (ADR-0044 §4)
 	certExpiry time.Time
-	ipMode     bool // IP 证书只走 HTTP-01，续期要 80 一直可达
+	ipMode     bool // IP certificates renew over HTTP-01 only, so port 80 must stay reachable
 	devices    int
 	configPath string
 }
@@ -45,11 +48,11 @@ func runStatus() error {
 	return nil
 }
 
-// colorEnabled 决定要不要上色。
+// colorEnabled reports whether to use ANSI colors.
 //
-// 只在【真的接着终端】时上色 —— `webterm > status.log` 或者管道给别的程序
-// 时，文件里不该躺着 \033[33m。另外认 NO_COLOR（no-color.org 的约定：
-// 只要设了就不上色，值是什么无所谓）和 TERM=dumb。
+// Only when writing to a terminal: `webterm > status.log` or a pipe should not
+// end up with \033[33m in it. It also honors NO_COLOR (per no-color.org, any
+// value, even empty, disables color) and TERM=dumb.
 func colorEnabled(f *os.File) bool {
 	if _, ok := os.LookupEnv("NO_COLOR"); ok {
 		return false
@@ -61,7 +64,8 @@ func colorEnabled(f *os.File) bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
-// collectStatus 尽力而为：任何一项取不到就留空，不让整张表失败。
+// collectStatus is best effort: anything it cannot read is left empty instead
+// of failing the whole overview.
 func collectStatus() status {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -99,45 +103,52 @@ func collectStatus() status {
 	return st
 }
 
-// probeRunning 判断服务在不在跑。
+// probeRunning reports whether the service is running.
 //
-// 先问 systemd（装出来的部署都有单元：ADR-0034 起是系统服务，之前是用户服务），
-// 那是最可靠的答案。
+// systemd is asked first: installed deployments always have a unit (a system
+// service since ADR-0034, a user service before), and it gives the most
+// reliable answer.
 //
-// 单元没在跑、或者根本没有单元时退化成探 /healthz（手工 webterm serve 也算在跑）。【不能只看端口有没有人听】——
-// 443 上很可能是别的服务（这个坑真踩过：探到的是 Xray），
-// 而 /healthz 返回 "ok" 是 webterm 特有的。
+// If the unit is not active, or there is none, it falls back to probing
+// /healthz, so a manual webterm serve counts too. A listening port is not
+// enough: 443 may belong to another service entirely (it once turned out to be
+// Xray), whereas a /healthz body of "ok" is specific to webterm.
 func probeRunning(unit unitKind, domain string, httpPort, httpsPort int) (bool, string) {
 	if unit.active() {
 		return true, "systemd"
 	}
-	// 生产：HTTPS 端口跑完整路由（:80 只有挑战和跳转）。
+	// Production: the HTTPS port serves the full router (:80 only has ACME
+	// challenges and redirects).
 	//
-	// 【必须带上 SNI】—— autocert 的 HostPolicy 只认 --domain 那个名字，
-	// 拿 IP 直连不带 SNI 的话服务端【根本不给证书】，握手就断了。
-	// 那是服务端的拒绝，客户端 InsecureSkipVerify 救不了，
-	// 探针会把活得好好的服务判成"未运行"。
+	// SNI is required. autocert's HostPolicy accepts only the --domain name, so
+	// a connection to the IP without SNI gets no certificate and the handshake
+	// fails. That is a server-side refusal InsecureSkipVerify cannot fix, and
+	// the probe would report a healthy service as not running.
 	//
-	// 校验仍然跳过：证书过期、链不全都不该影响"在不在跑"这个判断。
+	// Verification is still skipped: an expired certificate or an incomplete
+	// chain should not change whether the service counts as running.
 	if domain != "" && healthzOK("https://127.0.0.1:"+strconv.Itoa(httpsPort)+"/healthz", domain) {
 		return true, ""
 	}
-	// --dev / --no-tls：明文，在 http 端口上
+	// --dev / --no-tls: plain HTTP on the HTTP port.
 	if healthzOK("http://127.0.0.1:"+strconv.Itoa(httpPort)+"/healthz", "") {
 		return true, ""
 	}
 	return false, ""
 }
 
-// healthzOK 探一次 /healthz。sni 非空时按它发 SNI 并跳过证书校验。
+// healthzOK probes /healthz once. A non-empty sni is sent as the TLS server
+// name, and certificate verification is skipped.
 func healthzOK(url, sni string) bool {
 	c := &http.Client{
 		Timeout: time.Second,
-		// 【不跟随重定向】。:80 只有 ACME 挑战和跳转，跟下去就等于
-		// 让【别的地方】替本机回答"我在不在跑" —— 那正是这个探针
-		// 要防的误报（最早的版本探端口，把 443 上的 Xray 认成了 webterm）。
-		// 而且跳转目标是公网域名，跟下去会绕出这台机器再回来：
-		// --bind 127.0.0.1、NAT 不自反、DNS 不通时都会塌。
+		// Never follow redirects. :80 only has ACME challenges and redirects,
+		// and following one lets another host answer "is this machine
+		// running?", the very false positive this probe exists to prevent (the
+		// first version probed the port and mistook Xray on 443 for webterm).
+		// The redirect target is also the public domain, so following it leaves
+		// the machine and comes back, which breaks with --bind 127.0.0.1,
+		// without NAT hairpinning, or when DNS is down.
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -145,7 +156,7 @@ func healthzOK(url, sni string) bool {
 	if sni != "" {
 		c.Transport = &http.Transport{TLSClientConfig: &tls.Config{
 			ServerName:         sni,
-			InsecureSkipVerify: true, //nolint:gosec // 只探活，不传数据
+			InsecureSkipVerify: true, //nolint:gosec // liveness probe only; no data is sent
 		}}
 	}
 	resp, err := c.Get(url)
@@ -160,10 +171,12 @@ func healthzOK(url, sni string) bool {
 	return err == nil && strings.TrimSpace(string(body)) == "ok"
 }
 
-// certFromCache 从证书缓存文件里读出叶子证书（IP 模式的缓存与 autocert 同格式）。
+// certFromCache reads the leaf certificate from the certificate cache (the
+// IP-mode cache uses the same format as autocert).
 //
-// 缓存是 PEM：先私钥、再证书链。只取第一张 CERTIFICATE（叶子）。
-// 【不做校验】—— 这里只为了显示，真正的有效性判断在 autocert / ipCertManager 里。
+// The cache is PEM: the private key, then the chain. Only the first
+// CERTIFICATE block (the leaf) is used. Nothing is verified; this is for
+// display only, and validity is enforced by autocert / ipCertManager.
 func certFromCache(certDir, domain string) (*x509.Certificate, bool) {
 	raw, err := os.ReadFile(filepath.Join(certDir, domain))
 	if err != nil {
@@ -187,11 +200,14 @@ func certFromCache(certDir, domain string) (*x509.Certificate, bool) {
 	return nil, false
 }
 
-// certWarnThreshold 是「快到期」的黄色阈值：min(10 天, 有效期/4)（ADR-0044 §4）。
+// certWarnThreshold is the "expiring soon" (yellow) threshold:
+// min(10 days, validity/4) (ADR-0044 §4).
 //
-// 写死 10 天的话，6 天期的 IP 证书刚签下来就是黄的。按有效期缩放后，
-// 90 天证书仍是 10 天；160 小时的 IP 证书是 40 小时 —— 它本该在剩 53 小时时续好，
-// 到 40 小时还没续上，就是续期真的出了问题。不知道 NotBefore 时按 10 天。
+// A fixed 10 days would flag a 6-day IP certificate the moment it is issued.
+// Scaled, a 90-day certificate still gets 10 days and a 160-hour IP certificate
+// gets 40 hours: it should have renewed with 53 hours left, so still being
+// unrenewed at 40 means renewal is actually failing. Without NotBefore the
+// threshold is 10 days.
 func certWarnThreshold(start, expiry time.Time) time.Duration {
 	th := 10 * 24 * time.Hour
 	if !start.IsZero() {
@@ -202,15 +218,23 @@ func certWarnThreshold(start, expiry time.Time) time.Duration {
 	return th
 }
 
-// remaining 把剩余时间说成人话：两天以上按天，以内按小时。
+// remaining formats the time left: in days from two days up, in hours below.
 func remaining(expiry, now time.Time) string {
 	if d := expiry.Sub(now); d < 48*time.Hour {
-		return fmt.Sprintf("%d 小时", int(d/time.Hour))
+		return plural(int(d/time.Hour), "hour")
 	}
-	return fmt.Sprintf("%d 天", daysLeft(expiry, now))
+	return plural(daysLeft(expiry, now), "day")
 }
 
-// daysLeft 按自然日算剩余天数。已过期返回负数。
+// plural formats a count with an English noun: "1 day", "2 days".
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(n) + " " + noun + "s"
+}
+
+// daysLeft returns the number of whole days left; negative once expired.
 func daysLeft(expiry, now time.Time) int {
 	d := expiry.Sub(now)
 	if d < 0 {
@@ -220,7 +244,8 @@ func daysLeft(expiry, now time.Time) int {
 }
 
 func renderStatus(st status, ver string, now time.Time, color bool) string {
-	// 颜色只是强调 —— 关掉之后"已过期""只剩 N 天"这些字仍然把话说全了。
+	// Color is emphasis only: without it, words like "Expired" and
+	// "Only N days left" still say everything.
 	paint := func(code, s string) string {
 		if !color {
 			return s
@@ -230,77 +255,89 @@ func renderStatus(st status, ver string, now time.Time, color bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "webterm %s\n\n", ver)
 
-	row := func(k, v string) { fmt.Fprintf(&b, "  %-6s  %s\n", k, v) }
+	row := func(k, v string) { fmt.Fprintf(&b, "  %-11s  %s\n", k, v) }
 
 	switch {
 	case st.running && st.runningVia != "" && st.unit == unitUser:
-		row("服务", "运行中（systemd 用户服务 —— 内存吃紧时会比登录会话先被杀）")
+		row("Service", "Running (systemd user service; killed before your login session when memory runs low)")
 	case st.running && st.runningVia != "":
-		row("服务", "运行中（systemd）")
+		row("Service", "Running (systemd)")
 	case st.running:
-		row("服务", "运行中")
+		row("Service", "Running")
 	default:
-		row("服务", "未运行")
+		row("Service", "Not running")
 	}
 
 	if st.url != "" {
-		row("地址", st.url)
+		row("URL", st.url)
 	} else {
-		row("地址", "还没配地址 —— 用 webterm install 装（不给 --domain 就用本机公网 IP），或 webterm serve --dev 本地试")
+		row("URL", "Not configured. Install with webterm install (uses this machine's public IP without --domain), or try it locally with webterm serve --dev")
 	}
 
 	switch {
 	case !st.certOK && st.url != "":
-		row("证书", "还没有证书（服务启动时会自动申请）")
+		row("Certificate", "Not issued yet (requested automatically when the service starts)")
 	case st.certOK:
 		date := st.certExpiry.Local().Format("2006-01-02")
 		if !st.certStart.IsZero() && st.certExpiry.Sub(st.certStart) < 10*24*time.Hour {
-			date = st.certExpiry.Local().Format("2006-01-02 15:04") // 6 天期的证书，日期不够用
+			date = st.certExpiry.Local().Format("2006-01-02 15:04") // a date alone is too coarse for a 6-day certificate
 		}
-		reach := "80 或 443"
+		reach := "port 80 or 443"
 		if st.ipMode {
-			reach = "80"
+			reach = "port 80"
 		}
 		switch left := st.certExpiry.Sub(now); {
 		case left < 0:
-			row("证书", fmt.Sprintf("%s（%s）—— 重启服务会重新申请", paint("31", "已过期"), date))
+			row("Certificate", fmt.Sprintf("%s (%s); restart the service to request a new one", paint("31", "Expired"), date))
 		case left < certWarnThreshold(st.certStart, st.certExpiry):
-			// 到期是唯一会静默变成事故的东西，剩得少就说明白
-			row("证书", fmt.Sprintf("%s（%s）—— 自动续期需要 %s 从公网可达，看 journalctl -u webterm",
-				paint("33", "只剩 "+remaining(st.certExpiry, now)), date, reach))
+			// Expiry is the one thing that silently turns into an outage, so be
+			// explicit when time is short.
+			row("Certificate", fmt.Sprintf("%s (%s); renewal needs %s reachable from the internet. Check journalctl -u webterm",
+				paint("33", "Only "+remaining(st.certExpiry, now)+" left"), date, reach))
 		default:
-			row("证书", fmt.Sprintf("有效，到 %s（还有 %s，自动续期）", date, remaining(st.certExpiry, now)))
+			row("Certificate", fmt.Sprintf("Valid until %s (%s left, renews automatically)", date, remaining(st.certExpiry, now)))
 		}
 	}
 
 	if st.devices == 0 {
-		row("设备", "还没有授权设备")
+		row("Devices", "None authorized yet")
 	} else {
-		row("设备", fmt.Sprintf("%d 台已授权", st.devices))
+		row("Devices", fmt.Sprintf("%d authorized", st.devices))
 	}
 	if st.configPath != "" {
-		row("配置", st.configPath)
+		row("Config", st.configPath)
 	}
 
-	b.WriteString("\n")
+	type hint struct{ cmd, what string }
+	var hints []hint
 	if !st.running {
 		if st.unit == unitNone {
-			b.WriteString("  webterm serve      启动服务\n")
+			hints = append(hints, hint{"webterm serve", "Start the service"})
 		} else {
-			fmt.Fprintf(&b, "  %-18s 启动服务\n", st.unit.ctl("start"))
+			hints = append(hints, hint{st.unit.ctl("start"), "Start the service"})
 		}
 	}
 	if st.unit == unitUser {
-		// ADR-0034：迁移会关闭所有会话一次，所以只提示、不替用户做
-		b.WriteString("  webterm update --force-restart   迁移成系统服务（会关闭所有会话一次，从 SSH 跑）\n")
+		// ADR-0034: migrating closes every session once, so only suggest it.
+		hints = append(hints, hint{"webterm update --force-restart", "Migrate to a system service (closes all sessions once; run it over SSH)"})
 	}
 	if st.devices == 0 {
-		b.WriteString("  webterm pair       拿配对码 + 二维码，手机扫一下完成授权  ← 下一步\n")
+		hints = append(hints, hint{"webterm pair", "Get a pairing code and QR code to authorize your phone  ← next step"})
 	} else {
-		b.WriteString("  webterm pair       拿配对码 + 二维码\n")
+		hints = append(hints, hint{"webterm pair", "Get a pairing code and QR code"})
 	}
-	b.WriteString("  webterm devices    看已授权的设备 / 吊销\n")
-	b.WriteString("  webterm doctor     检查部署前置条件\n")
-	b.WriteString("\n\"webterm <命令> --help\" 看具体选项。\n")
+	hints = append(hints,
+		hint{"webterm devices", "List or revoke authorized devices"},
+		hint{"webterm doctor", "Check deployment prerequisites"},
+	)
+	width := 0
+	for _, h := range hints {
+		width = max(width, len(h.cmd))
+	}
+	b.WriteString("\n")
+	for _, h := range hints {
+		fmt.Fprintf(&b, "  %-*s  %s\n", width, h.cmd, h.what)
+	}
+	b.WriteString("\nRun \"webterm <command> --help\" for options.\n")
 	return b.String()
 }

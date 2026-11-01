@@ -9,7 +9,7 @@ import (
 	"github.com/sunhaijun/webterm/internal/session"
 )
 
-// ptmxFDs 数某个进程手里有几个 /dev/ptmx（别的会话的 master）。
+// ptmxFDs counts the /dev/ptmx fds (other sessions' masters) a process holds.
 func ptmxFDs(t *testing.T, pid int) int {
 	t.Helper()
 	dir := "/proc/" + strconv.Itoa(pid) + "/fd"
@@ -26,17 +26,18 @@ func ptmxFDs(t *testing.T, pid int) int {
 	return n
 }
 
-// agent 手里的 master 都带 CLOEXEC：后起的 shell 不能继承先前会话的 master ——
-// 否则关掉的会话的 pty 释放不了，别的会话里的进程还能读写它。热升级接回来的 fd
-// 在交接时清过 CLOEXEC，接回之后要置回来。
+// Every master the agent holds is CLOEXEC, so later shells can't inherit
+// earlier sessions' masters. Otherwise a closed session's pty is never released
+// and processes in other sessions can read and write it. Fds reattached after a
+// hot upgrade had CLOEXEC cleared for the handoff and must get it back.
 func TestLaterShellInheritsNoMaster(t *testing.T) {
 	m := session.NewManager(cfg())
 	create(t, m)
 	if n := ptmxFDs(t, session.ShellPIDForTest(create(t, m))); n != 0 {
-		t.Fatalf("新建的 shell 拿着 %d 个别的会话的 master", n)
+		t.Fatalf("new shell holds %d masters of other sessions", n)
 	}
 
-	// 交接之后再建
+	// Create another one after a handoff.
 	if err := m.Freeze(2 * time.Second); err != nil {
 		t.Fatal(err)
 	}
@@ -45,11 +46,11 @@ func TestLaterShellInheritsNoMaster(t *testing.T) {
 		t.Fatal(err)
 	}
 	m2 := session.NewManager(cfg())
-	t.Cleanup(m2.Shutdown) // 旧 Manager 不 Shutdown：shell 已经交给 m2
+	t.Cleanup(m2.Shutdown) // don't shut down the old Manager: its shells now belong to m2
 	if err := m2.Restore(snap); err != nil {
 		t.Fatal(err)
 	}
 	if n := ptmxFDs(t, session.ShellPIDForTest(create(t, m2))); n != 0 {
-		t.Fatalf("交接后新建的 shell 拿着 %d 个别的会话的 master", n)
+		t.Fatalf("shell created after handoff holds %d masters of other sessions", n)
 	}
 }

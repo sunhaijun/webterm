@@ -1,11 +1,12 @@
-// Package store 是 SQLite 持久化层。
+// Package store is the SQLite persistence layer.
 //
-// 选型见 ADR-0005（modernc.org/sqlite，纯 Go 无 cgo），schema 见
-// docs/50-backend/storage-schema.md。
+// See ADR-0005 for the choice of modernc.org/sqlite (pure Go, no cgo) and
+// docs/50-backend/storage-schema.md for the schema.
 //
-// 这个库里【绝对不能】出现终端输出内容（不变式 3 / AC-8.4），也不存用户敲过的
-// 命令（命令历史随 ADR-0026 删除）—— 只有设备与配对（token 与配对码只存哈希）
-// 和 schema 版本。
+// Terminal output must never reach this database (invariant 3 / AC-8.4), and
+// neither do the commands a user typed (command history was removed in
+// ADR-0026). It holds only devices, pairings (tokens and pairing codes are
+// stored as hashes) and the schema version.
 package store
 
 import (
@@ -26,40 +27,45 @@ var migrationFS embed.FS
 
 const schemaVersionKey = "schema_version"
 
-// Store 是数据库句柄。
+// Store is the database handle.
 //
-// 单连接 + 写锁：WAL 下 SQLite 支持并发读，但本项目的负载只有配对、设备校验与
-// last_seen_at 的节流更新，串行化是最简单可靠的选择。不要为了性能引入连接池的复杂度。
+// It uses a single connection plus a write lock. SQLite in WAL mode supports
+// concurrent readers, but the only load here is pairing, device checks and
+// throttled last_seen_at updates, so serializing everything is the simplest
+// reliable option. Don't add a connection pool for performance.
 type Store struct {
 	db *sql.DB
 	mu sync.Mutex
 }
 
-// Open 打开（必要时创建）数据库。dir 会被创建为 0700，db 文件为 0600。
+// Open opens the database, creating it if needed. dir is created with mode
+// 0700 and the database file with mode 0600.
 func Open(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("store: 创建数据目录: %w", err)
+		return nil, fmt.Errorf("store: create data dir: %w", err)
 	}
-	// MkdirAll 对已存在的目录是空操作，权限得显式收紧 —— 数据目录里有设备凭据
-	// 的哈希与证书私钥，同机的其它用户不在信任边界内。
+	// MkdirAll is a no-op on an existing directory, so tighten the mode
+	// explicitly: the data dir holds device credential hashes and certificate
+	// private keys, and other users on the host are outside the trust boundary.
 	if err := os.Chmod(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("store: 设置数据目录权限: %w", err)
+		return nil, fmt.Errorf("store: chmod data dir: %w", err)
 	}
 	path := filepath.Join(dir, "webterm.db")
 
-	// 必须预创建：SQLite 自己建文件时受 umask 影响，可能得到 0644（AC-1.12）。
+	// Create the file ourselves: when SQLite creates it, the mode depends on
+	// the umask and may end up 0644 (AC-1.12).
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("store: 创建 db 文件: %w", err)
+		return nil, fmt.Errorf("store: create db file: %w", err)
 	}
 	f.Close()
 	if err := os.Chmod(path, 0o600); err != nil {
-		return nil, fmt.Errorf("store: 设置 db 权限: %w", err)
+		return nil, fmt.Errorf("store: chmod db file: %w", err)
 	}
 
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		return nil, fmt.Errorf("store: 打开数据库: %w", err)
+		return nil, fmt.Errorf("store: open db: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 
@@ -76,8 +82,9 @@ func Open(dir string) (*Store, error) {
 }
 
 func (s *Store) pragmas() error {
-	// auto_vacuum 必须在建第一张表【之前】设，否则要整库 VACUUM 才生效 ——
-	// 不设的话后面的 incremental_vacuum 是空操作。
+	// auto_vacuum must be set before the first table is created; afterwards it
+	// only takes effect after a full VACUUM. Without it, the incremental_vacuum
+	// in migrate is a no-op.
 	for _, p := range []string{
 		"PRAGMA auto_vacuum = INCREMENTAL",
 		"PRAGMA journal_mode = WAL",
@@ -85,7 +92,7 @@ func (s *Store) pragmas() error {
 		"PRAGMA foreign_keys = ON",
 		"PRAGMA busy_timeout = 5000",
 	} {
-		// journal_mode 之类的 PRAGMA 会返回一行，用 Query 统一处理。
+		// Some PRAGMAs (journal_mode) return a row, so use Query for all of them.
 		rows, err := s.db.Query(p)
 		if err != nil {
 			return fmt.Errorf("store: %s: %w", p, err)
@@ -95,15 +102,18 @@ func (s *Store) pragmas() error {
 	return nil
 }
 
-// migrate 顺序执行未应用的迁移脚本，每个脚本在一个事务里。
+// migrate applies pending migration scripts in order, each in its own
+// transaction.
 //
-// 规则：迁移脚本一旦发布不再修改，只追加新脚本；每个脚本必须幂等友好，
-// 以容忍中断后重跑。不做降级迁移。
+// Rules: the statements of a released migration never change (scripts are
+// tracked by number only, so editing comments is harmless); schema changes
+// are new scripts. Each script must be safe to re-run after an interruption.
+// There are no down migrations.
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec(
 		`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 	); err != nil {
-		return fmt.Errorf("store: 建 settings 表: %w", err)
+		return fmt.Errorf("store: create settings table: %w", err)
 	}
 
 	current := 0
@@ -127,7 +137,7 @@ func (s *Store) migrate() error {
 	for _, name := range names {
 		v, err := strconv.Atoi(name[:4])
 		if err != nil {
-			return fmt.Errorf("store: 迁移脚本名不合法: %s", name)
+			return fmt.Errorf("store: invalid migration file name: %s", name)
 		}
 		if v <= current {
 			continue
@@ -142,7 +152,7 @@ func (s *Store) migrate() error {
 		}
 		if _, err := tx.Exec(string(body)); err != nil {
 			tx.Rollback()
-			return fmt.Errorf("store: 迁移 %s: %w", name, err)
+			return fmt.Errorf("store: migration %s: %w", name, err)
 		}
 		if _, err := tx.Exec(
 			`INSERT INTO settings(key, value) VALUES(?, ?)
@@ -159,8 +169,9 @@ func (s *Store) migrate() error {
 		applied++
 	}
 	if applied > 0 {
-		// 删表（0003 删命令历史）留下的空闲页还给文件系统。auto_vacuum 是
-		// INCREMENTAL，不跑这一句页就一直留在文件里。每一步回收一页，得把行读完。
+		// Return pages freed by dropped tables (0003 drops command history) to
+		// the file system. With auto_vacuum = INCREMENTAL they stay in the file
+		// until this runs. It frees one page per row, so drain all rows.
 		rows, err := s.db.Query("PRAGMA incremental_vacuum")
 		if err != nil {
 			return fmt.Errorf("store: incremental_vacuum: %w", err)
@@ -172,7 +183,7 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-// SchemaVersion 返回当前已应用的 schema 版本。
+// SchemaVersion returns the currently applied schema version.
 func (s *Store) SchemaVersion() (int, error) {
 	v, ok, err := s.getSetting(schemaVersionKey)
 	if err != nil || !ok {
@@ -188,10 +199,10 @@ func (s *Store) getSetting(key string) (string, bool, error) {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("store: 读 setting %q: %w", key, err)
+		return "", false, fmt.Errorf("store: read setting %q: %w", key, err)
 	}
 	return v, true, nil
 }
 
-// Close 关闭数据库。
+// Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }

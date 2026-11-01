@@ -1,88 +1,87 @@
-# ADR-0038 关闭确认不用浏览器的 `confirm()`，用自己的浮层
+# ADR-0038 Close confirmation uses our own overlay, not the browser's `confirm()`
 
-状态：已接受（2026-10-31）。修订 [session-ux.md](../../40-frontend/session-ux.md) §关闭会话。浮层的两种形态沿用 [ADR-0037](0037-settings-theme-and-font-size.md) §4。
+Status: Accepted (2026-10-31). Revises [session-ux.md, Closing a session](../../40-frontend/session-ux.md#closing-a-session). The two overlay forms follow [ADR-0037](0037-settings-theme-and-font-size.md) §4.
 
-## 背景
+## Context
 
-关闭一个还在跑的会话要二次确认。现在用的是 `window.confirm()`，用户的反馈是：
+Closing a running session asks for confirmation. It used `window.confirm()`, and the user asked for something more polished, for example a bottom sheet like the session list on narrow screens.
 
-> 现在，关闭时的确认用的浏览器默认的对话框？能否精致些，比如窄屏就有跟会话一览一样的底部抽屉来确认
+The browser dialog has other problems:
 
-浏览器的对话框还有几处不好：
+- Its look is up to the browser, unlike the rest of the UI, and it ignores the theme setting.
+- On phones it appears mid-screen, with both buttons far from the thumb.
+- It blocks synchronously: while it's open, all page JS stops, including WebSocket message handling.
+- Its title shows the site address ("xxx says"), which reads like a system warning.
 
-- 样子由浏览器决定，和界面其他部分不是一套，深浅色也不跟着设置走。
-- 手机上它弹在屏幕中间，两个按钮离拇指远。
-- 它是同步阻塞的：弹着的时候整个页面的 JS 都停住，连 WebSocket 的消息也要等它关掉才处理。
-- 标题栏里带着站点地址（「xxx 显示」），像一条系统警告。
+## Decision
 
-## 决策
+### 1. A confirmation overlay built on the `Drawer` primitive
 
-### 1. 用 `Drawer` 原语画一个确认浮层
+Same forms as settings, by `compact` / `wide`:
 
-形态和设置一样，看 `compact` / `wide`：
-
-| | `compact`（手机） | `wide`（PC / Pad） |
+| | `compact` (phone) | `wide` (PC / tablet) |
 |---|---|---|
-| 形态 | 贴底整宽 sheet，和会话抽屉一样 | 居中浮窗，宽 `min(420px, 100vw − 32px)` |
+| Form | Bottom-anchored full-width sheet, like the session drawer | Centered dialog, width `min(420px, 100vw − 32px)` |
 
 ```
 ┌─────────────── ═══ ───────────────┐
-│ 关闭「webterm」？               ✕ │
+│ Close "webterm"?                ✕ │
 ├───────────────────────────────────┤
-│ 会话里的程序会被结束。            │
+│ Programs running in it will be    │
+│ terminated.                       │
 ├───────────────────────────────────┤
 │  ┌─────────────┐ ┌─────────────┐  │
-│  │    取消     │ │    关闭     │  │  关闭用警示色
+│  │   Cancel    │ │    Close    │  │  Close in the warning color
 │  └─────────────┘ └─────────────┘  │
-│                                   │  下 max(16px, 安全区)
+│                                   │  bottom: max(16px, safe area)
 └───────────────────────────────────┘
 ```
 
-- `data-testid="close-confirm"`；按钮 `close-cancel`、`close-ok`。
-- 底部一行的留白和按钮样式与会话抽屉的底部一行相同（ADR-0037 §5），两个按钮等宽。「关闭」用 `--err` 的文字色。
-- 正文只有一句「会话里的程序会被结束。」，不展开解释。
-- **打开时焦点在「关闭」上**：`Enter` 确认、`Esc` 取消，和以前的 `confirm()` 一样。用键盘的人按 `Ctrl+Shift+W` 再按 `Enter`，手不用离开键盘。
-- 取消的方式就是浮层的关法：点遮罩、`Esc`、✕、（sheet）下滑、「取消」。
+- `data-testid="close-confirm"`; buttons `close-cancel` and `close-ok`.
+- The bottom row's spacing and button style match the session drawer's bottom row (ADR-0037 §5); the two buttons are equal width. "Close" uses `--err` for its text.
+- The body is a single sentence saying programs in the session will be terminated, with no further explanation.
+- **Focus starts on "Close"**: `Enter` confirms and `Esc` cancels, as with `confirm()`. Keyboard users press `Ctrl+Shift+W` then `Enter` without leaving the keyboard.
+- Cancel the same ways any overlay closes: tap the backdrop, `Esc`, ✕, (sheet) swipe down, or "Cancel".
 
-### 2. 能叠在会话抽屉上面
+### 2. It can stack on top of the session drawer
 
-手机上从会话抽屉里长按一行 →「关闭」，确认浮层叠在抽屉上面，抽屉不关：确认或取消之后，用户仍在列表里。
+On a phone, closing a session from the drawer stacks the confirmation on top of the drawer, which stays open: after confirming or cancelling, the user is still in the list.
 
-- 两层浮层同时在时，**`Esc` 只关最上面那一层**。每个 `Drawer` 收到 `Esc` 时先看自己是不是 DOM 里最后一个 `.drawer`，不是就不管。
-- 点遮罩只会点到最上面那一层的遮罩。
+- With two overlays open, **`Esc` closes only the top one**. On `Esc`, each `Drawer` first checks whether it's the last `.drawer` in the DOM and ignores the key if not.
+- A backdrop tap can only reach the top overlay's backdrop.
 
-### 3. 焦点
+### 3. Focus
 
-打开确认之前先记下焦点在哪。确认或取消之后，如果当时焦点在终端（或文本输入页）里，或者是非触摸设备，就把焦点还回去；从会话抽屉里打开的不还（焦点留在抽屉里）。
+Record where focus was before opening. After confirming or cancelling, return it if it was in the terminal (or the text page), or if the device is non-touch. When opened from the session drawer, don't return it (focus stays in the drawer).
 
-确认时**先还焦点、再发 `session.close`**。agent 回 `session.closed` 之后切到相邻会话，这一步要看「焦点在不在终端里」来决定给不给新会话焦点（AC-4.8）。如果先发再还，那一刻焦点还在 body 上，会被判成「没在打字」。
+On confirm, **return focus first, then send `session.close`**. When the agent replies `session.closed`, the client switches to a neighboring session, and whether that session gets focus depends on "was focus in the terminal" (AC-4.8). Sending first would leave focus on the body at that moment, and the user would be judged as not typing.
 
-### 4. 确认之前会话没了
+### 4. The session disappears before confirmation
 
-确认浮层开着的时候，这个会话可能已经被关掉了：在别的标签页里关的，或者 agent 重启了。会话一从列表里消失，确认浮层就跟着关。`sid` 会复用，留着的话，可能会关掉后来新建的那个同号会话。
+While the overlay is open, the session may already be gone: closed from another tab, or the agent restarted. As soon as the session leaves the list, the overlay closes. sids are reused, so leaving it open could close a later session with the same number.
 
-### 5. 关闭中的会话不再收任何东西，它的「会话不存在」不弹
+### 5. A closing session receives nothing, and its "unknown session" error isn't shown
 
-用户还报了一条：在标签上关掉会话之后，又弹出一条「会话不存在」。
+The user also reported an "unknown session" toast appearing after closing a session from its tab.
 
-agent 处理 `session.close` 的顺序是：**先把会话从表里删掉，再等进程退出**（`SIGHUP`，最多 2 秒后 `SIGKILL`），最后才广播 `session.closed`。这段时间里客户端还以为会话在，发给它的任何东西都换来 `error{code: "unknown_session"}`，客户端再把它弹成 toast。最常见的来源是**焦点上报**：tmux（`focus-events on`）、claude 这类程序开了 `DECSET 1004`，终端一失焦、得焦就发 `ESC [O` / `ESC [I`。老的 `confirm()` 对话框一关，焦点回到终端，正好在关闭的这段时间里发出去。拆掉 xterm 实例时它失焦，也会再发一次。
+The agent handles `session.close` in this order: **remove the session from the table, wait for the process to exit** (`SIGHUP`, then `SIGKILL` after at most 2 seconds), and only then broadcast `session.closed`. Meanwhile the client still thinks the session exists, and anything it sends gets `error{code: "unknown_session"}`, which the client showed as a toast. The most common source is **focus reports**: programs like tmux (`focus-events on`) and claude enable `DECSET 1004`, so the terminal sends `ESC [O` / `ESC [I` whenever it loses or gains focus. When the old `confirm()` dialog closed, focus returned to the terminal right inside that window. Tearing down the xterm instance blurs it and sends one more.
 
-客户端的处理：
+On the client:
 
-- 发出 `session.close` 之后，到收到 `session.closed` 之前，这个会话算「关闭中」：它的输入（键入、焦点上报、鼠标上报）、`resize` 一律不发。拆 xterm 实例时也先标成关闭中，再拆。
-- `unknown_session` 错误，如果对应的会话正在关闭、或者本地已经没有了，就不弹：会话本来就要没了，这条提示没有信息量。本地还在、也没在关的会话收到它，照旧弹（那是真的不同步了）。
-- 确认浮层里的按钮被 `Enter` 触发时，吞掉这个按键的默认动作：浏览器在 `keydown` 上就触发了 `click`，焦点随即回到终端，随后的 `keypress` 会落进终端，多出一个回车。
+- From sending `session.close` until `session.closed` arrives, the session is "closing": its input (typing, focus reports, mouse reports) and `resize` are not sent. When tearing down an xterm instance, mark it closing first.
+- An `unknown_session` error for a session that is closing, or no longer exists locally, isn't shown: the session is going away and the message carries no information. For a session that exists locally and isn't closing, it's still shown (that's a real desync).
+- When `Enter` triggers a button in the overlay, suppress the key's default action. Browsers fire `click` on `keydown`, focus then returns to the terminal, and the following `keypress` would land there as an extra Enter.
 
-不改 agent 的顺序：`session.closed` 要带退出码，只能在进程退出之后发。
+The agent's order doesn't change: `session.closed` carries the exit code, so it can only be sent after the process exits.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **不要确认，改成可撤销**（关闭后几秒内显示「撤销」）。关闭会话是先送 `SIGHUP` 再送 `SIGKILL`，程序已经被杀掉了，撤销不回来。
-- **确认时先把会话抽屉关掉，再弹确认**。确认完用户还得重新打开列表。
-- **手机上也用居中的浮窗**。按钮离拇指远，而且和会话抽屉不是一套。
+- **No confirmation, offer undo instead** (an "Undo" for a few seconds after closing). Closing sends `SIGHUP` then `SIGKILL`; the program is already dead and can't be brought back.
+- **Close the session drawer first, then confirm.** After confirming, the user has to reopen the list.
+- **Use a centered dialog on phones too.** The buttons are far from the thumb, and it doesn't match the session drawer.
 
-## 后果
+## Consequences
 
-- 新增 AC-4.11（含 §5 的关闭中）。E2E-11 ⑦、E2E-28 ①、E2E-41 ③ 不再监听浏览器的 `dialog` 事件，改为点 `close-ok` / `close-cancel`，并检查确认浮层的形态。
-- `Drawer` 收到 `Esc` 时先判断自己是不是最上面一层。
-- 控制器里加一份 `closing` 状态；`window.confirm` 不再使用。
+- Adds AC-4.11 (including §5's closing state). E2E-11 ⑦, E2E-28 ① and E2E-41 ③ no longer listen for the browser's `dialog` event; they click `close-ok` / `close-cancel` and check the overlay's form.
+- `Drawer` checks whether it's the top overlay before handling `Esc`.
+- The controller gets a `closing` state; `window.confirm` is no longer used.

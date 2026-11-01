@@ -1,95 +1,99 @@
-# ADR-0020 输入路径绝不静默丢弃
+# ADR-0020 Input is never silently dropped
 
-状态：已接受（2026-09-13）
+Status: Accepted (2026-09-13).
 
-用户报告"在终端里打字经常卡住"。排查后发现这不是一个 bug，而是**四条互相独立、症状完全相同的路**：敲下去的键没到 PTY，屏幕上什么都不变，也没有任何提示。本 ADR 记录一条贯穿这四条路的原则和由它导出的两个决策。
+## Context
 
-## 原则
+The user reported "typing in the terminal often gets stuck". It wasn't one bug but **independent paths with identical symptoms**: the keys never reach the PTY, nothing changes on screen, and nothing says why.
 
-**一次按键只有两种结局：送达 PTY，或者用户看得见地失败。**
-
-"看得见地失败"指状态条变成「重连中」、或者一条明确的提示。**不允许静默丢弃** —— 静默丢弃在用户那边和"死机"无法区分，而它触发的下一个动作必然是"再敲一遍"，重连后两遍都会执行。
-
-同一条原则的另一半是：**不允许静默失活**。连接、焦点、组字状态这三样东西一旦停在错误的一侧，用户没有任何线索知道要去点一下终端 / 刷新页面。
-
-## 四条路
-
-| # | 机制 | 症状 | 恢复方式 |
+| # | Mechanism | Symptom | Recovery |
 |---|---|---|---|
-| 1 | 僵尸 WebSocket：线路断了但没有 `onclose`，`readyState` 仍是 OPEN | 状态条写"在线"，打字无回显 | 40 秒后心跳判死，自己好 |
-| 2 | 回放门按会话封锁 `onData` | 切回会话 / 重连后的几秒内打字全丢 | 回放解析完，自己好 |
-| 3 | 切会话时焦点落回 `body` | 打字彻底没反应 | 手动点一下终端 |
-| 4 | `compositionend` 没来，`composing` 永久为真 | 该会话打字彻底没反应 | 切走再切回，或刷新 |
-| 5 | **`client_id` 跨刷新保留，而 `in_seq` 从 0 重来** —— agent 把新输入当成已处理过的重发丢掉（2026-09-19 发现，随 [ADR-0026](0026-agent-holds-terminal-state.md) 修复） | 刷新之后打字没反应 | **没有恢复方式**：点终端、切会话、重连都没用，再刷新反而欠得更多 |
+| 1 | Zombie WebSocket: the link is dead but there's no `onclose`; `readyState` is still OPEN | Status says online, typing has no echo | The heartbeat declares it dead after 40 s and it heals |
+| 2 | The replay gate blocks `onData` per session | All typing lost for a few seconds after switching back to a session or reconnecting | Heals once replay finishes parsing |
+| 3 | Focus falls back to `body` on a session switch | Typing does nothing at all | Tap the terminal |
+| 4 | `compositionend` never arrives, so `composing` stays true forever | Typing does nothing at all in that session | Switch away and back, or reload |
+| 5 | **`client_id` survives a reload while `in_seq` restarts at 0**, so the agent drops new input as already-processed resends (fixed with [ADR-0026](0026-agent-holds-terminal-state.md)) | Typing does nothing after a reload | **None**: tapping the terminal, switching sessions and reconnecting don't help, and reloading again makes it worse |
 
-1 和 2 会叠加：等了 40 秒终于重连，紧接着是回放窗口，打字还是不进去。这就是"经常卡住"的主要来源。
+1 and 2 stack: after finally reconnecting at 40 s, the replay window follows and typing still doesn't get through. That was the main source of "often stuck".
 
-第 5 条是后来补的，它与前四条不同：前四条都会自愈或有恢复动作，它没有 —— agent 记的 `accepted` 只增不减，每刷新一次欠得更多，用户的描述是"一直打不进"。它躲过了好几轮排查，因为浏览器、协议、agent 三方都一声不吭。修法是 `client_id` 的生存期改成一次页面加载（[协议 §4.1、§5.4](../../30-protocol/websocket-protocol.md#54-输入重发队列)），并且 agent 在看到这个形状时留痕。
+Row 5 was added later and differs from the others: the first four heal or have a recovery action; it has neither. The agent's `accepted` count only grows, so each reload owes more ("I can never type"). It survived several rounds of debugging because the browser, the protocol and the agent all stayed silent. The fix scopes `client_id` to one page load ([protocol §4.1, §5.4](../../30-protocol/websocket-protocol.md#54-input-resend-queue)), and the agent leaves a trace when it sees this shape.
 
-## 决策一：活性判定要由外部事件驱动一次即时探活
+## Decision
 
-**原来**：client 每 30 秒发一次 `ping`，10 秒收不到 `pong` 判死（协议 §5.4）。`online` / `visibilitychange` 事件会调 `retryNow()`，但它在 `state === 'online'` 时直接返回。
+**Principle: a keystroke has exactly two outcomes. It reaches the PTY, or it fails visibly.**
 
-问题在于**僵尸连接恰好自认在线**。手机息屏、切 App、Wi-Fi 切蜂窝、NAT/代理静默回收 —— 这些场合 TCP 连接没有 FIN，浏览器不会给 `onclose`，`readyState` 一直是 OPEN。于是唯一的判死渠道只剩心跳，最坏 30 + 10 = 40 秒。而 `setInterval` 在后台标签页还会被节流，实际可能更久。
+"Fails visibly" means the status changes to "reconnecting", or an explicit message appears. **Silent drops are not allowed**: to the user they're indistinguishable from a hang, and the next thing the user does is type it again, so after the reconnect both copies run.
 
-**改为**：`online` 事件与"页面重新可见"不再只是"重连中才有意义的加速器"，而是**活性探针的触发器**：
+The other half of the same principle: **no silent deactivation**. Once the connection, focus or composition state gets stuck on the wrong side, the user has no clue that they need to tap the terminal or reload.
+
+This principle yields two decisions.
+
+### Decision 1: external events trigger an immediate liveness probe
+
+**Before**: the client sent a `ping` every 30 s and declared the connection dead after 10 s without a `pong` (protocol §5.5). `online` / `visibilitychange` called `retryNow()`, which returned immediately when `state === 'online'`.
+
+The problem is that **a zombie connection believes it's online**. Screen off, app switch, Wi-Fi to cellular, a NAT or proxy silently reaping the connection: in all of these the TCP connection gets no FIN, the browser fires no `onclose`, and `readyState` stays OPEN. The heartbeat is then the only detector: worst case 30 + 10 = 40 s, and longer in background tabs, where `setInterval` is throttled.
+
+**Now**: the `online` event and "page visible again" are no longer just reconnect accelerators that matter only while reconnecting. They **trigger a liveness probe**:
 
 ```
 retryNow():
-  已停止           → 什么都不做
-  自认在线         → 立刻发一次 ping，2 秒内没有 pong → 关闭连接 → 走重连
-  其它（重连中等） → 重置退避、立刻重连（原行为）
+  stopped              → do nothing
+  believes it's online → send a ping now; no pong within 2 s → close the connection → reconnect
+  otherwise            → reset backoff, reconnect now (as before)
 ```
 
-2 秒不是心跳的 10 秒：这条探针发生在一个**已知的可疑时刻**（刚从后台回来 / 系统刚说网络变了），此时连接要么是活的（本机 RTT 远小于 2 秒），要么就是死的。判错的代价只是多一次重连，而重连是无损的（续传 + `in_ack` 重发）。
+2 s instead of the heartbeat's 10 s: the probe happens at a **known suspicious moment** (just back from the background, or the OS just reported a network change), when the connection is either alive (local RTT is far below 2 s) or dead. A wrong call costs one reconnect, and reconnects are lossless (resume + `in_ack` resend).
 
-**不采纳的方案**：把心跳间隔从 30 秒调小。那是拿全时段的电量和流量去买一个只在特定时刻才需要的结论 —— 手机上心跳是最不该加密的开销，而"刚回到前台"这个时刻是免费且精确的。
+**Rejected**: shortening the 30 s heartbeat. That spends battery and data all the time to get an answer needed only at specific moments. On phones the heartbeat is the last overhead to make more frequent, and "just came back to the foreground" is a free and precise moment.
 
-## 决策二：回放门的判据是"谁产生的"，不是"什么时候"
+### Decision 2: the replay gate asks who produced the data, not when
 
-**原来**（97a0baa）：回放期间整条 `onData` 关掉。理由正确 —— 回放的历史字节里有程序发过的终端查询（DSR / DA / `CSI ?u`），xterm 会**自动应答**，那不是用户输入，送进 PTY 就是给前台程序喂乱码（协议 §5.2 / AC-2.15）。
+**Before**: during replay, all `onData` was blocked. The reason is right: replayed history contains terminal queries the program sent (DSR / DA / `CSI ?u`), and xterm **answers them automatically**. Those answers aren't user input; sending them to the PTY feeds garbage to the foreground program (protocol §5.3 / AC-2.15).
 
-问题在于判据选错了维度。`onData` 上有两种东西：
+The problem is that the gate used the wrong dimension. `onData` carries two kinds of data:
 
-| 来源 | 什么时候发生 |
+| Source | When it happens |
 |---|---|
-| xterm 对历史查询的自动应答 | 同步发生在 `term.write()` 的解析里 |
-| 用户的按键 / 粘贴 | 同步发生在一个 DOM 输入事件的派发里 |
+| xterm's automatic answers to historical queries | Synchronously, inside `term.write()` parsing |
+| User keystrokes / paste | Synchronously, inside the dispatch of a DOM input event |
 
-按"会话此刻是否在回放"封锁，等于用时间去近似来源，于是**把用户的按键一起吞掉**了。而回放窗口不是一瞬间：ring 默认 1 MiB，切回一个跑过大量输出的会话就是整段 reset 回放，xterm 按 12ms 分片让出主线程，手机上是**秒级**的。
+Gating on "is this session replaying right now" approximates the source by time, and **swallows the user's keystrokes along with it**. And the replay window isn't instant: switching back to a session that produced a lot of output means a full reset replay of the ring buffer, which xterm parses in 12 ms slices to yield the main thread. On a phone that takes **seconds**.
 
-**改为**：直接问浏览器"此刻正在派发的是哪个事件" —— `window.event`（DOM 标准里为兼容保留的那个全局，Chrome / Safari / Firefox 都有）。它在事件派发期间指向当前事件，派发结束即恢复，正好就是我们要的那个判据：
+**Now**: ask the browser directly which event is being dispatched right now: `window.event`, the global kept in the DOM standard for compatibility (Chrome, Safari and Firefox all have it). It points at the current event during dispatch and resets afterwards, which is exactly the test we need:
 
 ```
 onData(data):
   window.event?.type ∈ {keydown, keypress, beforeinput, input, paste, compositionend, compositionupdate}
-                        → 放行（哪怕在回放）
-  否则 replayDepth > 0  → 丢弃（自动应答，原行为）
-  否则                  → 放行
+                          → pass (even during replay)
+  else if replayDepth > 0 → drop (automatic answer, as before)
+  else                    → pass
 ```
 
-它精确覆盖了几个容易漏的情形：
+It covers the easy-to-miss cases exactly:
 
-- xterm 的 `WriteBuffer` 在用户刚输入过之后会**同步**解析下一次 `write()`（它自己的 `_didUserInput` 优化）。而那次 `write()` 是在 WebSocket 的 `message` 事件里发起的 —— `window.event.type === 'message'`，不在表里，自动应答照样被拦住。
-- `setTimeout` 驱动的分片解析没有正在派发的事件，`window.event` 是 `undefined`，同样被拦住。
+- Right after user input, xterm's `WriteBuffer` parses the next `write()` **synchronously** (its `_didUserInput` optimization). That `write()` was started from the WebSocket `message` event, so `window.event.type === 'message'`, which isn't in the list, and the automatic answer is still blocked.
+- Slice parsing driven by `setTimeout` has no event being dispatched; `window.event` is `undefined`, so it's blocked too.
 
-**不用"自己挂监听器开一个时间窗"**：xterm 对它处理掉的按键会 `preventDefault + stopPropagation`（`cancel(event, true)`），冒泡阶段收不到，窗口只能靠定时器关 —— 而定时器任务与网络任务之间没有顺序保证，中间插进来的一次解析就会把自动应答放出去。`window.event` 没有这个缝。
+**Not a time window opened by our own listener**: xterm calls `preventDefault + stopPropagation` (`cancel(event, true)`) on keys it handles, so a bubbling listener never sees them, and the window could only be closed by a timer. There's no ordering guarantee between timer tasks and network tasks, so a parse slipping in between would let an automatic answer through. `window.event` has no such gap.
 
-`window.event` 万一不存在（非浏览器环境），判据恒为 false，行为**退回改之前的样子**，不会更糟。
+If `window.event` doesn't exist (a non-browser environment), the test is always false and behavior **reverts to the old gate**, never worse.
 
-**为什么不干脆去掉回放门**：自动应答是真实存在的，E2E-30 会抓到。
+**Why not remove the replay gate**: the automatic answers are real, and E2E-30 catches them.
 
-**为什么不按内容过滤**（"看起来像 DSR 应答就丢"）：用户完全可以手敲出同样的字节，而且过滤表要跟着终端查询集合走，永远漏。
+**Why not filter by content** ("drop anything that looks like a DSR reply"): users can type exactly the same bytes, and the filter would have to track the set of terminal queries forever, always missing some.
 
-## 推论（不是新决策，是上面原则的直接后果）
+### Corollaries
 
-- **焦点跟着会话走。** `activate()` 把上一个会话的 DOM 摘掉时焦点会落回 `body`，切过去的新会话没人给它焦点。规则：切换前焦点在终端里，切换后就还给终端；桌面（非触摸）无条件还给终端 —— 那里没有软键盘要顾虑。见 [`../../40-frontend/session-ux.md`](../../40-frontend/session-ux.md)。
-- **组字状态必须有兜底复位。** `composing` 只由 `compositionend` 复位，而它在切输入法 / 切窗口时可能不来。加两条兜底：`blur`，以及捕获阶段一个 `isComposing === false` 的 `keydown`（它本身就证明组字已经结束）。见 [`../../40-frontend/input.md`](../../40-frontend/input.md)。
-- **这条原则要可观测**（2026-09-19 补）。上面只约束了实现，没有回答「**怎么确认它没被违反**」—— 四条路修完之后再遇到"打字没反应"，第一步仍然是猜。所以输入路径按段留计数：按键到达页面 → 焦点在终端 → xterm 吐出 `onData` → 发给 agent → agent 确认，每段都有计数与**最近一次发生的时刻**，断点落在哪一段一眼可见（`__webterm.inputStats()`，AC-3.17，见 [`../../40-frontend/input.md`](../../40-frontend/input.md)）。它同样覆盖**不在 webterm 内**的那一类：四段全通而程序没反应，说明问题在 PTY 那一侧 —— 最常见的是 tmux 的 copy-mode（[ADR-0024](0024-scrollback-layered-model.md) §4）。
+These aren't new decisions; they follow directly from the principle.
 
-## 后果
+- **Focus follows the session.** When `activate()` detaches the previous session's DOM, focus falls back to `body`, and nobody gives it to the new session. Rule: if focus was in the terminal before the switch, give it back to the terminal after; on desktop (non-touch), always give it back, since there's no on-screen keyboard to worry about. See [`../../40-frontend/session-ux.md`](../../40-frontend/session-ux.md).
+- **Composition state needs a fallback reset.** `composing` was only reset by `compositionend`, which may never arrive when switching IMEs or windows. Two fallbacks: `blur`, and a capture-phase `keydown` with `isComposing === false` (which itself proves composition has ended). See [`../../40-frontend/input.md`](../../40-frontend/input.md).
+- **The principle must be observable.** The rules above constrain the implementation but don't answer "**how do we confirm it isn't being violated?**" After the four paths were fixed, the next "typing does nothing" would still start with guessing. So the input path keeps a counter per stage: key reaches the page → focus is in the terminal → xterm emits `onData` → sent to the agent → acknowledged by the agent. Each stage has a count and the **time of its last occurrence**, so the break point is visible at a glance (`__webterm.inputStats()`, AC-3.17, see [`../../40-frontend/input.md`](../../40-frontend/input.md)). It also covers problems **outside webterm**: if all stages pass and the program doesn't react, the problem is on the PTY side, most often tmux copy-mode ([ADR-0024](0024-scrollback-layered-model.md) §4).
 
-- 僵尸连接的暴露时间从最坏 40 秒降到 ~2 秒，且发生在用户最可能正要打字的那一刻（刚解锁手机）。
-- 回放期间打字不再丢；自动应答仍然被拦住。
-- 多了一个"用户输入事件窗口"的概念要维护：新增一种能产生 `onData` 的用户交互（例如鼠标跟踪）时，如果希望它在回放期间也放行，要把对应事件加进这张表。**不加也不会退化** —— 它只是回到原来的行为。
-- `ping` 的协议语义没变，探针复用同一条消息，agent 侧不需要改。
+## Consequences
+
+- Zombie connections are exposed in ~2 s instead of up to 40 s, and at the moment the user is most likely about to type (just unlocked the phone).
+- Typing during replay is no longer lost; automatic answers are still blocked.
+- One more concept to maintain, the list of "user input events". If a new user interaction produces `onData` (mouse tracking, for example) and should pass during replay, add its event type to the list. **Forgetting doesn't regress anything**; it just behaves as before.
+- `ping`'s protocol semantics are unchanged. The probe reuses the same message, and the agent needs no changes.

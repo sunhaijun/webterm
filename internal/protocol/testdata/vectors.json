@@ -1,5 +1,5 @@
 {
-  "_comment": "前后端共用的 fixture。Go 侧 internal/protocol 与 TS 侧 web/src/protocol 都必须跑它，防止实现漂移。契约见 docs/30-protocol/websocket-protocol.md §9（协议版本 2）。注意 seq 是【字符串】：它是 uint64，超过 2^53 的值过不了 JS 的 JSON.parse。data_len 是本帧计入 seq 的字节数：OUTPUT / INPUT 是 payload 长度，SNAPSHOT 是 0（快照字节不计入 out_seq）。",
+  "_comment": "Fixture shared by the Go (internal/protocol) and TS (web/src/protocol) implementations; both must run it so they cannot drift. Contract: docs/30-protocol/websocket-protocol.md §9 (protocol version 2). seq is a string because it is a uint64 and values above 2^53 do not survive JSON.parse in JS. data_len is how many bytes the frame adds to seq: the payload length for OUTPUT / INPUT, 0 for SNAPSHOT (snapshot bytes do not count toward out_seq).",
   "binary_frames": [
     {
       "name": "output_basic",
@@ -24,7 +24,7 @@
         "payload_hex": "1b5b48"
       },
       "data_len": 0,
-      "note": "flags bit0 = MORE：同一份快照后面还有帧。SNAPSHOT 的 seq 是快照对应的 out_seq，快照字节不计入 out_seq"
+      "note": "flags bit0 = MORE: more frames of the same snapshot follow. A SNAPSHOT seq is the out_seq the snapshot represents; snapshot bytes do not count toward out_seq"
     },
     {
       "name": "snapshot_last",
@@ -37,7 +37,7 @@
         "payload_hex": "1b5b324a"
       },
       "data_len": 0,
-      "note": "一份快照的最后一帧（或唯一一帧）：MORE 位为 0。收齐后 terminal.reset() → 换解码器 → 写入 → out_seq = seq"
+      "note": "Last (or only) frame of a snapshot: MORE is 0. Once complete: terminal.reset(), new decoder, write, out_seq = seq"
     },
     {
       "name": "input_basic",
@@ -62,7 +62,7 @@
         "payload_hex": "41"
       },
       "data_len": 1,
-      "note": "seq = MaxUint64 边界"
+      "note": "seq = MaxUint64 boundary"
     },
     {
       "name": "output_sid_zero",
@@ -75,7 +75,7 @@
         "payload_hex": "2a"
       },
       "data_len": 1,
-      "note": "sid=0 在帧编解码层是合法的；它作为无效值的语义由会话层负责"
+      "note": "sid=0 is valid at the frame codec layer; treating it as invalid is the session layer's job"
     },
     {
       "name": "output_binary_payload",
@@ -88,7 +88,7 @@
         "payload_hex": "e4b8ade696870aff00fe"
       },
       "data_len": 10,
-      "note": "payload 可以是任意字节序列，包括非法 UTF-8（ff 00 fe）"
+      "note": "The payload may be any byte sequence, including invalid UTF-8 (ff 00 fe)"
     },
     {
       "name": "output_reserved_flag_ignored",
@@ -101,7 +101,7 @@
         "payload_hex": "6869"
       },
       "data_len": 2,
-      "note": "bit0 只对 SNAPSHOT 有意义；OUTPUT 上的保留位接收方忽略，不是错误"
+      "note": "bit0 means something only on SNAPSHOT; on OUTPUT it is reserved and receivers ignore it, not an error"
     }
   ],
   "invalid_frames": [
@@ -168,7 +168,7 @@
         "protocol": 2,
         "server_version": "0.2.0",
         "instance_id": "a91e5c",
-        "home": "/home/sun",
+        "home": "/home/user",
         "limits": {
           "max_sessions": 20,
           "ring_bytes": 262144,
@@ -179,7 +179,7 @@
             "sid": 1,
             "name": "webterm",
             "name_is_manual": false,
-            "cwd": "/home/sun/github/webterm",
+            "cwd": "/home/user/github/webterm",
             "status": "running",
             "exit_code": null,
             "cols": 80,
@@ -206,7 +206,7 @@
         "protocol": 2,
         "server_version": "0.2.0",
         "instance_id": "a91e5c",
-        "home": "/home/sun",
+        "home": "/home/user",
         "limits": {
           "max_sessions": 20,
           "ring_bytes": 262144,
@@ -217,7 +217,7 @@
             "sid": 1,
             "name": "webterm",
             "name_is_manual": false,
-            "cwd": "/home/sun/github/webterm",
+            "cwd": "/home/user/github/webterm",
             "status": "running",
             "exit_code": null,
             "cols": 80,
@@ -236,7 +236,7 @@
           }
         ]
       },
-      "note": "out_seq 落出窗口 / 为 0 / 列数变了：等 SNAPSHOT 帧，from_seq = 快照的 seq"
+      "note": "out_seq outside the window, out_seq 0, or column count changed: expect SNAPSHOT frames; from_seq = the snapshot's seq"
     },
     {
       "name": "welcome_gone_after_restart",
@@ -245,7 +245,7 @@
         "protocol": 2,
         "server_version": "0.2.0",
         "instance_id": "b02f7d",
-        "home": "/home/sun",
+        "home": "/home/user",
         "limits": {
           "max_sessions": 20,
           "ring_bytes": 262144,
@@ -307,7 +307,7 @@
         "sid": 1,
         "before": null
       },
-      "note": "before 为 null = 挪到最后"
+      "note": "before null = move to the end"
     },
     {
       "name": "session_closed",
@@ -333,7 +333,7 @@
         "name": "api",
         "cwd": "/srv/api"
       },
-      "note": "cwd 来自 /proc/<前台进程组>/cwd，每秒读一次，变了才发；name_is_manual == false 时 name 跟着变"
+      "note": "cwd comes from /proc/<foreground process group>/cwd, polled once a second and sent only on change; name follows it when name_is_manual is false"
     },
     {
       "name": "session_order",
@@ -342,7 +342,7 @@
         "req_id": "r4",
         "sids": [3, 1, 2]
       },
-      "note": "session.move 成功后广播；sids 是完整的显示顺序，client 整个替换。req_id 只在发起方的副本上"
+      "note": "Broadcast after a successful session.move. sids is the full display order; clients replace theirs wholesale. Only the requester's copy carries req_id"
     },
     {
       "name": "session_order_broadcast",
@@ -350,7 +350,7 @@
         "t": "session.order",
         "sids": [3, 1, 2]
       },
-      "note": "其它连接收到的副本：没有 req_id"
+      "note": "Copy sent to other connections: no req_id"
     },
     {
       "name": "subscribe",
@@ -369,7 +369,7 @@
         "sid": 1,
         "out_seq": 483920
       },
-      "note": "省略 cols/rows = 沿用会话当前尺寸（老客户端就是这样）"
+      "note": "Omitted cols/rows keep the session's current size (what older clients send)"
     },
     {
       "name": "unsubscribe",
@@ -415,7 +415,7 @@
         "t": "error",
         "req_id": "r1",
         "code": "session_limit",
-        "message": "会话数已达上限 20"
+        "message": "session limit reached (20)"
       }
     },
     {
@@ -424,7 +424,7 @@
         "t": "error",
         "sid": 3,
         "code": "input_stalled",
-        "message": "会话输入队列已满"
+        "message": "session input queue is full"
       }
     },
     {
@@ -432,7 +432,7 @@
       "json": {
         "t": "notice",
         "level": "warn",
-        "message": "agent 即将重启，所有会话将结束"
+        "message": "agent is restarting; all sessions will end"
       }
     }
   ],
@@ -443,7 +443,7 @@
         "t": "session.split",
         "sid": 1
       },
-      "note": "接收方必须忽略，不能关连接"
+      "note": "Receivers must ignore it, not close the connection"
     }
   ]
 }

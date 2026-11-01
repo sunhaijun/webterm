@@ -1,11 +1,13 @@
 /**
- * 会话在 client 侧的表示 —— docs/40-frontend/session-ux.md。
+ * Client-side sessions (docs/40-frontend/session-ux.md).
  *
- * 每个会话一个 xterm 实例，【切走时不销毁】，只把 DOM 摘下来：切回去时屏幕内容、
- * 滚动位置、选区全部保持（走增量时）。
+ * One xterm instance per session. Switching away does not destroy it, only detaches its
+ * DOM, so on switch-back the screen, scroll position and selection are intact (when the
+ * agent sends a delta).
  *
- * 这里管：会话元数据、终端实例、输出写入（OUTPUT / SNAPSHOT）、回放门、
- * 进程结束提示行、订阅（只订阅当前可见的 + 保持接收的）。不管 UI。
+ * Owns session metadata, terminal instances, output writes (OUTPUT / SNAPSHOT), the replay
+ * gate, the process-exited line and subscriptions (only the visible session plus pinned
+ * ones). No UI.
  */
 import type { ITheme } from '@xterm/xterm'
 
@@ -15,7 +17,7 @@ import { createTerminal, exitLine, type TermHandle } from '../term/terminal'
 import { moveBefore } from '../ui/reorder'
 import { inUserInputEvent } from '../term/userinput'
 
-/** store 需要的那一小块连接层。 */
+/** The slice of the connection layer the store needs. */
 export interface ConnLike {
   subscribe(sid: number, cols?: number, rows?: number): void
   unsubscribe(sid: number): void
@@ -25,49 +27,52 @@ export interface ConnLike {
   isUnread(sid: number): boolean
 }
 
-/** 给 UI 的只读视图。 */
+/** Read-only view for the UI. */
 export interface SessionView {
   sid: number
   name: string
   cwd: string
   status: SessionStatus
   exitCode: number | null
-  /** `[n]`：当前显示顺序里的第几个（从 1 开始，ADR-0040）。 */
+  /** `[n]`: 1-based position in the current display order (ADR-0040). */
   index: number
-  /** 保持接收（pin 订阅）。 */
+  /** Pinned: stays subscribed while in the background. */
   pinned: boolean
-  /** 非当前会话且 headSeq > outSeq。 */
+  /** Not the active session and headSeq > outSeq. */
   unread: boolean
   active: boolean
 }
 
 export interface StoreHooks {
   onChange(): void
-  /** 过了回放门的 onData：用户输入，或 live 期间终端对查询的应答。 */
+  /** onData that passed the replay gate: user input, or terminal replies to live queries. */
   onData(sid: number, data: string): void
-  /** xterm 的 onBinary（部分鼠标上报编码），同样过了回放门。 */
+  /** xterm's onBinary (some mouse report encodings), also past the replay gate. */
   onBinary?(sid: number, data: string): void
-  /** 应用级快捷键：返回 false 表示拦下来，不让它进 PTY。 */
+  /** App-level shortcuts: return false to keep the key out of the PTY. */
   allowKey(e: KeyboardEvent): boolean
   theme(): ITheme | undefined
-  /** 当前设置的终端字号（AC-5.3）：新建的实例用它。 */
+  /** The configured terminal font size (AC-5.3), used for new instances. */
   fontSize(): number
 }
 
 interface Entry {
   info: SessionInfo
   term: TermHandle
-  /** 承载 xterm DOM 的容器，切走时从可见区摘下来。 */
+  /** Container holding the xterm DOM; detached from the page when switching away. */
   host: HTMLElement
   opened: boolean
   pinned: boolean
-  /** 进程结束提示行已经写过（快照会清屏，写快照时复位）。 */
+  /** The process-exited line has been written (reset on snapshot, which clears the screen). */
   exitShown: boolean
 }
 
 export class SessionStore {
   private readonly entries = new Map<number, Entry>()
-  /** 显示顺序（ADR-0040）：agent 给的，新建的排最后。可能含还没收到 session.created 的 sid（占位）。 */
+  /**
+   * Display order (ADR-0040), as given by the agent, with new sessions appended. May hold
+   * placeholder sids whose session.created hasn't arrived yet.
+   */
   private order: number[] = []
   private readonly conn: ConnLike
   private readonly h: StoreHooks
@@ -94,7 +99,7 @@ export class SessionStore {
     return this.entries.get(sid)?.term
   }
 
-  /** 按显示顺序（agent 给的，ADR-0040）。 */
+  /** Sessions in display order (from the agent, ADR-0040). */
   list(): SessionView[] {
     return this.ordered().map((e, i) => ({
       sid: e.info.sid,
@@ -123,8 +128,9 @@ export class SessionStore {
     host.dataset.sid = String(info.sid)
     const sid = info.sid
 
-    // 回放门（§5.3 / ADR-0020）：回放的字节还没解析完时，只放行【正在派发用户输入事件】
-    // 时产生的 onData；其余的是 xterm 对历史查询的自动应答，不能当按键送进 PTY
+    // Replay gate (§5.3 / ADR-0020): while replayed bytes are still being parsed, only pass
+    // onData produced during a user input event. Anything else is xterm auto-replying to
+    // old queries and must not reach the PTY as keystrokes.
     const gate = (): boolean => {
       inputTrace.bump('data')
       if (!inUserInputEvent() && term.replaying()) {
@@ -143,7 +149,7 @@ export class SessionStore {
 
     const entry: Entry = { info, term, host, opened: false, pinned: false, exitShown: false }
     this.entries.set(sid, entry)
-    if (!this.order.includes(sid)) this.order.push(sid) // 新建的排最后（ADR-0040）
+    if (!this.order.includes(sid)) this.order.push(sid) // New sessions go last (ADR-0040)
     this.maybeExitLine(entry)
     this.h.onChange()
   }
@@ -168,17 +174,18 @@ export class SessionStore {
     this.h.onChange()
   }
 
-  /** 全部作废（agent 重启过）。 */
+  /** Drops everything (the agent restarted). */
   clear(): void {
     for (const sid of [...this.entries.keys()]) this.remove(sid)
   }
 
   /**
-   * 把某个会话挂到可见容器里并订阅它（session-ux.md §订阅策略）。
+   * Mounts a session in the visible container and subscribes to it (session-ux.md,
+   * subscription strategy).
    *
-   *   1. unsubscribe(当前会话)（开着保持接收的不退）
-   *   2. 挂载 X.term 的 DOM → fit()
-   *   3. subscribe(X, out_seq, cols, rows)   ← 尺寸【就在这条消息里】，不单发 resize
+   *   1. unsubscribe(current session) (unless pinned)
+   *   2. mount X.term's DOM → fit()
+   *   3. subscribe(X, out_seq, cols, rows)   ← the size rides in this message; no separate resize
    */
   activate(sid: number, container: HTMLElement): void {
     const e = this.entries.get(sid)
@@ -202,7 +209,7 @@ export class SessionStore {
     this.h.onChange()
   }
 
-  /** 保持接收：切走也不退订。默认关闭，开了要付流量。 */
+  /** Pin: stay subscribed after switching away. Off by default since it costs bandwidth. */
   togglePinned(sid: number): void {
     const e = this.entries.get(sid)
     if (!e) return
@@ -214,7 +221,7 @@ export class SessionStore {
     this.h.onChange()
   }
 
-  /** OUTPUT 帧（连接层已去重、已判好是不是补课）。 */
+  /** An OUTPUT frame (already deduplicated and classified as catch-up or not by the connection). */
   output(sid: number, data: Uint8Array, replay: boolean): void {
     const e = this.entries.get(sid)
     if (!e) return
@@ -222,7 +229,7 @@ export class SessionStore {
     this.maybeExitLine(e)
   }
 
-  /** SNAPSHOT（收齐的一份）：清屏重画；会话已退出就在后面再写一次提示行。 */
+  /** A complete SNAPSHOT: clear and redraw; if the session has exited, write the notice line again after it. */
   snapshot(sid: number, data: Uint8Array): void {
     const e = this.entries.get(sid)
     if (!e) return
@@ -231,14 +238,15 @@ export class SessionStore {
     this.maybeExitLine(e)
   }
 
-  /** 改了主题、或系统切换了深浅色：所有实例一起换（layout.md §主题）。 */
+  /** Theme changed, or the OS switched light/dark: update every instance (layout.md). */
   setTheme(theme: ITheme | undefined): void {
     for (const e of this.entries.values()) e.term.term.options.theme = theme ?? {}
   }
 
   /**
-   * 改字号：所有实例一起换，对挂着的那个 fit()；没挂着的切过去时 activate() 会 fit。
-   * 【调用方还欠一条 resize】：字符格变了而容器没变，ResizeObserver 不会响（AC-5.3）。
+   * Font size change: update every instance and fit() the mounted one; the others fit on
+   * activate(). The caller still owes a resize: the cell size changed but the container
+   * didn't, so ResizeObserver stays quiet (AC-5.3).
    */
   setFontSize(px: number): void {
     for (const e of this.entries.values()) {
@@ -247,7 +255,7 @@ export class SessionStore {
     }
   }
 
-  /** 关闭之后切到相邻会话：优先后一个，没有就前一个。 */
+  /** The neighbor to switch to after a close: the next one, else the previous one. */
   neighbourOf(sid: number): number | null {
     const ids = this.ordered().map((e) => e.info.sid)
     const i = ids.indexOf(sid)
@@ -255,7 +263,7 @@ export class SessionStore {
     return ids[i + 1] ?? ids[i - 1] ?? null
   }
 
-  /** 上一个 / 下一个（Ctrl+Shift+↑ / ↓），到头回绕。 */
+  /** Previous / next (Ctrl+Shift+↑ / ↓), wrapping around. */
   step(delta: number): number | null {
     const ids = this.ordered().map((e) => e.info.sid)
     if (ids.length === 0) return null
@@ -276,10 +284,11 @@ export class SessionStore {
   }
 
   /**
-   * agent 给的完整顺序（welcome.sessions[] 的顺序、session.order）：整个替换。
-   * 【还不认识的 sid 也留着占位】：别的连接刚建的会话，session.order 可能先于它的
-   * session.created 到（ADR-0040 §2），到了就落在 agent 给的位置上。
-   * 里面没有的已知会话（刚建、正在关）按原来的相对顺序接在后面。
+   * Replaces the order with the agent's full list (welcome.sessions[] order, session.order).
+   * Unknown sids are kept as placeholders: for a session another connection just created,
+   * session.order may arrive before its session.created (ADR-0040 §2), and it lands where
+   * the agent put it. Known sessions missing from the list (just created, closing) follow
+   * in their previous relative order.
    */
   setOrder(sids: readonly number[]): void {
     const listed = new Set(sids)
@@ -287,7 +296,7 @@ export class SessionStore {
     this.h.onChange()
   }
 
-  /** 本地先挪（松手立刻生效），之后以 agent 的 session.order 为准。 */
+  /** Moves locally first (takes effect on drop); the agent's session.order is authoritative afterwards. */
   move(sid: number, before: number | null): void {
     this.order = moveBefore(this.order, sid, before)
     this.h.onChange()
@@ -298,8 +307,8 @@ export class SessionStore {
   }
 
   /**
-   * 进程结束提示行（AC-4.5）：会话已退出、并且输出已经追平（outSeq ≥ headSeq）时写一次。
-   * 没追平就先不写 —— 否则补课的字节会排到提示行后面。
+   * Process-exited line (AC-4.5): written once when the session has exited and output has
+   * caught up (outSeq ≥ headSeq). Not before, or catch-up bytes would land after it.
    */
   private maybeExitLine(e: Entry): void {
     if (e.exitShown || !shouldShowExitLine(e.info.status, this.conn.outSeqOf(e.info.sid), this.conn.headSeqOf(e.info.sid))) {
@@ -310,19 +319,19 @@ export class SessionStore {
   }
 }
 
-/** 提示行该不该写：已退出且输出已经追平。 */
+/** Whether to write the exit line: exited and caught up. */
 export function shouldShowExitLine(status: SessionStatus, outSeq: number, headSeq: number): boolean {
   return status === 'exited' && outSeq >= headSeq
 }
 
-/** 显示名：agent 已经按 CWD 算好了（AC-4.4），这里只兜底。 */
+/** Display name. The agent already derives it from the CWD (AC-4.4); this is only a fallback. */
 export function displayName(s: Pick<SessionInfo, 'name'>): string {
   return s.name || 'shell'
 }
 
 /**
- * 已退出会话里的输入（session-ux.md §会话结束）：`\r` = 关闭会话，其余丢弃 ——
- * PTY 已经不在了，提示行已经告诉用户该做什么。
+ * Input in an exited session (session-ux.md, session end): `\r` closes the session and
+ * anything else is dropped. The PTY is gone and the exit line tells the user what to do.
  */
 export function routeInput(status: SessionStatus, data: string): 'send' | 'close' | 'drop' {
   if (status !== 'exited') return 'send'
@@ -330,8 +339,9 @@ export function routeInput(status: SessionStatus, data: string): 'send' | 'close
 }
 
 /**
- * 抽屉里显示的 CWD：等于家目录、或在家目录之下时缩成 `~`，否则原样。
- * 家目录来自 `welcome.home`（§4.2）；拿不到就不缩写，不猜。
+ * The CWD shown in the drawer: the home directory or anything under it is abbreviated to
+ * `~`, everything else is shown as is. Home comes from `welcome.home` (§4.2); without it
+ * nothing is abbreviated, no guessing.
  */
 export function shortCwd(cwd: string, home: string | null | undefined): string {
   if (!home || home === '/') return cwd

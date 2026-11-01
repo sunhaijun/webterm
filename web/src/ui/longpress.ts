@@ -1,13 +1,15 @@
 /**
- * 按下 → 判「点一下 / 长按 / 拖走了」。附加键的 CTRL / ALT 锁定、抽屉一行的长按（露出按钮）、
- * 标签的长按（菜单 / 拖动）都用它（ADR-0025 §2、ADR-0039、ADR-0040）。
+ * Classifies a press as tap, long-press or drag. Used by CTRL / ALT locking on the extra
+ * keys, long-press on drawer rows (reveals the buttons) and long-press on tabs (menu /
+ * drag) (ADR-0025 §2, ADR-0039, ADR-0040).
  *
- * 纯状态机，计时器可注入，便于单测。组件把它放在 useRef 里：一次按压跨越多次渲染。
+ * A pure state machine with an injectable timer for unit tests. Components keep it in a
+ * useRef because one press spans several renders.
  */
 
-/** 长按的门槛。 */
+/** Long-press threshold. */
 export const LONG_PRESS_MS = 500
-/** 移动超过这么多就不算「点」也不算「长按」，是拖动。 */
+/** Moving farther than this makes it a drag, neither tap nor long-press. */
 export const TAP_SLOP_PX = 10
 
 export type PressResult = 'tap' | 'long' | 'none'
@@ -37,7 +39,7 @@ export class PressTracker {
     this.timers = timers
   }
 
-  /** 按下。`onLong` 在按满门槛且没拖动时触发（手指还没抬起，反馈要立刻给）。 */
+  /** Press. `onLong` fires once the threshold passes without a drag (the finger is still down, so feedback is immediate). */
   down(x: number, y: number, onLong: () => void): void {
     this.cancel()
     this.active = true
@@ -61,7 +63,7 @@ export class PressTracker {
     }
   }
 
-  /** 抬起：这一下是点、长按、还是拖走了。 */
+  /** Release: was it a tap, a long-press or a drag. */
   up(): PressResult {
     if (!this.active) return 'none'
     this.active = false

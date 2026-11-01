@@ -25,55 +25,55 @@ func newAuthTrusting(t *testing.T, trustProxy bool) (*auth.Auth, *store.Store) {
 	return auth.New(st, false, trustProxy), st
 }
 
-// UT-pair-1..4：一次性、过期、熵、常数时间比较（AC-1.4）。
+// UT-pair-1..4: single use, expiry, entropy, constant-time compare (AC-1.4).
 func TestPairingCode(t *testing.T) {
 	a, _ := newAuth(t)
 	now := time.Now()
 
-	t.Run("熵足够", func(t *testing.T) {
+	t.Run("has enough entropy", func(t *testing.T) {
 		seen := map[string]bool{}
 		for range 100 {
 			code, err := a.NewPairingCode(now)
 			if err != nil {
 				t.Fatal(err)
 			}
-			// 32 字节 base64url 无填充 = 43 个字符
+			// 32 bytes as unpadded base64url = 43 characters
 			if len(code) != 43 {
-				t.Fatalf("配对码长度 = %d, want 43（32 字节熵）", len(code))
+				t.Fatalf("pairing code length = %d, want 43 (32 bytes of entropy)", len(code))
 			}
 			if seen[code] {
-				t.Fatal("生成了重复的配对码")
+				t.Fatal("generated a duplicate pairing code")
 			}
 			seen[code] = true
 		}
 	})
 
-	t.Run("一次性", func(t *testing.T) {
+	t.Run("is single use", func(t *testing.T) {
 		code, _ := a.NewPairingCode(now)
 		if _, _, err := a.Pair(code, "UA", "1.2.3.4", now); err != nil {
-			t.Fatalf("第一次配对失败: %v", err)
+			t.Fatalf("first pairing failed: %v", err)
 		}
 		if _, _, err := a.Pair(code, "UA", "1.2.3.4", now); err == nil {
-			t.Fatal("同一个配对码用了第二次")
+			t.Fatal("same pairing code worked twice")
 		}
 	})
 
-	t.Run("5 分钟过期", func(t *testing.T) {
+	t.Run("expires after 5 minutes", func(t *testing.T) {
 		code, _ := a.NewPairingCode(now)
 		later := now.Add(auth.PairingTTL + time.Second)
 		if _, _, err := a.Pair(code, "UA", "1.2.3.4", later); err == nil {
-			t.Fatal("过期的配对码仍然可用")
+			t.Fatal("expired pairing code still works")
 		}
 	})
 
-	t.Run("错误的码", func(t *testing.T) {
+	t.Run("rejects a wrong code", func(t *testing.T) {
 		if _, _, err := a.Pair("totally-wrong", "UA", "1.2.3.4", now); err == nil {
-			t.Fatal("乱猜的配对码通过了")
+			t.Fatal("guessed pairing code was accepted")
 		}
 	})
 }
 
-// UT-auth-1：库里存的是哈希不是原文（AC-1.10）。
+// UT-auth-1: the store holds hashes, not plaintext tokens (AC-1.10).
 func TestTokenHashedNotStored(t *testing.T) {
 	a, st := newAuth(t)
 	code, _ := a.NewPairingCode(time.Now())
@@ -81,42 +81,42 @@ func TestTokenHashedNotStored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 用原文能查到设备（说明哈希对得上）
+	// Looking up by plaintext finds the device, so the hashes match.
 	got, err := st.DeviceByToken(token)
 	if err != nil || got == nil || got.ID != dev.ID {
-		t.Fatalf("按 token 查设备失败: %v %v", got, err)
+		t.Fatalf("device lookup by token failed: %v %v", got, err)
 	}
-	// 吊销之后就查不到了
+	// After revocation the lookup fails.
 	if err := st.RevokeDevice(dev.ID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	got, err = st.DeviceByToken(token)
 	if err != nil || got != nil {
-		t.Fatal("已吊销的设备仍能用旧 token 查到")
+		t.Fatal("revoked device still found by its old token")
 	}
 }
 
-// UT-reconnect 之外的一条：限速的退避行为（AC-1.6）。
+// Rate limiter backoff behavior (AC-1.6).
 func TestLimiterBackoff(t *testing.T) {
 	l := auth.NewLimiter()
 	now := time.Now()
 	const ip = "9.9.9.9"
 
-	// 一分钟内前 5 次放行
+	// The first 5 attempts within a minute pass.
 	for i := range 5 {
 		if ok, _ := l.Allow(ip, now); !ok {
-			t.Fatalf("第 %d 次就被拦了，应当允许 5 次/分钟", i+1)
+			t.Fatalf("blocked on attempt %d; should allow 5 per minute", i+1)
 		}
 	}
 	ok, retry := l.Allow(ip, now)
 	if ok {
-		t.Fatal("第 6 次应当被限速")
+		t.Fatal("6th attempt should be rate limited")
 	}
 	if retry <= 0 {
-		t.Fatal("被限速时应当给出 Retry-After")
+		t.Fatal("rate-limited response should include Retry-After")
 	}
 
-	t.Run("失败推进指数退避", func(t *testing.T) {
+	t.Run("failures advance exponential backoff", func(t *testing.T) {
 		l := auth.NewLimiter()
 		now := time.Now()
 		var last time.Duration
@@ -124,51 +124,53 @@ func TestLimiterBackoff(t *testing.T) {
 			l.Failed("8.8.8.8", now)
 			_, retry := l.Allow("8.8.8.8", now)
 			if i > 0 && retry <= last {
-				t.Fatalf("第 %d 次失败后退避 %v，没有比上次的 %v 更长", i+1, retry, last)
+				t.Fatalf("backoff after failure %d is %v, not longer than previous %v", i+1, retry, last)
 			}
 			last = retry
 		}
 	})
 
-	t.Run("成功后清零", func(t *testing.T) {
+	t.Run("success resets failures", func(t *testing.T) {
 		l := auth.NewLimiter()
 		now := time.Now()
 		l.Failed("7.7.7.7", now)
 		l.Succeeded("7.7.7.7")
 		if ok, _ := l.Allow("7.7.7.7", now); !ok {
-			t.Fatal("配对成功之后不该还背着失败计数")
+			t.Fatal("failure count should be cleared after a successful pairing")
 		}
 	})
 
-	t.Run("不同 IP 互不影响", func(t *testing.T) {
+	t.Run("IPs are independent", func(t *testing.T) {
 		l := auth.NewLimiter()
 		now := time.Now()
 		for range 6 {
 			l.Allow("1.1.1.1", now)
 		}
 		if ok, _ := l.Allow("2.2.2.2", now); !ok {
-			t.Fatal("一个 IP 的限速影响到了另一个")
+			t.Fatal("rate limit on one IP affected another")
 		}
 	})
 }
 
-// 默认【不信任】X-Forwarded-For —— 否则攻击者伪造它就能绕过限速。
+// X-Forwarded-For is ignored by default; otherwise forging it would bypass
+// rate limiting.
 func TestClientIPIgnoresForwardedByDefault(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/auth/pair", nil)
 	r.RemoteAddr = "203.0.113.9:5555"
 	r.Header.Set("X-Forwarded-For", "1.1.1.1, 2.2.2.2")
 
 	if got := auth.ClientIP(r, false); got != "203.0.113.9" {
-		t.Fatalf("默认应当忽略 X-Forwarded-For，得到 %q", got)
+		t.Fatalf("X-Forwarded-For should be ignored by default, got %q", got)
 	}
-	// 开了 --trust-proxy 才取【最后一跳】：那是最近的可信代理写进去的
+	// With --trust-proxy, take the last hop: the nearest trusted proxy wrote it.
 	if got := auth.ClientIP(r, true); got != "2.2.2.2" {
-		t.Fatalf("--trust-proxy 下应当取最后一跳，得到 %q", got)
+		t.Fatalf("--trust-proxy should use the last hop, got %q", got)
 	}
 }
 
-// last_ip 与限速同一个口径：开了 --trust-proxy 取 X-Forwarded-For 的最后一跳。
-// 否则反代后面所有设备的 last_ip 都是代理的地址。
+// last_ip follows the same rule as rate limiting: with --trust-proxy it is
+// the last X-Forwarded-For hop. Otherwise every device behind a reverse proxy
+// would show the proxy's address.
 func TestLastIPHonoursTrustProxy(t *testing.T) {
 	for _, tc := range []struct {
 		trust bool
@@ -200,8 +202,9 @@ func TestLastIPHonoursTrustProxy(t *testing.T) {
 	}
 }
 
-// 闲下来的 IP 要被清掉：只试过一次、或失败过就再没来的 IP 不能永远留在表里 ——
-// 配对接口对整个互联网开放。
+// Idle IPs are forgotten: an IP that tried once, or failed and never came
+// back, must not stay in the table forever. The pairing endpoint is open to
+// the whole internet.
 func TestLimiterForgetsIdleIPs(t *testing.T) {
 	l := auth.NewLimiter()
 	now := time.Now()
@@ -209,11 +212,11 @@ func TestLimiterForgetsIdleIPs(t *testing.T) {
 	l.Failed("1.1.1.1", now)
 	l.Allow("2.2.2.2", now)
 
-	later := now.Add(11 * time.Minute) // 过了 GC 周期
+	later := now.Add(11 * time.Minute) // past the GC period
 	l.Allow("3.3.3.3", later.Add(-30*time.Second))
 	l.Allow("4.4.4.4", later)
 	if n := l.TrackedIPsForTest(); n != 2 {
-		t.Fatalf("还记着 %d 个 IP, want 2（闲了 10 分钟的两个该清掉）", n)
+		t.Fatalf("tracking %d IPs, want 2 (the two idle for 10 minutes should be gone)", n)
 	}
 }
 
@@ -222,7 +225,7 @@ func TestDeviceNameFromUserAgent(t *testing.T) {
 		"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605 Safari/605": "iPhone · Safari",
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) Chrome/120 Safari/537": "macOS · Chrome",
 		"Mozilla/5.0 (X11; Linux x86_64) Firefox/121.0":                       "Linux · Firefox",
-		"": "未知设备",
+		"": "Unknown device",
 	}
 	for ua, want := range cases {
 		if got := auth.DeviceName(ua); got != want {
@@ -231,12 +234,13 @@ func TestDeviceNameFromUserAgent(t *testing.T) {
 	}
 }
 
-// UT-pair-5：数字配对码（ADR-0017）—— 16 位、均匀、可带分隔符手输、与 URL 码同生共死。
+// UT-pair-5: numeric pairing code (ADR-0017): 16 digits, uniform, may be
+// typed with separators, and shares its fate with the URL code.
 func TestPairingDigits(t *testing.T) {
 	a, _ := newAuth(t)
 	now := time.Now()
 
-	t.Run("16 位十进制且不重复", func(t *testing.T) {
+	t.Run("is 16 unique decimal digits", func(t *testing.T) {
 		seen := map[string]bool{}
 		for range 50 {
 			c, err := a.NewPairingCodes(now)
@@ -244,16 +248,16 @@ func TestPairingDigits(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(c.Digits) != auth.DigitsLen || strings.Trim(c.Digits, "0123456789") != "" {
-				t.Fatalf("数字码 %q 不是 16 位十进制", c.Digits)
+				t.Fatalf("numeric code %q is not 16 decimal digits", c.Digits)
 			}
 			if seen[c.Digits] {
-				t.Fatal("生成了重复的数字码")
+				t.Fatal("generated a duplicate numeric code")
 			}
 			seen[c.Digits] = true
 		}
 	})
 
-	t.Run("分组显示与规整", func(t *testing.T) {
+	t.Run("formats in groups and normalizes", func(t *testing.T) {
 		if got := auth.FormatDigits("4821093755661204"); got != "4821-0937-5566-1204" {
 			t.Fatalf("FormatDigits = %q", got)
 		}
@@ -262,41 +266,41 @@ func TestPairingDigits(t *testing.T) {
 				t.Fatalf("NormalizeCode(%q) = %q", in, got)
 			}
 		}
-		// 不是 16 位数字的原样返回 —— URL 码里本来就可能有 -
+		// Anything that isn't 16 digits is returned as is; URL codes may contain '-'.
 		if got := auth.NormalizeCode("kJ8x-abc_DEF"); got != "kJ8x-abc_DEF" {
-			t.Fatalf("URL 码被改了: %q", got)
+			t.Fatalf("URL code was modified: %q", got)
 		}
 	})
 
-	t.Run("手输带分隔符的数字码能配对，之后 URL 码作废", func(t *testing.T) {
+	t.Run("typed digits with separators pair and invalidate the URL code", func(t *testing.T) {
 		c, _ := a.NewPairingCodes(now)
 		if _, _, err := a.Pair(auth.FormatDigits(c.Digits), "UA", "1.2.3.4", now); err != nil {
-			t.Fatalf("数字码配对失败: %v", err)
+			t.Fatalf("pairing with numeric code failed: %v", err)
 		}
 		if _, _, err := a.Pair(c.URL, "UA", "1.2.3.4", now); err == nil {
-			t.Fatal("数字码用掉之后 URL 码仍然可用 —— 两把钥匙必须同生共死")
+			t.Fatal("URL code still works after the numeric code was used; both keys must expire together")
 		}
 	})
 
-	t.Run("URL 码用掉之后数字码作废", func(t *testing.T) {
+	t.Run("using the URL code invalidates the digits", func(t *testing.T) {
 		c, _ := a.NewPairingCodes(now)
 		if _, _, err := a.Pair(c.URL, "UA", "1.2.3.4", now); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := a.Pair(c.Digits, "UA", "1.2.3.4", now); err == nil {
-			t.Fatal("URL 码用掉之后数字码仍然可用")
+			t.Fatal("numeric code still works after the URL code was used")
 		}
 	})
 
-	t.Run("错一位就不行", func(t *testing.T) {
+	t.Run("rejects one wrong digit", func(t *testing.T) {
 		c, _ := a.NewPairingCodes(now)
 		wrong := []byte(c.Digits)
 		wrong[15] = '0' + (wrong[15]-'0'+1)%10
 		if _, _, err := a.Pair(string(wrong), "UA", "1.2.3.4", now); err == nil {
-			t.Fatal("错一位的数字码通过了")
+			t.Fatal("numeric code with one wrong digit was accepted")
 		}
 		if _, _, err := a.Pair(c.Digits, "UA", "1.2.3.4", now); err != nil {
-			t.Fatal("猜错不该把正确的码作废")
+			t.Fatal("a wrong guess must not invalidate the correct code")
 		}
 	})
 }

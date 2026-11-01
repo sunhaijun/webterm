@@ -1,26 +1,29 @@
-// Package ringbuf 是每会话的输出环形缓冲 —— 增量续传（AC-2.1）的实现基础。
+// Package ringbuf is the per-session output ring buffer that backs incremental
+// resume (AC-2.1).
 //
-// 契约与不变式见 docs/50-backend/ring-buffer.md。最关键的一条：
-// 对任意 from ∈ [BaseSeq, HeadSeq]，Slice(from) 的长度必然正好是 HeadSeq-from，
-// 不多不少。这是字节级连续性（AC-2.1）的数学基础。
+// The contract and invariants live in docs/50-backend/ring-buffer.md. The key
+// one: for every from in [BaseSeq, HeadSeq], len(Slice(from)) == HeadSeq-from,
+// exactly. Byte-level continuity (AC-2.1) rests on it.
 //
-// 它只服务增量这一条路（ADR-0026 §3）：落出窗口的客户端一律走模拟器的快照，
-// 所以这里按字节裁剪，不找换行边界，也不在回放前插任何东西。
+// It serves only the incremental path (ADR-0026 §3). A client that has fallen
+// out of the window gets an emulator snapshot instead, so trimming is plain
+// byte-wise: no searching for line boundaries, nothing injected before replay.
 package ringbuf
 
-// Buffer 是单个 []byte + 读写位置的经典环形结构。
-// 容量固定，不动态增长；Append 是热路径，稳态零分配。
+// Buffer is a classic ring over a single []byte. Capacity is fixed. Append is
+// the hot path and does not allocate in steady state.
 //
-// Buffer 本身不加锁 —— 调用方必须保证 ring 的内容与它的 seq 在同一把锁下更新
-// （见 docs/50-backend/session-manager.md 的锁规则）。
+// Buffer is not locked. Callers must update its contents and the session's seq
+// under the same lock (see the locking rules in
+// docs/50-backend/session-manager.md).
 type Buffer struct {
 	buf   []byte
-	start int    // 保留内容在 buf 中的起始下标
-	n     int    // 保留内容长度，n <= cap(buf)
-	base  uint64 // start 处的 seq
+	start int    // index in buf of the first retained byte
+	n     int    // retained length, n <= cap(buf)
+	base  uint64 // seq of the byte at start
 }
 
-// New 创建容量为 capacity 字节的缓冲。capacity 必须为正。
+// New returns a buffer holding capacity bytes. capacity must be positive.
 func New(capacity int) *Buffer {
 	if capacity <= 0 {
 		panic("ringbuf: capacity must be positive")
@@ -28,16 +31,18 @@ func New(capacity int) *Buffer {
 	return &Buffer{buf: make([]byte, capacity)}
 }
 
-// Cap 返回容量。
+// Cap returns the capacity in bytes.
 func (b *Buffer) Cap() int { return len(b.buf) }
 
-// BaseSeq 返回保留内容的起始 seq。
+// BaseSeq returns the seq of the oldest retained byte.
 func (b *Buffer) BaseSeq() uint64 { return b.base }
 
-// HeadSeq 返回累计追加的总字节数。裁剪不影响它。
+// HeadSeq returns the total number of bytes ever appended. Trimming does not
+// change it.
 func (b *Buffer) HeadSeq() uint64 { return b.base + uint64(b.n) }
 
-// Append 追加数据，返回本段【首字节】的 seq。空间不足时从头部按字节裁剪。
+// Append appends p and returns the seq of its first byte. When space runs out
+// it trims exactly enough bytes from the front.
 func (b *Buffer) Append(p []byte) (seq uint64) {
 	seq = b.HeadSeq()
 	total := len(p)
@@ -46,7 +51,8 @@ func (b *Buffer) Append(p []byte) (seq uint64) {
 	}
 	capacity := len(b.buf)
 
-	// 单次超过容量：只保留末尾 capacity 字节，但 HeadSeq 加满整个长度。
+	// A single append larger than the buffer keeps only its last capacity bytes,
+	// but HeadSeq still advances by the full length.
 	if total >= capacity {
 		copy(b.buf, p[total-capacity:])
 		b.start = 0
@@ -71,7 +77,7 @@ func (b *Buffer) Append(p []byte) (seq uint64) {
 	return seq
 }
 
-// trim 从头部丢掉正好 need 个字节。
+// trim drops exactly need bytes from the front.
 func (b *Buffer) trim(need int) {
 	if need >= b.n {
 		b.base += uint64(b.n)
@@ -87,12 +93,12 @@ func (b *Buffer) trim(need int) {
 	b.base += uint64(need)
 }
 
-// Slice 返回从 from 开始的所有内容。
+// Slice returns everything from seq from onward.
 //
-//	from ∈ [BaseSeq, HeadSeq]       → (缺的那一段, true)
-//	其余（已被裁掉 / 领先于 head） → (nil, false)   调用方改走快照
+//	from in [BaseSeq, HeadSeq]            -> (missing bytes, true)
+//	otherwise (trimmed away, or past head) -> (nil, false); caller falls back to a snapshot
 //
-// 返回的是拷贝，调用方可以自由持有。
+// The result is a copy the caller may keep.
 func (b *Buffer) Slice(from uint64) (data []byte, ok bool) {
 	if from < b.base || from > b.HeadSeq() {
 		return nil, false
@@ -117,18 +123,21 @@ func (b *Buffer) copyRange(off, length int) []byte {
 	return out
 }
 
-// Export 导出缓冲的全部保留内容（拷贝）及其起始 seq，供热升级交接（ADR-0016）。
-// 与 Slice(BaseSeq()) 等价，单独命名是为了让调用点说清意图。
+// Export returns a copy of all retained bytes and the seq of the first one,
+// for hot-upgrade handoff (ADR-0016). It is equivalent to Slice(BaseSeq()); the
+// separate name makes call sites say what they mean.
 func (b *Buffer) Export() (base uint64, data []byte) {
 	return b.base, b.copyRange(0, b.n)
 }
 
-// Restore 用 Export 的结果在新进程里重建缓冲。
+// Restore rebuilds a buffer from Export's output in the new process.
 //
-// 不变式：Restore(capacity, Export()) 之后 BaseSeq / HeadSeq 与导出时完全相等，
-// 对任意 from ∈ [base, head]，Slice(from) 逐字节一致 —— 跨进程版的 AC-2.1。
-// data 比 capacity 大时只保留末尾 capacity 字节、base 相应前移，HeadSeq 不变
-// （与单次 Append 超容量的规则一致）—— 升级时 --ring-bytes 改小了也不会算错序号。
+// Invariant: after Restore(capacity, Export()), BaseSeq and HeadSeq match the
+// exported buffer and Slice(from) is byte-identical for every from in
+// [base, head] (AC-2.1 across processes). If data exceeds capacity, only the
+// last capacity bytes are kept and base moves forward while HeadSeq stays put,
+// matching the oversized-Append rule. Shrinking --ring-bytes across an upgrade
+// therefore cannot corrupt seq numbers.
 func Restore(capacity int, base uint64, data []byte) *Buffer {
 	b := New(capacity)
 	if len(data) > capacity {

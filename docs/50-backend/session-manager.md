@@ -1,47 +1,47 @@
-# 会话管理
+# Session manager
 
-> 状态：Accepted。输出链路的决策见 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)。
+> Status: Accepted. Output path decision: [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md).
 
-## 职责边界
+## Responsibilities
 
-| 组件 | 职责 |
+| Component | Responsibility |
 |---|---|
-| `SessionManager` | `sid` 分配、会话表、上限控制、生命周期编排 |
-| `Session` | 一个 PTY + 一个环形缓冲 + 一个终端模拟器 + 订阅者集合 |
-| `vterm.Terminal` | 会话的终端模拟器（`internal/vterm`，包着 tuios.dev/vt）。吃全部 PTY 输出，出快照，导出 / 导入状态 |
-| `Conn` | 一条 WebSocket 连接。持有它对各会话的订阅 |
-| `inputState` | `(client_id, sid) → in_ack`。**挂在 Session 上而不是 Conn 上**，跨重连存活（协议 §5.4） |
+| `SessionManager` | `sid` allocation, session table, limits, lifecycle orchestration |
+| `Session` | One PTY + one ring buffer + one terminal emulator + a set of subscribers |
+| `vterm.Terminal` | The session's terminal emulator (`internal/vterm`, wrapping tuios.dev/vt). Consumes all PTY output, produces snapshots, exports / imports its state |
+| `Conn` | One WebSocket connection. Holds its subscriptions to sessions |
+| `inputState` | `(client_id, sid) → in_ack`. **Lives on the Session, not the Conn**, so it survives reconnects (protocol §5.4) |
 
-**`Session` 不知道 WebSocket 的存在** —— 它只有一个"订阅者"接口。这让会话逻辑可以在没有网络的情况下单测（IT-session-*）。
+**`Session` knows nothing about WebSockets**; all it sees is a subscriber interface. That lets session logic be tested without a network (IT-session-*).
 
 ```go
 type Subscriber interface {
-    // ClientID 返回订阅者所属标签页的 id。输入记账按 (client_id, sid) 走，
-    // ack 只发给同一个 client。
+    // ClientID returns the id of the browser tab this subscriber belongs to.
+    // Input accounting is keyed by (client_id, sid), and acks go only to that client.
     ClientID() string
 
-    // Push 推送一段原始输出（OUTPUT 帧）。data 是可安全持有的拷贝。
+    // Push sends a chunk of raw output (OUTPUT frame). data is a copy the subscriber may keep.
     Push(sid uint16, seq uint64, data []byte)
 
-    // Snapshot 推送一份快照（SNAPSHOT 帧，连接层按单帧上限拆分）。
-    // seq 是快照对应的 out_seq；data 不计入 seq。
+    // Snapshot sends a snapshot (SNAPSHOT frame; the connection layer splits it by the frame size limit).
+    // seq is the out_seq the snapshot corresponds to; data doesn't count toward seq.
     Snapshot(sid uint16, seq uint64, data []byte)
 
-    // Event 推送一条控制消息（*protocol.SessionUpdated、*protocol.Ack…）。
+    // Event sends a control message (*protocol.SessionUpdated, *protocol.Ack, …).
     Event(msg any)
 }
 ```
 
-三个方法**都必须非阻塞**（内部有界队列，满则自行断开）。
+`Push`, `Snapshot`, and `Event` **must never block** (each has a bounded queue inside; when it's full, the subscriber disconnects itself).
 
-## 数据结构
+## Data structures
 
 ```go
 type SessionManager struct {
     mu       sync.RWMutex
     sessions map[uint16]*Session
     nextSID  uint16
-    maxSess  int              // 默认 20
+    maxSess  int              // default 20
     cfg      Config
 }
 
@@ -50,76 +50,74 @@ type Session struct {
     ptmx   *os.File           // PTY master
     cmd    *exec.Cmd
 
-    mu         sync.RWMutex    // 保护以下所有字段
+    mu         sync.RWMutex    // guards every field below
     name       string
     nameManual bool
-    title      string          // 此刻采用的终端标题（ADR-0043）；"" = 不用标题
-    titlePgrp  int             // 标题归属的前台进程组：最近一次写标题时在前台的那个
+    title      string          // terminal title currently in use (ADR-0043); "" = no title
+    titlePgrp  int             // foreground process group the title belongs to: the one in front at the last title write
     cwd        string
     status     Status          // running | exited
     exitCode   *int
     cols, rows uint16
-    ring       *ringbuf.Buffer // 默认 256 KiB，自带 base/head seq
-    vt         vterm.Terminal  // 2000 行历史
+    ring       *ringbuf.Buffer // default 256 KiB; tracks base/head seq itself
+    vt         vterm.Terminal  // 2000 lines of history
     subs       map[Subscriber]struct{}
 
-    inputQ   *inputQueue       // 有界 256 KiB，满则关连接（绝不阻塞，见下）
-    inQueued map[string]uint64 // client_id → 已【接受入队】的累计字节数
-    inAck    map[string]uint64 // client_id → 已【写入 PTY】的累计字节数
+    inputQ   *inputQueue       // bounded at 256 KiB; when full, close the connection (never block, see below)
+    inQueued map[string]uint64 // client_id → bytes ACCEPTED into the queue so far
+    inAck    map[string]uint64 // client_id → bytes WRITTEN to the PTY so far
     done     chan struct{}
 }
 ```
 
-### `inQueued` 与 `inAck` 是两个数
+### `inQueued` and `inAck` are different counters
 
-- `inQueued` 用于校验 INPUT 帧的 seq 连续性 —— 拿 `inAck` 校验的话，客户端
-  连着发两帧时第二帧会被误判成空洞（PTY 还没消费完第一帧）
-- `inAck` 用于 `ack` 消息与 `welcome.resumed[].in_ack`
-- 连接断开时 `DetachClient` 丢弃该 client 尚未写入 PTY 的入队数据，并把
-  `inQueued` 回退到 `inAck`，让重连后的重发精确对齐（协议 §5.4）
-- 两者都按 `client_id` 记账，**跨重连存活**，随会话销毁而释放
+- `inQueued` validates INPUT frame seq continuity. Validating against `inAck` instead would flag the second of two back-to-back frames as a gap (the PTY hasn't consumed the first one yet).
+- `inAck` feeds `ack` messages and `welcome.resumed[].in_ack`.
+- On disconnect, `DetachClient` drops that client's queued input that hasn't reached the PTY yet and rewinds `inQueued` to `inAck`, so the client's resend after reconnecting lines up exactly (protocol §5.4).
+- Both are keyed by `client_id`, **survive reconnects**, and are freed with the session.
 
-### 锁的规则
+### Locking rules
 
-- **`ring.Append` 与 `vt.Write` 必须在同一把锁下、对同一段字节做。** 这样任何时刻模拟器吃到的字节数都等于 `ring.HeadSeq()`，快照的 `seq` 才能直接取 `HeadSeq()`。这是最容易出错的地方。
-- **`subscribe` 的「判定增量 / 快照 + 取切片或生成快照 + 推送 + 加入订阅者集合」必须在同一把锁下完成。** 分开做，中间到达的一批输出要么被推两遍（重复），要么两边都漏（空洞）—— 而协议 §3 规定客户端遇到空洞**直接关连接**。这次推送是下面那条"不要在锁内推"的唯一例外：它是一次性的，而推送按契约本就非阻塞。
-- **改列数的重排 + 生成快照 + 推给每个订阅者**也在同一把锁下（见 §改尺寸）。
-- `Session.mu` 是读写锁：`readLoop` 写，订阅者列表读多写少。
-- **实时输出、增量补齐、快照全部在锁内推给订阅者。** 出锁再推的话，一段已经算进快照的输出可能排到快照后面才到客户端，违反协议 §3 的连续性。这样做不会卡住 PTY 读取，因为 `Subscriber.Push` / `Snapshot` 按契约是非阻塞的（只入连接的写队列，满了就关连接）。
+- **`ring.Append` and `vt.Write` must run under the same lock, on the same bytes.** Then the emulator has always consumed exactly `ring.HeadSeq()` bytes, and a snapshot's `seq` can simply be `HeadSeq()`. This is the easiest thing to get wrong.
+- **`subscribe`'s "decide incremental vs. snapshot + take the slice or build the snapshot + push + add to the subscriber set" must all happen under one lock.** Split it up, and output arriving in between is either pushed twice (duplicate) or missed by both (gap) — and protocol §3 says the client **closes the connection** on a gap.
+- **Reflow on a column change + building the snapshot + pushing it to every subscriber** also happen under one lock (see [Resize](#resize)).
+- `Session.mu` is a read-write lock: `readLoop` writes; the subscriber set is read far more often than it's written.
+- **Live output, incremental catch-up, and snapshots are all pushed to subscribers under the lock.** Pushing after unlocking could let output that's already in a snapshot reach the client after that snapshot, breaking the continuity required by protocol §3. This doesn't stall PTY reads because `Subscriber.Push` / `Snapshot` are non-blocking by contract (they only enqueue onto the connection's write queue, and close the connection when it's full).
 
-## `sid` 分配
+## `sid` allocation
 
-`uint16` 递增，跳过仍在使用的值，回绕后从 1 重新找空位（0 保留为无效值）。
+`uint16`, incrementing, skipping values still in use; after wrapping it searches for a free value from 1 again (0 is reserved as invalid).
 
-**不复用刚释放的 sid**（至少隔一轮回绕），避免"客户端还没处理完 sid=3 的关闭，新会话又叫 sid=3"这类竞态。
+**A just-freed sid isn't reused** (not for at least one full wrap), to avoid races like "the client hasn't finished handling sid=3's close, and a new session is already sid=3".
 
-进程内的这个保证跨不过重启 —— 重启后 `sid` 从头分配，老客户端手里的 `sid` 可能指向一个毫不相干的新会话。所以 `SessionManager` 启动时生成一个随机 `instance_id`，放进 `welcome`；`hello` 里带的 `instance_id` 不符时，所有 `resume` 项一律判 `gone`（协议 §5.3）。
+That in-process guarantee doesn't survive a restart: sids start over, so a sid an old client still holds may point at an unrelated new session. So `SessionManager` generates a random `instance_id` at startup and sends it in `welcome`; if the `instance_id` in `hello` doesn't match, every `resume` entry is `gone` (protocol §5.3).
 
-## 四个 goroutine
+## Four goroutines
 
 ### `readLoop`
 
 ```
 for {
     n, err := ptmx.Read(buf)          // buf 32 KiB
-    if err != nil { break }           // EIO = shell 退出
+    if err != nil { break }           // EIO = shell exited
 
     session.mu.Lock()
-    seq := ring.Append(buf[:n])        // 返回本段起始 seq
-    vt.Write(buf[:n])                  // 同一段字节，同一把锁
-    vt.TakeResponses()                 // 模拟器的查询应答丢弃（查询由浏览器回答）
+    seq := ring.Append(buf[:n])        // returns the seq of this chunk's first byte
+    vt.Write(buf[:n])                  // same bytes, same lock
+    vt.TakeResponses()                 // drop the emulator's query replies (the browser answers queries)
     subs := copySubs()
     data := copy(buf[:n])
-    for _, s := range subs { s.Push(sid, seq, data) }   // 锁内：非阻塞，只入写队列
+    for _, s := range subs { s.Push(sid, seq, data) }   // under the lock: non-blocking, enqueue only
     session.mu.Unlock()
 
-    emit(session.updated{head_seq})     // 未订阅的连接靠它判未读，连接层 1s 节流
+    emit(session.updated{head_seq})     // unsubscribed connections use it for unread; the connection layer throttles it to 1s
 }
 ```
 
-**agent 不改写输出流**：`out_seq` 就是 PTY 输出的累计字节数（CLAUDE.md 不变式 ④）。
+**The agent never rewrites the output stream**: `out_seq` is the cumulative count of PTY output bytes (CLAUDE.md invariant 4).
 
-模拟器的开销：单核约 20 MB/s（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §背景）。交互程序的输出远低于它；`cat` 一个大文件会被限在这个速度。
+Emulator cost: about 20 MB/s per core ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md#context)). Interactive programs produce far less; `cat` of a large file gets capped at that rate.
 
 ### `writeLoop`
 
@@ -127,15 +125,15 @@ for {
 for item := range inputCh {                    // item = {clientID, data}
     n, err := ptmx.Write(item.data)
     if err != nil { break }
-    session.addAck(item.clientID, sid, n)      // in_ack += n，节流后发 ack
+    session.addAck(item.clientID, sid, n)      // in_ack += n; ack sent after throttling
 }
 ```
 
-`inputCh` 有界（256 KiB）。**入队必须是非阻塞的**：满了就回 `error{code:"input_stalled", sid}` 并关闭那条连接（协议 §5.6）。
+`inputCh` is bounded (256 KiB). **Enqueueing must not block**: when the queue is full, reply `error{code:"input_stalled", sid}` and close that connection (protocol §5.6).
 
-**绝不能阻塞发送方** —— 发送方是 `Conn` 的读 goroutine，而一条 WebSocket 复用所有会话。一个不读 stdin 的前台程序（`sleep 1000`、某些 TUI）把 PTY 输入缓冲填满，就会顺着 `ptmx.Write` → `writeLoop` → `inputCh` 一路把整条连接的读循环卡死：ping/pong、`resize`、`session.create`、**其它会话的输入**全停，60 秒后 agent 还会把这条本来健康的连接判死。
+**Never block the sender.** The sender is the `Conn`'s read goroutine, and one WebSocket carries every session. A foreground program that doesn't read stdin (`sleep 1000`, some TUIs) fills the PTY's input buffer, and the stall propagates through `ptmx.Write` → `writeLoop` → `inputCh` all the way up to the connection's read loop: ping/pong, `resize`, `session.create`, and **input for every other session** all stop, and 60 seconds later the agent declares this otherwise healthy connection dead.
 
-关连接是无损的：client 重连后按 `in_ack` 重发（协议 §5.4）。
+Closing the connection is lossless: the client reconnects and resends from `in_ack` (protocol §5.4).
 
 ### `waitLoop`
 
@@ -145,136 +143,135 @@ session.mu.Lock()
 status = Exited
 exitCode = extractExitCode(err)
 session.mu.Unlock()
-close(inputCh)                          // 停止接受输入
+close(inputCh)                          // stop accepting input
 broadcast(session.updated{status:"exited", exit_code})
-// ring 与模拟器保留，不释放（AC-4.5）
+// ring and emulator are kept, not freed (AC-4.5)
 ```
 
-**`ring` 与模拟器在 `exited` 后保留**，直到用户显式 `session.close`。这是"构建失败了要回看报错"场景的支撑（AC-4.5）：切回、刷新都还能拿到快照。
+**The ring and emulator are kept after `exited`**, until the user explicitly sends `session.close`. This supports "the build failed, let me read the error" (AC-4.5): switching back and refreshing still get a snapshot.
 
 ### `cwdLoop`
 
-运行中的会话每秒读一次工作目录与终端标题：
+Once a second, for running sessions, read the working directory and the terminal title:
 
 ```
-pgrp := ioctl(ptmx, TIOCGPGRP)          // PTY 的前台进程组
+pgrp := ioctl(ptmx, TIOCGPGRP)          // the PTY's foreground process group
 cwd  := readlink("/proc/<pgrp>/cwd")
-title, writes := 模拟器的标题, 标题被写过几次
-writes 变了 → titlePgrp = pgrp            // 标题归属于设它时在前台的进程组
-s.title = (pgrp == titlePgrp && pgrp != shell 的 pid) ? clean(title) : ""
-cwd 变了、或名字变了 → 一起广播 session.updated{cwd?, name?}
+title, writes := the emulator's title, how many times the title was written
+writes changed → titlePgrp = pgrp            // the title belongs to the group that was in front when it was set
+s.title = (pgrp == titlePgrp && pgrp != the shell's pid) ? clean(title) : ""
+cwd changed, or name changed → broadcast one session.updated{cwd?, name?}
 ```
 
-- 标题的规则见 [ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)：shell 在提示符时设的标题不用，程序退出回到目录名；用写入次数判断「设过」，新进程设了同样的标题也认得出
+- Title rules are in [ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md): titles the shell sets at the prompt are ignored, and the name goes back to the directory when the program exits. Counting writes detects "was set" even when a new process sets the same title.
+- The leader of the foreground process group is the program the user is using right now (shell, vim, claude…), and its directory is where the user thinks they are.
+- If a read fails (the process just exited, permissions), skip this round; don't clear the existing `cwd`.
+- Works with any shell, with no cooperation from the shell. We only build for Linux (CI ships only linux/amd64 and linux/arm64), so `/proc` is always there.
+- After `ssh`-ing out, it shows the local ssh process's directory; the remote directory is unknowable anyway.
 
-- 前台进程组的组长就是用户此刻在用的程序（shell、vim、claude…），它的目录就是用户认为"我在哪"
-- 读失败（进程刚退出、权限）就跳过这一轮，不清空已有的 `cwd`
-- 任何 shell 都适用，不需要 shell 配合。只构建 Linux（CI 只出 linux/amd64、linux/arm64），`/proc` 一定在
-- ssh 出去之后显示的是本机 ssh 进程的目录 —— 远端的目录本来就不可知
-
-## 订阅：增量还是快照
+## Subscribe: incremental or snapshot
 
 ```
 subscribe(sub, out_seq, cols, rows):
-  锁内:
-    列数与会话当前不同 → vt.Resize(cols, rows) → 快照
-    否则 out_seq > 0 且 ring.Slice(out_seq) 成功 → 增量：Push(sid, out_seq, data)
-         其余 → 快照：Snapshot(sid, ring.HeadSeq(), vt.Snapshot(2000))
-         行数变了 → vt.Resize(cols, rows)
-    加入订阅者集合
-  锁外:
-    尺寸变了 → TIOCSWINSZ
+  under the lock:
+    columns differ from the session's → vt.Resize(cols, rows) → snapshot
+    otherwise, out_seq > 0 and ring.Slice(out_seq) succeeds → incremental: Push(sid, out_seq, data)
+         anything else → snapshot: Snapshot(sid, ring.HeadSeq(), vt.Snapshot(2000))
+         rows changed → vt.Resize(cols, rows)
+    add to the subscriber set
+  after unlocking:
+    size changed → TIOCSWINSZ
 ```
 
-`hello.resume` 用同一个判定（不带尺寸）。快照包含当前屏、至多 2000 行历史、模式、画笔、滚动区、字符集、制表位、光标，以及解析到一半的序列（[协议 §5.2](../30-protocol/websocket-protocol.md)）。
+`hello.resume` uses the same decision (without a size). A snapshot contains the current screen, up to 2000 lines of history, modes, pen, scroll region, character sets, tab stops, cursor, and any partially parsed sequence ([protocol §5.2](../30-protocol/websocket-protocol.md)).
 
-**`TIOCSWINSZ` 必须在锁外、入队之后**：程序因 SIGWINCH 整屏重画的字节因此一定排在快照或增量之后。
+**`TIOCSWINSZ` must come after unlocking, after the enqueue**, so the bytes a program redraws on SIGWINCH always land after the snapshot or incremental output.
 
-## 改尺寸
+## Resize
 
 ```
 Resize(cols, rows):
-  锁内:
-    列数变了 → vt.Resize → 生成快照（seq = HeadSeq）→ 推给每个订阅者
-    只有行数变了 → vt.Resize
-    记下 cols / rows
-  锁外: TIOCSWINSZ（已退出的会话跳过）
+  under the lock:
+    columns changed → vt.Resize → build a snapshot (seq = HeadSeq) → push it to every subscriber
+    only rows changed → vt.Resize
+    record cols / rows
+  after unlocking: TIOCSWINSZ (skipped for exited sessions)
 ```
 
-列数变了要重发快照：两边各自重排的结果不一致，以 agent 的为准（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §4）。只改行数不发 —— 手机每弹一次软键盘就改一次行数，每次重发上百 KiB、清掉浏览器的回看位置，代价太大。
+A column change resends the snapshot: the two sides would reflow differently, and the agent's result wins ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §4). A row-only change doesn't: phones change the row count every time the on-screen keyboard opens, and resending hundreds of KiB and resetting the browser's scrollback position each time costs too much.
 
-## 生命周期
-
-```
-（不存在）──create──> running ──shell 退出──> exited ──close──> （销毁）
-                        │
-                        └──close──> SIGHUP ──2s──> SIGKILL ──> （销毁）
-```
-
-### 创建
+## Lifecycle
 
 ```
-1. 检查上限          → 超出返回 error{session_limit}
-2. 校验参数          → cols/rows 必须 > 0 且 <= 1000
-3. 解析 cwd          → 默认继承请求里的值，否则 home；必须存在且是目录
-4. exec.Command(shell, "-l", "-i")    // 默认登录 shell；--no-login-shell 时只 "-i"
-   环境：继承 agent 环境 + TERM=xterm-256color + WEBTERM_SESSION=<sid>
-         + 备用屏兼容清单（AC-7.8）+ --session-env 的键值
-   清理：BASH_ENV、ENV
+(none) ──create──> running ──shell exits──> exited ──close──> (destroyed)
+                      │
+                      └──close──> SIGHUP ──2s──> SIGKILL ──> (destroyed)
+```
+
+### Create
+
+```
+1. Check the limit     → over it: error{session_limit}
+2. Validate params     → cols/rows must be > 0 and <= 1000
+3. Resolve cwd         → the requested value if given, else home; must exist and be a directory
+4. exec.Command(shell, "-l", "-i")    // login shell by default; just "-i" with --no-login-shell
+   env:     the agent's environment + TERM=xterm-256color + WEBTERM_SESSION=<sid>
+            + the alternate screen compat list (AC-7.8) + --session-env pairs
+   removed: BASH_ENV, ENV
 5. pty.StartWithSize(cmd, &pty.Winsize{...})
-   agent 的 oom_score_adj 是负数时，fork 前临时调到 0、Start 返回后调回（见下）
+   if the agent's oom_score_adj is negative, set it to 0 before the fork and restore it after Start returns (below)
 6. vt = vterm.New(cols, rows, 2000)
-7. 起四个 goroutine
-8. 落库无（会话不持久化，见 ADR-0005）
+7. Start the four goroutines
+8. Nothing is persisted (sessions aren't stored, see ADR-0005)
 ```
 
-shell 按它自己的规则加载启动文件：登录 shell 读 profile 链，非登录的交互 shell 读 `~/.bashrc`。webterm 不注入任何东西。
+The shell loads its startup files by its own rules: a login shell reads the profile chain, a non-login interactive shell reads `~/.bashrc`. webterm injects nothing.
 
-**OOM 优先级（[ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md) §3）**：系统服务把 agent 设成 -900，会话要和 SSH 登录一样是 0。shell 必须在执行任何用户代码之前就是 0，否则 `~/.profile` 里起的常驻进程（ssh-agent 之类）会永久继承 -900。所以第 5 步持 `spawnMu`：先读自己的值 self；self < 0 就写 0，起 shell，再写回 self。调高不需要特权，调回 self 也不会低于下限。self ≥ 0（手动 `webterm serve`、用户服务）时什么都不做。调回必须在 `cmd.Start` 返回之后：Go 用 `CLONE_VM|CLONE_VFORK` 起子进程，exec 之前内核会把 `oom_score_adj` 的改动同步给它。
+**OOM priority ([ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md) §3)**: the system service sets the agent to -900, but sessions should be at 0, like an SSH login. The shell must be at 0 before it runs any user code, or long-lived processes started from `~/.profile` (ssh-agent and the like) inherit -900 forever. So step 5 holds `spawnMu`: read our own value, `self`; if `self < 0`, write 0, start the shell, then write `self` back. Raising the value needs no privilege, and writing `self` back never goes below the floor. If `self ≥ 0` (manual `webterm serve`, user service), do nothing. The write-back must come after `cmd.Start` returns: Go starts children with `CLONE_VM|CLONE_VFORK`, and until the child execs, the kernel propagates `oom_score_adj` changes to it.
 
-`TERM` 固定为 `xterm-256color`。不用 `xterm-kitty` 之类 —— 浏览器里的 xterm.js 的能力集与 `xterm-256color` 最匹配，查询也由它回答。
+`TERM` is fixed to `xterm-256color`, not `xterm-kitty` or the like: xterm.js in the browser matches `xterm-256color`'s capabilities best, and it's the one answering queries.
 
-**备用屏兼容清单（AC-7.8，[ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1）**：把已知的全屏 AI CLI 拉回主屏，让它的输出变成追加流 —— 只有追加流才有 scrollback 可以往回拖。目前清单里只有一条 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`。规则：
+**Alternate screen compat list (AC-7.8, [ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1)**: moves known full-screen AI CLIs back to the main screen, so their output becomes an append-only stream — only an append-only stream has scrollback you can drag back through. The list currently has one entry: `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`. Rules:
 
-- **用户已经设过的同名变量不覆盖**（agent 自己的环境里有，或 `--session-env` 给了）—— 这是他的机器；
-- `--session-env` 优先于清单，`--no-altscreen-compat` 整份关掉；
-- 清单里**只放"把 TUI 拉回主屏"这一类变量**，任何改变程序行为的（模型、权限、遥测）一概不放；
-- `TERM` 与 `WEBTERM_SESSION` 是 webterm 自己的口径（前者决定 xterm.js 那侧的能力匹配，后者是会话标识），**不接受覆盖** —— `--session-env` 写了这两个键会在解析时直接报错，`internal/session` 里还有第二道兜底。
+- **Never override a variable the user already set** (in the agent's own environment, or via `--session-env`): it's their machine.
+- `--session-env` takes precedence over the list; `--no-altscreen-compat` turns the whole list off.
+- The list **only holds variables that move a TUI back to the main screen**; nothing that changes program behavior (model, permissions, telemetry) ever goes in.
+- `TERM` and `WEBTERM_SESSION` are webterm's own (the former matches xterm.js's capabilities, the latter identifies the session) and **can't be overridden**: `--session-env` with either key fails at parse time, and `internal/session` checks again as a backstop.
 
-这些是上游的私有开关，没有兼容承诺，所以必须能关、也必须能验证（[troubleshooting.md](../80-ops/troubleshooting.md)）。
+These are private upstream switches with no compatibility promise, so they must be possible to turn off and to verify ([troubleshooting.md](../80-ops/troubleshooting.md)).
 
-### 关闭
+### Close
 
 ```
 running:
-  1. syscall.Kill(-pgid, SIGHUP)     // bash 收到后会把 SIGHUP 转发给它的所有作业
+  1. syscall.Kill(-pgid, SIGHUP)     // bash forwards SIGHUP to all of its jobs
   2. select { <-done | <-time.After(2s) }
-  3. 超时 → killSession(sid, SIGKILL) + syscall.Kill(-pgid, SIGKILL)
-  4. shell 退出后再 killSession(sid, SIGKILL) 扫一遍
-  5. ptmx.Close()、释放 ring 与模拟器、从表里摘除
+  3. timeout → killSession(sid, SIGKILL) + syscall.Kill(-pgid, SIGKILL)
+  4. after the shell exits, sweep again with killSession(sid, SIGKILL)
+  5. ptmx.Close(), free the ring and emulator, remove from the table
 exited:
-  直接执行 5
+  just step 5
 ```
 
-**光靠 `kill(-pgid)` 是不够的。** 交互式 bash 开着 job control，**每个作业都在自己的进程组里** —— `sleep 300 &` 的 pgid 不等于 shell 的 pgid，给 shell 的进程组发信号只能打到 shell 自己。
+**`kill(-pgid)` alone isn't enough.** An interactive bash has job control on, and **every job runs in its own process group**: `sleep 300 &` has a different pgid from the shell, so signaling the shell's process group only reaches the shell.
 
-真正干活的是两条：
+Two mechanisms do the real work:
 
-| 路径 | 靠什么 |
+| Path | Relies on |
 |---|---|
-| 优雅（绝大多数情况） | SIGHUP 打到 shell，**bash 自己把 SIGHUP 转发给所有作业** |
-| 兜底 | 按【会话】清扫：`pty.Start` 已 `setsid`，shell 的 sid == shell 的 pid，后代都继承它。扫 `/proc` 找 sid 相同的进程逐个 SIGKILL |
+| Graceful (almost always) | SIGHUP reaches the shell, and **bash forwards SIGHUP to all of its jobs** |
+| Fallback | Sweep by **session**: `pty.Start` already called `setsid`, so the shell's session id equals its pid, and every descendant inherits it. Scan `/proc` for processes with the same session id and SIGKILL each one |
 
-兜底那条不能省：宽限期内没退干净时 bash 已经没机会转发了，作业会变成孤儿继续跑。屏蔽了 SIGHUP 的作业（`trap "" HUP`）也只有这条路能收拾。
+The fallback can't be skipped: if things haven't exited within the grace period, bash no longer gets the chance to forward, and its jobs become orphans that keep running. Jobs that ignore SIGHUP (`trap "" HUP`) can only be cleaned up this way.
 
-主动 `setsid` 脱离的进程（`nohup` / `setsid` / `systemd-run`）会逃掉 —— 那是用户明确的意图，符合预期。
+Processes that deliberately detach (`nohup` / `setsid` / `systemd-run`) escape. That's the user's explicit intent, and expected.
 
-## 自动命名（AC-4.4）
+## Auto naming (AC-4.4)
 
 ```go
 func (s *Session) displayName() string {
     if s.nameManual { return s.name }
-    if s.title != "" { return s.title }     // 前台程序设的终端标题（ADR-0043）
+    if s.title != "" { return s.title }     // terminal title set by the foreground program (ADR-0043)
     if s.cwd == "" { return "shell" }
     if s.cwd == home { return "~" }
     if b := filepath.Base(s.cwd); b != "" && b != "/" { return b }
@@ -282,70 +279,72 @@ func (s *Session) displayName() string {
 }
 ```
 
-`cwdLoop` 每一轮：更新 `s.cwd` 与 `s.title`；目录变了或名字变了（`!nameManual` 时）就广播一条 `session.updated`，只带变了的字段。
+Every `cwdLoop` round updates `s.cwd` and `s.title`; when the directory changes, or the name changes (with `!nameManual`), it broadcasts one `session.updated` carrying only the changed fields.
 
-**不做重名去重**（不加 `(2)` 后缀）—— 两个都在 `webterm` 目录下的会话本来就该同名。
+**No dedup for duplicate names** (no `(2)` suffix): two sessions in a `webterm` directory should both be called `webterm`.
 
-## 上限与资源
+## Limits and resources
 
-| 项 | 默认 | 配置项 |
+| Item | Default | Setting |
 |---|---|---|
-| 最大会话数 | 20 | `--max-sessions` |
-| 最大并发连接数 | 16 | `--max-conns` |
-| 每会话环形缓冲 | 256 KiB | `--ring-bytes` |
-| 每会话模拟器历史 | 2000 行 | 常量（= 快照带的行数） |
-| 每连接写队列 | 4 MiB | 常量 |
-| 每会话输入队列 | 256 KiB | 常量 |
-| 单帧上限 | 256 KiB | 协议常量，不可配 |
-| PTY 读缓冲 | 32 KiB | 常量 |
+| Max sessions | 20 | `--max-sessions` |
+| Max concurrent connections | 16 | `--max-conns` |
+| Ring buffer per session | 256 KiB | `--ring-bytes` |
+| Emulator history per session | 2000 lines | Constant (= lines in a snapshot) |
+| Write queue per connection | 4 MiB | Constant |
+| Input queue per session | 256 KiB | Constant |
+| Max frame size | 256 KiB | Protocol constant, not configurable |
+| PTY read buffer | 32 KiB | Constant |
 
-内存上界 ≈ 20 ×（256 KiB 环形缓冲 + < 1 MiB 模拟器）+ 16 × 4 MiB（连接写队列）≈ 90 MiB。
+Memory bound ≈ 20 × (256 KiB ring buffer + < 1 MiB emulator) + 16 × 4 MiB (connection write queues) ≈ 90 MiB.
 
-**连接数必须有上限**：协议 §1 允许同设备开任意多标签页，而每条连接挂着一个 4 MiB 的写队列。超出时握手阶段直接拒绝（`503`），不进入协议层。
+**Connections must be capped**: protocol §1 allows any number of browser tabs per device, and each connection carries a 4 MiB write queue. Over the limit, the handshake is rejected outright (`503`) before reaching the protocol layer.
 
-## 优雅关闭（`SIGTERM`）
-
-```
-1. 停止接受新的 WebSocket 连接
-2. 向所有连接广播 notice{level:"warn", message:"agent 即将重启，所有会话将结束"}
-3. 等 2 秒（让消息送出去）
-4. 对所有会话执行关闭流程（SIGHUP → 2s → SIGKILL）
-5. 关闭 store
-6. 退出
-```
-
-第 2 步很重要：会话必然会丢（[ADR-0003](../20-architecture/adr/0003-no-tmux.md)），至少要让用户知道**为什么**丢的，而不是看到一个莫名的重连失败。
-
-## 热升级交接（`SIGUSR2` / `reexec`，[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）
-
-升级**不走**上面的关闭流程。agent 原地 `exec` 新二进制，会话跟着进程一起活下来：
+## Graceful shutdown (`SIGTERM`)
 
 ```
-1. 预检：以子进程跑新二进制 `webterm handoff-check`，喂元数据快照；读不了 → 中止，服务照常
-2. Freeze：拒新连接；给每个会话的 ptmx 设一个已过期的读 / 写 deadline，把阻塞在
-   Read / Write 里的 readLoop / writeLoop 打断，两个循环停在安全点（喂完一段之后、
-   pop 之前）。写了一半的输入把剩下的部分放回队首；cwdLoop 停
-3. Export：持 s.mu 拍快照 —— 见下表；ring 导出为 (base_seq, 字节)，模拟器导出完整状态
-   （带满 2000 行历史），输入队列导出未写完的条目
-4. 广播 notice{level:"info"} 「正在热升级，会话保留，稍后自动重连」，关闭所有 WebSocket
-5. 清 CLOEXEC，syscall.Exec(新二进制, serve …原参数… --handoff-fd N)
-6. 新进程：Manager.Restore —— os.NewFile 接回 ptmx（O_NONBLOCK 在 fd 上，接回来就是
-   可轮询的），os.FindProcess 接回 shell，ringbuf.Restore、模拟器导回状态，
-   输入队列重新入队，四个 goroutine 重新起
+1. Stop accepting new WebSocket connections
+2. Broadcast notice{level:"warn", message:"The agent is restarting. All sessions will end."} to every connection
+3. Wait 2 seconds (let the message go out)
+4. Close every session (SIGHUP → 2s → SIGKILL)
+5. Close the store
+6. Exit
 ```
 
-任何一步失败（预检、memfd、exec 返回）→ `Thaw`：清 deadline、放行几个循环、恢复接受连接，日志 + notice 明说原因。**不自动退化成 restart**。
+Step 2 matters: the sessions will be lost ([ADR-0003](../20-architecture/adr/0003-no-tmux.md)), so at least tell users **why**, instead of showing an unexplained reconnect failure.
 
-进快照的字段（`internal/handoff.Session`）就是 `Session` 结构体里"不能丢"的那部分：sid、ptmx fd、shell pid、createdAt、name / nameManual、title / titlePgrp（ADR-0043 §4）、cwd、status / exitCode、cols / rows、ring（base + 字节）、**模拟器状态**、inQueued / inAck、未写完的输入。**不进**快照的：订阅者 —— 连接会重建；agent 与 shell 的 `oom_score_adj` —— 前者随 execve 保留，后者本来就在 shell 进程上。已退出的会话（ring 与模拟器保留供回看）也交接，只是没有 fd 和 pid。
+## Hot upgrade handoff (`SIGUSR2` / `reexec`, [ADR-0016](../20-architecture/adr/0016-hot-reexec.md))
 
-**交接前后同一会话生成的快照必须逐字节相等**，增量路径必须字节级连续（`TestHandoffByteLevelContinuity`）。
+An upgrade **doesn't** go through the shutdown above. The agent `exec`s the new binary in place, and the sessions live on with the process:
 
-Manager 级别：`instance_id`（**不变**，客户端才能 `resume` 成 `ok`）、`nextSID`、代数 `generation`（每交接一次 +1，`webterm reload` 靠它判断新进程已接手）。
+```
+1. Preflight: run the new binary as a child, `webterm handoff-check`, and feed it a metadata snapshot;
+   if it can't read it → abort, the service carries on
+2. Freeze: refuse new connections; set an already-expired read/write deadline on every session's ptmx to
+   interrupt readLoop / writeLoop blocked in Read / Write; both loops stop at a safe point (after feeding a
+   chunk, before pop). Partially written input goes back to the head of the queue; cwdLoop stops
+3. Export: snapshot under s.mu (see below); the ring exports as (base_seq, bytes), the emulator exports its
+   full state (with all 2000 lines of history), the input queue exports its unwritten entries
+4. Broadcast notice{level:"info"} "Upgrading webterm. Sessions are kept and will reconnect shortly.",
+   close every WebSocket
+5. Clear CLOEXEC; syscall.Exec(new binary, serve …original args… --handoff-fd N)
+6. New process: Manager.Restore — os.NewFile adopts the ptmx (O_NONBLOCK is set on the fd, so it's pollable
+   as is), os.FindProcess adopts the shell, ringbuf.Restore, the emulator imports its state, the input
+   queue is refilled, the four goroutines start again
+```
 
-**冻结期间的不变式**：readLoop 停在一段字节喂完之后，所以 ring、模拟器与 `out_seq` 一致；writeLoop 停在 `pop` 之前，所以 `inAck` 与真正写进 PTY 的字节一致；都不再动，`Export` 拍到的就是一个自洽的切面。新增会话字段时先问"要不要进快照"。
+If any step fails (preflight, memfd, exec returning) → `Thaw`: clear the deadlines, let the loops run again, accept connections again; log it and send a notice saying why. **Never fall back to a restart on its own.**
 
-控制 socket：`<data-dir>/run/agent.sock`（0600），一行 JSON 请求一行应答。`{"op":"status"}` → 版本、pid、generation、会话数、忙碌会话数（PTY 前台进程组不是 shell 自己，即有命令在跑）、`handoff: true`；`{"op":"reexec"}` → 触发上面的流程。`SIGUSR2` 等价。
+The snapshot (`internal/handoff.Session`) holds the parts of `Session` that must not be lost: sid, ptmx fd, shell pid, createdAt, name / nameManual, title / titlePgrp (ADR-0043 §4), cwd, status / exitCode, cols / rows, ring (base + bytes), **emulator state**, inQueued / inAck, unwritten input. **Not** in the snapshot: subscribers (connections are rebuilt) and the `oom_score_adj` of the agent and the shell (the former survives execve; the latter lives on the shell process anyway). Exited sessions (ring and emulator kept for reading) are handed off too, just without an fd or pid.
 
-## 崩溃残留清理
+**A session's snapshot must be byte-identical before and after the handoff**, and the incremental path must be byte-continuous (`TestHandoffByteLevelContinuity`).
 
-不需要清理 PTY 或进程 —— agent 死亡时 PTY master 关闭，shell 收到 `SIGHUP` 自行退出。webterm 不再生成任何临时文件（rcfile 已随 shell 集成删除）。
+At the manager level: `instance_id` (**unchanged**, so clients can `resume` with `ok`), `nextSID`, and `generation` (incremented on every handoff; `webterm reload` uses it to tell that the new process has taken over).
+
+**Invariant while frozen**: readLoop stops after fully feeding a chunk, so the ring, emulator, and `out_seq` agree; writeLoop stops before `pop`, so `inAck` matches what was actually written to the PTY. Nothing moves, so `Export` captures a consistent cut. When you add a session field, first ask whether it belongs in the snapshot.
+
+Control socket: `<data-dir>/run/agent.sock` (0600), one JSON request line, one response line. `{"op":"status"}` → version, pid, generation, session count, busy session count (the PTY's foreground process group isn't the shell itself, i.e. a command is running), `handoff: true`; `{"op":"reexec"}` → triggers the flow above. `SIGUSR2` is equivalent.
+
+## Crash cleanup
+
+Nothing to clean up for PTYs or processes: when the agent dies the PTY master closes, and the shell gets `SIGHUP` and exits. webterm no longer creates any temporary files (the rcfile went away with shell integration).

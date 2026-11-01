@@ -1,77 +1,77 @@
-# ADR-0043 前台程序设的终端标题作会话的自动名
+# ADR-0043 Use the terminal title set by the foreground program as the session's automatic name
 
-状态：已接受（2026-10-31）。扩展 AC-4.4 的自动命名规则；协议的线格式不变，`name` 的来源多一种。
+Status: Accepted (2026-10-31). Extends AC-4.4's automatic naming rule. The protocol wire format is unchanged; `name` just has one more source.
 
-## 背景
+## Context
 
-自动名是 CWD 的 basename。主用途是在同一个项目里开几个会话跑 claude / codex，它们的名字全一样，靠编号区分（[ADR-0041](0041-tab-index-and-edit-icon.md)），看不出哪个在干什么。
+The automatic name was the CWD's basename. The main use case is several sessions in one project running claude / codex, and they all get the same name. Session numbers tell them apart ([ADR-0041](0041-tab-index-and-edit-icon.md)), but not what each is doing.
 
-程序自己会说：终端标题（OSC 0 / OSC 2）。用 pty 实测 claude 2.1（`TERM=xterm-256color`，代理指向死端口、不花额度）：
+The programs say so themselves, through the terminal title (OSC 0 / OSC 2). Measured with a pty against claude 2.1 (`TERM=xterm-256color`, proxy pointed at a dead port so no usage is spent):
 
 ```
- 2.19s  OSC0 '✳ Claude Code'      启动、空闲
- 8.37s  OSC0 '◐ Claude Code'      提交之后：◐ / ◑ 约每秒交替一次（在干活）
+ 2.19s  OSC0 '✳ Claude Code'      started, idle
+ 8.37s  OSC0 '◐ Claude Code'      after submitting: ◐ / ◑ alternate about once a second (working)
   …
-20.40s  OSC0 '✳ Claude Code'      回到空闲
+20.40s  OSC0 '✳ Claude Code'      back to idle
 ```
 
-`✳` / `◐◑` 就是「在等你 / 在干活」，同屏开几个 claude 时这正是最想知道的。（对话有了主题之后 claude 会把标题换成主题，离线测不到这一步，没有实测。）
+`✳` / `◐◑` mean "waiting for you" / "working", which is exactly what you want to know with several claudes open. (Once a conversation has a topic, claude replaces the title with the topic; that can't be reproduced offline and wasn't measured.)
 
-但标题不能拿来就用。Debian 默认的 `.bashrc` 在**每个提示符**都设标题（`PS1` 里的 `\e]0;\u@\h: \w\a`），实测就是 `sun@racknerd-e7b65b7: ~/github/webterm`：照单全收的话，每个标签都是这串，主机名把 120–240px 的标签吃光。
+But titles can't be taken at face value. Debian's default `.bashrc` sets the title at **every prompt** (`\e]0;\u@\h: \w\a` in `PS1`), producing titles like `user@hostname: ~/github/webterm`. Taking every title would put that string on every tab, with the hostname eating the 120–240px tab.
 
-## 决策
+## Decision
 
-### 1. 名字的来源，按优先级
+### 1. Name sources, in priority order
 
 ```
-name = 手动名                              （nameManual）
-     ?? 前台程序设的标题                    （见 §2）
-     ?? CWD 的 basename（home → ~，/ → /）
+name = manual name                            (nameManual)
+     ?? title set by the foreground program   (see §2)
+     ?? basename of the CWD (home → ~, / → /)
      ?? "shell"
 ```
 
-`name_is_manual` 的含义不变：只有用户改的名字算手动。
+`name_is_manual` means the same as before: only a name set by the user is manual.
 
-### 2. 只认「此刻在前台、且不是 shell 本身」的程序设的标题
+### 2. Only titles set by the current foreground program, and not by the shell itself
 
-- 标题**归属于设它时的前台进程组**。agent 每秒轮询一次（就是读 CWD 的那一次）：读前台进程组、读模拟器的标题和「标题被写过几次」的计数；计数变了，就把这个标题记在此刻的前台进程组名下。
-- 只在 **前台进程组 == 标题的归属 且 ≠ shell 自己（shell 的 pid）** 时采用标题。于是：
-  - shell 在提示符时设的标题（`user@host: dir`）不用 —— 归属是 shell；
-  - 程序退出、回到提示符 → 回到目录名；
-  - 同一个程序再启动一次 → 它重新设标题之前，不沿用上一次的标题（归属的进程组已经不是它了）。用写入次数而不是内容判断「设过」，新进程设了一模一样的标题也认得出来。
-- ssh 出去之后，远端 shell 设的 `user@remote: dir` 会被采用（本机前台是 ssh，不是 shell）：这时它正好说明了「连到了哪台机器」。
-- 一秒的采样不在输出热路径上加任何系统调用。
+- A title **belongs to the foreground process group at the time it was set**. The agent polls once a second (the same poll that reads the CWD): it reads the foreground process group, the emulator's title, and a counter of how many times the title has been written. When the counter changes, the title is recorded as belonging to the current foreground process group.
+- The title is used only when **the foreground process group == the title's owner, and ≠ the shell itself (the shell's pid)**. As a result:
+  - titles the shell sets at the prompt (`user@host: dir`) aren't used, because their owner is the shell;
+  - when the program exits and the prompt returns, the name goes back to the directory;
+  - when the same program starts again, the previous title isn't reused until the new process sets one (the owning process group is no longer the foreground). Judging "has set a title" by write count rather than content means a new process setting an identical title is still recognized.
+- After `ssh` to another host, the remote shell's `user@remote: dir` is used (locally the foreground is ssh, not the shell). There it usefully says which machine you're on.
+- Sampling once a second adds no system calls to the output hot path.
 
-### 3. 标题原样显示，只做清洗
+### 3. Titles are shown as is, only sanitized
 
-- 去掉控制字符（C0、DEL、C1），去掉首尾空白，最多 64 个字符；清洗后为空等于没设。
-- **不改写内容**：claude 的 `✳` / `◐` 前缀原样保留，那就是忙闲信号。
-- 名字变了才发 `session.updated{name}`（和 `cwd` 变化合在同一条里）。claude 干活时 `◐ ↔ ◑` 每秒变一次，于是每个在干活的会话每秒最多一条，和 `head_seq` 的节流同一个量级。
+- Strip control characters (C0, DEL, C1) and surrounding whitespace, and cap at 64 characters. A title that's empty after sanitizing counts as unset.
+- **Don't rewrite the content**: claude's `✳` / `◐` prefix stays; it's the busy/idle signal.
+- Send `session.updated{name}` only when the name changes (combined with a `cwd` change into one message). claude flips `◐ ↔ ◑` every second while working, so each working session sends at most one message per second, the same order as `head_seq` throttling.
 
-### 4. 跨热升级
+### 4. Across hot upgrades
 
-模拟器的导出状态本来就带着标题。另把「当前采用的标题」与「标题归属的进程组」放进 `internal/handoff.Session`（`title`、`title_pgrp`）：升级之后名字不会先闪回目录名、等程序下次设标题才回来。写入计数不交接：新进程里模拟器从导入的状态开始计数，两边都从 0 起。
+The emulator's exported state already includes the title. In addition, the "currently used title" and "the process group that owns it" go into `internal/handoff.Session` (`title`, `title_pgrp`), so after an upgrade the name doesn't flash back to the directory until the program next sets its title. The write counter isn't handed off: the new process's emulator starts counting from the imported state, and both sides start from 0.
 
-### 5. 在 tmux 里
+### 5. Inside tmux
 
-tmux 默认不把 pane 里程序设的标题转给外层终端，这时前台是 tmux，没有标题，名字仍是目录名。要看到 claude 的标题，在 `~/.tmux.conf` 里：
+By default tmux doesn't pass titles set by programs in a pane to the outer terminal. The foreground is tmux, there's no title, and the name stays the directory. To see claude's title, add to `~/.tmux.conf`:
 
 ```
 set -g set-titles on
-set -g set-titles-string '#T'   # 当前 pane 的标题
+set -g set-titles-string '#T'   # the current pane's title
 ```
 
-写进 [troubleshooting.md](../../80-ops/troubleshooting.md)。webterm 不替用户改 tmux 配置。
+Documented in [troubleshooting.md](../../80-ops/troubleshooting.md#tab-name-doesnt-follow-claudes-title). webterm doesn't change the user's tmux config.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **浏览器里用 xterm.js 的 `onTitleChange`。** 客户端只订阅当前会话，后台会话的标题根本到不了浏览器；而最需要看名字的恰恰是后台那几个。
-- **标题和目录拼在一起**（`✳ Claude Code · webterm`）。标签只有 120–240px，放不下两样；目录在抽屉的路径列和标签的 `title` 提示里都有。
-- **用前台进程名**（`/proc/<pgrp>/comm`）。只能得到 `claude`，所有 claude 会话还是同名，也没有忙闲。
-- **采用 shell 设的标题。** 见背景：`user@host: ` 前缀占满标签。按内容去剥前缀是猜，换个 `PS1` 就失效。
-- **去掉 `✳` / `◐` 这类前缀，只留文字。** 丢掉的正是最有用的忙闲信号，而且 agent 不该改写程序的输出（不变式 4 的精神）。
+- **Use xterm.js's `onTitleChange` in the browser.** The client only subscribes to the current session, so titles from background sessions never reach the browser, and those are exactly the names that matter most.
+- **Combine title and directory** (`✳ Claude Code · webterm`). A 120–240px tab can't fit both; the directory is already in the drawer's path column and the tab's `title` tooltip.
+- **Use the foreground process name** (`/proc/<pgrp>/comm`). That only yields `claude`, so all claude sessions still share a name, with no busy/idle signal.
+- **Use titles set by the shell.** See Context: the `user@host: ` prefix fills the tab. Stripping prefixes by content is guesswork that breaks with any other `PS1`.
+- **Strip prefixes like `✳` / `◐` and keep only the text.** That throws away the most useful signal, the busy/idle state, and the agent shouldn't rewrite program output (the spirit of invariant 4).
 
-## 后果
+## Consequences
 
-- AC-4.4、协议 §`session.rename` / §`session.updated`、session-ux.md §自动命名、session-manager.md（结构体、轮询、自动命名、交接清单）同步。
-- 测试：UT-vterm 标题与写入计数；UT-name-2 标题清洗；IT-session-6 标题归属（shell 设的不用、程序设的用、退出回目录名、再启动不沿用、手动名优先）；交接测试断言标题跨升级保留；E2E-41 ⑪。
+- AC-4.4, the protocol's `session.rename` / `session.updated` sections, session-ux.md (automatic naming) and session-manager.md (struct, polling, automatic naming, handoff list) are updated.
+- Tests: UT-vterm title and write counter; UT-name-2 title sanitizing; IT-session-6 title ownership (shell titles ignored, program titles used, back to the directory on exit, no reuse on restart, manual name wins); a handoff test asserts the title survives an upgrade; E2E-41 ⑪.

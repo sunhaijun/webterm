@@ -21,7 +21,7 @@ func open(t *testing.T) (*store.Store, string) {
 	return s, dir
 }
 
-// 迁移必须幂等：连续跑两次结果一致。
+// Migrations are idempotent: opening twice gives the same result.
 func TestMigrationsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	s1, err := store.Open(dir)
@@ -36,22 +36,23 @@ func TestMigrationsIdempotent(t *testing.T) {
 
 	s2, err := store.Open(dir)
 	if err != nil {
-		t.Fatalf("第二次 Open 失败: %v", err)
+		t.Fatalf("second Open failed: %v", err)
 	}
 	defer s2.Close()
 	v2, _ := s2.SchemaVersion()
 	if v1 != v2 || v1 == 0 {
-		t.Fatalf("schema 版本 %d → %d", v1, v2)
+		t.Fatalf("schema version %d → %d", v1, v2)
 	}
 	if d, err := s2.DeviceByToken("tok"); err != nil || d == nil || d.ID != "dev-1" {
-		t.Fatalf("重开后数据丢了: %+v %v", d, err)
+		t.Fatalf("data lost after reopen: %+v %v", d, err)
 	}
 }
 
-// 迁移 0003：老库升级之后不再留着用户敲过的命令原文（ADR-0026 §6）。
+// Migration 0003: an upgraded database no longer keeps the text of commands
+// the user typed (ADR-0026 §6).
 //
-// 新库上 0001 建的 commands 表随即被 0003 删掉；这里模拟的是一个停在 0002、
-// 表里真有命令的老库。
+// On a fresh database 0003 drops the commands table right after 0001 creates
+// it; this simulates an old database stuck at 0002 with real commands in it.
 func TestMigration0003DropsCommandHistory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "webterm.db")
@@ -81,11 +82,11 @@ func TestMigration0003DropsCommandHistory(t *testing.T) {
 
 	s, err := store.Open(dir)
 	if err != nil {
-		t.Fatalf("升级老库失败: %v", err)
+		t.Fatalf("upgrading old database failed: %v", err)
 	}
 	defer s.Close()
 	if v, _ := s.SchemaVersion(); v < 3 {
-		t.Fatalf("schema 版本 = %d, want ≥ 3", v)
+		t.Fatalf("schema version = %d, want ≥ 3", v)
 	}
 	s.Close()
 
@@ -99,17 +100,18 @@ func TestMigration0003DropsCommandHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n != 0 {
-		t.Fatalf("commands 表或它的索引还在（%d 个）", n)
+		t.Fatalf("commands table or its indexes still present (%d)", n)
 	}
 	if err := db.QueryRow(`SELECT count(*) FROM settings WHERE key = 'history_enabled'`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 0 {
-		t.Fatal("只为历史服务的 history_enabled 还在")
+		t.Fatal("history-only setting history_enabled still present")
 	}
 }
 
-// 新库：0001 建的 commands 表也被 0003 删掉，库里没有任何命令历史的结构。
+// Fresh database: 0003 also drops the commands table created by 0001, so no
+// command history schema remains.
 func TestFreshStoreHasNoCommandsTable(t *testing.T) {
 	_, dir := open(t)
 	db, err := sql.Open("sqlite", filepath.Join(dir, "webterm.db"))
@@ -122,12 +124,12 @@ func TestFreshStoreHasNoCommandsTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n != 0 {
-		t.Fatal("新库里还有 commands 表")
+		t.Fatal("fresh database still has a commands table")
 	}
 }
 
-// IT-store-1：DB 文件权限必须是 0600（AC-1.12）。
-// SQLite 自己创建时受 umask 影响，可能得到 0644。
+// IT-store-1: the DB file mode must be 0600 (AC-1.12). When SQLite creates
+// the file itself, the umask may leave it at 0644.
 func TestStoreFilePermissions(t *testing.T) {
 	_, dir := open(t)
 	fi, err := os.Stat(filepath.Join(dir, "webterm.db"))
@@ -135,13 +137,13 @@ func TestStoreFilePermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if perm := fi.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("webterm.db 权限 = %04o, want 0600", perm)
+		t.Fatalf("webterm.db mode = %04o, want 0600", perm)
 	}
 	di, err := os.Stat(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if perm := di.Mode().Perm(); perm != 0o700 {
-		t.Fatalf("数据目录权限 = %04o, want 0700", perm)
+		t.Fatalf("data dir mode = %04o, want 0700", perm)
 	}
 }

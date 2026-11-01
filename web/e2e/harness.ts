@@ -1,8 +1,8 @@
 /**
- * E2E 夹具：起真二进制、完成配对、给出操作终端的把手。
+ * E2E harness: starts the real binary, pairs a browser, and exposes handles for driving the terminal.
  *
- * 见 docs/70-testing/e2e-scenarios.md 的「测试夹具」。界面是 ADR-0025 的 Termux 式：
- * 没有输入模式、没有 Composer —— 敲命令就是点终端打字。
+ * See "Test harness" in docs/70-testing/e2e-scenarios.md. The UI is the Termux-style one from
+ * ADR-0025: no input modes, no composer. To run a command, focus the terminal and type.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, type Page } from '@playwright/test'
 
-/** 让内核挑一个空闲端口。随机猜端口在并行/连跑时会撞车。 */
+/** freePort lets the kernel pick an unused port. Guessing collides under parallel or back-to-back runs. */
 function freePort(): Promise<number> {
   return new Promise((res, rej) => {
     const srv = createServer()
@@ -22,7 +22,7 @@ function freePort(): Promise<number> {
         const p = addr.port
         srv.close(() => res(p))
       } else {
-        srv.close(() => rej(new Error('拿不到端口')))
+        srv.close(() => rej(new Error('could not get a free port')))
       }
     })
   })
@@ -31,21 +31,22 @@ function freePort(): Promise<number> {
 const REPO = resolve(process.cwd(), '..')
 const BINARY = join(REPO, 'webterm')
 
-/** 夹具脚本目录（绝对路径：会话默认起在 $HOME，不 cd 过去也能跑）。 */
+/** Fixture scripts directory. Absolute, because sessions start in $HOME. */
 export const FIXTURES = resolve(process.cwd(), 'e2e/fixtures')
-/** `emit.sh <行数> [每行延迟ms]` —— 确定性输出，字节级比较用。 */
+/** `emit.sh <lines> [delay ms per line]`: deterministic output for byte-level comparisons. */
 export const EMIT = `bash ${FIXTURES}/emit.sh`
-/** `altscreen.sh <快跑秒数> <完成标记文件>` —— 假的全屏 TUI（E2E-31 / E2E-36）。 */
+/** `altscreen.sh <busy seconds> <done marker file>`: a fake full-screen TUI (E2E-31 / E2E-36). */
 export const ALTSCREEN = `bash ${FIXTURES}/altscreen.sh`
 
 export interface AgentOptions {
   /**
-   * 每会话环形缓冲。默认用 agent 自己的默认值（256 KiB）—— 断线窗口内的输出不会溢出，
-   * 增量路径的字节级比较才稳定。只有快照路径的场景（E2E-2c / 4 / 30 / 31）调成 65536。
+   * Per-session ring buffer size. Defaults to the agent's own default (256 KiB), so output produced
+   * while disconnected never overflows and incremental-path byte comparisons stay stable. Only the
+   * snapshot-path scenarios (E2E-2c / 4 / 30 / 31) lower it to 65536.
    */
   ringBytes?: number
   maxSessions?: number
-  /** 追加的 serve 参数（排障用，如 `--log-level debug`）。 */
+  /** Extra `serve` flags, for debugging (e.g. `--log-level debug`). */
   extraArgs?: string[]
 }
 
@@ -81,7 +82,7 @@ export class Agent {
     const proc = spawn(BINARY, Agent.args(port, dataDir, opts), { stdio: ['ignore', 'pipe', 'pipe'] })
     const agent = new Agent(proc, port, dataDir, opts)
     agent.collect(proc)
-    await waitFor(async () => (await agent.healthy()) && agent.pairURL !== '', 'agent 启动并打出配对码')
+    await waitFor(async () => (await agent.healthy()) && agent.pairURL !== '', 'agent started and printed a pairing code')
     return agent
   }
 
@@ -104,37 +105,38 @@ export class Agent {
   }
 
   /**
-   * 杀掉 agent 再在同一端口、同一数据目录起一个新进程（E2E-18 / E2E-36 ⑥）。
-   * 设备与 Cookie 在数据库里，照样有效；会话全部消失、`instance_id` 变了（ADR-0003）。
+   * restart kills the agent and starts a new process on the same port and data dir (E2E-18 / E2E-36 (6)).
+   * Devices and cookies live in the database and stay valid; all sessions are gone and `instance_id`
+   * changes (ADR-0003).
    */
   async restart(): Promise<void> {
     const old = this.proc
     const exited = new Promise<void>((res) => old.once('exit', () => res()))
     old.kill('SIGKILL')
     await exited
-    await waitFor(async () => !(await this.healthy()), '旧 agent 停止服务', 10_000)
+    await waitFor(async () => !(await this.healthy()), 'old agent stopped serving', 10_000)
     this.proc = spawn(BINARY, Agent.args(this.port, this.dataDir, this.opts), { stdio: ['ignore', 'pipe', 'pipe'] })
     this.collect(this.proc)
-    await waitFor(() => this.healthy(), '新 agent 起来了')
+    await waitFor(() => this.healthy(), 'new agent is up')
   }
 
-  /** 配对链接（fragment 里带着一次性配对码）。 */
+  /** pairLink returns the pairing URL; the one-time pairing code is in the fragment. */
   pairLink(): string {
     return this.pairURL
   }
 
-  /** 同一次配对的数字码（ADR-0017），从 stdout 里抓 dddd-dddd-dddd-dddd。 */
+  /** pairDigits returns the numeric form of the same pairing code (ADR-0017), scraped from stdout as dddd-dddd-dddd-dddd. */
   async pairDigits(): Promise<string> {
     let found = ''
     await waitFor(() => {
       const m = this.log.match(/\b(\d{4}-\d{4}-\d{4}-\d{4})\b/)
       if (m) found = m[1]!
       return found !== ''
-    }, 'stdout 打出数字配对码', 10_000)
+    }, 'numeric pairing code on stdout', 10_000)
     return found
   }
 
-  /** 现生成一个新的配对码，用于第二台设备。 */
+  /** newPairLink mints a fresh pairing code, for a second device. */
   async newPairLink(): Promise<string> {
     const proc = spawn(BINARY, ['pair', '--dev', '--data-dir', this.dataDir, '--http-port', String(this.port)], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -144,25 +146,26 @@ export class Agent {
     proc.stderr?.on('data', (c: Buffer) => (out += c.toString()))
     await new Promise<void>((res) => proc.on('exit', () => res()))
     const m = out.match(/http:\/\/127\.0\.0\.1:\d+\/pair#[A-Za-z0-9_-]+/)
-    if (!m) throw new Error(`webterm pair 没有打出配对链接:\n${out}`)
+    if (!m) throw new Error(`webterm pair printed no pairing link:\n${out}`)
     return m[0]
   }
 
   /**
-   * 让 page 完成配对，之后它就带着会话 Cookie 了（停在 `/`）。
-   * 启动时打出的那把码只能用一次：第二个 context 起自动 `webterm pair` 现生成一把。
+   * pair pairs the page; afterwards it carries a session cookie and sits on `/`.
+   * The code printed at startup is single-use, so from the second context on this runs
+   * `webterm pair` to mint a new one.
    */
   async pair(page: Page): Promise<void> {
     const url = this.pairUsed ? await this.newPairLink() : this.pairURL
     this.pairUsed = true
     await page.goto(url)
-    // 配对成功会跳回首页；失败则停在配对页并显示原因
+    // Success redirects to `/`; failure stays on the pairing page and shows the reason.
     await page.waitForURL((u) => u.pathname === '/' && !u.hash, { timeout: 20_000 })
   }
 
-  /** 配对 → 打开主界面 → 等到「在线」且有了第一个会话。 */
+  /** open pairs, loads the main UI, and waits until it is online with a first session. */
   async open(page: Page): Promise<void> {
-    // 排障：连不上时把浏览器侧看到的 WebSocket 生命周期与 agent 日志一起打出来
+    // Diagnostics: if the connection never comes up, dump the browser-side WebSocket lifecycle next to the agent log.
     const t0 = Date.now()
     const wsLog: string[] = []
     page.on('pageerror', (e) => wsLog.push(`${Date.now() - t0}ms pageerror ${e.message}\n${e.stack ?? ''}`))
@@ -184,30 +187,31 @@ export class Agent {
       await waitOnline(page)
     } catch (e) {
       const tail = this.log.split('\n').filter((l) => l.startsWith('time=')).slice(-10).join('\n')
-      console.log(`[open] ${this.baseURL} 没连上\n  ws: ${wsLog.join(' | ') || '（没有 WebSocket）'}\n${tail}`)
+      console.log(`[open] ${this.baseURL} never came online\n  ws: ${wsLog.join(' | ') || '(no WebSocket)'}\n${tail}`)
       throw e
     }
-    await waitFor(async () => (await hooks.sid(page)) !== null, '第一个会话就位')
+    await waitFor(async () => (await hooks.sid(page)) !== null, 'first session is ready')
   }
 
   logs(): string {
     return this.log
   }
 
-  /** agent 进程的 pid。热升级原地 exec 之后它不变。 */
+  /** pid is the agent's process ID. It survives an in-place exec during hot upgrade. */
   pid(): number {
     return this.proc.pid ?? -1
   }
 
   /**
-   * 热升级（ADR-0016 / E2E-26）：给 agent 发 SIGUSR2，它预检、冻结、交接、原地 exec
-   * 同一个二进制。PID 不变，stdout 管道照旧 —— 这个 ChildProcess 句柄继续有效。
+   * reexec triggers a hot upgrade (ADR-0016 / E2E-26): SIGUSR2 makes the agent preflight, freeze,
+   * hand off, and exec the same binary in place. The PID and the stdout pipe stay the same, so this
+   * ChildProcess handle remains valid.
    */
   reexec(): void {
     this.proc.kill('SIGUSR2')
   }
 
-  /** `webterm reload --probe`：返回退出码与 stdout（含 `generation=N`）。 */
+  /** reloadProbe runs `webterm reload --probe` and returns its exit code and stdout (which includes `generation=N`). */
   async reloadProbe(): Promise<{ code: number; out: string }> {
     const proc = spawn(BINARY, ['reload', '--probe', '--dev', '--data-dir', this.dataDir], { stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
@@ -222,7 +226,7 @@ export class Agent {
     try {
       rmSync(this.dataDir, { recursive: true, force: true })
     } catch {
-      /* 尽力而为 */
+      /* best effort */
     }
   }
 }
@@ -237,48 +241,51 @@ export async function waitFor(
     if (await cond()) return
     await new Promise((r) => setTimeout(r, 100))
   }
-  throw new Error(`超时等待：${what}`)
+  throw new Error(`timed out waiting for: ${what}`)
 }
 
 export async function waitOnline(page: Page, timeout = 30_000): Promise<void> {
-  await expect(page.getByTestId('conn-text')).toHaveText('在线', { timeout })
+  await expect(page.getByTestId('conn-text')).toHaveText('Online', { timeout })
 }
 
-/** 让当前会话的终端拿到焦点（不点：点终端在触屏上是「切换软键盘」，第二下会失焦）。 */
+/**
+ * focusTerm focuses the current session's terminal without clicking it: on touch devices a click
+ * toggles the on-screen keyboard, so a second click would blur it.
+ */
 export async function focusTerm(page: Page): Promise<void> {
   await page.evaluate(() => document.querySelector<HTMLTextAreaElement>('.term .xterm-helper-textarea')?.focus())
 }
 
-/** 敲一条命令：聚焦终端 → 逐键键入 → 回车。 */
+/** submit types a command into the terminal key by key, then presses Enter. */
 export async function submit(page: Page, text: string): Promise<void> {
   await focusTerm(page)
   await page.keyboard.type(text)
   await page.keyboard.press('Enter')
 }
 
-/** 等终端缓冲（含 scrollback）里出现某段文字。 */
+/** waitText waits until the terminal buffer, scrollback included, contains `needle`. */
 export async function waitText(page: Page, needle: string | RegExp, what?: string, timeoutMs = 30_000): Promise<void> {
   await waitFor(
     async () => {
       const t = await terminalText(page)
       return typeof needle === 'string' ? t.includes(needle) : needle.test(t)
     },
-    what ?? `终端出现 ${String(needle)}`,
+    what ?? `terminal shows ${String(needle)}`,
     timeoutMs,
   )
 }
 
-/** 数一段文字在缓冲里出现几次。 */
+/** count returns how many times `needle` occurs in `haystack`. */
 export function count(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1
 }
 
-/** 终端当前的可见文本（含 scrollback）。 */
+/** terminalText returns the terminal's text, scrollback included. */
 export async function terminalText(page: Page): Promise<string> {
   return hooks.text(page)
 }
 
-/** xterm 缓冲的序列化结果 —— 字节级比较用的就是它。 */
+/** serialize returns the serialized xterm buffer, which is what byte-level comparisons use. */
 export async function serialize(page: Page): Promise<string> {
   return page.evaluate(() => (window as unknown as WebtermWindow).__webterm.serialize())
 }
@@ -287,12 +294,12 @@ export async function outSeq(page: Page): Promise<number> {
   return page.evaluate(() => (window as unknown as WebtermWindow).__webterm.outSeq())
 }
 
-/** 最近一次 welcome —— 用来直接断言续传结果，而不是从 UI 反推。 */
+/** lastWelcome returns the most recent welcome, so tests assert the resume result directly instead of inferring it from the UI. */
 export async function lastWelcome(page: Page): Promise<Welcome | null> {
   return page.evaluate(() => (window as unknown as WebtermWindow).__webterm.welcome())
 }
 
-/** 前端算出来的终端尺寸。 */
+/** termSize returns the terminal size the frontend computed. */
 export async function termSize(page: Page): Promise<{ cols: number; rows: number }> {
   return page.evaluate(() => (window as unknown as WebtermWindow).__webterm.size())
 }
@@ -303,7 +310,7 @@ export interface Welcome {
   sessions: { sid: number; head_seq: number; cols: number; rows: number }[]
 }
 
-/** `__webterm.frames()` 的一项。 */
+/** FrameRec is one entry of `__webterm.frames()`. */
 export interface FrameRec {
   type: number
   kind: 'OUTPUT' | 'SNAPSHOT'
@@ -314,7 +321,7 @@ export interface FrameRec {
   replay: boolean
 }
 
-/** `__webterm.inputStats()`（AC-3.17）。 */
+/** InputStats mirrors `__webterm.inputStats()` (AC-3.17). */
 export interface InputStats {
   keydown: { n: number; agoMs: number }
   toTerm: { n: number; agoMs: number }
@@ -346,7 +353,7 @@ interface WebtermWindow {
   }
 }
 
-/** `window.__webterm` 的直通。 */
+/** hooks passes straight through to `window.__webterm`. */
 export const hooks = {
   text: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.text()),
   sid: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm?.sid() ?? null),
@@ -366,12 +373,12 @@ export const hooks = {
 }
 
 /**
- * 收到的帧（`frames()` 只留最近 512 帧，按长度取差）。返回一个「从此刻起」的读取器：
- * 之后调用它拿到的是这之后新到的帧。
+ * framesSince returns a reader for frames received from now on. `frames()` keeps only the last
+ * 512 frames, so the reader slices by length.
  */
 export async function framesSince(page: Page): Promise<() => Promise<FrameRec[]>> {
   const base = (await hooks.frames(page)).length
-  // 环形截断之后长度不再增长：此时退回到按「最后一帧」对齐
+  // Once the ring is full the length stops growing; fall back to aligning on the last frame seen.
   const last = (await hooks.frames(page)).at(-1)
   return async () => {
     const all = await hooks.frames(page)
@@ -382,11 +389,11 @@ export async function framesSince(page: Page): Promise<() => Promise<FrameRec[]>
   }
 }
 
-/** 等某个会话收到一份完整的快照（最后一帧不带 MORE），返回这份快照的帧。 */
+/** waitSnapshot waits for a complete snapshot for `sid` (last frame without MORE) and returns its frames. */
 export async function waitSnapshot(
   read: () => Promise<FrameRec[]>,
   sid: number,
-  what = `会话 ${sid} 收到 SNAPSHOT`,
+  what = `session ${sid} received a SNAPSHOT`,
   timeoutMs = 30_000,
 ): Promise<FrameRec[]> {
   let got: FrameRec[] = []
@@ -400,20 +407,20 @@ export async function waitSnapshot(
   return got
 }
 
-// ---------- 发出去的东西 ----------
+// ---------- Outgoing traffic ----------
 
 export interface SentRecorder {
-  /** 发出去的控制消息，按顺序（解析过的 JSON）。 */
+  /** ctl returns sent control messages in order, parsed from JSON. */
   ctl(): Promise<{ t: string; [k: string]: unknown }[]>
-  /** 发出去的 INPUT 帧 payload（每帧一项，按 UTF-8 解成字符串）。 */
+  /** input returns sent INPUT frame payloads, one entry per frame, decoded as UTF-8. */
   input(): Promise<string[]>
-  /** 同上，十六进制。 */
+  /** inputHex is like input, but hex-encoded. */
   inputHex(): Promise<string[]>
-  /** 清空记录（之后的读数从零开始）。 */
+  /** clear resets the recording. */
   clear(): Promise<void>
 }
 
-/** hook `WebSocket.prototype.send`：记控制消息与 INPUT 帧。必须在页面加载之前装。 */
+/** recordSent hooks `WebSocket.prototype.send` to record control messages and INPUT frames. Install it before the page loads. */
 export async function recordSent(page: Page): Promise<SentRecorder> {
   await page.addInitScript(() => {
     const w = window as unknown as { __ctl: unknown[]; __in: string[]; __inHex: string[] }
@@ -426,7 +433,7 @@ export async function recordSent(page: Page): Promise<SentRecorder> {
         try {
           w.__ctl.push(JSON.parse(data))
         } catch {
-          /* 不是 JSON 就不记 */
+          /* not JSON; skip */
         }
       } else if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
         const b = data instanceof Uint8Array ? data : new Uint8Array(data)
@@ -454,9 +461,9 @@ export async function recordSent(page: Page): Promise<SentRecorder> {
   }
 }
 
-// ---------- 会话切换（两种形态） ----------
+// ---------- Switching sessions (both forms) ----------
 
-/** 抽屉 / 浮层的进场动画（约 170ms）落位：矩形两次读数相同。 */
+/** settled waits for a drawer or sheet's enter animation (~170ms) to finish: two identical rect readings in a row. */
 export async function settled(page: Page, testid: string): Promise<void> {
   let last = ''
   await waitFor(async () => {
@@ -465,17 +472,17 @@ export async function settled(page: Page, testid: string): Promise<void> {
     const same = r !== null && s === last
     last = s
     return same
-  }, `${testid} 动画结束`, 5_000)
+  }, `${testid} animation finished`, 5_000)
 }
 
-/** compact：打开会话抽屉并等它落位。 */
+/** openDrawer opens the session drawer (compact form) and waits for it to settle. */
 export async function openDrawer(page: Page): Promise<void> {
   if (!(await page.getByTestId('session-drawer').count())) await page.getByTestId('open-sessions').click()
   await expect(page.getByTestId('session-drawer')).toBeVisible()
   await settled(page, 'session-drawer')
 }
 
-/** 新建一个会话并等它成为当前会话，返回新 sid。两种形态都走界面上的入口。 */
+/** newSession creates a session through the UI (either form), waits for it to become current, and returns its sid. */
 export async function newSession(page: Page): Promise<number> {
   const before = await hooks.sid(page)
   if ((await hooks.form(page)) === 'compact') {
@@ -488,11 +495,11 @@ export async function newSession(page: Page): Promise<number> {
   await waitFor(async () => {
     sid = await hooks.sid(page)
     return sid !== null && sid !== before
-  }, '切到了新会话')
+  }, 'switched to the new session')
   return sid!
 }
 
-/** 切到某个会话（compact：抽屉里点那一行；wide：点标签）。 */
+/** switchTo switches to a session: compact clicks its row in the drawer, wide clicks its tab. */
 export async function switchTo(page: Page, sid: number): Promise<void> {
   if ((await hooks.form(page)) === 'compact') {
     await openDrawer(page)
@@ -500,25 +507,27 @@ export async function switchTo(page: Page, sid: number): Promise<void> {
   } else {
     await page.getByTestId(`tab-${sid}`).click()
   }
-  await waitFor(async () => (await hooks.sid(page)) === sid, `切到会话 ${sid}`)
+  await waitFor(async () => (await hooks.sid(page)) === sid, `switched to session ${sid}`)
 }
 
 /**
- * 路由层面的 WebSocket 断开控制。
+ * WSControl cuts the WebSocket at the routing layer.
  *
- * 这是 e2e-scenarios.md 里的「方式一」，最贴近真实的网络中断，而且断点
- * 完全可控。CDP 的 offline 模拟对【已建立】的 WebSocket 不会立刻触发
- * onclose，页面会一直以为自己还在线 —— 那测的就不是断线了。
+ * This is "method 1" in e2e-scenarios.md: closest to a real network drop, with full control over
+ * where the cut happens. CDP offline emulation does not fire onclose on an already-open WebSocket,
+ * so the page would keep believing it is online and the test would not be testing a disconnect.
  *
- * 必须在页面打开 WebSocket 之前装。
+ * Install it before the page opens its WebSocket.
  */
 export interface WSControl {
   goOffline(): Promise<void>
   /**
-   * 僵尸连接（E2E-33 / AC-2.20）：**已建立的那条两个方向都不再转发，但不关闭**。
+   * goZombie simulates a zombie connection (E2E-33 / AC-2.20): the open socket stops forwarding in
+   * both directions but is never closed.
    *
-   * 这是息屏、切网、NAT 回收的样子 —— TCP 上没有 FIN，浏览器那边 `readyState`
-   * 一直是 OPEN，页面自认在线。新连接则像线路断了一样直接失败。
+   * This is what screen-off, network switches, and NAT expiry look like: no FIN on the wire,
+   * `readyState` stays OPEN, and the page thinks it is online. New connections fail as if the line
+   * were down.
    */
   goZombie(): void
   goOnline(): void
@@ -532,7 +541,7 @@ export async function installWSControl(page: Page): Promise<WSControl> {
 
   await page.routeWebSocket('**/ws', (ws) => {
     if (!online) {
-      ws.close({ code: 1006 }) // 1006 = 异常关闭，模拟线路断了
+      ws.close({ code: 1006 }) // 1006 = abnormal closure, i.e. the line dropped
       return
     }
     const server = ws.connectToServer()
@@ -544,9 +553,9 @@ export async function installWSControl(page: Page): Promise<WSControl> {
     server.onMessage((m) => {
       if (!zombie) ws.send(m)
     })
-    // 【关闭必须自己转发】：注册了 onClose 之后 Playwright 就不再默认转发关闭，
-    // 页面自己调 ws.close()（心跳判死、探活判死走的就是这条）时，页面那边的
-    // close 事件根本不会来 —— 应用永远停在"在线"，测的就不是真实行为了
+    // Forward closes ourselves: once onClose is registered, Playwright stops forwarding them. When
+    // the page calls ws.close() itself (heartbeat or liveness probe declaring the socket dead), the
+    // page would never see a close event and the app would stay "online" forever.
     ws.onClose((code, reason) => {
       live.delete(pair)
       void ws.close({ code, reason })
@@ -561,21 +570,21 @@ export async function installWSControl(page: Page): Promise<WSControl> {
   return {
     async goOffline() {
       online = false
-      // 【两头都关】：只关页面那头的话，agent 那头的连接还活着、还订阅着会话，
-      // 输出照样经 Playwright 中继往一个已关闭的页面 socket 里灌 —— 断几次之后
-      // 中继堆积，页面的事件派发被拖慢到十几秒（实测），测的就不是续传了
+      // Close both ends. If only the page end closes, the agent end stays subscribed and keeps
+      // pushing output through the Playwright relay into a closed page socket. After a few cuts the
+      // relay backs up and page event dispatch slows to 10+ seconds, which is no longer a resume test.
       for (const p of [...live]) {
         void p.page.close({ code: 1006 })
-        // 关 agent 那头的码只能是 1000 或 3000–4999：中继 socket 是页面里的原生 WebSocket，
-        // 别的码 close() 直接抛异常，那条连接就关不掉
+        // The agent end is a native WebSocket inside the page, so its close code must be 1000 or
+        // 3000-4999. Any other code makes close() throw and the connection stays open.
         void p.server.close({ code: 1000, reason: 'e2e offline' })
       }
       live.clear()
       await page.waitForTimeout(50)
     },
     goZombie() {
-      zombie = true // 活着的那条：黑洞，但不关
-      online = false // 新连接：像线断了一样失败
+      zombie = true // the open socket: black hole, but not closed
+      online = false // new connections: fail as if the line were down
     },
     goOnline() {
       zombie = false
@@ -584,7 +593,7 @@ export async function installWSControl(page: Page): Promise<WSControl> {
   }
 }
 
-/** 在终端里三击包含 `needle` 的那一行（它得在可视区里），把整行选中。 */
+/** selectLine triple-clicks the terminal line containing `needle` to select it. The line must be in the viewport. */
 export async function selectLine(page: Page, needle: string): Promise<void> {
   const pos = await page.evaluate((needle) => {
     const w = (window as unknown as WebtermWindow).__webterm
@@ -596,11 +605,11 @@ export async function selectLine(page: Page, needle: string): Promise<void> {
     const cellH = s.height / rows
     return { x: s.left + 20, y: s.top + (idx - y + 0.5) * cellH, visible: idx >= y && idx < y + rows }
   }, needle)
-  if (!pos.visible) throw new Error(`${needle} 不在可视区里，选不了`)
+  if (!pos.visible) throw new Error(`${needle} is outside the viewport; cannot select it`)
   await page.mouse.click(pos.x, pos.y, { clickCount: 3 })
 }
 
-/** 对 xterm 派发一次 copy 事件，返回它写进剪贴板的文字（= 当前选区）。 */
+/** copySelection dispatches a copy event on xterm and returns the text it put on the clipboard (the current selection). */
 export async function copySelection(page: Page): Promise<string> {
   return page.evaluate(() => {
     const ta = document.querySelector<HTMLTextAreaElement>('.term .xterm-helper-textarea')!
@@ -610,7 +619,7 @@ export async function copySelection(page: Page): Promise<string> {
   })
 }
 
-/** 矩形（取整），量几何用。 */
+/** rectOf returns an element's bounding rect, rounded, for geometry assertions. */
 export async function rectOf(page: Page, selector: string) {
   return page.evaluate((s) => {
     const el = document.querySelector(s)

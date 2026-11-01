@@ -1,75 +1,61 @@
-# ADR-0021 跟手的手势只做预览，布局改动推到松手
+# ADR-0021 Drag gestures only preview; layout changes wait for release
 
-> **适用对象（桌面侧栏）已随 [ADR-0025](0025-termux-style-ui.md) 删除**；「跟手只做预览、松手才改布局」这条原则由 ADR-0025 的捏合改字号继承。以下保留作历史记录。
+Status: Accepted (2026-09-13). Its subject, the desktop sidebar, was removed by [ADR-0025](0025-termux-style-ui.md); the principle "a drag only previews, the layout changes on release" carries over to ADR-0025's pinch to change font size.
 
-状态：已接受（2026-09-13）
+## Context
 
-用户报告"桌面浏览器里拖动会卡顿，手机上不会"。量下来这不是"桌面慢"，而是**桌面上唯一的那个拖动，恰好是这套布局里最贵的一种改动**：拖侧栏分隔条 = 每帧改终端几何。而手机上的每一个拖动都是浮层（[ADR-0013](0013-terminal-only.md) ③、[ADR-0018](0018-one-drawer-primitive.md) ④），碰不到终端。
+The user reported that dragging was janky in desktop browsers but not on phones. Measured, the issue wasn't "desktop is slow". **The only drag on desktop happened to be the most expensive kind of change in the layout**: dragging the sidebar splitter changes the terminal's geometry every frame. Every drag on mobile moves an overlay ([ADR-0018](0018-one-drawer-primitive.md) §4) and never touches the terminal.
 
-## 量到的数
+Real binary + Chromium, a 120-step drag (2 px per step, 8 ms between steps):
 
-真二进制 + Chromium，120 步拖动（每步 2px，步间隔 8ms）：
-
-| 每次指针移动 | 拖侧栏分隔条（1440×900） | 拖 sheet 抓手（390×844） |
+| Per pointer move | Sidebar splitter (1440×900) | Sheet grabber (390×844) |
 |---|---|---|
-| 样式重算 | 1.6 ms | 0.21 ms |
-| 布局 | 0.68 ms | 0.21 ms |
-| JS（整个 App 重渲染都在内） | 0.4 ms | 0.6 ms |
-| 掉帧（> 25ms 的帧） | 116 / 243 | **0 / 322** |
+| Style recalc | 1.6 ms | 0.21 ms |
+| Layout | 0.68 ms | 0.21 ms |
+| JS (including re-rendering the whole App) | 0.4 ms | 0.6 ms |
+| Janky frames (> 25 ms) | 116 / 243 | **0 / 322** |
 
-绕开 Preact 的微基准（改一次 + 强制样式重算与布局，不含绘制，ms/次）：
+A microbenchmark bypassing Preact (one change, then forced style recalc and layout, no paint; ms per change):
 
 ```
-① 空转（地板）                     0.002
-② 改一个【没人用】的 CSS 变量        1.363   ← 钱不是花在改列宽上
-③ 改 --sidebar-w（原来的做法）       1.14       而是花在根节点整棵子树判脏
-④ 直接改 grid-template-columns      0.542
-⑤ 改浮层尺寸（sheet 那种）           0.095
+① no-op (floor)                                0.002
+② change a CSS variable NOBODY uses            1.363   ← the cost isn't changing the column width,
+③ change --sidebar-w (the original approach)   1.14       it's dirtying the whole subtree from the root
+④ set grid-template-columns directly           0.542
+⑤ resize an overlay (like the sheet)           0.095
 ```
 
-三条结论：
+Three findings:
 
-1. **JS 不是瓶颈**。整个 `App` 每帧重渲染只要 0.4ms，Chrome 又把 `pointermove` 合并到每帧一次。改用 rAF 合帧、或者给组件加 memo，都救不了这件事。
-2. **一半成本花在"把宽度写成根节点上的 CSS 变量"**。②比④还贵说明：代价来自 Chromium 对自定义属性的失效策略（改 `.app` 上的自定义属性 → 整棵子树的样式判脏），跟这个变量有没有人读无关。
-3. **另一半是终端的重排与重绘**。把 `.term` 设成 `visibility: hidden`（仍参与布局、只是不画）之后，同一段拖动掉帧从 116 降到 70。
+1. **JS isn't the bottleneck.** Re-rendering the whole `App` costs 0.4 ms per frame, and Chrome coalesces `pointermove` to once per frame. Batching with rAF or memoizing components can't fix this.
+2. **Half the cost is "writing the width as a CSS variable on the root".** ② costing more than ④ shows the cost comes from Chromium's invalidation strategy for custom properties (changing one on `.app` dirties the styles of the whole subtree), whether or not anyone reads the variable.
+3. **The other half is terminal relayout and repaint.** With `.term` set to `visibility: hidden` (still laid out, just not painted), the same drag dropped from 116 janky frames to 70.
 
-> 测量环境没有 GPU（headless + SwiftShader 软件光栅），所以**掉帧数比真机悲观**：同窗口下纯 `transform` 动画也只有 30fps。主线程那几个毫秒数是可以搬到真机上的部分，掉帧数只用于同一台机器上的横向比较。
+The test machine has no GPU (headless + SwiftShader software rasterization), so **janky-frame counts are more pessimistic than on real devices**: in the same window even a pure `transform` animation manages only 30 fps. The main-thread milliseconds transfer to real devices; frame counts are only for comparisons on the same machine.
 
-## 决定
+## Decision
 
-**一、跟手的连续手势，每帧只许改合成器能自己消化的属性（`transform` / `opacity`）。真正的布局改动推到手势结束。**
+1. **Continuous drag gestures may only change properties the compositor handles on its own (`transform` / `opacity`) per frame. Real layout changes wait until the gesture ends.** For the sidebar splitter:
 
-具体到侧栏分隔条：
+   | Moment | Before | Now |
+   |---|---|---|
+   | `pointermove` | `setSidebarW()` → write `--sidebar-w` → grid columns change → terminal relayout and repaint | Only write a `transform: translateX()` on `.sidebar-resizer` |
+   | `pointerup` | Settle the width | Settle the width (unchanged), clear the `transform` |
 
-| 时刻 | 原来 | 现在 |
-|---|---|---|
-| `pointermove` | `setSidebarW()` → 写 `--sidebar-w` → 栅格列变 → 终端重排重绘 | 只给 `.sidebar-resizer` 写一个 `transform: translateX()` |
-| `pointerup` | 结算宽度 | 结算宽度（不变），清掉 `transform` |
+2. **The preview position equals the release result.** Both use one pure function, `settleSidebarWidth()`: clamping, snapping back to 240 and collapsing past the threshold are **all visible during the drag**. Before, they only showed after release (drag to the far left and the width stuck at 200, with no hint that releasing would collapse it). This is a testable invariant: the preview position matches the boundary after release (UT-sidebar-1, E2E-32).
+3. **No Preact state during the drag.** Calling `setSidebarW` every frame re-rendered the whole `App`. That took only 0.4 ms, but it was the source of a guaranteed layout-property change per frame. Writing the `transform` of that **one** element directly means zero re-renders during the drag (one on press and one on release, for `data-sidebar-drag`).
+4. **The principle applies to all drag gestures, but paths that are already cheap needn't be rewritten.** The write sheet grabber changes `.bottom`'s `height` per frame (0.095 ms), and `.bottom` is absolutely positioned inside the fixed-height `.bottom-slot`, so changing it never touches terminal geometry. It already meets the substance of the rule (no terminal relayout) and stays as is. **New gestures follow this ADR.**
 
-**二、预览的位置 = 松手的结果**，两者共用 `settleSidebarWidth()` 一个纯函数：夹紧、吸附回 240、拖过门槛收起，全部**在拖动中就看得见**。原来这些只在松手后才显形（拖到最左边，宽度停在 200 不动，看不出松手会收起）。
+Rejected alternatives:
 
-这条是可测的不变式：预览位置与松手后的实际边界必须一致（UT-sidebar-1、E2E-32）。
+- **Only replace `--sidebar-w` with a direct `grid-template-columns`** (1.14 → 0.54 ms). Saves half the main-thread time, but the terminal still relayouts and repaints every frame, so the other half of the jank remains. Half a fix is harder to explain.
+- **`contain` on `.canvas` / `.sidebar` to shrink the repaint area.** Useful, but it lightens "relayout every frame" instead of not doing it. Relayout once after the drag is negligible; it doesn't need to happen every frame at all. This optimization can be done separately later and doesn't conflict with this ADR.
+- **Update less often during the drag (every 2 frames).** Trades jank for lag; neither follows the finger.
 
-**三、拖动期间不进 Preact state**。`setSidebarW` 每帧一次会把整个 `App` 重渲染一遍——虽然只要 0.4ms，但它是"每帧必然改一次 DOM 布局属性"的源头。改成直接写那**一个**元素的 `transform`，拖动全程 0 次重渲染（按下、松手各一次，用于 `data-sidebar-drag`）。
+## Consequences
 
-**四、这条原则适用于所有跟手手势，但不要求已经便宜的路也改写**。写态 sheet 抓手每帧改的是 `.bottom` 的 `height`，0.095ms，且 `.bottom` 绝对定位在定高的 `.bottom-slot` 里（[ADR-0013](0013-terminal-only.md) ③），改它不碰终端几何——它已经满足这条原则的实质（不重排终端），维持现状。**新增手势按本 ADR 办。**
-
-## 不采纳的方案
-
-- **只把 `--sidebar-w` 换成直接写 `grid-template-columns`**（1.14 → 0.54ms）。省一半主线程，但终端每帧照样重排重绘，掉帧的另一半还在。做了一半的事更难解释。
-- **给 `.canvas` / `.sidebar` 加 `contain`，缩小重绘范围**。有用，但它是在给"每帧都重排"这件事减负，而不是不做它。拖动结束后重排一次的代价本来就可以忽略——这件事根本不需要每帧做。这个优化可以将来单独做，与本 ADR 不冲突。
-- **拖动中降频（每 2 帧更新一次）**。把卡顿换成滞后，两种都是不跟手。
-
-## 代价与取舍
-
-- **拖动中侧栏内容不再跟着变宽**，看到的是一条落点线（整列高亮）。换来合成器级别的跟手。
-  需要说清楚的是：原来那个"实时"本来也只到 CSS 层——拖动期间 `ResizeObserver` 被短路，cols/rows 不重算，画布被裁 / 留白，松手才重排（[layout.md](../../40-frontend/layout.md) §desktop 的第一条硬约束）。所以损失的是"侧栏列表实时变窄"这一点视觉，不是终端的实时性——终端本来就不实时。
-- **从收起态拖出来时，侧栏在松手前不展开**。原来是先展开给人看、松手再结算，现在统一成"预览线 → 松手落地"。少一条特例。
-- 键盘步进（`←` / `→` / `Home` / `End`）**仍然是即时改宽**：离散、一次一步、没有每帧预算问题，预览反而多余。
-
-## 影响
-
-- 文档：[acceptance-criteria.md](../../10-requirements/acceptance-criteria.md) AC-5.12 改写；[layout.md](../../40-frontend/layout.md) §desktop「侧栏宽度可拖、可收起」补第三条硬约束；[e2e-scenarios.md](../../70-testing/e2e-scenarios.md) E2E-32 步骤 1 / 4 改写、新增步骤 8。
-- 前端：`web/src/ui/sidebar.ts` 新增 `previewEdge()`（预览位置 = 松手结果，一个纯函数）；`web/src/ui/app.tsx` 的三个指针回调；`web/src/style.css` 的 `.sidebar-resizer`（拖动时整列高亮 + `will-change`）。
-- 测试：UT-sidebar-1 补预览位置；E2E-32 改断言（拖动中 `.sidebar` 宽度**不变**、分隔条视觉位置跟手、松手后宽度落到预览处）。
-- 不触及协议、重连、连接层、会话状态。终端几何在拖动全程不变，因此"拖动全程只发一条 `resize`"这条老断言比原来更强（现在拖动期间根本没有几何变化可言）。
+- **The sidebar content no longer widens live during the drag**; you see a drop line (the whole column highlighted) in exchange for compositor-level tracking. To be clear, the old "live" behavior only reached the CSS layer anyway: during a drag `ResizeObserver` was short-circuited, cols / rows weren't recomputed, and the canvas was clipped or padded until release (the first hard constraint in [layout.md](../../40-frontend/layout.md) §desktop). What's lost is the sidebar list narrowing live, not terminal liveness; the terminal was never live.
+- **Dragging out from the collapsed state no longer expands the sidebar before release.** It used to expand first and settle on release; now it's uniformly "preview line → land on release". One fewer special case.
+- Keyboard steps (`←` / `→` / `Home` / `End`) **still change the width immediately**: discrete, one step at a time, no per-frame budget, so a preview would be redundant.
+- Docs and tests: AC-5.12 rewritten in [acceptance-criteria.md](../../10-requirements/acceptance-criteria.md); a third hard constraint for "sidebar width can be dragged and collapsed" in [layout.md](../../40-frontend/layout.md); E2E-32 in [e2e-scenarios.md](../../70-testing/e2e-scenarios.md) asserts that `.sidebar`'s width **doesn't change** during the drag, the splitter follows the pointer visually, and the width lands at the preview position on release. Code: `previewEdge()` in `web/src/ui/sidebar.ts`, the three pointer callbacks in `web/src/ui/app.tsx`, `.sidebar-resizer` in `web/src/style.css` (whole-column highlight + `will-change`).
+- Protocol, reconnect, connection layer and session state untouched. Terminal geometry doesn't change during the drag at all, so the old assertion "a drag sends exactly one `resize`" is stronger than before.

@@ -1,209 +1,213 @@
-# 架构总览
+# Architecture overview
 
-> 状态：Accepted
+> Status: Accepted
 
-## 全景
+## The big picture
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ 浏览器 (PWA)                                              │
-│                                                           │
-│  ┌────────────┐  ┌───────────────┐  ┌─────────────────┐  │
-│  │ 抽屉/标签栏 │  │ xterm.js      │  │ 附加键 /        │  │
-│  │ 未读指示    │  │ 只负责显示    │  │ 文本输入页      │  │
-│  └────────────┘  └───────────────┘  └─────────────────┘  │
-│         └──────────────┬──────────────────┘               │
-│                 ┌──────▼───────┐                          │
-│                 │ 连接层        │  seq 记账 / 重发队列     │
-│                 │ (单个 WS)     │  流式 UTF-8 解码 / 退避  │
-│                 └──────┬───────┘                          │
-└────────────────────────┼─────────────────────────────────┘
-                         │  WSS  (同源, 单端口)
-┌────────────────────────▼─────────────────────────────────┐
-│ webterm agent  (单个 Go 二进制)                            │
-│                                                           │
-│  ┌─────────────────────────────────────────────────────┐ │
-│  │ HTTP 层                                              │ │
-│  │  GET  /              → go:embed 静态资源            │ │
-│  │  POST /auth/pair     → 配对                          │ │
-│  │  *    /api/devices*  → 设备管理 REST                 │ │
-│  │  GET  /ws            → WebSocket 升级（认证+Origin）  │ │
-│  │  TLS: autocert (生产) | 明文 (--dev)                 │ │
-│  └───────────────┬─────────────────────────────────────┘ │
-│                  │                                        │
+│ Browser (PWA)                                            │
+│                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────┐  │
+│  │ drawer/tabs  │  │ xterm.js     │  │ extra keys /   │  │
+│  │ unread dots  │  │ display only │  │ text page      │  │
+│  └──────────────┘  └──────────────┘  └────────────────┘  │
+│         └─────────────────┬──────────────────┘           │
+│                    ┌──────▼───────┐                      │
+│                    │ connection   │  seq accounting,     │
+│                    │ layer        │  resend queue,       │
+│                    │ (one WS)     │  UTF-8 stream        │
+│                    │              │  decoding, backoff   │
+│                    └──────┬───────┘                      │
+└───────────────────────────┼──────────────────────────────┘
+                            │  WSS (same origin, one port)
+┌───────────────────────────▼──────────────────────────────┐
+│ webterm agent (single Go binary)                         │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ HTTP layer                                         │  │
+│  │  GET  /              → go:embed static assets      │  │
+│  │  POST /auth/pair     → pairing                     │  │
+│  │  *    /api/devices*  → device management REST      │  │
+│  │  GET  /ws            → WebSocket upgrade           │  │
+│  │                        (auth + Origin)             │  │
+│  │  TLS: autocert (production) | plain HTTP (--dev)   │  │
+│  └───────────────┬────────────────────────────────────┘  │
+│                  │                                       │
 │  ┌───────────────▼─────────────┐   ┌───────────────────┐ │
-│  │ Session Manager              │   │ Store (SQLite)     │ │
-│  │  sid → Session               │   │  devices           │ │
-│  │  上限 / 命名 / 生命周期       │   │  pairings          │ │
-│  └───────────────┬─────────────┘   │  settings          │ │
-│                  │                  └───────────────────┘ │
-│  ┌───────────────▼───────────────────────────────────┐   │
-│  │ Session                                           │   │
-│  │                                                   │   │
-│  │   PTY ──read──┬──> 环形缓冲 (out_seq) ──> 增量     │   │
-│  │    ▲          └──> 终端模拟器 (vterm)  ──> 快照    │   │
-│  │    │               （同一把锁、同一段字节）         │   │
-│  │    └──write── 输入队列 (in_ack)                   │   │
-│  │                                                   │   │
-│  │   bash -l -i      CWD ← /proc/<前台进程组>/cwd    │   │
-│  └───────────────────────────────────────────────────┘   │
+│  │ Session Manager             │   │ Store (SQLite)    │ │
+│  │  sid → Session              │   │  devices          │ │
+│  │  limit / naming / lifecycle │   │  pairings         │ │
+│  └───────────────┬─────────────┘   │  settings         │ │
+│                  │                 └───────────────────┘ │
+│  ┌───────────────▼────────────────────────────────────┐  │
+│  │ Session                                            │  │
+│  │                                                    │  │
+│  │   PTY ──read──┬──> ring buffer (out_seq) ──> delta │  │
+│  │    ▲          └──> emulator (vterm) ──> snapshot   │  │
+│  │    │               (same lock, same bytes)         │  │
+│  │    └──write── input queue (in_ack)                 │  │
+│  │                                                    │  │
+│  │   bash -l -i      CWD ← /proc/<fg pgrp>/cwd        │  │
+│  └────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
 
-## 关键数据流
+## Key data flows
 
-### 输出路径（PTY → 浏览器）
+### Output path (PTY → browser)
 
 ```
 PTY.Read()
-   ↓  原始字节（可能在任意位置被分片），一个字节都不改
-锁内 ┬─> 环形缓冲 append       out_seq += len
-     └─> 终端模拟器 Write      吃到的字节数 == head_seq；它的查询应答丢弃
+   ↓  raw bytes (may be split anywhere); not a single byte is changed
+under lock ┬─> ring buffer append        out_seq += len
+           └─> terminal emulator Write   bytes consumed == head_seq; its query replies are discarded
    ↓
-已订阅的 WS 连接：OUTPUT 帧
+subscribed WS connections: OUTPUT frames
    ↓
-浏览器：流式 TextDecoder → term.write(字符串)
+browser: streaming TextDecoder → term.write(string)
 ```
 
-**关键不变式**：`out_seq` = 会话累计的 PTY 输出字节数，agent 不改写输出流；`SNAPSHOT` 帧不计入 `out_seq`（CLAUDE.md 不变式 ④）。见 [ADR-0026](adr/0026-agent-holds-terminal-state.md)。
+**Key invariant**: `out_seq` = the session's cumulative PTY output bytes; the agent doesn't rewrite the output stream; `SNAPSHOT` frames don't count toward `out_seq` (CLAUDE.md invariant 4). See [ADR-0026](adr/0026-agent-holds-terminal-state.md).
 
-### 输入路径（浏览器 → PTY）
+### Input path (browser → PTY)
 
 ```
-按键 / 附加键 / 文本输入页
-   ↓  分配 in_seq（累计字节数）
-写入本地重发队列（未 ack 的保留）
+keys / extra keys / text page
+   ↓  assign in_seq (cumulative bytes)
+append to the local resend queue (kept until acked)
    ↓
-WS 二进制帧 → agent
-   ↓  校验 in_seq 连续性
+WS binary frame → agent
+   ↓  check in_seq continuity
 PTY.Write()
    ↓
-in_ack += len  →  ack 控制消息 → client 裁剪重发队列
+in_ack += len  →  ack control message → client trims its resend queue
 ```
 
-### 续传路径（重连、切回、刷新）
+### Resume path (reconnect, switch back, reload)
 
 ```
-client 重连（Cookie 认证）
+client reconnects (cookie auth)
    ↓  hello{ client_id, instance_id, resume: [{sid, out_seq}, ...] }
-agent 对每个会话判断：
-   ├─ instance_id 不符                         → gone：agent 重启过，sid 已被重新分配
-   ├─ out_seq > 0 且 ∈ [base_seq, head_seq]    → ok：从 out_seq 增量补发原始字节
-   └─ 其余（刷新、落出窗口…）                   → snapshot：模拟器导出当前屏 + 至多 2000 行历史
+agent decides per session:
+   ├─ instance_id mismatch                     → gone: the agent restarted and sids were reallocated
+   ├─ out_seq > 0 and ∈ [base_seq, head_seq]   → ok: resend raw bytes from out_seq (incremental)
+   └─ anything else (reload, out of window, …) → snapshot: the emulator exports the current screen + up to 2000 lines of history
    ↓  welcome{ instance_id, sessions, resumed: [{sid, status, from_seq, in_ack}, ...] }
-client 按 in_ack 裁剪重发队列，重发其后的输入
-（in_ack 按 (client_id, sid) 记账，跨重连存活 —— 否则重连必然触发 input_gap）
+client trims its resend queue by in_ack and resends the input after it
+(in_ack is tracked per (client_id, sid) and survives reconnects — otherwise every reconnect would hit input_gap)
 ```
 
-切回会话用 `subscribe{out_seq, cols, rows}`，判定相同；列数变了一律走快照（以 agent 的重排为准）。细节见 [`../30-protocol/websocket-protocol.md`](../30-protocol/websocket-protocol.md) §5。
+Switching back to a session uses `subscribe{out_seq, cols, rows}` with the same decision; a column change always takes the snapshot path (the agent's reflow wins). Details in [`../30-protocol/websocket-protocol.md`](../30-protocol/websocket-protocol.md) §5.
 
-## 分层与目录
+## Layers and directories
 
 ```
-cmd/webterm/            main、CLI 子命令（serve / pair / devices / doctor / reload / update）
+cmd/webterm/            main, CLI subcommands (install / serve / pair / devices / doctor / reload / update)
 internal/
-  agent/                HTTP 路由、TLS、生命周期
-  auth/                 配对、设备、Cookie 会话、限速
-  session/              Session Manager、Session、PTY、CWD 轮询
-  ringbuf/              环形缓冲（序列号、按字节裁剪、切片）
-  vterm/                agent 侧终端模拟器（包着 tuios.dev/vt）：写入、改尺寸、快照、导出 / 导入状态
-  handoff/              热升级交接的会话快照
-  protocol/             消息类型、二进制帧编解码（前后端契约的 Go 侧）
-  store/                SQLite schema、迁移、查询
-  wsconn/               WebSocket 连接层
-  webui/                前端产物的 go:embed 挂载点
+  agent/                HTTP routes, TLS, lifecycle
+  auth/                 pairing, devices, cookie sessions, rate limiting
+  session/              Session Manager, Session, PTY, CWD polling
+  ringbuf/              ring buffer (sequence numbers, byte-based trimming, slicing)
+  vterm/                agent-side terminal emulator (wraps tuios.dev/vt): write, resize, snapshot, export / import state
+  handoff/              session snapshot for the hot-upgrade handoff
+  protocol/             message types, binary frame codec (Go side of the contract)
+  store/                SQLite schema, migrations, queries
+  wsconn/               WebSocket connection layer
+  webui/                go:embed mount point for the frontend build
 web/
   src/
-    app/                装配：形态判定、标签栏 / 会话抽屉、连接横幅与提示
-    keys/               附加键与文本输入页、keymap、终端直输的 IME 兜底、输入路径计数
-    term/               xterm 封装、回放门、手势
-    sessions/           会话状态、切换、未读
-    conn/               WebSocket 连接层、seq 记账、重发队列、退避
-    ui/                 通用组件：浮层、配对页、视口
-    protocol/           消息类型、编解码（前后端契约的 TS 侧）
+    app/                wiring: form detection, tab bar / session drawer, connection banner and toasts
+    keys/               extra keys and text page, keymap, IME fallbacks for direct input, input path counters
+    term/               xterm wrapper, replay gate, gestures
+    sessions/           session state, switching, unread
+    conn/               WebSocket connection layer, seq accounting, resend queue, backoff
+    ui/                 shared components: sheets, pairing page, viewport
+    protocol/           message types, codec (TS side of the contract)
   tests/                Vitest
   e2e/                  Playwright
-docs/                   本目录
+docs/                   this directory
 ```
 
-**`internal/protocol` 与 `web/src/protocol` 必须严格对应**，且两者都以 [`../30-protocol/websocket-protocol.md`](../30-protocol/websocket-protocol.md) 为准。任何一侧单独改动视为 bug。
+**`internal/protocol` and `web/src/protocol` must match exactly**, and both follow [`../30-protocol/websocket-protocol.md`](../30-protocol/websocket-protocol.md). A change to only one side is a bug.
 
-## 并发模型（agent）
+## Concurrency model (agent)
 
-每个 Session 四个 goroutine：
+Each Session runs four goroutines:
 
-| goroutine | 职责 |
+| goroutine | Responsibility |
 |---|---|
-| `readLoop` | `PTY.Read()` → 环形缓冲 + 终端模拟器（同锁）→ 广播给订阅者 |
-| `writeLoop` | 从输入 channel 取数据 → `PTY.Write()` → 更新 `in_ack` |
-| `waitLoop` | `cmd.Wait()`，进程退出后设置 `exited` 状态与退出码 |
-| `cwdLoop` | 每秒读一次 `/proc/<前台进程组>/cwd`，变了就更新会话名并广播 |
+| `readLoop` | `PTY.Read()` → ring buffer + terminal emulator (same lock) → broadcast to subscribers |
+| `writeLoop` | take data from the input channel → `PTY.Write()` → update `in_ack` |
+| `waitLoop` | `cmd.Wait()`; when the process exits, set the `exited` state and the exit code |
+| `cwdLoop` | read `/proc/<foreground process group>/cwd` once a second; on change, update the session name and broadcast |
 
-每个 WebSocket 连接两个 goroutine（读、写）。**读写两侧的队列都有界，且都不阻塞** —— 满了就断开该连接，让它走续传重连。
+Each WebSocket connection has two goroutines (read and write). **Both queues are bounded and neither blocks** — when one fills up, the connection is dropped and the client resumes on reconnect.
 
-- 写侧阻塞会反压到 `PTY.Read()`，一个慢客户端就能拖慢服务器上真正在跑的活
-- 读侧阻塞更糟：一条连接复用所有会话，一个不读 stdin 的前台程序会把整条连接的读循环卡死（ping、resize、其它会话的输入全停）
+- A blocked write side backpressures into `PTY.Read()`, so one slow client could slow down the real work running on the server
+- A blocked read side is worse: one connection carries all sessions, so a foreground program that doesn't read stdin would stall the whole connection's read loop (ping, resize and every other session's input all stop)
 
-`Session.mu` 是读写锁；环形缓冲的追加与模拟器的写入必须在同一把锁下、对同一段字节做，否则快照的 `seq` 与内容对不上，续传也会算错切片。
+`Session.mu` is an RWMutex. Appending to the ring buffer and writing to the emulator must happen under the same lock, on the same bytes; otherwise a snapshot's `seq` won't match its content and resume will compute the wrong slice.
 
-## 会话与进程生命周期
+## Session and process lifecycle
 
 ```
-create ──> running ──(shell 退出)──> exited ──(用户关闭)──> 销毁
+create ──> running ──(shell exits)──> exited ──(user closes)──> destroyed
               │
-              └──(用户关闭)──> SIGHUP ──2s──> SIGKILL ──> 销毁
+              └──(user closes)──> SIGHUP ──2s──> SIGKILL ──> destroyed
 ```
 
-`exited` 状态下会话仍保留环形缓冲与模拟器，可查看、可续传、可出快照，但不接受输入。
+In the `exited` state a session keeps its ring buffer and emulator: it can be viewed, resumed and snapshotted, but accepts no input.
 
-**agent 进程退出 = 所有会话销毁**（PTY master 关闭 → shell 收到 SIGHUP）。这是已接受的取舍，见 [ADR-0003](adr/0003-no-tmux.md)。
+**Agent process exit = every session destroyed** (the PTY master closes → the shells get SIGHUP). This is an accepted trade-off; see [ADR-0003](adr/0003-no-tmux.md). A hot upgrade re-execs in place and doesn't exit ([ADR-0016](adr/0016-hot-reexec.md)).
 
-## 决策记录
+## Decision records
 
-| ADR | 主题 |
+| ADR | Decision |
 |---|---|
-| [0001](adr/0001-agent-first-no-ssh.md) | Agent-first，链路上不用 SSH |
-| [0002](adr/0002-self-contained-binary.md) | 自包含单二进制，不依赖外部平台 |
-| [0003](adr/0003-no-tmux.md) | 不用 tmux，agent 自持 PTY |
-| [0004](adr/0004-acme-only-tls.md) | TLS 只做 ACME 一档 |
-| [0005](adr/0005-sqlite-pure-go.md) | 存储用纯 Go SQLite |
-| [0006](adr/0006-agent-side-osc-parsing.md) | OSC 由 agent 解析并剥离（已被 0026 取代） |
-| [0007](adr/0007-dual-mode-input.md) | 双模输入（Composer / Raw）（已被 0013、0025 取代） |
-| [0008](adr/0008-pinned-history-as-snippets.md) | 快捷命令 = 置顶的历史（已被 0025 取代） |
-| [0009](adr/0009-hybrid-ws-framing.md) | WebSocket 混合帧（二进制数据 + JSON 控制）（被 0026 修订：新增 SNAPSHOT 帧、删除 ATTR_PREFIX） |
-| [0010](adr/0010-bash-rcfile-injection.md) | 通过临时 rcfile 注入 shell 集成（已被 0026 取代） |
-| [0011](adr/0011-read-first-layout.md) | 读态优先的三态布局（移动端部分已被 0013 取代） |
-| [0012](adr/0012-ai-cli-conversation-first.md) | 面向 claude / codex 的「对话优先」读写（移动端部分已被 0013 取代） |
-| [0013](adr/0013-terminal-only.md) | 终端是唯一显示面（§2–§5 已被 0025 取代） |
-| [0014](adr/0014-input-toggle.md) | 底栏输入互切键（已被 0025 取代） |
-| [0015](adr/0015-bottom-keyrow.md) | 底栏单行键行（已被 0025 取代） |
-| [0016](adr/0016-hot-reexec.md) | 热升级：原地 re-exec 交接会话 |
-| [0017](adr/0017-numeric-pairing-code.md) | 数字配对码，二维码之外可以手输 |
-| [0018](adr/0018-one-drawer-primitive.md) | 次要界面共用一个浮层原语（⋯ 菜单与历史浮层已随 0025 删除，设置与居中浮窗随 0030 删除，又随 0037 回来、改按形态分） |
-| [0019](adr/0019-altscreen-redraw-not-replay.md) | 备用屏不回放历史，改为重画（已被 0026 取代） |
-| [0020](adr/0020-input-never-silently-dropped.md) | 输入路径绝不静默丢弃 |
-| [0021](adr/0021-drag-preview-not-live-relayout.md) | 跟手的手势只做预览，布局改动推到松手（适用对象已随 0025 删除，原则保留） |
-| [0022](adr/0022-drop-command-palette.md) | 砍掉命令面板 |
-| [0023](adr/0023-terminal-font-list.md) | 终端字体给一份探测过的清单（被 0030 取代） |
-| [0024](adr/0024-scrollback-layered-model.md) | 回滚历史的分层模型：先把内容留在追加流里（§2–§4 已被 0026 取代，§1 保留） |
-| [0025](adr/0025-termux-style-ui.md) | Termux 式界面：全屏终端 + 两行附加键，会话按设备分两种切换（§3 回车被 0027 修订，§5 纵向拖被 0029 修订，设置被 0030 删除、0037 加回两项，标签宽度被 0031 修订，`+` 被 0035 移出标签条，§3 文本页被 0036 改为跟着会话走） |
-| [0026](adr/0026-agent-holds-terminal-state.md) | 输出链路：agent 持有终端状态，浏览器只负责显示 |
-| [0027](adr/0027-text-page-enter-submits.md) | 文本输入页：回车 = 发送并提交 |
-| [0028](adr/0028-settings-without-notes.md) | 设置面板不写说明文字（面板被 0030 删除） |
-| [0029](adr/0029-touch-drag-to-wheel.md) | 触屏纵向拖：程序开了鼠标跟踪时转成滚轮（标定被 0032 去掉） |
-| [0030](adr/0030-no-settings.md) | 不要设置：主题跟随系统，字号与字体用默认；会话按钮显示会话数（主题、字号与浮层形态被 0037 取代） |
-| [0031](adr/0031-tabs-equal-width.md) | 标签栏：按宽度等分，放不下时横向滚动（`+` 的位置被 0035 修订） |
-| [0032](adr/0032-drag-wheel-per-row.md) | 触屏拖动转滚轮：去掉标定，手指每移动一行高发一次 |
-| [0033](adr/0033-own-fit.md) | 终端行列自己算，不用 FitAddon（修某些宽度上列数来回翻） |
-| [0034](adr/0034-system-service-oom-priority.md) | 以普通用户运行的系统服务：agent 不再先于会话被 OOM 杀掉 |
-| [0035](adr/0035-tabbar-new-button-pinned.md) | 标签栏的 `+` 移出滚动条：常驻可见、与标签隔开、与状态点对齐 |
-| [0036](adr/0036-text-page-per-session.md) | 文本输入页跟着会话走：每个会话各记页与草稿 |
-| [0037](adr/0037-settings-theme-and-font-size.md) | 设置回来，只有主题与终端字号；浮层按形态分；会话抽屉有最小高度与底部留白 |
-| [0038](adr/0038-close-confirm-sheet.md) | 关闭确认不用浏览器的 `confirm()`，用自己的浮层；关闭中的会话不再收东西 |
-| [0039](adr/0039-drawer-row-swipe-actions.md) | 手机会话列表左滑出按钮；改名用一张小 sheet；浮层跟着可视区走 |
-| [0040](adr/0040-session-order-drag.md) | 会话可以拖动排序，顺序存在 agent 上（协议加 `session.move` / `session.order`） |
-| [0041](adr/0041-tab-index-and-edit-icon.md) | 标签名前带编号 `[n]`（与抽屉一致，改过名的也带）；文本页按钮画成铅笔斜出圆角方框的 SVG |
-| [0042](adr/0042-red-means-error-and-line-icons.md) | 未读点用强调色、红色只表示出错；标签与浮层的 ✕、保持接收标记换成线条图标；抽屉路径不再前后颠倒、名字优先 |
-| [0043](adr/0043-terminal-title-as-auto-name.md) | 前台程序（不是 shell）设的终端标题作会话自动名，优先于目录名；shell 提示符设的不用 |
-| [0044](adr/0044-ip-address-certificates.md) | 没有域名也能部署：`--domain` 接受公网 IPv4，Let's Encrypt 6 天期 IP 证书；删掉 `--acme-staging` |
-| [0045](adr/0045-install-from-the-binary.md) | 安装脚本嵌进二进制（`webterm install`）、网上取的脚本只下载并交接、启动前先签好证书、装完直接配对 |
+| [0001](adr/0001-agent-first-no-ssh.md) | Agent first: no SSH in the path |
+| [0002](adr/0002-self-contained-binary.md) | A self-contained single binary with no external platform |
+| [0003](adr/0003-no-tmux.md) | No tmux; the agent owns the PTYs |
+| [0004](adr/0004-acme-only-tls.md) | TLS via ACME only |
+| [0005](adr/0005-sqlite-pure-go.md) | Pure-Go SQLite for storage |
+| [0006](adr/0006-agent-side-osc-parsing.md) | The agent parses and strips OSC (superseded by 0026) |
+| [0007](adr/0007-dual-mode-input.md) | Dual-mode input (Composer / Raw) (superseded by 0013, 0025) |
+| [0008](adr/0008-pinned-history-as-snippets.md) | Quick commands = pinned history (superseded by 0025) |
+| [0009](adr/0009-hybrid-ws-framing.md) | Hybrid WebSocket framing: binary data + JSON control (amended by 0026: SNAPSHOT frame added, ATTR_PREFIX removed) |
+| [0010](adr/0010-bash-rcfile-injection.md) | Shell integration through an injected temporary rcfile (superseded by 0026) |
+| [0011](adr/0011-read-first-layout.md) | Read-first three-state layout (mobile part superseded by 0013) |
+| [0012](adr/0012-ai-cli-conversation-first.md) | Conversation-first reading and writing for claude / codex (mobile part superseded by 0013) |
+| [0013](adr/0013-terminal-only.md) | The terminal is the only display surface (§2–§5 superseded by 0025) |
+| [0014](adr/0014-input-toggle.md) | Input toggle key in the bottom bar (superseded by 0025) |
+| [0015](adr/0015-bottom-keyrow.md) | Single key row in the bottom bar (superseded by 0025) |
+| [0016](adr/0016-hot-reexec.md) | Hot upgrade: re-exec in place and hand over the sessions |
+| [0017](adr/0017-numeric-pairing-code.md) | Numeric pairing code that can be typed in when the QR code can't be scanned |
+| [0018](adr/0018-one-drawer-primitive.md) | One sheet primitive for all secondary UI (the ⋯ menu and history sheet were removed with 0025; settings and the centered dialog were removed with 0030, then brought back by 0037 and split by form) |
+| [0019](adr/0019-altscreen-redraw-not-replay.md) | The alternate screen is redrawn, not replayed (superseded by 0026) |
+| [0020](adr/0020-input-never-silently-dropped.md) | The input path never drops input silently |
+| [0021](adr/0021-drag-preview-not-live-relayout.md) | Gestures that follow the finger only preview; layout changes wait until release (its subject was removed with 0025; the principle stands) |
+| [0022](adr/0022-drop-command-palette.md) | Drop the command palette |
+| [0023](adr/0023-terminal-font-list.md) | A probed list of terminal fonts (superseded by 0030) |
+| [0024](adr/0024-scrollback-layered-model.md) | Layered scrollback model: keep content in the append stream first (§2–§4 superseded by 0026; §1 stands) |
+| [0025](adr/0025-termux-style-ui.md) | Termux-style UI: full-screen terminal + two rows of extra keys, with session switching by device (§3 Enter amended by 0027, §5 vertical drag amended by 0029, settings removed by 0030 with two brought back by 0037, tab width amended by 0031, `+` moved out of the tab strip by 0035, §3 text page made per-session by 0036) |
+| [0026](adr/0026-agent-holds-terminal-state.md) | Output path: the agent holds the terminal state, the browser only displays it |
+| [0027](adr/0027-text-page-enter-submits.md) | Text page: Enter sends and submits |
+| [0028](adr/0028-settings-without-notes.md) | No explanatory text in the settings panel (panel removed by 0030) |
+| [0029](adr/0029-touch-drag-to-wheel.md) | A vertical touch drag becomes wheel events when the program tracks the mouse (calibration removed by 0032) |
+| [0030](adr/0030-no-settings.md) | No settings: theme follows the system, font size and font use defaults; the session button shows the session count (theme, font size and sheet forms superseded by 0037) |
+| [0031](adr/0031-tabs-equal-width.md) | Tab bar: equal-width tabs that scroll horizontally when they don't fit (position of `+` amended by 0035) |
+| [0032](adr/0032-drag-wheel-per-row.md) | Touch drag to wheel: no calibration, one event per row height of finger movement |
+| [0033](adr/0033-own-fit.md) | Compute terminal rows and columns ourselves instead of using FitAddon (fixes the column count flipping at some widths) |
+| [0034](adr/0034-system-service-oom-priority.md) | System service running as a normal user: the agent is no longer OOM-killed before its sessions |
+| [0035](adr/0035-tabbar-new-button-pinned.md) | The tab bar's `+` moves out of the scrolling strip: always visible, set apart from the tabs, aligned with the status dot |
+| [0036](adr/0036-text-page-per-session.md) | The text page follows the session: each session keeps its own page and draft |
+| [0037](adr/0037-settings-theme-and-font-size.md) | Settings come back with only theme and terminal font size; sheets split by form; the session drawer gets a minimum height and bottom padding |
+| [0038](adr/0038-close-confirm-sheet.md) | Close confirmation uses our own sheet instead of the browser's `confirm()`; a closing session receives nothing more |
+| [0039](adr/0039-drawer-row-swipe-actions.md) | Swipe actions on the phone session list; rename in a small sheet; sheets follow the visual viewport |
+| [0040](adr/0040-session-order-drag.md) | Sessions can be reordered by dragging, and the order lives on the agent (protocol adds `session.move` / `session.order`) |
+| [0041](adr/0041-tab-index-and-edit-icon.md) | Tab names carry an index `[n]` (as in the drawer, renamed tabs included); the text page button is an SVG pencil sticking out of a rounded box |
+| [0042](adr/0042-red-means-error-and-line-icons.md) | The unread dot uses the accent color and red means errors only; line icons for the tab / sheet ✕ and the pin marker; drawer paths no longer reversed, name first |
+| [0043](adr/0043-terminal-title-as-auto-name.md) | A terminal title set by the foreground program (not the shell) becomes the session's automatic name, ahead of the directory name; titles set at the shell prompt are ignored |
+| [0044](adr/0044-ip-address-certificates.md) | Deploy without a domain: Let's Encrypt IP certificates |
+| [0045](adr/0045-install-from-the-binary.md) | The install script ships inside the binary (`webterm install`) |
+| [0046](adr/0046-guided-install.md) | Guided install: the installer walks you through the manual steps and re-checks them |

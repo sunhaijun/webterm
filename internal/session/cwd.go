@@ -11,24 +11,28 @@ import (
 	"github.com/sunhaijun/webterm/internal/protocol"
 )
 
-// 工作目录改读 /proc（ADR-0026 §6）：不需要 shell 配合，任何 shell 都适用。
+// The working directory comes from /proc (ADR-0026 §6), which needs no shell
+// cooperation and works with any shell:
 //
-//	pgrp := ioctl(ptmx, TIOCGPGRP)       PTY 的前台进程组
+//	pgrp := ioctl(ptmx, TIOCGPGRP)       the PTY's foreground process group
 //	cwd  := readlink(/proc/<pgrp>/cwd)
 //
-// 前台进程组的组长就是用户此刻在用的程序（shell、vim、claude…），它的目录
-// 就是用户认为"我在哪"。ssh 出去之后显示的是本机 ssh 进程的目录 —— 远端的
-// 目录本来就不可知。
+// The foreground group leader is the program the user is using right now
+// (shell, vim, claude, ...), and its directory is where the user thinks they
+// are. After ssh'ing out it shows the local ssh process's directory; the
+// remote one is unknowable anyway.
 //
-// 同一次轮询也看终端标题（ADR-0043）：前台程序设的标题优先于目录名，见 title.go。
+// The same poll also checks the terminal title (ADR-0043): a title set by the
+// foreground program takes precedence over the directory name; see title.go.
 
-// foregroundPgrp 返回 PTY 的前台进程组 id。
+// foregroundPgrp returns the PTY's foreground process group id.
 //
-// 【不能对 ptmx 调 Fd()】：那会把可轮询的文件切回阻塞模式（见 winsize.go），
-// 走 SyscallConn.Control 拿 fd 做 ioctl 不改模式。
+// It must not call Fd() on ptmx, which would switch the pollable file back to
+// blocking mode (see winsize.go). The ioctl goes through SyscallConn.Control,
+// which leaves the mode alone.
 func foregroundPgrp(f *os.File) (int, error) {
 	if f == nil {
-		return 0, errors.New("session: 没有 ptmx")
+		return 0, errors.New("session: no ptmx")
 	}
 	rc, err := f.SyscallConn()
 	if err != nil {
@@ -45,13 +49,15 @@ func foregroundPgrp(f *os.File) (int, error) {
 	return pgrp, ierr
 }
 
-// processCWD 读 /proc/<pid>/cwd。
+// processCWD reads /proc/<pid>/cwd.
 func processCWD(pid int) (string, error) {
 	return os.Readlink("/proc/" + strconv.Itoa(pid) + "/cwd")
 }
 
-// cwdLoop 每 interval 读一次前台进程组的工作目录与终端标题，变了就广播。
-// 会话退出就停；热升级冻结期间跳过（交接快照拍下之后状态不该再变）。
+// cwdLoop reads the foreground process group's working directory and the
+// terminal title every interval and broadcasts changes. It stops when the
+// session exits and skips polls during a hot-upgrade freeze, since state must
+// not change after the handoff snapshot is taken.
 func (s *Session) cwdLoop(interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Second
@@ -71,9 +77,11 @@ func (s *Session) cwdLoop(interval time.Duration) {
 	}
 }
 
-// poll 读一次前台进程组的工作目录与终端标题，目录或名字变了就广播一条
-// session.updated（只带变了的字段，AC-4.4）。读不到前台进程组就跳过这一轮；
-// 读不到目录（进程刚退出、权限）只是不更新目录，不清空已有的 cwd。
+// poll reads the foreground process group's working directory and the
+// terminal title once, and broadcasts a session.updated with only the changed
+// fields if the directory or name changed (AC-4.4). If the foreground group
+// can't be read, the round is skipped. If the directory can't be read (the
+// process just exited, permissions), the existing cwd is kept.
 func (s *Session) poll() {
 	pgrp, err := foregroundPgrp(s.ptmx)
 	if err != nil || pgrp <= 0 {
@@ -96,7 +104,7 @@ func (s *Session) poll() {
 		upd.CWD = strPtr(cwd)
 	}
 	raw, writes := s.term.Title()
-	if writes != s.titleSeen { // 有人设过标题：归到此刻的前台进程组名下
+	if writes != s.titleSeen { // a title was set: attribute it to the current foreground group
 		s.titleSeen = writes
 		s.titlePgrp = pgrp
 	}
@@ -110,12 +118,15 @@ func (s *Session) poll() {
 	}
 }
 
-// busy 报告这个会话是否有命令在跑：PTY 的前台进程组不是 shell 自己。
+// busy reports whether the session is running a command, meaning the PTY's
+// foreground process group is not the shell itself.
 //
-// 交互式 shell 开着 job control，停在提示符时前台进程组就是 shell（pty.Start
-// 已 setsid，shell 的 pid == 它的进程组 id）；跑命令时前台换成那条命令的进程组。
-// 已退出的会话、读不到前台进程组的会话算空闲 —— --when-idle 等的是"没人在干活"，
-// 看不清的不该把升级卡住。
+// An interactive shell runs with job control. At the prompt the foreground
+// group is the shell (pty.Start calls setsid, so the shell's pid equals its
+// pgid); while a command runs, it is that command's group. Exited sessions and
+// sessions whose foreground group can't be read count as idle: --when-idle
+// waits for "nobody is working", and an unknown state shouldn't block the
+// upgrade.
 func (s *Session) busy() bool {
 	s.mu.RLock()
 	running := s.status == protocol.StatusRunning

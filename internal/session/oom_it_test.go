@@ -15,7 +15,7 @@ func selfOOMAdj(t *testing.T) int {
 	t.Helper()
 	raw, err := os.ReadFile("/proc/self/oom_score_adj")
 	if err != nil {
-		t.Skipf("读不到 /proc/self/oom_score_adj：%v", err)
+		t.Skipf("cannot read /proc/self/oom_score_adj: %v", err)
 	}
 	v, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil {
@@ -24,13 +24,14 @@ func selfOOMAdj(t *testing.T) int {
 	return v
 }
 
-// IT-oom-1（ADR-0034 §3）：真 /proc、真 PTY。子进程目标值调成 self+100 —— 和生产里
-// 「agent -900、shell 0」是同一个方向（子进程比 agent 高），却不需要特权。
-// 并发起几个会话，每个 shell 都拿到目标值，agent 最后回到 self。
+// IT-oom-1 (ADR-0034 §3): real /proc, real PTYs. The child target is self+100,
+// the same direction as production's "agent -900, shell 0" (child above
+// agent) but without privileges. Several sessions start concurrently; every
+// shell gets the target and the agent ends back at self.
 func TestITOOM1_ShellGetsChildAdj(t *testing.T) {
 	self := selfOOMAdj(t)
 	if self > 900 {
-		t.Skipf("oom_score_adj = %d，没有往上调的余地", self)
+		t.Skipf("oom_score_adj = %d, no room to raise it", self)
 	}
 	target := self + 100
 	defer session.SetChildOOMAdjForTest(target)()
@@ -59,11 +60,11 @@ func TestITOOM1_ShellGetsChildAdj(t *testing.T) {
 	}
 
 	if got := selfOOMAdj(t); got != self {
-		t.Errorf("起完会话后 agent = %d，want 回到 %d", got, self)
+		t.Errorf("agent after starting sessions = %d, want back at %d", got, self)
 	}
 
-	// shell 自己报它的值（$$ 是 shell 的 pid）。输入的回显里是 "OOM=$(…"，
-	// 不会和 "OOM=<数字>" 混淆。
+	// The shell reports its own value ($$ is the shell's pid). The echoed input
+	// reads "OOM=$(...", which can't be confused with "OOM=<number>".
 	want := fmt.Sprintf("OOM=%d.", target)
 	for i, s := range sessions {
 		c := newConn(t, m, fmt.Sprintf("tab-%d", i))

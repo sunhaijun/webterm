@@ -1,137 +1,137 @@
-# WebSocket 协议
+# WebSocket protocol
 
-> 状态：Accepted · 协议版本 `2`（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)）
+> Status: Accepted · protocol version `2` ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md))
 >
-> ★ **这是前后端的唯一契约。** 任何改动必须先改这篇文档，再改代码。不允许一侧先改。
-> 实现位置：`internal/protocol`（Go）与 `web/src/protocol`（TS），两者必须严格对应，并对同一组测试向量做单测。
+> ★ **This is the only contract between frontend and backend.** Every change starts here, then the code. Neither side changes first.
+> Implemented in `internal/protocol` (Go) and `web/src/protocol` (TS). The two must match exactly, and both run the same test vectors in their unit tests.
 
 ---
 
-## 0. 术语速查
+## 0. Quick reference
 
-| 名字 | 定义 |
+| Name | Definition |
 |---|---|
-| `sid` | 会话 id，`uint16`，agent 进程内唯一，进程重启后重新分配 |
-| `out_seq` | **会话累计的 PTY 输出字节数**中 client 已收到的位置。agent 不改写输出流，一个字节都不剥离 |
-| `in_seq` | **client 已发给 agent 的累计字节数**（按会话） |
-| `in_ack` | agent 已真正写入 PTY 的累计输入字节数 |
-| `base_seq` | 环形缓冲当前保留内容的起始 `out_seq` |
-| `head_seq` | 环形缓冲当前的末尾 `out_seq`（= 该会话累计产出字节数） |
-| 快照 | agent 侧终端模拟器在某个 `seq` 上的完整状态，序列化成任何 xterm 都能吃的字节（§5.2） |
-| `client_id` | 一次页面加载的身份。**输入记账的 key**，见 §5.4 |
-| `instance_id` | agent 进程本次启动的随机 id。用于识别"agent 重启过"，见 §5.3 |
+| `sid` | Session id, `uint16`, unique within an agent process, reallocated after a process restart |
+| `out_seq` | How far into the **session's cumulative PTY output, in bytes,** the client has received. The agent does not rewrite the output stream; not a single byte is stripped |
+| `in_seq` | **Cumulative bytes the client has sent the agent** (per session) |
+| `in_ack` | Cumulative input bytes the agent has actually written to the PTY |
+| `base_seq` | The `out_seq` at which the ring buffer's retained content starts |
+| `head_seq` | The `out_seq` at the end of the ring buffer (= total bytes the session has produced) |
+| snapshot | The agent-side terminal emulator's full state at some `seq`, serialized as bytes any xterm can consume (§5.2) |
+| `client_id` | Identity of one page load. **The key for input accounting**, see §5.4 |
+| `instance_id` | Random id of the current agent process run. Detects "the agent restarted", see §5.3 |
 
-**seq 是字节计数，不是消息计数。** 理由见 [ADR-0009](../20-architecture/adr/0009-hybrid-ws-framing.md)。
+**seq counts bytes, not messages.** Rationale in [ADR-0009](../20-architecture/adr/0009-hybrid-ws-framing.md).
 
 ---
 
-## 1. 连接建立
+## 1. Connection setup
 
-### 端点
+### Endpoint
 
 ```
 GET /ws
 Upgrade: websocket
 Cookie: webterm_session=<token>
-Origin: https://<配置的域名>
+Origin: https://<configured domain>
 ```
 
-### 服务端校验（全部失败即拒绝，不升级）
+### Server-side checks (any failure rejects the upgrade)
 
-| 检查 | 失败响应 |
+| Check | On failure |
 |---|---|
-| Cookie 存在且对应未吊销的设备 | `401` |
-| `Origin` 与配置域名严格相等（`--dev` 下允许 `http://localhost:*` 与 `http://127.0.0.1:*`） | `403` |
+| Cookie present and maps to a device that isn't revoked | `401` |
+| `Origin` exactly equals the configured domain (under `--dev`, `http://localhost:*` and `http://127.0.0.1:*` are allowed) | `403` |
 
-**握手阶段不做版本协商** —— 握手上没有携带 client 版本的字段（不使用 `Sec-WebSocket-Protocol`）。版本在 `hello`/`welcome` 里协商，不匹配时回 `error{code:"protocol_unsupported"}`，这样能给出可读的错误消息而不是一个裸的握手失败。
+**No version negotiation in the handshake** — the handshake carries no client version (`Sec-WebSocket-Protocol` isn't used). The version is negotiated in `hello`/`welcome`, and a mismatch returns `error{code:"protocol_unsupported"}`, which gives a readable error instead of a bare handshake failure.
 
-### 单连接约定
+### One connection for everything
 
-- 一条 WebSocket 复用所有会话，帧头带 `sid`
-- 同一设备可以开多条连接（多个标签页）。**agent 允许并且不做互斥**：每条连接独立订阅、独立记 `out_seq`
-- 输入侧多连接并发写同一会话是允许的但语义上由用户负责（就像两个人 attach 同一个 tmux）。`in_seq` 按 **`client_id`** 独立记账，见 §5.4
+- One WebSocket carries all sessions; the frame header carries `sid`
+- One device may open several connections (several tabs). **The agent allows this and doesn't make them exclusive**: each connection subscribes and tracks `out_seq` independently
+- Several connections writing input to the same session at once is allowed, and what that means is up to the user (like two people attached to the same tmux). `in_seq` is accounted per **`client_id`**, see §5.4
 
 ---
 
-## 2. 帧类型
+## 2. Frame types
 
-WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节。
+The WebSocket opcode is the discriminator; no extra type byte is needed.
 
-| WebSocket 帧 | 内容 |
+| WebSocket frame | Content |
 |---|---|
-| **binary** | 终端数据与快照。12 字节定长头 + 原始负载 |
-| **text** | 控制消息。JSON 对象，必有 `t` 字段 |
+| **binary** | Terminal data and snapshots. 12-byte fixed header + raw payload |
+| **text** | Control messages. A JSON object that always has a `t` field |
 
-任何不符合上述格式的帧 → 接收方发 `error{code:"bad_frame"}` 并关闭连接。
+Any frame that doesn't match → the receiver sends `error{code:"bad_frame"}` and closes the connection.
 
 ---
 
-## 3. 二进制数据帧
+## 3. Binary data frames
 
-### 布局（大端）
+### Layout (big-endian)
 
 ```
-偏移  长度  字段      类型      说明
-────  ────  ────────  ────────  ──────────────────────────────────────
+Offset Len  Field     Type      Description
+────── ───  ────────  ────────  ──────────────────────────────────────────
   0     1   type      uint8     0x01 = OUTPUT   (agent→client)
                                 0x02 = INPUT    (client→agent)
                                 0x03 = SNAPSHOT (agent→client)
-  1     1   flags     uint8     bit0 = MORE（仅 SNAPSHOT，见下）
-                                其余位保留：发送方填 0，接收方忽略
-  2     2   sid       uint16    会话 id
-  4     8   seq       uint64    OUTPUT / INPUT：本帧【首字节】的 out_seq / in_seq
-                                SNAPSHOT：这份快照对应的 out_seq（见下）
+  1     1   flags     uint8     bit0 = MORE (SNAPSHOT only, see below)
+                                other bits reserved: sender writes 0, receiver ignores
+  2     2   sid       uint16    session id
+  4     8   seq       uint64    OUTPUT / INPUT: out_seq / in_seq of this frame's FIRST byte
+                                SNAPSHOT: the out_seq this snapshot corresponds to (see below)
  12     N   payload   bytes     N ≥ 1
 ```
 
-- 头部固定 12 字节
-- `payload` 长度为 0 的帧是非法的 → `error{code:"bad_frame"}`
-- 未知 `type`、方向不对的 `type`（client 发来 `OUTPUT` / `SNAPSHOT`，agent 发来 `INPUT`）→ `error{code:"bad_frame"}`
-- 单帧 `payload` 上限 **256 KiB**；超出 → `error{code:"frame_too_large"}` 并关闭连接
-- **不做任何编码**。`payload` 可以是任意字节序列，包括被切断的多字节 UTF-8 字符 —— client 必须用**流式** UTF-8 解码器接（§5.2）
+- The header is always 12 bytes
+- A frame with an empty `payload` is invalid → `error{code:"bad_frame"}`
+- An unknown `type`, or a `type` sent in the wrong direction (client sends `OUTPUT` / `SNAPSHOT`, agent sends `INPUT`) → `error{code:"bad_frame"}`
+- The `payload` of one frame is at most **256 KiB**; larger → `error{code:"frame_too_large"}` and close the connection
+- **No encoding.** `payload` can be any byte sequence, including a multi-byte UTF-8 character cut in half — the client must decode with a **streaming** UTF-8 decoder (§5.2)
 
-### OUTPUT 帧（agent → client）
+### OUTPUT frames (agent → client)
 
-- `payload` 是 PTY 的原始输出，原样转发。分帧边界完全由 agent 的读取时机决定，**没有语义**
-- 连续的 OUTPUT 帧对同一 `sid` 必须满足 `seq(n+1) == seq(n) + len(payload(n))`
-- client 收到 `seq != 期望值` 时：
-  - `seq < 期望` → 重复数据（不应发生），丢弃并记 warning
-  - `seq > 期望` → 出现空洞（不应发生），**立即关闭连接并走重连续传**，不要尝试自行修补
+- `payload` is raw PTY output, forwarded verbatim. Frame boundaries depend only on when the agent happens to read, and **carry no meaning**
+- Consecutive OUTPUT frames for the same `sid` must satisfy `seq(n+1) == seq(n) + len(payload(n))`
+- When the client sees `seq != expected`:
+  - `seq < expected` → duplicate data (shouldn't happen): drop it and log a warning
+  - `seq > expected` → a gap (shouldn't happen): **close the connection immediately and resume via reconnect**; don't try to patch it up
 
-### SNAPSHOT 帧（agent → client）
+### SNAPSHOT frames (agent → client)
 
-一份快照可以拆成多帧：同一份快照的所有帧 `seq` 相同，**除最后一帧外都置 `flags` bit0（MORE）**。agent 保证一份快照的各帧之间不夹杂同一 `sid` 的其它帧。
+A snapshot can span several frames: every frame of one snapshot has the same `seq`, and **all but the last set `flags` bit0 (MORE)**. The agent guarantees that no other frames for the same `sid` are interleaved between a snapshot's frames.
 
-- `seq` 是这份快照对应的 `out_seq`：agent 的模拟器恰好吃完了前 `seq` 个字节。之后的 OUTPUT 帧从 `seq` 开始
-- `payload`（拼起来之后）是一段**任何 xterm 兼容终端都能吃的字节**：从清空的终端开始画出至多 2000 行历史、当前屏、模式、画笔、滚动区域、字符集、制表位、光标，以及模拟器解析到一半的序列（放在最后，让之后的 OUTPUT 帧把它接完）
-- **快照的字节不计入 `out_seq`**。它是 agent 生成的渲染指令，不是流内容
-- client 收齐最后一帧后：在写入流里先写 RIS（`ESC c`）复位 → 换一个新的 UTF-8 解码器 → 把快照当作**回放**写入（§5.3 回放门）→ `out_seq = seq`
-- **用写入流里的 RIS（`ESC c`）复位，不要调 `term.reset()`**：`reset()` 是同步的，不清写缓冲。列数一变 agent 立刻重发快照，此时还没解析完的旧输出会被画到复位之后、快照之前。RIS 和快照一起进写缓冲，顺序天然正确（xterm 自己在 `reset()` 的注释里也建议这种场合用 RIS）
+- `seq` is the `out_seq` this snapshot corresponds to: the agent's emulator has consumed exactly the first `seq` bytes. Subsequent OUTPUT frames start at `seq`
+- The (concatenated) `payload` is bytes **any xterm-compatible terminal can consume**: starting from a cleared terminal, it draws up to 2000 lines of history, the current screen, modes, pen, scroll region, character sets, tab stops and cursor, plus any sequence the emulator is halfway through parsing (placed last, so the following OUTPUT frames complete it)
+- **Snapshot bytes don't count toward `out_seq`.** They are rendering instructions generated by the agent, not stream content
+- Once the last frame arrives, the client writes RIS (`ESC c`) into the write stream to reset → switches to a new UTF-8 decoder → writes the snapshot as **replay** (§5.3, replay gate) → sets `out_seq = seq`
+- **Reset with RIS (`ESC c`) in the write stream, not with `term.reset()`**: `reset()` is synchronous and doesn't clear the write buffer. When the column count changes, the agent resends a snapshot immediately, and old output that hasn't been parsed yet would be drawn after the reset but before the snapshot. RIS enters the write buffer together with the snapshot, so the order is right by construction (xterm's own comment on `reset()` recommends RIS in this situation)
 
-### INPUT 帧（client → agent）
+### INPUT frames (client → agent)
 
-- client 分配 `in_seq` 并写入本地重发队列
-- agent 校验（记账属于 `(client_id, sid)`，不属于连接，见 §5.4）。设 `accepted`
-  为 agent 已接受入队的累计字节数：
-  - `seq == accepted` → 正常，入队待写 PTY
-  - `seq < accepted` → 重发的已处理数据，**丢弃前 `accepted - seq` 字节**，接受剩余部分（重连时的正常情况）
-  - `seq > accepted` → 空洞 → `error{code:"input_gap"}` 并关闭连接
+- The client assigns `in_seq` and appends the data to its local resend queue
+- The agent validates it (accounting belongs to `(client_id, sid)`, not to the connection, see §5.4). Let `accepted`
+  be the cumulative bytes the agent has accepted into its queue:
+  - `seq == accepted` → normal, queue it for the PTY
+  - `seq < accepted` → resent data already handled: **drop the first `accepted - seq` bytes** and accept the rest (normal on reconnect)
+  - `seq > accepted` → a gap → `error{code:"input_gap"}` and close the connection
 
-  **校验用的是 `accepted` 而不是 `in_ack`。** 两者不同：`in_ack` 是已经真正
-  写进 PTY 的字节数，它滞后于入队。拿 `in_ack` 做校验的话，客户端连着发两帧
-  时第二帧就会被误判成空洞 —— PTY 还没来得及消费第一帧。`in_ack` 只用于
-  `ack` 与重连后的重发起点。
-- 会话状态为 `exited` 时收到 INPUT → 丢弃并回 `error{code:"session_exited", sid}`，不关闭连接
+  **Validate against `accepted`, not `in_ack`.** They differ: `in_ack` counts bytes actually
+  written to the PTY and lags behind the queue. Validating against `in_ack` would flag the second
+  of two back-to-back frames as a gap, because the PTY hasn't consumed the first one yet. `in_ack`
+  is used only for `ack` and as the resend starting point after a reconnect.
+- INPUT for a session in the `exited` state → drop it and reply `error{code:"session_exited", sid}`; don't close the connection
 
 ---
 
-## 4. 控制消息（JSON 文本帧）
+## 4. Control messages (JSON text frames)
 
-所有控制消息形如 `{"t": "<类型>", ...}`。未知 `t` 值：**接收方必须忽略**（前向兼容）。
+Every control message looks like `{"t": "<type>", ...}`. An unknown `t` value **must be ignored** by the receiver (forward compatibility).
 
 ### 4.1 client → agent
 
-#### `hello` — 连接后的第一条消息，必须
+#### `hello` — the first message after connecting, required
 
 ```json
 {
@@ -145,14 +145,14 @@ WebSocket 原生的 opcode 就是判别依据，不需要额外的判别字节�
 }
 ```
 
-| 字段 | 说明 |
+| Field | Description |
 |---|---|
-| `protocol` | client 支持的协议版本 |
-| `client_id` | **每次页面加载一个**，client 自己生成、只放内存；跨重连靠同一个连接对象保持不变。是输入记账的 key（§5.4）。**不能存 `sessionStorage`**：刷新后 id 还是那个，agent 记的 `in_ack` 停在刷新前的累计值，新页面的 `in_seq` 却从 0 重新数，开头那几个字节会被当成重发静默丢掉。也不能存 `localStorage`：同源共享，区分不了标签页 |
-| `instance_id` | 上次 `welcome` 里拿到的值，首次连接为 `null`。与 agent 当前值不符 → agent 把所有 `resume` 项判为 `gone`（§5.3） |
-| `resume` | 想要续传的会话及其输出进度。首次连接为 `[]`。**不带输入进度** —— `in_ack` 由 agent 保管 |
+| `protocol` | Protocol version the client supports |
+| `client_id` | **One per page load**, generated by the client and kept in memory only; it stays the same across reconnects because the same connection object holds it. The key for input accounting (§5.4). **Don't store it in `sessionStorage`**: after a reload the id would be the same, the agent's `in_ack` would still hold the pre-reload total, but the new page's `in_seq` starts again from 0, so its first bytes would be silently dropped as resends. Not in `localStorage` either: it's shared across the origin and can't tell tabs apart |
+| `instance_id` | The value from the last `welcome`; `null` on first connect. If it differs from the agent's current value, the agent marks every `resume` entry `gone` (§5.3) |
+| `resume` | Sessions to resume and their output progress. `[]` on first connect. **No input progress** — the agent keeps `in_ack` |
 
-agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_hello"}` 并关闭。
+Any other frame before `hello` → `error{code:"expected_hello"}` and close.
 
 #### `session.create`
 
@@ -160,9 +160,9 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 { "t": "session.create", "req_id": "r1", "name": null, "cwd": null, "cols": 80, "rows": 24 }
 ```
 
-`name`/`cwd` 为 `null` 时用默认值（`cwd` 默认为用户 home）。成功回 `session.created`，失败回 `error`。
+`name`/`cwd` of `null` means the default (`cwd` defaults to the user's home). Success → `session.created`; failure → `error`.
 
-**建会话不自动订阅**：client 收到 `session.created` 后自己发 `subscribe{out_seq: 0}`，走快照拿到第一屏。只有这一条路。
+**Creating a session doesn't subscribe to it**: on `session.created` the client sends `subscribe{out_seq: 0}` itself and gets the first screen as a snapshot. This is the only path.
 
 #### `session.close`
 
@@ -170,17 +170,17 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 { "t": "session.close", "req_id": "r2", "sid": 1 }
 ```
 
-对 `running` 会话：`SIGHUP` → 2 秒后仍存活则 `SIGKILL`。
-对 `exited` 会话：直接释放缓冲并销毁。
-均回 `session.closed`。
+For a `running` session: `SIGHUP` → `SIGKILL` if it's still alive after 2 seconds.
+For an `exited` session: free the buffers and destroy it immediately.
+Both reply `session.closed`.
 
 #### `session.rename`
 
 ```json
-{ "t": "session.rename", "req_id": "r3", "sid": 1, "name": "构建" }
+{ "t": "session.rename", "req_id": "r3", "sid": 1, "name": "build" }
 ```
 
-设置后该会话**停止**自动命名（不再跟随终端标题与 CWD）。`name` 传 `null` 恢复自动命名。
+After this the session **stops** automatic naming (it no longer follows the terminal title or the CWD). `name: null` restores automatic naming.
 
 #### `session.move`
 
@@ -188,11 +188,11 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 { "t": "session.move", "req_id": "r4", "sid": 3, "before": 1 }
 ```
 
-把会话 `sid` 挪到会话 `before` 的前面；`before` 为 `null` 时挪到最后（[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)）。
+Moves session `sid` in front of session `before`; `before: null` moves it to the end ([ADR-0040](../20-architecture/adr/0040-session-order-drag.md)).
 
-- `sid` 不存在 → `error{code:"unknown_session"}`。
-- `before` 不存在（比如刚被别处关掉）→ 当作 `null`，挪到最后；`before` 等于 `sid` → 原地不动。都不报错。
-- 成功后广播 `session.order`（§4.2），**位置没变也广播**，发起方据此确认。
+- `sid` doesn't exist → `error{code:"unknown_session"}`.
+- `before` doesn't exist (e.g. it was just closed elsewhere) → treated as `null`, move to the end; `before` equals `sid` → stays put. Neither is an error.
+- On success, broadcast `session.order` (§4.2), **even if the position didn't change**, so the sender gets confirmation.
 
 #### `subscribe` / `unsubscribe`
 
@@ -201,20 +201,20 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 { "t": "unsubscribe", "sid": 1 }
 ```
 
-**只对当前可见的会话订阅。** 未订阅的会话在 agent 侧照常运行、照常喂给模拟器，agent 只在其产生输出时发一条 `session.updated{head_seq}`（做节流，见 §6.2），client 据此自行判定未读。
+**Subscribe only to the currently visible session.** Unsubscribed sessions keep running on the agent and keep feeding the emulator; the agent only sends `session.updated{head_seq}` when they produce output (throttled, see §6.2), and the client derives unread from it.
 
-`subscribe` 携带 `out_seq`，判定与 `resume` 相同（§5.1）：**增量**或**快照**。第一次打开、切回会话都用这个消息，不需要重连。client 手里没有这个会话的内容时（第一次打开、刷新页面）报 `out_seq: 0`。
+`subscribe` carries `out_seq` and is decided the same way as `resume` (§5.1): **incremental** or **snapshot**. Both first open and switching back use this message; no reconnect is needed. When the client has none of this session's content (first open, page reload), it reports `out_seq: 0`.
 
-**`cols` / `rows` 是此刻的终端尺寸**，省略、为 0、或超出 1..1000 表示"沿用会话当前尺寸"。列数变了时，快照发给**该会话的每个订阅者**（不只是这条连接），与 `resize` 相同。**订阅时不要再单发一条 `resize`** —— 尺寸必须和 `subscribe` 在同一条消息里，agent 才能把顺序钉死：
+**`cols` / `rows` are the current terminal size**; omitted, 0, or outside 1..1000 means "keep the session's current size". When the column count changes, the snapshot goes to **every subscriber of the session** (not just this connection), as with `resize`. **Don't send a separate `resize` when subscribing** — the size must be in the same message as `subscribe` so the agent can pin down the order:
 
 ```
-锁内: 列数变了 → 模拟器.Resize → 走快照（不管 out_seq）
-      否则     → 按 §5.1 判定增量 / 快照；行数变了就 模拟器.Resize
-      把要发的帧入队，加入订阅者集合
-锁外: 尺寸变了 → TIOCSWINSZ
+under lock:   columns changed → emulator.Resize → snapshot (regardless of out_seq)
+              otherwise       → incremental / snapshot per §5.1; emulator.Resize if rows changed
+              queue the frames, join the subscriber set
+outside lock: size changed    → TIOCSWINSZ
 ```
 
-程序因 SIGWINCH 重画的字节因此一定排在快照或增量之后。反过来的话，那批重画字节会进入快照之前的位置，客户端拿不到那一屏。
+So whatever the program redraws on SIGWINCH always comes after the snapshot or incremental bytes. The other way round, the redraw would land before the snapshot's position and the client would never get that screen.
 
 #### `resize`
 
@@ -222,10 +222,10 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 { "t": "resize", "sid": 1, "cols": 100, "rows": 30 }
 ```
 
-client 侧做 100ms 防抖。agent：
+The client debounces by 100ms. The agent:
 
-- **列数变了**：锁内 `模拟器.Resize` → 生成快照（`seq` = `head_seq`）→ 发给**该会话的每个订阅者**；锁外 `TIOCSWINSZ`。两边各自重排的结果不一致（[ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §4），以 agent 的为准
-- **只有行数变了**：`模拟器.Resize` + `TIOCSWINSZ`，不发快照
+- **Columns changed**: under the lock, `emulator.Resize` → generate a snapshot (`seq` = `head_seq`) → send it to **every subscriber of the session**; `TIOCSWINSZ` outside the lock. The two sides reflow differently ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §4), and the agent's result wins
+- **Only rows changed**: `emulator.Resize` + `TIOCSWINSZ`, no snapshot
 
 #### `ping`
 
@@ -233,11 +233,11 @@ client 侧做 100ms 防抖。agent：
 { "t": "ping", "ts": 1757116800123 }
 ```
 
-每 30 秒发一次。**用协议级 ping 而不是 WebSocket 控制帧**，因为浏览器 API 不暴露 ping/pong，且我们要测 RTT。
+Sent every 30 seconds. **A protocol-level ping rather than WebSocket control frames**, because the browser API doesn't expose ping/pong and we want to measure RTT.
 
 ### 4.2 agent → client
 
-#### `welcome` — 对 `hello` 的响应
+#### `welcome` — the reply to `hello`
 
 ```json
 {
@@ -245,12 +245,12 @@ client 侧做 100ms 防抖。agent：
   "protocol": 2,
   "server_version": "0.2.0",
   "instance_id": "a91e…",
-  "home": "/home/sun",
+  "home": "/home/user",
   "limits": { "max_sessions": 20, "ring_bytes": 262144, "max_frame_bytes": 262144 },
   "sessions": [
     {
       "sid": 1, "name": "webterm", "name_is_manual": false,
-      "cwd": "/home/sun/github/webterm",
+      "cwd": "/home/user/github/webterm",
       "status": "running", "exit_code": null,
       "cols": 80, "rows": 24,
       "base_seq": 221776, "head_seq": 483920,
@@ -263,35 +263,35 @@ client 侧做 100ms 防抖。agent：
 }
 ```
 
-`resumed[].status`：
+`resumed[].status`:
 
-| 值 | 含义 | client 动作 |
+| Value | Meaning | Client action |
 |---|---|---|
-| `ok` | 增量续传 | 不清屏，从 `from_seq`（= 自己的 `out_seq`）接 OUTPUT 帧 |
-| `snapshot` | 发快照 | 等 SNAPSHOT 帧（§3）；`from_seq` = 快照的 `seq` |
-| `gone` | 该 sid 已不存在（会话已销毁 / `instance_id` 不符） | 移除该会话的 UI，提示"会话已结束" |
+| `ok` | Incremental resume | Don't clear the screen; continue with OUTPUT frames from `from_seq` (= its own `out_seq`) |
+| `snapshot` | Snapshot follows | Wait for SNAPSHOT frames (§3); `from_seq` = the snapshot's `seq` |
+| `gone` | The sid no longer exists (session destroyed / `instance_id` mismatch) | Remove the session from the UI and show "Session ended" |
 
-**`sessions[]` 的顺序就是会话的显示顺序**（[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)）：新建的排在最后，`session.move` 可以调整。client 照这个顺序显示，不自己排序。
+**The order of `sessions[]` is the display order** ([ADR-0040](../20-architecture/adr/0040-session-order-drag.md)): new sessions go last, and `session.move` can reorder them. The client shows this order and doesn't sort on its own.
 
-`home` 是 agent 用户的家目录，client 用它把 CWD 缩写成 `~`（cwd 等于它或以 `home + "/"` 开头时）。没有这个字段时不缩写。
+`home` is the agent user's home directory. The client uses it to abbreviate a CWD to `~` (when the CWD equals it or starts with `home + "/"`). If the field is absent, nothing is abbreviated.
 
-`resumed[].in_ack` 是 agent 对 **该 `client_id`** 在该会话上已写入 PTY 的累计字节数（§5.4）。**client 必须据此裁剪重发队列，并重发其后的全部输入。**
+`resumed[].in_ack` is the cumulative number of bytes the agent has written to the PTY for **this `client_id`** on this session (§5.4). **The client must trim its resend queue by it and resend everything after it.**
 
-**未读靠 `head_seq` 推导**，不是服务端状态：`unread = head_seq > 本地 out_seq`。未读天然是 per-client 的，放在服务端会让两个标签页互相清对方的未读。
+**Unread is derived from `head_seq`**, not stored on the server: `unread = head_seq > local out_seq`. Unread is inherently per client; keeping it on the server would let two tabs clear each other's unread state.
 
 #### `session.created` / `session.closed` / `session.updated`
 
 ```json
-{ "t": "session.created", "req_id": "r1", "session": { …同 welcome.sessions[] 的结构… } }
+{ "t": "session.created", "req_id": "r1", "session": { …same shape as welcome.sessions[]… } }
 { "t": "session.closed",  "req_id": "r2", "sid": 1, "exit_code": 0 }
 { "t": "session.updated", "sid": 1, "name": "api", "cwd": "/srv/api", "status": "running", "head_seq": 491337 }
 ```
 
-- 三条都**广播给该设备的所有连接**（否则 B 标签页看不到 A 新建的会话）。`req_id` 只出现在发起请求的那条连接的副本上
-- `session.updated` 只包含**发生变化的字段** + `sid`。client 做增量合并
-- `cwd` 来自 agent 每秒读一次 `/proc/<前台进程组>/cwd`，变了才发；`name_is_manual == false` 时 `name` 跟着变（AC-4.4）
-- 自动名的来源（[ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)）：**前台程序**（不是 shell 本身）设的终端标题（OSC 0 / 2，清洗后最多 64 个字符）优先，没有时是 CWD 的 basename。标题与 CWD 在同一次每秒轮询里读，名字变了才发，所以每个会话每秒至多一条
-- **会话退出**：`session.updated{status:"exited", exit_code, head_seq}` 一定排在该会话**最后一个 OUTPUT 之后**（agent 等 PTY 读到 EOF 再发，最多等 500 ms —— 后台进程占着 PTY 时 EOF 不会来）。`head_seq` 是最终的输出总量：client 的 `out_seq` 追到它，才说明输出收齐了
+- All three are **broadcast to every connection of the device** (otherwise tab B wouldn't see a session tab A created). `req_id` appears only on the copy sent to the connection that made the request
+- `session.updated` contains only **the fields that changed** + `sid`. The client merges it in
+- `cwd` comes from the agent reading `/proc/<foreground process group>/cwd` once a second and is sent only on change; when `name_is_manual == false`, `name` follows (AC-4.4)
+- Source of the automatic name ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)): the terminal title (OSC 0 / 2, sanitized, at most 64 characters) set by the **foreground program** (not the shell itself) wins; otherwise the CWD basename. Title and CWD are read in the same once-a-second poll and a message is sent only when the name changes, so there is at most one per session per second
+- **Session exit**: `session.updated{status:"exited", exit_code, head_seq}` always comes **after the session's last OUTPUT** (the agent waits for EOF on the PTY, for at most 500 ms — EOF never comes while a background process holds the PTY open). `head_seq` is the final output total: only when the client's `out_seq` reaches it has all output arrived
 
 #### `session.order`
 
@@ -299,7 +299,7 @@ client 侧做 100ms 防抖。agent：
 { "t": "session.order", "req_id": "r4", "sids": [3, 1, 2] }
 ```
 
-`session.move` 成功后广播给所有连接，`req_id` 只在发起方的副本上。`sids` 是**完整的**显示顺序，client 整个替换自己的顺序。新建、关闭会话不发它：新建的排在最后，关掉的直接去掉，两边各自推得出来。
+Broadcast to every connection after a successful `session.move`; `req_id` appears only on the sender's copy. `sids` is the **complete** display order, and the client replaces its own order with it. Creating and closing sessions don't send it: new sessions go last and closed ones are removed, which both sides can work out on their own.
 
 #### `ack`
 
@@ -307,7 +307,7 @@ client 侧做 100ms 防抖。agent：
 { "t": "ack", "sid": 1, "in_ack": 1352 }
 ```
 
-agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条，取最新值（这是累计量，丢中间值无害）。
+Sent after writing to the PTY. **Throttled**: at most one per session per 50ms, carrying the latest value (it's cumulative, so dropping intermediate values is harmless).
 
 #### `pong`
 
@@ -315,219 +315,219 @@ agent 写入 PTY 后发送。**做节流**：同一会话最多每 50ms 一条�
 { "t": "pong", "ts": 1757116800123 }
 ```
 
-`ts` 原样回显 client 的值，client 据此算 RTT。
+`ts` echoes the client's value; the client computes RTT from it.
 
 #### `error`
 
 ```json
-{ "t": "error", "req_id": "r1", "sid": 1, "code": "session_limit", "message": "会话数已达上限 20" }
+{ "t": "error", "req_id": "r1", "sid": 1, "code": "session_limit", "message": "session limit reached (20)" }
 ```
 
-`req_id` / `sid` 在适用时携带。错误码表见 §7。
+`req_id` / `sid` are included when they apply. Error codes are listed in §7.
 
 #### `notice`
 
 ```json
-{ "t": "notice", "level": "warn", "message": "agent 即将重启，所有会话将结束" }
+{ "t": "notice", "level": "warn", "message": "agent is restarting; all sessions will end" }
 ```
 
-`level`：`info` / `warn` / `error`。用于 agent 主动告知（如 `SIGTERM` 时的关闭预告、设备被吊销）。
+`level`: `info` / `warn` / `error`. Used when the agent has something to tell the client unprompted (such as the shutdown warning on `SIGTERM`, or a revoked device).
 
 ---
 
-## 5. 续传机制
+## 5. Resume
 
-### 5.1 增量还是快照
+### 5.1 Incremental or snapshot
 
-`hello.resume` 的每一项与每一条 `subscribe`，agent 都做同一个判定：
+For every `hello.resume` entry and every `subscribe`, the agent makes the same decision:
 
 ```
-instance_id 不符 / sid 不存在          → gone（仅 hello）
-subscribe 带来的列数与会话当前不同      → 快照（先 模拟器.Resize；该会话的其它订阅者也收到这份快照）
-out_seq > 0 且 base_seq ≤ out_seq ≤ head_seq → 增量：from_seq = out_seq，发 [out_seq, head_seq) 的原始字节
-其余（out_seq == 0、落出窗口、领先于 head）→ 快照：from_seq = 快照的 seq
+instance_id mismatch / sid doesn't exist        → gone (hello only)
+subscribe brings a column count != the session's → snapshot (emulator.Resize first; the session's other subscribers get this snapshot too)
+out_seq > 0 and base_seq ≤ out_seq ≤ head_seq    → incremental: from_seq = out_seq, send the raw bytes [out_seq, head_seq)
+anything else (out_seq == 0, out of window, ahead of head) → snapshot: from_seq = the snapshot's seq
 ```
 
-- **增量**是网络抖动、短时切走的常态，字节级连续（AC-2.1）
-- **快照**覆盖其余一切：第一次打开、刷新页面、断线太久、切走太久、程序在备用屏、列数变了。没有"按屏分流"，没有"历史输出已截断"
-- **判定在锁内，与入队、加入订阅者集合一起完成**。分开做的话，中间到达的一批输出要么被发两遍（重复），要么两边都漏（空洞）
+- **Incremental** is the normal case for network blips and short switches away; it's byte-level continuous (AC-2.1)
+- **Snapshot** covers everything else: first open, page reload, long disconnects, long switches away, programs on the alternate screen, column changes. No per-screen branching, no "history truncated"
+- **The decision is made under the lock, together with queuing the frames and joining the subscriber set.** Done separately, a batch of output arriving in between is either sent twice (duplicate) or missed by both (gap)
 
-### 5.2 环形缓冲与模拟器
+### 5.2 Ring buffer and emulator
 
-每个会话的 PTY 输出，在**同一把锁里**做两件事：追加进环形缓冲、喂给终端模拟器。所以任何时刻 `模拟器吃到的字节数 == head_seq`，快照的 `seq` 就取那一刻的 `head_seq`。
+Each session's PTY output does two things **under the same lock**: it's appended to the ring buffer and fed to the terminal emulator. So at any moment `bytes consumed by the emulator == head_seq`, and a snapshot's `seq` is the `head_seq` at that moment.
 
 ```
                       base_seq                      head_seq
                           │                             │
-输出字节流: ──────────────┼─────────────────────────────┼──────>
-            (已被覆盖)    │  环形缓冲（默认 256 KiB）    │
-                                                        └── 模拟器的状态恰好对应这里
+output stream: ───────────┼─────────────────────────────┼──────>
+             (overwritten)│    ring buffer (256 KiB)    │
+                                                        └── the emulator's state matches exactly this point
 ```
 
-- **环形缓冲**只服务增量这一条路，默认 `ring_bytes` = **256 KiB**（`--ring-bytes`）。按字节裁剪，不找 `\n` 边界：落出窗口的客户端一律走快照，裁剪位置不影响显示
-- **模拟器**（`internal/vterm`，tuios.dev/vt）保留 2000 行历史，不管有没有人订阅都喂。它自己生成的查询应答**丢弃** —— 终端查询仍由浏览器的 xterm 回答（§5.3）
-- **快照**由模拟器导出：当前屏 + 至多 2000 行历史 + 模式 / 画笔 / 滚动区 / 字符集 / 制表位 / 光标 + 解析到一半的序列。普通内容生成约 0.5 ms（只有当前屏）到 35 ms（满 2000 行，100 列）
-- **快照上限 1 MiB**：超过就按比例减少带的历史行数重新生成一次（当前屏与模式不减）。宽终端（几百列）配上每格换色的极端输出，满 2000 行可达数 MiB，会撑爆连接写队列（4 MiB，§5.6）而断开、重连又要快照，形成死循环
-- client 侧：**每会话一个流式 UTF-8 解码器**（`TextDecoder` + `stream: true`），把字节解成字符串再写进 xterm。直接写 `Uint8Array` 时，xterm.js 会在某些切法下丢字（第 2 字节为 `0x80` 的三字节字符切在第 2 字节之后，如 `。` `…` `—`），见 [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §背景。收到快照时换一个新的解码器
+- The **ring buffer** serves only the incremental path; default `ring_bytes` = **256 KiB** (`--ring-bytes`). It's trimmed by bytes, not at `\n` boundaries: clients that fall out of the window always get a snapshot, so where the trim lands doesn't affect the display
+- The **emulator** (`internal/vterm`, tuios.dev/vt) keeps 2000 lines of history and is fed whether or not anyone is subscribed. The query replies it generates are **discarded** — terminal queries are still answered by the browser's xterm (§5.3)
+- **Snapshots** are exported by the emulator: current screen + up to 2000 lines of history + modes / pen / scroll region / character sets / tab stops / cursor + any half-parsed sequence. Typical content takes about 0.5 ms (current screen only) to 35 ms (a full 2000 lines at 100 columns)
+- **Snapshots are capped at 1 MiB**: above that, regenerate once with proportionally fewer history lines (the current screen and modes are never cut). A wide terminal (hundreds of columns) with pathological output that changes color on every cell can reach several MiB at 2000 lines, which would overflow the connection write queue (4 MiB, §5.6) and disconnect — and the reconnect needs a snapshot again, looping forever
+- On the client: **one streaming UTF-8 decoder per session** (`TextDecoder` with `stream: true`) turns bytes into strings before they're written to xterm. Writing `Uint8Array` directly makes xterm.js drop characters for some splits (a three-byte character whose second byte is `0x80`, split right after that byte, e.g. `。` `…` `—`); see the context section of [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md). A snapshot gets a fresh decoder
 
-### 5.3 重连续传流程
+### 5.3 Reconnect and resume
 
 ```
-①  client 检测到断开
-②  client 保留：每会话的 out_seq、未 ack 的输入队列
-③  指数退避重连（0.5s 起，×1.5，上限 15s，±20% 抖动）
-    online 事件 / 页面重新可见 → 立即重试一次并重置退避
-④  连接建立 → 发 hello{ client_id, instance_id, resume: [{sid, out_seq}, …] }
-⑤  agent 对每个 sid 按 §5.1 判定 ok / snapshot / gone
-⑥  agent 回 welcome（含 instance_id 与 resumed[].in_ack）
-⑦  client：
-       status=="gone"   → 移除会话 UI
-       按 in_ack 裁剪重发队列 → 重发其后全部输入
-⑧  agent 推送：ok → 从 from_seq 起的 OUTPUT 帧；snapshot → SNAPSHOT 帧，随后从它的 seq 起的 OUTPUT 帧
+①  client detects the disconnect
+②  client keeps: each session's out_seq, the unacked input queue
+③  exponential backoff (from 0.5s, ×1.5, capped at 15s, ±20% jitter)
+    online event / page becomes visible → retry once immediately and reset the backoff
+④  connected → send hello{ client_id, instance_id, resume: [{sid, out_seq}, …] }
+⑤  agent decides ok / snapshot / gone for each sid (§5.1)
+⑥  agent replies welcome (with instance_id and resumed[].in_ack)
+⑦  client:
+       status=="gone"   → remove the session UI
+       trim the resend queue by in_ack → resend all input after it
+⑧  agent sends: ok → OUTPUT frames from from_seq; snapshot → SNAPSHOT frames, then OUTPUT frames from its seq
 ```
 
-**为什么要 `instance_id`**：`sid` 是 `uint16` 且 agent 重启后从头分配。没有实例标识时，一个 `resume{sid:1, out_seq:很大}` 会被当成"领先于 head"，屏幕上留着旧会话的内容，之后接的却是一个**毫不相干的新会话**的输出，用户无从察觉。
+**Why `instance_id`**: `sid` is a `uint16` reallocated from scratch after an agent restart. Without an instance id, `resume{sid:1, out_seq:<large>}` would be treated as "ahead of head": the screen keeps the old session's content and then continues with output from a **completely unrelated new session**, and the user has no way to notice.
 
-**热升级不算重启**（[ADR-0016](../20-architecture/adr/0016-hot-reexec.md)）：agent 原地 re-exec 时把 `instance_id`、每会话的环形缓冲、模拟器状态与 `in_ack` 一并交接给新进程，所以升级后客户端重连仍是增量续传，不是 `gone`。只有真正的进程重启（`SIGTERM`、崩溃）才换 `instance_id`。
+**A hot upgrade isn't a restart** ([ADR-0016](../20-architecture/adr/0016-hot-reexec.md)): when the agent re-execs in place, it hands `instance_id`, each session's ring buffer, emulator state and `in_ack` to the new process, so clients reconnecting after an upgrade still resume incrementally rather than getting `gone`. Only a real process restart (`SIGTERM`, crash) changes `instance_id`.
 
-**推荐做法**：`resume` 只列可见会话，其它会话在用户切过去时用 `subscribe{out_seq}` 补齐，避免重连瞬间涌入大量数据。
+**Recommended**: list only visible sessions in `resume`, and catch up the others with `subscribe{out_seq}` when the user switches to them, to avoid a flood of data right after reconnecting.
 
-**回放门：补课与快照的字节写进终端时，终端产生的自动应答不进 PTY。** 历史输出里有程序发过的终端查询（DSR / DA / `CSI ?u` …），把这段字节写进 xterm，它会**再答一遍** —— 那不是用户输入，送进 PTY 就是一串乱码键入。client 侧每会话记一个 `catchup_to`：`out_seq` 追到它之前收到的 OUTPUT 都算回放；SNAPSHOT 一律算回放。
+**Replay gate: while catch-up and snapshot bytes are being written to the terminal, the terminal's automatic replies don't go to the PTY.** Historical output contains terminal queries that programs sent (DSR / DA / `CSI ?u` …). Writing those bytes into xterm makes it **answer them again** — that isn't user input, and sending it to the PTY types garbage. The client keeps a `catchup_to` per session: OUTPUT received before `out_seq` reaches it counts as replay; SNAPSHOT always counts as replay.
 
-| 时机 | `catchup_to` |
+| When | `catchup_to` |
 |---|---|
-| `welcome`，`status == "ok"` | 该会话的 `head_seq` |
-| `subscribe`，增量 | 该会话已知的 `head_seq`（由 `session.updated` 维护） |
-| 收到 SNAPSHOT | 它的 `seq`（快照之后就是 live） |
+| `welcome`, `status == "ok"` | the session's `head_seq` |
+| `subscribe`, incremental | the session's known `head_seq` (kept up to date by `session.updated`) |
+| SNAPSHOT received | its `seq` (after the snapshot, it's live) |
 
-**抑制的是自动应答，不是用户的输入。** 两者都从 xterm 的 `onData` 出来，区别在于**谁产生的**：自动应答同步发生在 `term.write()` 的解析里，用户输入同步发生在一次 DOM 输入事件的派发里。client 按来源区分：**正在派发用户输入事件时产生的 `onData` 一律放行**，其余的才受回放门约束（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)）。
+**Suppress automatic replies, not user input.** Both come out of xterm's `onData`; what differs is **who produced them**: automatic replies happen synchronously inside the parsing of `term.write()`, user input synchronously inside the dispatch of a DOM input event. The client tells them apart by source: **`onData` produced while a user input event is being dispatched always passes**; only the rest is subject to the replay gate ([ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)).
 
-### 5.4 输入重发队列
+### 5.4 Input resend queue
 
-client 侧每会话维护：
+Per session, the client keeps:
 
 ```
-in_seq_next : uint64        下一个要分配的 in_seq
-pending     : [{seq, bytes}]  已发送但未被 ack 的输入
+in_seq_next : uint64          next in_seq to assign
+pending     : [{seq, bytes}]  input sent but not yet acked
 ```
 
-- 发送时：分配 `seq = in_seq_next`，`in_seq_next += len`，入队 `pending`
-- 收到 `ack{in_ack}`：丢弃 `pending` 中 `seq + len <= in_ack` 的项；若某项被部分 ack，裁掉其前部
-- 重连后：按 `welcome.resumed[].in_ack` 裁剪，然后**按 seq 升序重发** `pending` 全部内容
-- `pending` 上限 **64 KiB**。超出时停止接受新输入并在 UI 上明确提示"离线输入已满"，**不要静默丢弃**
+- On send: assign `seq = in_seq_next`, `in_seq_next += len`, append to `pending`
+- On `ack{in_ack}`: drop the `pending` entries with `seq + len <= in_ack`; trim the front of an entry that is partly acked
+- After reconnecting: trim by `welcome.resumed[].in_ack`, then **resend everything in `pending` in ascending seq order**
+- `pending` is capped at **64 KiB**. Beyond that, stop accepting new input and say so clearly in the UI ("Offline input buffer full"); **never drop input silently**
 
-**记账的 key 是 `(client_id, sid)`，不是连接。** 两个标签页各自独立计数（混在一起没有意义），但**同一页面的重连必须继承 `in_ack`**：
+**The accounting key is `(client_id, sid)`, not the connection.** Two tabs count independently (mixing them would make no sense), but **a reconnect from the same page must inherit `in_ack`**:
 
-- agent 为每个 `(client_id, sid)` 维护 `in_ack`，**保留到会话销毁为止**。刷新一次就多一个 `client_id`，条目数随刷新次数增长；每条是一个 id 加两个 `uint64`，长期运行的会话上也只是 KB 量级，所以不回收 —— 回收之后，那个页面带着 `pending` 重连会被判 `input_gap`
-- 该 `client_id` 从未对这个会话发过输入时 `in_ack = 0`，此时 client 侧的 `in_seq_next` 也必然是 0，两侧天然对齐。这一条成立的前提是 `client_id` 每次页面加载都是新的（§4.1）
-- 反过来，`seq == 0` 而这个 `(client_id, sid)` 已有记账，说明 client 把计数器重置了却沿用了旧 `client_id`。正常的重连不会出现这个形状：client 按 `in_ack` 裁剪后从 `seq = in_ack` 重发，`seq` 不会从 0 开始。agent 仍按重发处理（丢掉重复的部分），但**记一条 Warn**（`sid`、`client`、`accepted`、`len`）—— 这类丢弃在浏览器一侧看不出任何迹象（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 第 5 条）
-- 若按连接记账，重连后 `in_ack` 归零而 client 的 `pending` 仍从旧 `seq` 起，agent 会判 `seq > in_ack` → `input_gap` → 关连接 → 无限重连。**断线期间的输入不丢**（US-2.2）整条就废了
+- The agent keeps `in_ack` for each `(client_id, sid)` **until the session is destroyed**. Every reload adds a `client_id`, so the number of entries grows with reloads; each is an id plus two `uint64`s, a few KB even on long-lived sessions, so they're never reclaimed — reclaiming one would make that page's reconnect, with input still in `pending`, fail with `input_gap`
+- When this `client_id` has never sent input to this session, `in_ack = 0`, and the client's `in_seq_next` is necessarily 0 as well, so the two sides agree from the start. This only holds because `client_id` is new on every page load (§4.1)
+- Conversely, `seq == 0` when this `(client_id, sid)` already has accounting means the client reset its counter but kept the old `client_id`. A normal reconnect never looks like this: the client trims by `in_ack` and resends from `seq = in_ack`, so `seq` doesn't start at 0. The agent still treats it as a resend (dropping the duplicate part) but **logs a Warn** (`sid`, `client`, `accepted`, `len`) — the browser shows no sign at all of these drops ([ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md), item 5)
+- With per-connection accounting, `in_ack` would reset to zero on reconnect while the client's `pending` still starts at the old `seq`; the agent would see `seq > in_ack` → `input_gap` → close → reconnect, forever. **Input typed while disconnected survives** (US-2.2) would be broken entirely
 
-**连接断开时，agent 必须丢弃该 `client_id` 已入队但尚未写入 PTY 的输入**，并从
-`accepted` 里**减掉丢掉的字节数**。这些字节从未被 ack，client 仍持在 `pending` 里，
-重连后会重发；不丢的话它们会被写进 PTY 一次、重发时再写一次。
+**When a connection drops, the agent must discard that `client_id`'s input that is queued but not yet written to the PTY**, and
+**subtract the discarded bytes** from `accepted`. Those bytes were never acked and the client still holds them in `pending`,
+so it will resend them; if they weren't discarded they'd be written to the PTY once now and once more on resend.
 
-**不能直接回退到 `in_ack`**：写循环已经从队列里取走、正在写的那一段既不在队列里，
-也还没 ack（前台程序不读输入时，这一次写会卡很久 —— 正是 `input_stalled` 断线重连的场景）。
-回退到 `in_ack` 的话，client 重发时这一段被当成新数据再接受一次，写进 PTY 两遍。
-只减丢掉的部分，`accepted = in_ack + 正在写的那段`，client 从 `in_ack` 重发的前缀按重复跳过，精确对齐。
+**Don't simply roll back to `in_ack`**: the chunk the write loop has already taken off the queue and is writing is neither in the queue
+nor acked yet (when the foreground program isn't reading input, that write can block for a long time — exactly the `input_stalled` disconnect case).
+Rolling back to `in_ack` would accept that chunk again as new data when the client resends it, writing it to the PTY twice.
+Subtracting only the discarded part leaves `accepted = in_ack + the chunk being written`, so the prefix the client resends from `in_ack` is skipped as a duplicate and everything lines up exactly.
 
-### 5.5 心跳与超时
+### 5.5 Heartbeat and timeouts
 
-| 方向 | 规则 |
+| Direction | Rule |
 |---|---|
-| client → agent | 每 30 秒发 `ping` |
-| agent → client | 收到 `ping` 立即回 `pong` |
-| client 判死 | 发出 `ping` 后 10 秒未收到 `pong` → 主动关闭并重连 |
-| client 探活 | `online` 事件 / 页面重新可见时**立刻**发一次 `ping`，**2 秒**未收到 `pong` → 关闭并重连 |
-| agent 判死 | 60 秒未收到任何帧 → 关闭连接 |
+| client → agent | `ping` every 30 seconds |
+| agent → client | reply `pong` immediately on `ping` |
+| client declares dead | no `pong` within 10 seconds of a `ping` → close and reconnect |
+| client probes | on the `online` event / page becoming visible, send a `ping` **immediately**; no `pong` within **2 seconds** → close and reconnect |
+| agent declares dead | no frame of any kind for 60 seconds → close the connection |
 
-`ping`/`pong` 不影响 `out_seq`/`in_seq`。探活复用同一对消息，**agent 侧不需要任何改动**。
+`ping`/`pong` don't affect `out_seq`/`in_seq`. The probe reuses the same pair of messages, so **the agent needs no change for it**.
 
-**为什么要单独一条探活规则。** 线路断掉不一定有 `onclose`：手机息屏、切 App、Wi-Fi 切蜂窝、NAT / 反向代理静默回收连接，这些场合 TCP 上没有 FIN，浏览器那边 `readyState` 一直是 OPEN。这种**僵尸连接**自认在线，唯一的暴露渠道就是心跳，最坏 30 + 10 = 40 秒 —— 而 `setInterval` 在后台标签页还会被节流，实际更久。这 40 秒里用户打的字全都写进一条死 socket，屏幕上毫无变化。
+**Why a separate probe rule.** A dead line doesn't always produce `onclose`: screen off, switching apps, Wi-Fi to cellular, a NAT or reverse proxy silently evicting the connection — none of these send a FIN, so the browser's `readyState` stays OPEN. Such a **zombie connection** believes it's online, and the only thing that exposes it is the heartbeat, after 30 + 10 = 40 seconds at worst — longer in practice, since `setInterval` is throttled in background tabs. For those 40 seconds everything the user types goes into a dead socket and nothing changes on screen.
 
-`online` 与"页面重新可见"是**已知的可疑时刻**：系统刚说网络变了、或者用户刚把应用切回前台。此时连接要么是活的（本机 RTT 远小于 2 秒），要么就是死的，所以探针用 2 秒而不是心跳的 10 秒。判错的代价只是多一次重连，而重连是无损的（§5.3 续传 + §5.4 按 `in_ack` 重发）。
+`online` and "page visible again" are **known suspicious moments**: the system just said the network changed, or the user just brought the app back to the foreground. At that point the connection is either alive (local RTT is far below 2 seconds) or dead, so the probe waits 2 seconds rather than the heartbeat's 10. A wrong call costs only one reconnect, and reconnects are lossless (§5.3 resume + §5.4 resend from `in_ack`).
 
-理由与取舍见 [ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md)。
+Rationale and trade-offs: [ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md).
 
-### 5.6 有界队列策略（读写两侧）
+### 5.6 Bounded queues (both directions)
 
-| 队列 | 上限 | 满了怎么办 |
+| Queue | Limit | When full |
 |---|---|---|
-| 连接写队列（输出 → client） | 4 MiB（常量） | 关闭该连接 |
-| 会话输入队列（client → PTY） | 256 KiB | 回 `error{code:"input_stalled", sid}` 并关闭该连接 |
+| Connection write queue (output → client) | 4 MiB (constant) | close that connection |
+| Session input queue (client → PTY) | 256 KiB | reply `error{code:"input_stalled", sid}` and close that connection |
 
-**两侧都绝不阻塞。** 写侧阻塞会反压到 `PTY.Read()` 卡住 shell —— 一个慢客户端不能拖慢服务器上真正在跑的活。读侧阻塞更糟：**一条 WebSocket 复用所有会话**，一个不读 stdin 的前台程序（`sleep`、某些 TUI）会把 PTY 输入缓冲填满，进而卡住整条连接的读循环 —— ping/pong、`resize`、`session.create`、其它会话的输入全停。
+**Neither side ever blocks.** A blocked write side backpressures into `PTY.Read()` and stalls the shell — one slow client must not slow down the real work running on the server. A blocked read side is worse: **one WebSocket carries all sessions**, so a foreground program that doesn't read stdin (`sleep`, some TUIs) fills the PTY's input buffer and then stalls the whole connection's read loop — ping/pong, `resize`, `session.create` and every other session's input all stop.
 
-关连接是无损的：client 自动重连走续传，输出走增量或快照、输入按 `in_ack`（§5.4）重发即可。
+Closing the connection is lossless: the client reconnects automatically and resumes, output via incremental or snapshot, input resent from `in_ack` (§5.4).
 
 ---
 
-## 6. 状态与节流
+## 6. State and throttling
 
-### 6.1 会话状态机
+### 6.1 Session state machine
 
 ```
-（不存在）──session.create──> running ──shell 退出──> exited ──session.close──> （销毁）
-                                 │
-                                 └──session.close──> SIGHUP ─2s─> SIGKILL ──> （销毁）
+(none) ──session.create──> running ──shell exits──> exited ──session.close──> (destroyed)
+                              │
+                              └──session.close──> SIGHUP ─2s─> SIGKILL ──> (destroyed)
 ```
 
-`exited` 会话：保留缓冲、可续传、可查看，**不接受输入**。
+`exited` sessions keep their buffers, can be resumed and viewed, and **accept no input**.
 
-### 6.2 节流规则汇总
+### 6.2 Throttling rules
 
-| 消息 | 节流 |
+| Message | Throttling |
 |---|---|
-| `ack` | 每会话最多 50ms 一条，取最新累计值；**被吞掉的要补发** |
-| `session.updated{head_seq}` | 每会话最多 1s 一条（client 只用它判未读，中间值无害）；**被吞掉的要补发** |
-| `session.updated{cwd}` | agent 每秒读一次，仅在路径实际变化时发送 |
-| `resize`（client 侧） | 100ms 防抖；**订阅时例外，见 §4.1 `subscribe`** |
+| `ack` | at most one per session per 50ms, carrying the latest cumulative value; **a swallowed value must be sent later** |
+| `session.updated{head_seq}` | at most one per session per 1s (the client only uses it for unread, so intermediate values don't matter); **a swallowed value must be sent later** |
+| `session.updated{cwd}` | the agent reads once a second and sends only when the path actually changes |
+| `resize` (client side) | 100ms debounce; **except on subscribe, see `subscribe` in §4.1** |
 
-**"被吞掉的要补发"不是可选项。** 这两条都是累计量，丢中间值无害 —— 但**丢最后一个值有害**：
-输出常常是一阵一阵的，一秒内打完就安静了，后面再没有新消息来触发下一条。只节流不补发，
-客户端手里的值就永远停在那一阵之前 —— `head_seq` 停住意味着未读点不亮（AC-4.3），
-`in_ack` 停住意味着重发队列清不掉。实现上：节流时记下最新值，由写循环的定时器在窗口
-过期后补发。
+**"A swallowed value must be sent later" is not optional.** Both values are cumulative, so dropping intermediate ones is harmless — but **dropping the last one is not**:
+output often comes in a burst that finishes within a second, after which nothing triggers another message. Throttling without a trailing send
+leaves the client stuck on the value from before the burst — a stuck `head_seq` means the unread dot never lights up (AC-4.3),
+a stuck `in_ack` means the resend queue never drains. Implementation: when throttling, record the latest value and let the write loop's
+timer send it once the window expires.
 
 ---
 
-## 7. 错误码
+## 7. Error codes
 
-| `code` | 含义 | 是否关闭连接 |
+| `code` | Meaning | Closes the connection |
 |---|---|---|
-| `expected_hello` | 首条消息不是 `hello` | 是 |
-| `protocol_unsupported` | 协议版本无法协商 | 是 |
-| `bad_frame` | 帧格式非法（长度不足、payload 为空、未知 `type`、方向不对的 `type`、JSON 解析失败） | 是 |
-| `frame_too_large` | 超过 `max_frame_bytes` | 是 |
-| `input_gap` | INPUT 帧的 `seq` 大于 agent 已接受的累计字节数（`accepted`，§3），出现空洞 | 是 |
-| `input_stalled` | 会话输入队列满（PTY 长时间写不进去，§5.6） | 是 |
-| `unauthorized` | 设备已被吊销 | 是（先发 `notice`） |
-| `unknown_session` | `sid` 不存在 | 否 |
-| `session_exited` | 向已退出的会话写输入 | 否 |
-| `session_limit` | 会话数达上限 | 否 |
-| `bad_request` | 参数非法（如 `cols <= 0`） | 否 |
-| `internal` | agent 内部错误 | 视情况 |
+| `expected_hello` | The first message isn't `hello` | yes |
+| `protocol_unsupported` | The protocol version can't be negotiated | yes |
+| `bad_frame` | Malformed frame (too short, empty payload, unknown `type`, `type` in the wrong direction, JSON parse failure) | yes |
+| `frame_too_large` | Exceeds `max_frame_bytes` | yes |
+| `input_gap` | The INPUT frame's `seq` is greater than the bytes the agent has accepted (`accepted`, §3): there's a gap | yes |
+| `input_stalled` | The session input queue is full (the PTY can't be written to for a long time, §5.6) | yes |
+| `unauthorized` | The device has been revoked | yes (after a `notice`) |
+| `unknown_session` | The `sid` doesn't exist | no |
+| `session_exited` | Input sent to a session that has exited | no |
+| `session_limit` | The session limit has been reached | no |
+| `bad_request` | Invalid parameters (e.g. `cols <= 0`) | no |
+| `internal` | Internal agent error | depends |
 
 ---
 
-## 8. 协议版本演进
+## 8. Protocol versioning
 
-- `protocol` 为整数，当前 `2`
-- **可以自由添加**：新的控制消息类型、已有消息的新字段。接收方忽略未知 `t` 和未知字段
-- **必须升版本**：二进制帧布局变更、已有字段语义变更、删除字段
-- 版本不匹配时 agent 回 `error{code:"protocol_unsupported"}` 并在 `message` 里写清双方版本，client 展示"agent 已升级，请刷新页面"
+- `protocol` is an integer, currently `2`
+- **Can be added freely**: new control message types, new fields on existing messages. Receivers ignore unknown `t` values and unknown fields
+- **Requires a version bump**: changes to the binary frame layout, changed semantics of an existing field, removed fields
+- On a version mismatch the agent replies `error{code:"protocol_unsupported"}` with both versions spelled out in `message`, and the client shows "Agent was upgraded; reload the page"
 
-| 版本 | 变化 |
+| Version | Changes |
 |---|---|
-| 1 | 初版 |
-| 2 | [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)：新增 `SNAPSHOT` 帧与 `resumed[].status: "snapshot"`；删除 `ATTR_PREFIX`、`reset`、`redraw`、`cwd`、`prompt`、`command.start` / `command.end`、会话字段 `integration` / `prompt_state` / `unmarked_input`；`out_seq` 不再剥离 OSC |
+| 1 | Initial version |
+| 2 | [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md): added the `SNAPSHOT` frame and `resumed[].status: "snapshot"`; removed `ATTR_PREFIX`, `reset`, `redraw`, `cwd`, `prompt`, `command.start` / `command.end`, and the session fields `integration` / `prompt_state` / `unmarked_input`; `out_seq` no longer strips OSC |
 
 ---
 
-## 9. 测试向量
+## 9. Test vectors
 
-`internal/protocol/testdata/vectors.json` 是前后端共用的 fixture，两侧单测都必须跑它（防止实现漂移）。格式：
+`internal/protocol/testdata/vectors.json` is a fixture shared by frontend and backend, and the unit tests on both sides must run it (to keep the implementations from drifting). Format:
 
 ```json
 {
@@ -541,7 +541,7 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
       "name": "snapshot_more",
       "hex": "0301000100000000000000e81b5b48",
       "decoded": { "type": 3, "flags": 1, "sid": 1, "seq": "232", "payload_hex": "1b5b48" },
-      "note": "flags bit0 = MORE：同一份快照后面还有帧"
+      "note": "flags bit0 = MORE: more frames of the same snapshot follow"
     }
   ],
   "invalid_frames": [
@@ -553,15 +553,15 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
     { "name": "hello_first_connect", "json": { "t": "hello", "protocol": 2, "client_id": "x", "resume": [] } }
   ],
   "unknown_messages": [
-    { "name": "future_type", "json": { "t": "session.split", "sid": 1 }, "note": "接收方必须忽略，不能关连接" }
+    { "name": "future_type", "json": { "t": "session.split", "sid": 1 }, "note": "receivers must ignore this, not close the connection" }
   ]
 }
 ```
 
-`binary_frames[].data_len` 是该帧**计入 seq 的字节数**：OUTPUT / INPUT 等于 payload 长度，SNAPSHOT 为 0（快照不计入 seq）。两侧都要逐帧校验它。
+`binary_frames[].data_len` is the number of bytes the frame **counts toward seq**: the payload length for OUTPUT / INPUT, 0 for SNAPSHOT (snapshots don't count toward seq). Both sides check it frame by frame.
 
-**`seq` 在 fixture 里是字符串。** 它是 `uint64`，而 JS 的 `JSON.parse` 会把超过 2^53 的整数变成浮点丢精度 —— 一份要给两侧共用的 fixture 不能有一边读不准。Go 侧用 `strconv.ParseUint`，TS 侧用 `BigInt(string)`。
+**`seq` is a string in the fixture.** It's a `uint64`, and JS `JSON.parse` turns integers above 2^53 into lossy floats — a fixture shared by both sides can't have one side misread it. Go uses `strconv.ParseUint`, TS uses `BigInt(string)`.
 
-`unknown_messages` 用来钉住前向兼容：两侧都必须【忽略】不认识的 `t` 值，而不是当成错误。
+`unknown_messages` pins down forward compatibility: both sides must **ignore** an unknown `t` value rather than treat it as an error.
 
-必测项见 [`../70-testing/strategy.md`](../70-testing/strategy.md)。最关键的两条是 **AC-2.1 字节级连续性**（增量）与 **AC-2.21 屏幕级一致性**（快照）。
+The required tests are listed in [`../70-testing/strategy.md`](../70-testing/strategy.md). The two most important are **AC-2.1 byte-level continuity** (incremental) and **AC-2.21 screen-level consistency** (snapshot).

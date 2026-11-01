@@ -1,80 +1,55 @@
-# ADR-0044 没有域名也能部署：用公网 IP 申请证书
+# ADR-0044 Deploy without a domain: Let's Encrypt IP certificates
 
-状态：已接受（2026-10-31）。补充 [ADR-0004](0004-acme-only-tls.md)：仍然只走 ACME，只是多一种「地址」。
+Status: Accepted (2026-10-31). Amends [ADR-0004](0004-acme-only-tls.md): TLS still comes only from ACME; the address may now be an IP.
 
-## 背景
+## Context
 
-用户：
+ADR-0004 required a domain, so every new server started with a trip to a DNS console. Since 2026-01-15 Let's Encrypt issues certificates for IP addresses ([announcement](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability)), only with the `shortlived` profile (about 160 hours). `golang.org/x/crypto/acme` supports IP identifiers (`acme.IPIDs`, RFC 8738) and profiles (`WithOrderIssuanceProfile`) from v0.58.0; `autocert` still handles domains only.
 
-> 能否同时支持下 ip？
+## Decision
 
-ADR-0004 只接受域名，所以在新服务器上部署之前，总要先去 DNS 控制台加一条 A 记录，再等 TTL 生效。当时否决 sslip.io 兜底的理由是「当前环境有域名」。
+### 1. `--domain` accepts a public IPv4 address
 
-现在情况变了：Let's Encrypt 从 2026-01-15 起正式签发 **IP 地址证书**（[公告](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability)）。这种证书只有一种有效期：选 `shortlived` profile，约 160 小时（6 天多一点）。`golang.org/x/crypto/acme` 从 v0.58.0 起支持 IP 标识（`acme.IPIDs`，RFC 8738）和 profile（`acme.WithOrderIssuanceProfile`）。不过 `autocert` 仍然只认域名。
+No new flag: `--domain` is "the host in the browser's address bar", used for the certificate, the Origin check, the pairing URL and redirects alike. IPv6 literals are rejected with an explanation; listening, URL building and port checks don't handle brackets or dual stack yet.
 
-## 决策
+### 2. IP mode uses its own certificate manager
 
-### 1. `--domain` 也接受公网 IPv4
+autocert can't be used: it only orders `dns` identifiers and selects certificates by SNI, which browsers don't send for IP addresses. `internal/agent/ipcert.go` drives `acme.Client` directly:
 
-`--domain 203.0.113.42` 就是 IP 模式。不另加 flag：它的含义本来就是「浏览器地址栏里的那个主机名」，Origin 校验、配对 URL、跳转都用它，域名和 IP 走的是同一条路。
-
-**只支持 IPv4**。传入 IPv6 字面量会直接报错并说明原因。现在的监听地址（`--bind` 默认 `0.0.0.0`）、URL 拼接和端口检查都没有处理方括号和双栈，要支持 IPv6 得先把这几处都改对，留到以后。
-
-### 2. IP 模式用自己的证书管理器，不用 autocert
-
-autocert 不能用，原因有两个：它只会下 `dns` 类型的订单；它按 SNI 找证书，而**浏览器连 IP 时不发 SNI**（RFC 6066 禁止把 IP 放进 SNI）。
-
-`internal/agent` 里加一个小的证书管理器（`ipcert`），直接调 `acme.Client`：
-
-| 环节 | 做法 |
+| | |
 |---|---|
-| 订单 | `AuthorizeOrder(acme.IPIDs(ip), WithOrderIssuanceProfile("shortlived"))`。CA 的目录里没有 `shortlived` 时直接失败，并报出「这个 CA 不签 IP 证书」 |
-| 挑战 | **只走 HTTP-01**。`:80` 上 `/.well-known/acme-challenge/<token>` 由管理器自己应答，其它请求照常 301 |
-| 握手 | `GetCertificate` 不看 SNI，一律返回当前证书；**握手时从不触发签发**，所以没有「替任意名字申请证书」这个攻击面（ADR-0004 里 HostPolicy 防的就是它） |
-| 缓存 | `certs/<ip>`，格式和 autocert 一样（先私钥 PEM，再证书链），`webterm` 的状态总览不用区分模式就能读；账号密钥也沿用 `certs/acme_account+key` |
-| 启动 | 先读缓存，读到还有效的证书就直接用，不找 CA。重启不会多签证书，也就不会耗掉「同一组标识每周 5 张」的额度 |
-| 续期 | 剩余有效期不到总有效期的 1/3 时续期（和 autocert 的规则一样）。160 小时的证书大约在到期前 53 小时续；失败后每小时重试一次，赶在 Let's Encrypt「每小时 5 次失败验证」的限额以内 |
+| Order | `AuthorizeOrder(acme.IPIDs(ip), WithOrderIssuanceProfile("shortlived"))`; a directory without `shortlived` fails with "this CA doesn't issue IP certificates" |
+| Challenge | HTTP-01 only, answered on `:80`; everything else there redirects to HTTPS |
+| Handshake | `GetCertificate` ignores SNI and never triggers issuance, so there's nothing to abuse (the threat ADR-0004's HostPolicy guards against) |
+| Cache | `certs/<ip>` in autocert's format (key PEM, then the chain), account key in `certs/acme_account+key` |
+| Startup | Use the cached certificate if valid; restarts never re-issue (5 duplicates per week is the limit) |
+| Renewal | When less than a third of the lifetime remains (~53 h for 160 h), like autocert; on failure retry hourly; each attempt times out after 5 minutes |
 
-**为什么不做 TLS-ALPN-01**：IP 版的 TLS-ALPN-01（RFC 8738 §6）要用反向解析名当 SNI，挑战证书里还要放 iPAddress SAN。x/crypto 的 `TLSALPN01ChallengeCert` 只会生成 dNSName。另外 `--https-port` 不是 443 的时候，这条路本来就走不通。只走 HTTP-01 代码最少。
+TLS-ALPN-01 for IPs (RFC 8738 §6) needs a reverse-DNS SNI and an iPAddress SAN in the challenge certificate, which x/crypto doesn't build, and it can't work with an `--https-port` other than 443. HTTP-01 is enough.
 
-**代价**：IP 模式下 80 端口**必须一直从公网可达**。域名模式不一样，后来关掉 80 也能靠 443 续期。IP 证书每 4 天左右就要续一次，80 一断，几天之内证书就会过期。这一条写进安装文档和状态总览。
+**Cost:** in IP mode port 80 must stay reachable. With a domain, renewal can fall back to 443.
 
-### 3. 删掉 staging
+### 3. No staging
 
-`--acme-staging` 删掉，`ServeConfig` 里不再有 staging 这条路，配置文件里写了 `acme-staging` 会启动失败并说明它已经删了。
+`--acme-staging` is gone; a config file that still sets `acme-staging` fails to load with a clear message.
 
-**它原本是坏的**。staging 和正式证书共用 `certs/`，而 autocert 读缓存时只检查过期时间、主机名和私钥，**不检查签发者**。安装文档原来的步骤是「先装好（正式服务已经启动），再停服务跑 staging」，结果会是下面两种之一：
+It shared `certs/` with production, and autocert doesn't check the issuer of a cached certificate: depending on the order of operations, a staging run either validated nothing or left a staging certificate that production served for ~60 days. It isn't worth fixing. Its only purpose was a dry run that doesn't spend production quota, but the install-time check (ADR-0045 §4) now requests the real certificate: success is the issuance the service uses, and failure only costs the hourly "5 failed validations per identifier per account" allowance. The weekly limits count successful issuances only.
 
-- 正式证书已经签下来了：staging 读到的就是它，什么都没验证。
-- 正式证书没签下来：staging 证书写进 `certs/`，之后正式服务把这张不受信任的证书发给浏览器，要到约 60 天后续期才会换掉。
+Staging survives as an internal reachability probe during a guided install (ADR-0046), with a throwaway directory.
 
-**修好它也不值得**。staging 只有一个用处：签证书之前先试一次，失败了不花正式环境的额度。可是：
+### 4. Expiry warning scales with lifetime
 
-- 自检直接签**正式**证书、存进 `certs/`，服务启动时就用这一张（ADR-0045 §4）。成功的那一次**就是**正式签发，不多签一张。
-- 失败的那一次只消耗「每个账号每个标识每小时 5 次失败验证」（每 12 分钟恢复 1 次）。最坏也就是等十几分钟，碰不到按周计的限额：那两条（每域名 / 每个 IP 每周 50 张，同一组标识每周 5 张）只算**签发成功**的次数。
-- 域名模式下 autocert 一次可能连试 TLS-ALPN-01 和 HTTP-01 两种挑战，算两次失败。也就是说，一小时内连着失败三次才会被挡住，挡住之后十几分钟就能再试。
+The status overview turns yellow below `min(10 days, lifetime / 4)`: 10 days for 90-day certificates, 40 hours for IP certificates (which renew at ~53 hours remaining).
 
-为这十几分钟，留一个 flag、一个目录、一套「先用 staging 调通」的提示，划不来。
+### 5. doctor in IP mode
 
-### 4. 状态总览的「快到期」阈值随有效期缩放
+Instead of DNS checks, doctor verifies that `--domain` equals this machine's public IP (via api.ipify.org); a mismatch usually means NAT or a changed IP.
 
-原来是剩不到 10 天就标黄，IP 证书刚签下来就只有 6 天，会一直是黄的。改成：
+## Consequences
 
-```
-剩余 < min(10 天, 总有效期 / 4)  → 标黄
-```
-
-对 90 天的证书，阈值仍然是 10 天。对 160 小时的证书是 40 小时：正常情况下在剩 53 小时时就续好了，到 40 小时还没续上，就说明续期确实出了问题。
-
-### 5. doctor 在 IP 模式下的检查项
-
-不做 DNS 的两项检查，改为检查「本机公网 IP（问 api.ipify.org）是否等于 `--domain`」。不相等通常说明机器在 NAT 后面，或者 IP 已经变了。
-
-## 后果
-
-- 新服务器最少只要做一件机器外的事：**在云安全组里放行 80/443**。域名变成可选。
-- **换 IP 或者从 IP 换到域名，浏览器那边就是另一个 origin**：Cookie、PWA、Service Worker 都不会带过去，每台设备都要重新配对。云服务器的 IP 一般是固定的（弹性 IP），但从 IP 搬到域名这一步要提前告诉用户。
-- HSTS 头照常发。浏览器对 IP 主机会忽略它（RFC 6797 §8.1），没有影响。
-- 带 IP SAN 的有效证书足以构成 secure context，PWA、剪贴板、Service Worker 都能用。真机上能不能正常安装 PWA 进手工清单验证。
-- x/crypto 从 v0.56.0 升到 v0.58.0（纯 Go，不违反单二进制不变式）。
-- 用 `--acme-staging` 跑过的老机器，`certs/` 里可能还留着一张 staging 证书。删 flag 不会自动清掉它，排障文档里有手工删的办法。
+- A new server needs nothing outside it except an open cloud firewall; a domain is optional.
+- Changing the IP, or moving from IP to a domain, changes the browser origin: cookies and PWA installs don't carry over and every device must pair again.
+- HSTS is still sent; browsers ignore it for IP hosts (RFC 6797 §8.1).
+- A valid certificate with an IP SAN makes a secure context, so PWA, clipboard and service workers work (to be confirmed on real devices).
+- x/crypto moved from v0.56.0 to v0.58.0 (pure Go).
+- Machines that once ran `--acme-staging` may still hold a staging certificate in `certs/`; the troubleshooting guide explains how to remove it.

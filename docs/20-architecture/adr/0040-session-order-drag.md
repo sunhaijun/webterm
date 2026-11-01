@@ -1,62 +1,60 @@
-# ADR-0040 会话可以拖动排序，顺序存在 agent 上
+# ADR-0040 Sessions can be reordered by dragging; the order lives on the agent
 
-状态：已接受（2026-10-31）。协议新增 `session.move` / `session.order`（[websocket-protocol.md](../../30-protocol/websocket-protocol.md) §4），不升版本（§8：新消息类型可以自由添加）。
+Status: Accepted (2026-10-31). The protocol gains `session.move` / `session.order` ([websocket-protocol.md](../../30-protocol/websocket-protocol.md) §4) without a version bump (§8: new message types may be added freely).
 
-## 背景
+## Context
 
-用户：
+The user wanted to reorder sessions by dragging.
 
-> 会话要能通过拖动调整顺序
+The order was fixed: the client sorted by `created_at`, the agent by `sid`. The drawer's `[n]` meant "nth in creation order", and `Ctrl+Shift+↑/↓` followed that order too.
 
-现在会话的顺序是固定的：客户端按 `created_at` 排，agent 按 `sid` 排。抽屉里的 `[n]` 是「按创建顺序的第几个」，`Ctrl+Shift+↑/↓` 也按这个顺序走。
+## Decision
 
-## 决策
+### 1. Order is agent state, like the session name
 
-### 1. 顺序是 agent 上的状态，和会话名一样
+The order is a list of `sid`s kept in the agent's session manager:
 
-顺序存在 agent 的会话管理器里，是一个 `sid` 列表：
+- New sessions go last; closed sessions are removed.
+- `welcome.sessions[]` is sent in this order, and clients display it as is.
+- A client sends `session.move{sid, before}` to move a session in front of `before` (`before: null` moves it to the end). The agent applies it and broadcasts the whole list to every connection as `session.order{sids}`.
+- **Hot upgrade carries the order**: `sessions[]` in the handoff snapshot is in display order, and the new process restores that order. The snapshot format is unchanged (schema still 2); an old snapshot (sorted by `sid`) restores in `sid` order.
+- When the agent restarts, the order is gone along with the sessions.
 
-- 新建的会话排在最后；关掉的从列表里删掉。
-- `welcome.sessions[]` 按这个顺序给出，客户端照原样显示。
-- client 发 `session.move{sid, before}` 把一个会话挪到 `before` 前面（`before: null` 放到最后）。agent 改完后把整张列表广播给所有连接：`session.order{sids}`。
-- **热升级要带上顺序**：交接快照里的 `sessions[]` 按显示顺序排列，新进程按这个顺序恢复。快照格式不变（schema 仍是 2），老快照（按 `sid` 排的）恢复出来就是按 `sid` 的顺序。
-- agent 重启后顺序和会话一起没了。
+**Why not keep it in the browser**: session names are already agent state, identical on every device. If order lived only in one browser, `[n]` on the phone and the computer wouldn't match. sids are also reused after an agent restart, so `localStorage` would have to tie the order to `instance_id` to avoid mixing them up.
 
-**为什么不放在浏览器里**：会话名已经是 agent 上的状态，所有设备看到的一样；顺序如果只在这台浏览器里，手机和电脑上的 `[n]` 就会对不上。`sid` 在 agent 重启后还会复用，放在 `localStorage` 里还得跟 `instance_id` 绑在一起才不会认错。
+### 2. The client moves first, then follows the broadcast
 
-### 2. 客户端先挪，再等广播
+On release the client shows the new order immediately and sends `session.move`. When `session.order` arrives, it wins. If two devices drag at once, whichever reaches the agent last takes effect, and both converge.
 
-松手时客户端立刻按新顺序显示，同时发 `session.move`。收到 `session.order` 后以它为准。两台设备同时拖时，后到 agent 的那一次生效，两边最终一致。
+`session.order` may arrive before a session's `session.created`: another connection just created a session and someone dragged right after. So the client **keeps a slot** for sids in `sids` it doesn't know yet; when that session's `session.created` arrives, it lands where the agent put it rather than at the end.
 
-`session.order` 可能先于某个会话的 `session.created` 到达：另一条连接刚建了会话，紧接着有人拖了一下。所以客户端对 `sids` 里还不认识的 sid **也留着位置**，那个会话的 `session.created` 到了就落在 agent 给的位置上，不排到最后。
+`[n]` now means "nth in the current order", and `Ctrl+Shift+↑/↓` and "switch to the neighbor after closing the current session" follow the current order.
 
-`[n]` 改为「当前顺序里的第几个」，`Ctrl+Shift+↑/↓` 与「关掉当前会话后切到相邻的」都按当前顺序。
+### 3. How dragging works
 
-### 3. 怎么拖
-
-| 在哪 | 怎么开始 | 跟手方向 |
+| Where | How it starts | Axis |
 |---|---|---|
-| `wide` 标签栏，鼠标 | 按住标签，横向移动 > 5px | 横向 |
-| `wide` 标签栏，触屏（Pad） | 长按标签（500ms）后不松手直接移动；长按后原地松手仍是弹会话菜单 | 横向 |
-| `compact` 抽屉 | 按住一行右端的拖动柄（`≡`，44px 宽）直接拖；行的其余部分照旧（点、左滑、长按、纵向滚动） | 纵向 |
+| `wide` tab bar, mouse | Press a tab and move more than 5px horizontally | Horizontal |
+| `wide` tab bar, touch (tablet) | Long-press a tab (500ms), then move without lifting; releasing in place after a long-press still opens the session menu | Horizontal |
+| `compact` drawer | Drag the grip at the right end of a row (`≡`, 44px wide); the rest of the row behaves as before (tap, swipe left, long-press, vertical scroll) | Vertical |
 
-- 拖动时被拖的那一项跟着指针走（`translate`），带阴影浮起来；其余项让出位置。松手时插到指针所在的位置；位置没变就什么都不发。
-- 拖动结束后的那个 `click` 吞掉，不切会话。
-- 标签条放不下需要滚动时、抽屉列表长到需要滚动时，指针拖到边缘 32px 以内就自动朝那边滚。
-- `Esc` 取消正在进行的拖动，回到原位。
-- 拖动柄是一个线条图标（三条横线，[layout.md §图标](../../40-frontend/layout.md#图标)），`data-testid="session-<sid>-grip"`。手机上拖动柄是可见的入口；Pad 上的长按拖动是加速路径，菜单仍可用。
+- While dragging, the dragged item follows the pointer (`translate`) and is lifted with a shadow; the others move aside. On release it's inserted where the pointer is; if the position didn't change, nothing is sent.
+- The `click` that follows a drag is swallowed, so it doesn't switch sessions.
+- When the tab strip or the drawer list is long enough to scroll, dragging within 32px of an edge auto-scrolls that way.
+- `Esc` cancels a drag in progress and puts the item back.
+- The grip is a line icon (three horizontal lines, [layout.md, Icons](../../40-frontend/layout.md#icons)), `data-testid="session-<sid>-grip"`. On phones the grip is the visible entry point; on tablets long-press-drag is a shortcut and the menu still works.
 
-为什么手机上用拖动柄、不用长按拖动：长按一行已经用来露出这一行的按钮（[ADR-0039](0039-drawer-row-swipe-actions.md)），左滑也被占了；纵向拖动是滚动列表。一个看得见的柄不和任何手势抢。
+Why a grip on phones rather than long-press-drag: long-pressing a row already reveals its buttons ([ADR-0039](0039-drawer-row-swipe-actions.md)), swiping left is taken too, and vertical drag scrolls the list. A visible grip competes with no gesture.
 
-## 不采纳的方案
+### Rejected alternatives
 
-- **顺序只存在浏览器里**。见 §1。
-- **`session.move` 用目标下标而不是 `before`**。两台设备同时操作时，下标指的位置可能已经变了；「放到某个会话前面」不受别的会话插入、删除影响。
-- **抽屉里长按后拖动**。长按已经给了行操作，见 §3。
-- **用键盘挪顺序**（比如 `Ctrl+Shift+PgUp/PgDn`）。浏览器自己用着这两个组合键切标签页；没有用户要求，不加。
+- **Keep the order only in the browser.** See §1.
+- **Have `session.move` carry a target index instead of `before`.** With two devices acting at once, an index may already point somewhere else; "put it before that session" is unaffected by other sessions being inserted or removed.
+- **Long-press then drag in the drawer.** Long-press is already taken by row actions; see §3.
+- **Reorder with the keyboard** (e.g. `Ctrl+Shift+PgUp/PgDn`). Browsers use those combinations to switch tabs, and nobody asked for it.
 
-## 后果
+## Consequences
 
-- 协议加两条消息；agent 的会话管理器加一个顺序列表，`List()` 按它返回；交接快照的 `sessions[]` 按它排。
-- 客户端的会话顺序改由 agent 给的列表决定，不再按 `created_at` 排。
-- 新增 AC-4.13、E2E-45、UT-order-1、IT-order-1。
+- The protocol gains two messages; the agent's session manager gets an order list that `List()` follows, and the handoff snapshot's `sessions[]` is sorted by it.
+- The client's session order comes from the agent's list instead of sorting by `created_at`.
+- Adds AC-4.13, E2E-45, UT-order-1, IT-order-1.
