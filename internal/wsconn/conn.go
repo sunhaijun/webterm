@@ -98,11 +98,9 @@ type Conn struct {
 	closeCode websocket.StatusCode
 	closeMsg  string
 
-	done     chan struct{}
-	doneOnce sync.Once
-	// flushed 在写队列刷干净之后关闭。
-	flushed     chan struct{}
-	flushedOnce sync.Once
+	done chan struct{} // closeWith 置 closed 的那一次关闭它
+	// flushed 在 writeLoop 退出（写队列刷完或写失败）时关闭。
+	flushed chan struct{}
 	// cancel 取消 Serve 的 context，用来把阻塞在 ws.Read 上的 readLoop 叫醒
 	// （否则连接要等到 60 秒判死才真的断，AC-1.11 会挂）。
 	//
@@ -192,6 +190,11 @@ func (c *Conn) Event(msg any) {
 			c.mu.Unlock()
 		}
 	}
+	c.send(msg)
+}
+
+// send 把控制消息编码后入队，不过节流。
+func (c *Conn) send(msg any) {
 	b, err := protocol.Encode(msg)
 	if err != nil {
 		c.log.Error("编码控制消息失败", "err", err)
@@ -316,7 +319,7 @@ func (c *Conn) closeWith(code websocket.StatusCode, msg string) {
 	c.closeCode, c.closeMsg = code, msg
 	cancel := c.cancel
 	c.mu.Unlock()
-	c.doneOnce.Do(func() { close(c.done) })
+	close(c.done) // 只有把 closed 置真的这一次走到这里
 	if cancel == nil {
 		return
 	}

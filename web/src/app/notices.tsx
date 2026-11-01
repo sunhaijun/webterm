@@ -50,10 +50,14 @@ export function ToastView({ toast }: { toast: Toast | null }) {
 }
 
 /** 组字预览：跟着终端光标走，显示未提交的组字内容。 */
-export function ImePreview({ preview }: { preview: ImePreviewState | null }) {
+export function ImePreview({ preview, fontSize }: { preview: ImePreviewState | null; fontSize: number }) {
   if (!preview) return null
   return (
-    <div class="ime-preview" data-testid="ime-preview" style={{ left: `${preview.left}px`, top: `${preview.top}px` }}>
+    <div
+      class="ime-preview"
+      data-testid="ime-preview"
+      style={{ left: `${preview.left}px`, top: `${preview.top}px`, fontSize: `${fontSize}px` }}
+    >
       {preview.text}
     </div>
   )

@@ -18,9 +18,6 @@ import { Terminal, type ITheme } from '@xterm/xterm'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 
-/** 终端字号：固定，不提供设置（AC-5.3，ADR-0030）。 */
-export const FONT_SIZE = 14
-
 /**
  * 终端字体：系统等宽栈，和 CSS 里的 `--font-mono` 是同一串。尾巴是 CJK 等宽回退 ——
  * 编程字体基本不带汉字，少了它汉字会掉进比例字体，中英混排的列宽当场歪掉。
@@ -90,9 +87,10 @@ export interface TermHandle {
   dispose(): void
 }
 
-export function createTerminal(theme?: ITheme): TermHandle {
+/** `fontSize` 来自设置（`ui/prefs.ts`，默认 14，ADR-0037）。 */
+export function createTerminal(theme: ITheme | undefined, fontSize: number): TermHandle {
   const term = new Terminal({
-    fontSize: FONT_SIZE,
+    fontSize,
     fontFamily: FONT_FAMILY,
     scrollback: SCROLLBACK,
     allowProposedApi: true,

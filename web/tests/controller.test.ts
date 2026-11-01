@@ -473,3 +473,179 @@ describe('进程结束提示行用 session.updated 里的 head_seq 判追平', (
     expect(text.indexOf('LAST-LINE')).toBeLessThan(text.indexOf('[进程已结束'))
   })
 })
+
+describe('UT-prefs-1 改字号与主题（AC-5.3，ADR-0037）', () => {
+  const store = () =>
+    (ctl as unknown as { store: { termOf(sid: number): { term: { options: { fontSize?: number; theme?: { background?: string } } } } | undefined } })
+      .store
+
+  it('改字号：所有实例一起换、记住；容器没变也补发 resize；新建的会话用新字号', async () => {
+    sock.text(welcome([info(1), info(2)]))
+    await new Promise((r) => setTimeout(r, 250))
+    const before = sock.msgs('resize').length
+    ctl.setFontSize(16)
+    expect(ctl.get().fontSize).toBe(16)
+    expect(localStorage.getItem('webterm.fontSize')).toBe('16')
+    expect(store().termOf(1)!.term.options.fontSize).toBe(16)
+    expect(store().termOf(2)!.term.options.fontSize, '没挂着的实例也换').toBe(16)
+    await new Promise((r) => setTimeout(r, 250))
+    expect(sock.msgs('resize').length, '字符格变了而容器没变：也要补一条 resize').toBe(before + 1)
+    sock.text({ t: 'session.created', session: info(3) })
+    expect(store().termOf(3)!.term.options.fontSize).toBe(16)
+  })
+
+  it('不合法或没变的字号什么都不做', async () => {
+    sock.text(welcome([info(1)]))
+    await new Promise((r) => setTimeout(r, 250))
+    const before = sock.msgs('resize').length
+    for (const n of [9, 25, 15.5, 14]) ctl.setFontSize(n)
+    expect(ctl.get().fontSize).toBe(14)
+    expect(localStorage.getItem('webterm.fontSize')).toBeNull()
+    await new Promise((r) => setTimeout(r, 250))
+    expect(sock.msgs('resize').length).toBe(before)
+  })
+
+  it('改主题：打上 data-theme、记住，xterm 的主题重读一遍', () => {
+    sock.text(welcome([info(1)]))
+    const t = store().termOf(1)!.term
+    t.options.theme = { background: '#123456' }
+    ctl.setTheme('dark')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+    expect(localStorage.getItem('webterm.theme')).toBe('dark')
+    expect(ctl.get().theme).toBe('dark')
+    expect(t.options.theme?.background, '重读过 CSS 变量，不再是旧对象').not.toBe('#123456')
+    ctl.setTheme('system')
+    expect(document.documentElement.hasAttribute('data-theme')).toBe(false)
+    expect(localStorage.getItem('webterm.theme')).toBe('system')
+  })
+
+  it('设置开关：从会话抽屉打开会关掉抽屉；非触摸设备关掉后焦点回终端', () => {
+    sock.text(welcome([info(1)]))
+    ctl.openSessions()
+    ctl.openSettings()
+    expect(ctl.get().sessionsOpen).toBe(false)
+    expect(ctl.get().settingsOpen).toBe(true)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    ctl.closeSettings()
+    expect(ctl.get().settingsOpen).toBe(false)
+    expect(area.contains(document.activeElement), 'jsdom 里 coarse = false：焦点还给终端').toBe(true)
+  })
+})
+
+describe('UT-close-1 关闭确认（AC-4.11，ADR-0038）', () => {
+  it('running：先进 closing，不发 session.close；确认才发', () => {
+    sock.text(welcome([info(1), info(2)]))
+    ctl.requestClose(2)
+    expect(ctl.get().closing).toBe(2)
+    expect(sock.msgs('session.close')).toHaveLength(0)
+    ctl.confirmClose()
+    expect(ctl.get().closing).toBeNull()
+    expect(sock.msgs('session.close')).toMatchObject([{ sid: 2 }])
+  })
+
+  it('取消：不发', () => {
+    sock.text(welcome([info(1), info(2)]))
+    ctl.requestClose(2)
+    ctl.cancelClose()
+    expect(ctl.get().closing).toBeNull()
+    expect(sock.msgs('session.close')).toHaveLength(0)
+  })
+
+  it('exited：直接发，不确认', () => {
+    sock.text(welcome([info(1), info(2, { status: 'exited', exit_code: 0 })]))
+    ctl.requestClose(2)
+    expect(ctl.get().closing).toBeNull()
+    expect(sock.msgs('session.close')).toMatchObject([{ sid: 2 }])
+  })
+
+  it('确认时先还焦点再发：关掉当前会话后，焦点跟到相邻会话的终端', () => {
+    sock.text(welcome([info(1), info(2)]))
+    area.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea')!.focus()
+    ctl.requestClose(1)
+    // 浮层拿走了焦点
+    const btn = document.createElement('button')
+    document.body.appendChild(btn)
+    btn.focus()
+    expect(area.contains(document.activeElement)).toBe(false)
+    ctl.confirmClose()
+    expect(area.contains(document.activeElement), '发 session.close 之前焦点已经回到终端').toBe(true)
+    sock.text({ t: 'session.closed', sid: 1, exit_code: 0 })
+    expect(term().sid()).toBe(2)
+    expect(area.contains(document.activeElement), '切到相邻会话后焦点在它的终端里').toBe(true)
+  })
+
+  it('确认浮层开着时会话没了：closing 清掉，之后同号的新会话不会被误关', () => {
+    sock.text(welcome([info(1), info(2)]))
+    ctl.requestClose(2)
+    sock.text({ t: 'session.closed', sid: 2, exit_code: 0 })
+    expect(ctl.get().closing).toBeNull()
+    sock.text({ t: 'session.created', session: info(2, { name: 'new-2' }) })
+    ctl.confirmClose()
+    expect(sock.msgs('session.close')).toHaveLength(0)
+  })
+})
+
+describe('UT-close-1 关闭中（ADR-0038 §5）', () => {
+  it('发了 session.close 之后：输入（含焦点上报）与 resize 都不发，它的 unknown_session 不弹', async () => {
+    sock.text(welcome([info(1), info(2)]))
+    ctl.requestClose(1)
+    ctl.confirmClose()
+    const before = sock.inputs().length
+    xterm(1).input('\x1b[I', false) // 焦点上报
+    inside('keydown', () => xterm(1).input('x', true))
+    expect(sock.inputs().length, '关闭中的会话不再收输入').toBe(before)
+    sock.text({ t: 'error', sid: 1, code: 'unknown_session', message: '会话不存在' })
+    expect(ctl.get().toast, '关闭中：意料之中，不弹').toBeNull()
+    sock.text({ t: 'session.closed', sid: 1, exit_code: 0 })
+    sock.text({ t: 'error', sid: 1, code: 'unknown_session', message: '会话不存在' })
+    expect(ctl.get().toast, '本地已经没有了：也不弹').toBeNull()
+    sock.text({ t: 'error', sid: 2, code: 'unknown_session', message: '会话不存在' })
+    expect(ctl.get().toast?.text, '本地还在、也没在关：真的不同步了，照弹').toBe('会话不存在')
+  })
+})
+
+describe('UT-order-1 拖动排序（ADR-0040）', () => {
+  it('welcome 的顺序就是显示顺序；moveSession 本地先挪并发 session.move；session.order 整个替换', () => {
+    sock.text(welcome([info(3), info(1), info(2)]))
+    expect(ctl.get().sessions.map((s) => s.sid)).toEqual([3, 1, 2])
+    ctl.moveSession(2, 3)
+    expect(ctl.get().sessions.map((s) => s.sid)).toEqual([2, 3, 1])
+    expect(sock.msgs('session.move')).toMatchObject([{ sid: 2, before: 3 }])
+    sock.text({ t: 'session.order', sids: [1, 2, 3] })
+    expect(ctl.get().sessions.map((s) => `${s.index}:${s.sid}`)).toEqual(['1:1', '2:2', '3:3'])
+  })
+})
+
+describe('UT-close-1 关闭没落地', () => {
+  it('离线时关闭：提示，不标成关闭中（重连后照常收发）；确认浮层开着时再按关闭不覆盖', async () => {
+    sock.text(welcome([info(1), info(2)]))
+    ctl.requestClose(1)
+    ctl.requestClose(2)
+    expect(ctl.get().closing, '确认开着：第二次关闭忽略').toBe(1)
+    ctl.cancelClose()
+    sock.close()
+    ctl.requestClose(1)
+    ctl.confirmClose()
+    expect(ctl.get().toast?.text).toBe('未连接，稍后再关闭会话')
+    await new Promise((r) => setTimeout(r, 900))
+    const s2 = sockets[sockets.length - 1]!
+    s2.open()
+    s2.text(welcome([info(1), info(2)], { resumed: [{ sid: 1, status: 'ok', from_seq: 0, in_ack: 0 }] }))
+    inside('keydown', () => xterm(1).input('x', true))
+    expect(s2.inputs(), '没关成的会话照常收输入').toContain('x')
+  })
+
+  it('发出去了但重连后 welcome 里它还在：不再算关闭中', async () => {
+    sock.text(welcome([info(1), info(2)]))
+    ctl.requestClose(1)
+    ctl.confirmClose()
+    expect(sock.msgs('session.close')).toHaveLength(1)
+    sock.close()
+    await new Promise((r) => setTimeout(r, 900))
+    const s2 = sockets[sockets.length - 1]!
+    s2.open()
+    s2.text(welcome([info(1), info(2)], { resumed: [{ sid: 1, status: 'ok', from_seq: 0, in_ack: 0 }] }))
+    inside('keydown', () => xterm(1).input('y', true))
+    expect(s2.inputs()).toContain('y')
+  })
+})

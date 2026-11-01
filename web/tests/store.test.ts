@@ -62,6 +62,7 @@ function make() {
     onData() {},
     allowKey: () => true,
     theme: () => undefined,
+    fontSize: () => 14,
   })
   const area = document.createElement('div')
   document.body.appendChild(area)
@@ -71,14 +72,34 @@ function make() {
 const enc = (s: string) => new TextEncoder().encode(s)
 
 describe('列表', () => {
-  it('按创建顺序排，编号 [n] 从 1 开始，关掉中间的后面顺延', () => {
+  it('UT-order-1 按 agent 给的顺序排（不看 created_at），新来的排最后；编号 [n] 从 1 开始，关掉中间的后面顺延', () => {
     const { store } = make()
     store.upsert(info(5, { created_at: 300 }))
     store.upsert(info(2, { created_at: 100 }))
     store.upsert(info(9, { created_at: 200 }))
-    expect(store.list().map((s) => `${s.index}:${s.sid}`)).toEqual(['1:2', '2:9', '3:5'])
-    store.remove(9)
-    expect(store.list().map((s) => `${s.index}:${s.sid}`)).toEqual(['1:2', '2:5'])
+    const view = () => store.list().map((s) => `${s.index}:${s.sid}`)
+    expect(view(), '没给顺序：按到达顺序').toEqual(['1:5', '2:2', '3:9'])
+    store.setOrder([9, 5, 2])
+    expect(view()).toEqual(['1:9', '2:5', '3:2'])
+    store.remove(5)
+    expect(view()).toEqual(['1:9', '2:2'])
+    store.upsert(info(7))
+    expect(view(), '新建的排最后').toEqual(['1:9', '2:2', '3:7'])
+  })
+
+  it('UT-order-1 session.order：不认识的 sid 占位（它的 session.created 晚到时落在那里），没列出的已知会话按原相对顺序接在后面；本地先挪', () => {
+    const { store } = make()
+    for (const sid of [1, 2, 3, 4]) store.upsert(info(sid))
+    store.setOrder([3, 99, 1])
+    expect(store.list().map((s) => s.sid)).toEqual([3, 1, 2, 4])
+    store.upsert(info(99))
+    expect(store.list().map((s) => s.sid), '晚到的 99 落在 agent 给的位置').toEqual([3, 99, 1, 2, 4])
+    store.remove(99)
+    store.move(4, 3)
+    expect(store.list().map((s) => s.sid)).toEqual([4, 3, 1, 2])
+    store.move(4, null)
+    expect(store.list().map((s) => s.sid)).toEqual([3, 1, 2, 4])
+    expect(store.step(1), '没有当前会话：从头走').toBe(3)
   })
 
   it('未读 = 非当前会话且 head > out；当前会话不显示未读', () => {

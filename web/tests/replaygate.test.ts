@@ -35,6 +35,7 @@ function makeStore() {
     onData: (_sid, data) => sent.push(data),
     allowKey: () => true,
     theme: () => undefined,
+    fontSize: () => 14,
   })
   store.upsert(info(1))
   return { store, sent }

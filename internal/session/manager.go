@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
 	"time"
 
@@ -163,8 +164,15 @@ type Manager struct {
 	// 用户无从察觉。
 	instanceID string
 
-	mu        sync.RWMutex
-	sessions  map[uint16]*Session
+	mu       sync.RWMutex
+	sessions map[uint16]*Session
+	// order 是显示顺序（ADR-0040）：新建的排最后，关掉的删掉，Move 调整。
+	// 只放已经起来的会话 —— Create 的占位（nil）不在里面。
+	order []uint16
+	// orderMu 把 Move 与它的广播串成一个动作，见 Move。不和 mu 一起拿：
+	// 广播期间 List / Get 照常走。
+	orderMu sync.Mutex
+
 	nextSID   uint16
 	observers map[Subscriber]struct{}
 	// generation 是热升级的代数：每交接一次 +1（ADR-0016）。webterm reload 靠它判断新进程已接手。
@@ -289,7 +297,15 @@ func (m *Manager) Create(spec Spec) (*Session, error) {
 		return nil, err
 	}
 	m.mu.Lock()
+	if m.frozen {
+		// 起 shell 期间开始了热升级：Freeze / Export 都没看见它，留着就没人接
+		delete(m.sessions, sid)
+		m.mu.Unlock()
+		s.close()
+		return nil, ErrFrozen
+	}
 	m.sessions[sid] = s
+	m.order = append(m.order, sid) // 新建的排最后
 	m.mu.Unlock()
 	return s, nil
 }
@@ -375,8 +391,11 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 
 // pollable 把 creack/pty 给的阻塞 master 换成 Go poller 里的非阻塞文件。
 // 返回新文件与它的 fd 号（fd 单独记着 —— 之后不能再对文件调 Fd()）。
+//
+// dup 必须带 CLOEXEC：裸 dup 的 fd 会被之后起的每个 shell 及其子孙继承，
+// 关掉的会话的 pty 就一直释放不了。
 func pollable(raw *os.File) (*os.File, int, error) {
-	fd, err := unix.Dup(int(raw.Fd()))
+	fd, err := unix.FcntlInt(raw.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
 		return nil, -1, err
 	}
@@ -401,21 +420,80 @@ func (m *Manager) Get(sid uint16) (*Session, bool) {
 	return s, ok && s != nil
 }
 
-// List 返回所有会话，按 sid 升序。
+// List 返回所有会话，按显示顺序（ADR-0040）。
 func (m *Manager) List() []*Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]*Session, 0, len(m.sessions))
-	for _, s := range m.sessions {
-		if s != nil {
+	out := make([]*Session, 0, len(m.order))
+	for _, sid := range m.order {
+		if s := m.sessions[sid]; s != nil {
 			out = append(out, s)
 		}
 	}
-	sortSessions(out)
 	return out
 }
 
-// Infos 返回所有会话的元数据（welcome.sessions[]）。
+// Order 返回显示顺序（sid 列表）。
+func (m *Manager) Order() []uint16 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return slices.Clone(m.order)
+}
+
+// Move 把会话 sid 挪到 before 前面（协议 §4.1 session.move，ADR-0040）。
+// before 为 nil 或不存在（比如刚被别处关掉）→ 挪到最后；等于 sid → 原地不动。
+// sid 不存在 → ErrUnknownSession，publish 不调。
+//
+// 成功时（位置没变也算）拿挪完之后的完整顺序调 publish —— 广播 session.order。
+// 【改顺序与广播在同一把锁里】：两台设备同时拖，各自的广播如果不串行，某条连接
+// 可能先收到后一次的顺序、再收到前一次的，停在一个 agent 上已经不存在的顺序上。
+// publish 不能阻塞，也不能回头调 Move（连接层的 Event 只是入队，满了就关连接）。
+func (m *Manager) Move(sid uint16, before *uint16, publish func(order []uint16)) error {
+	m.orderMu.Lock()
+	defer m.orderMu.Unlock()
+
+	m.mu.Lock()
+	if s, ok := m.sessions[sid]; !ok || s == nil {
+		m.mu.Unlock()
+		return ErrUnknownSession
+	}
+	if before == nil || *before != sid {
+		m.order = moveBefore(m.order, sid, before)
+	}
+	order := slices.Clone(m.order)
+	m.mu.Unlock()
+
+	if publish != nil {
+		publish(order)
+	}
+	return nil
+}
+
+// moveBefore 返回把 sid 挪到 before 前面之后的顺序；before 为 nil 或不在列表里时放到最后。
+func moveBefore(order []uint16, sid uint16, before *uint16) []uint16 {
+	out := make([]uint16, 0, len(order)+1)
+	for _, v := range order {
+		if v != sid {
+			out = append(out, v)
+		}
+	}
+	at := len(out)
+	if before != nil {
+		if i := slices.Index(out, *before); i >= 0 {
+			at = i
+		}
+	}
+	return slices.Insert(out, at, sid)
+}
+
+// removeOrderLocked 把 sid 从显示顺序里删掉。调用方持有 m.mu。
+func (m *Manager) removeOrderLocked(sid uint16) {
+	if i := slices.Index(m.order, sid); i >= 0 {
+		m.order = slices.Delete(m.order, i, i+1)
+	}
+}
+
+// Infos 返回所有会话的元数据（welcome.sessions[]），按显示顺序。
 func (m *Manager) Infos() []protocol.SessionInfo {
 	list := m.List()
 	out := make([]protocol.SessionInfo, 0, len(list))
@@ -436,6 +514,7 @@ func (m *Manager) Close(sid uint16) (*int, error) {
 		return nil, ErrUnknownSession
 	}
 	delete(m.sessions, sid)
+	m.removeOrderLocked(sid)
 	m.mu.Unlock()
 
 	s.close()
@@ -502,6 +581,7 @@ func (m *Manager) shutdown() {
 		}
 	}
 	m.sessions = make(map[uint16]*Session)
+	m.order = nil
 	m.mu.Unlock()
 
 	var wg sync.WaitGroup
@@ -527,12 +607,4 @@ func filterEnv(env []string, drop ...string) []string {
 		}
 	}
 	return out
-}
-
-func sortSessions(s []*Session) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j].sid < s[j-1].sid; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }

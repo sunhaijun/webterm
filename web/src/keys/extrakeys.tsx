@@ -14,6 +14,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { Form } from '../app/form'
 import { PressTracker } from '../ui/longpress'
+import { capturePointer } from '../ui/pointer'
 import { EXTRA_KEYS, appAction, isModifierKey, type ExtraKeyId, type Sticky } from './keymap'
 import { isPageSwipe, textEnter, type KeyPage, type TextPageEls, type TextSend } from './textpage'
 
@@ -69,11 +70,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
     const key = (keyEl?.dataset.key as ExtraKeyId | undefined) ?? null
     if (page === 'keys') {
       e.preventDefault() // 不抢焦点
-      try {
-        ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-      } catch {
-        /* 合成事件没有活动指针，拿不到捕获也无妨 */
-      }
+      capturePointer(e.currentTarget as Element, e.pointerId)
     }
     gesture.current = { x: e.clientX, y: e.clientY, key: page === 'keys' ? key : null }
     if (key && isModifierKey(key) && page === 'keys') {

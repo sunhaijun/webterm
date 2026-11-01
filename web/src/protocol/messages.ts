@@ -5,6 +5,7 @@ export const T = {
   sessionCreate: 'session.create',
   sessionClose: 'session.close',
   sessionRename: 'session.rename',
+  sessionMove: 'session.move',
   subscribe: 'subscribe',
   unsubscribe: 'unsubscribe',
   resize: 'resize',
@@ -14,6 +15,7 @@ export const T = {
   sessionCreated: 'session.created',
   sessionClosed: 'session.closed',
   sessionUpdated: 'session.updated',
+  sessionOrder: 'session.order',
   ack: 'ack',
   pong: 'pong',
   error: 'error',
@@ -112,6 +114,13 @@ export interface SessionUpdated {
   head_seq?: number
 }
 
+/** session.move 之后广播的完整显示顺序（§4.2，ADR-0040）。 */
+export interface SessionOrder {
+  t: 'session.order'
+  req_id?: string
+  sids: number[]
+}
+
 export interface Ack {
   t: 'ack'
   sid: number
@@ -140,6 +149,7 @@ export type ServerMessage =
   | SessionCreated
   | SessionClosed
   | SessionUpdated
+  | SessionOrder
   | Ack
   | Pong
   | ErrorMsg

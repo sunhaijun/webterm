@@ -45,7 +45,7 @@ describe('PressTracker', () => {
     expect(long).toBe(0)
   })
 
-  it('按满门槛 = 长按：手指还没抬起就触发，抬起报 long，紧跟着的 click 吞掉一次', () => {
+  it('按满门槛 = 长按：手指还没抬起就触发，抬起报 long', () => {
     const t = fakeTimers()
     const p = new PressTracker(500, t.timers)
     let long = 0
@@ -53,8 +53,6 @@ describe('PressTracker', () => {
     t.advance(500)
     expect(long).toBe(1)
     expect(p.up()).toBe('long')
-    expect(p.takeSwallowedClick()).toBe(true)
-    expect(p.takeSwallowedClick(), '一次性').toBe(false)
   })
 
   it('拖走了既不是点也不是长按', () => {

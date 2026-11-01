@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,7 +62,7 @@ func colorEnabled(f *os.File) bool {
 // collectStatus 尽力而为：任何一项取不到就留空，不让整张表失败。
 func collectStatus() status {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
-	fs.SetOutput(os.NewFile(0, os.DevNull))
+	fs.SetOutput(io.Discard)
 	var c commonFlags
 	c.register(fs)
 	httpsPort := fs.Int("https-port", 443, "")
@@ -75,10 +76,7 @@ func collectStatus() status {
 		st.configPath = cfgPath
 	}
 	if c.domain != "" {
-		st.url = "https://" + c.domain
-		if *httpsPort != 443 {
-			st.url += fmt.Sprintf(":%d", *httpsPort)
-		}
+		st.url = agent.ExternalURL(c.domain, *httpsPort)
 	}
 
 	st.unit = detectUnit()
@@ -118,11 +116,11 @@ func probeRunning(unit unitKind, domain string, httpPort, httpsPort int) (bool, 
 	// 探针会把活得好好的服务判成"未运行"。
 	//
 	// 校验仍然跳过：staging 证书、自签、链不全都不该影响"在不在跑"这个判断。
-	if domain != "" && healthzOK("https://127.0.0.1:"+itoa(httpsPort)+"/healthz", domain) {
+	if domain != "" && healthzOK("https://127.0.0.1:"+strconv.Itoa(httpsPort)+"/healthz", domain) {
 		return true, ""
 	}
 	// --dev / --no-tls：明文，在 http 端口上
-	if healthzOK("http://127.0.0.1:"+itoa(httpPort)+"/healthz", "") {
+	if healthzOK("http://127.0.0.1:"+strconv.Itoa(httpPort)+"/healthz", "") {
 		return true, ""
 	}
 	return false, ""

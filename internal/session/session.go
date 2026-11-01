@@ -287,13 +287,16 @@ func (s *Session) Unsubscribe(sub Subscriber) {
 //
 // 这些字节从未被 ack，客户端仍持在 pending 里，重连后会按 in_ack 重发。
 // 不丢的话它们会被写进 PTY 一次、重发时再写一次。
+//
+// 记账只减掉丢掉的字节，【不是回到 in_ack】：writeLoop 已经取走、正写着的那段
+// （PTY 输入满时会卡很久）还算已接受，重发时按重复跳过，否则它会写两遍。
 func (s *Session) DetachClient(clientID string) {
 	dropped := s.inputQ.dropClient(clientID)
 	if dropped == 0 {
 		return
 	}
 	s.mu.Lock()
-	s.inQueued[clientID] = s.inAck[clientID]
+	s.inQueued[clientID] -= uint64(dropped)
 	s.mu.Unlock()
 }
 
@@ -314,8 +317,8 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 	}
 	queued := s.inQueued[clientID]
 	if seq == 0 && queued > 0 {
-		// 【client 把 in_seq 重置了，这边的记账却还在】。正常重连不是这个形状：断开时
-		// accepted 已回退到 in_ack，client 按 in_ack 裁剪后从 in_ack 起重发。照旧按重发
+		// 【client 把 in_seq 重置了，这边的记账却还在】。正常重连不是这个形状：client 按
+		// in_ack 裁剪后从 in_ack 起重发（协议 §5.4）。照旧按重发
 		// 处理，但这类丢弃在浏览器一侧毫无迹象（ADR-0020 第 5 条），宁可吵也要留痕。
 		slog.Warn("输入的 in_seq 从 0 重来，但这个 client_id 已有记账 —— 重复部分按重发丢弃（协议 §5.4）",
 			"sid", s.sid, "client", clientID, "accepted", queued, "len", len(data))
@@ -338,9 +341,9 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 	cp := make([]byte, len(data))
 	copy(cp, data)
 	if err := s.inputQ.push(clientID, cp); err != nil {
-		// 入队失败：回滚记账，让重连后的重发能对上
+		// 入队失败：回滚记账，让重连后的重发能对上。用减法：期间 DetachClient 可能已改过它
 		s.mu.Lock()
-		s.inQueued[clientID] = queued
+		s.inQueued[clientID] -= uint64(len(data))
 		s.mu.Unlock()
 		return err
 	}

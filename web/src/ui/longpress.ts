@@ -1,6 +1,6 @@
 /**
- * 按下 → 判「点一下 / 长按 / 拖走了」。附加键的 CTRL / ALT 锁定、会话行与标签的
- * 会话菜单都用它（ADR-0025 §2 / §4）。
+ * 按下 → 判「点一下 / 长按 / 拖走了」。附加键的 CTRL / ALT 锁定、抽屉一行的长按（露出按钮）、
+ * 标签的长按（菜单 / 拖动）都用它（ADR-0025 §2、ADR-0039、ADR-0040）。
  *
  * 纯状态机，计时器可注入，便于单测。组件把它放在 useRef 里：一次按压跨越多次渲染。
  */
@@ -29,7 +29,6 @@ export class PressTracker {
   private active = false
   private moved = false
   private fired = false
-  private swallowClick = false
   private readonly ms: number
   private readonly timers: Timers
 
@@ -44,14 +43,12 @@ export class PressTracker {
     this.active = true
     this.moved = false
     this.fired = false
-    this.swallowClick = false
     this.x0 = x
     this.y0 = y
     this.timer = this.timers.set(() => {
       this.timer = undefined
       if (!this.active || this.moved) return
       this.fired = true
-      this.swallowClick = true
       onLong()
     }, this.ms)
   }
@@ -76,16 +73,6 @@ export class PressTracker {
   cancel(): void {
     this.active = false
     this.clearTimer()
-  }
-
-  /**
-   * 长按之后浏览器还会补一个 click —— 在 onClick 里先问这一句，是就吞掉。
-   * 一次性：问过就清。
-   */
-  takeSwallowedClick(): boolean {
-    const v = this.swallowClick
-    this.swallowClick = false
-    return v
   }
 
   private clearTimer(): void {

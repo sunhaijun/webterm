@@ -243,7 +243,7 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 4. 抽屉列表里显示 `exit 1`（警示色）；标签只变灰（`data-exited`），不显示退出码
 5. **刷新页面** → 提示行在缓冲里**只出现一次**
 6. 在该会话里按 `Enter` → 会话关闭（不需要确认），切到相邻会话
-7. 关闭 `running` 会话（会话菜单 → 关闭）→ 二次确认
+7. 关闭 `running` 会话（会话菜单 → 关闭）→ 弹 `close-confirm`（不是浏览器对话框：整个过程没有 `dialog` 事件），标题里有会话名，焦点在 `close-ok` 上；点 `close-cancel` → 浮层消失、会话还在；再关一次，按 `Esc` → 同样不关；再关一次，按 `Enter` → 会话关闭（ADR-0038）
 
 ---
 
@@ -252,7 +252,10 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 > AC-5.1, AC-5.3, AC-5.4
 
 1. 跑 `emit.sh 3000` → 向上滚动能看到早期输出（无需进入任何模式）
-2. **外观跟随系统、没有设置**（AC-5.3）：`page.emulateMedia({ colorScheme: 'light' })` 下 `body` 与终端区（`.stage`）的背景是浅色（`--bg` / `--term-bg`），xterm 的主题背景（`.xterm-viewport` 的内联样式；CSS 把它的计算值压成透明）也是 `--term-bg`；切到 `dark`，**不刷新**，三者都换成深色；终端行的字号是 14px；页面上没有 `open-settings`；按 `Ctrl+Shift+,` 不出现任何浮层（`.drawer` 为 0 个）
+2. **外观：默认跟随系统，设置里改主题与字号**（AC-5.3，[ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)）：
+   - 默认：`page.emulateMedia({ colorScheme: 'light' })` 下 `body` 与终端区（`.stage`）的背景是浅色（`--bg` / `--term-bg`），xterm 的主题背景（`.xterm-viewport` 的内联样式；CSS 把它的计算值压成透明）也是 `--term-bg`；切到 `dark`，**不刷新**，三者都换成深色；`<html>` 没有 `data-theme`；终端字号（`__webterm.fontSize()`）是 14；按 `Ctrl+Shift+,` 不出现任何浮层（`.drawer` 为 0 个）
+   - 改主题：系统仍是 `dark`，点 `open-settings` → `settings` 出现，`theme-system` 是 `aria-checked="true"`；点 `theme-light` → **不刷新**，`<html data-theme="light">`，三处背景都是浅色；刷新 → 仍是浅色、配对过的页面一加载就是浅色；再打开设置点 `theme-system` → 回到深色、`data-theme` 被去掉
+   - 改字号：记下 `__webterm.size()` 与 `resizes()`；点两次 `font-inc` → `font-size` 显示 16、`__webterm.fontSize()` 是 16、列数变少，且**发出了 `resize`**（`resizes()` 变大，最后一条 `resize` 的 `cols` 等于新列数）；刷新 → 仍是 16；连点 `font-dec` 到 10 → `font-dec` 变 `disabled`；`localStorage` 里只有 `webterm.fontSize`，没有按形态分的 key
 3. 选中一段文本，此时有新输出到达 → **选区不被破坏**（选中的仍是原来那几行的内容）
 4. 复制 → 剪贴板内容正确
 
@@ -347,12 +350,15 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 > AC-4.10, AC-5.11, AC-4.8。`web/e2e/drawer.spec.ts`，Pixel 5。触屏抽屉有约 170ms 的 `sheet-up` 进场动画：量「贴底」或长按抽屉里的行之前先等动画结束（`animationend`，或等矩形两次读数相同），否则拿到的是半路的位置。
 
-1. **形态**：会话按钮 `open-sessions` 里的数字等于会话数（`1`）；点它 → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行只有 `new-session`，没有 `open-settings`；从抽屉新建一个会话后按钮里是 `2`，关掉它变回 `1`
+1. **形态**：会话按钮 `open-sessions` 里的数字等于会话数（`1`）；点它 → `session-drawer` 贴底（底缘与可视区底部差 ≤ 1px）、整宽、有抓手 `.drawer-grab`、标题栏有 ✕；底部固定一行是 `new-session` 与 `open-settings`，各有一个 SVG 图标；从抽屉新建一个会话后按钮里是 `2`；在抽屉里左滑它 → `row-close` → `close-confirm` 是贴底 sheet、**叠在抽屉上**（两个 `.drawer`），按 `Esc` 只关掉确认、抽屉仍在；再关一次点 `close-ok` → 行消失、抽屉仍开着，按钮里变回 `1`（AC-4.11）
 2. **焦点进浮层**：每次打开，`document.activeElement.closest('.drawer')` 非空
 3. **关闭方式**（会话抽屉）：点遮罩、`Esc`、✕、选中一个会话、`page.goBack()`（系统返回键）各关一次；`goBack` 之后页面仍在 `/`；五次开关之后 `history.length` 至多比开始时多 1
 4. **不挤终端**：开关抽屉前后 `.term` 的矩形逐字段相同，`__webterm.size()` 与 `resizes()` 不变
 5. **焦点恢复**（AC-4.8）：先点终端让它有焦点 → 开抽屉 → 选另一个会话 → 焦点在新会话的 helper textarea 上；先让终端失焦 → 开抽屉 → 选会话 → 焦点**不**在终端
-6. **会话菜单**：长按抽屉里的一行 → `session-menu` 出现，有 `session-rename` `session-pin` `session-close`；改名后列表里的名字跟着变；点外面关闭菜单
+6. **行操作**（AC-4.12，ADR-0039）：两个会话。触摸左滑第二行 120px → 松手后它停在打开（行内容左移 216px），`row-pin` `row-rename` `row-close` 可见；只左滑 60px → 弹回；打开后右滑 → 关上；纵向拖列表不打开任何一行。长按一行 → 同样打开、**不出现** `session-menu`；再左滑另一行 → 前一行关上；点开着那行的正文 → 关上、当前会话不变。`row-pin` → 名字前出现 `⇵`、行关上。`row-rename` → `rename-sheet` 叠在抽屉上（两个 `.drawer`），`rename-input` 有焦点、内容全选、字号 16px；输入 `RENAMED` 按 `Enter` → sheet 消失、抽屉仍在，那一行显示 `RENAMED`；再打开改名清空按「保存」→ 恢复自动命名；再打开改名按 `Esc` → 只关改名
+9. **浮层跟着可视区**（ADR-0039 §3）：打开改名 sheet 后把视口高度减 300px（模拟可视视口被键盘压缩：`.app` 的高度跟着变）→ `rename-sheet` 的底边与 `.app` 的底边差 ≤ 1px，`rename-input` 整个在 `.app` 的矩形里；`session-drawer` 的高度 ≤ `.app` 高度的 80%
+7. **高度与留白**（AC-5.11，ADR-0037 §5）：只有 1 个会话时打开抽屉 → `session-drawer` 的高度 ≥ 可视区高度的 50%（差 ≤ 1px）；底部一行贴着 sheet 底部；`new-session` 的底边与 sheet 底边之间 ≥ 16px、左边与 sheet 左边之间 16px，`open-settings` 的右边与 sheet 右边之间 16px，两个按钮之间 12px，两个按钮一样高（48px）
+8. **从抽屉进设置**：点 `open-settings` → `session-drawer` 消失，`settings` 出现，贴底整宽、有抓手；它的高度小于可视区的 50%（不套会话抽屉的最小高度）；`font-inc` 的底边与 sheet 底边之间 ≥ 16px；点遮罩关闭
 
 ---
 
@@ -555,17 +561,18 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 
 ## E2E-41 宽屏标签栏（AC-4.10）
 
-> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述，第 8 步中途把窗口改窄。`+` 的位置见 [ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)。
+> `web/e2e/tabs.spec.ts`，1440×900 鼠标；第 7 步用 iPad Mini 设备描述，第 8 步中途把窗口改窄。`open-settings` 与设置浮层见 [ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)。`+` 的位置见 [ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)。
 
-1. **结构**：顶栏在终端上方；`tabbar`（标签条）里只有一个标签，`new-session` 在顶栏里、**不在** `tabbar` 里，位于标签条右边、左边缘距标签条右边缘 12px（ADR-0035）；右侧钉住 `conn-dot`，它在最右；`new-session` 里的 SVG 与 `conn-dot` 的垂直中心相差 ≤ 0.5px；没有 `open-settings`、没有 `open-sessions`，没有附加键
+1. **结构**：顶栏在终端上方；`tabbar`（标签条）里只有一个标签，`new-session` 在顶栏里、**不在** `tabbar` 里，位于标签条右边、左边缘距标签条右边缘 12px（ADR-0035）；右侧钉住 `conn-dot` 与 `open-settings`，`open-settings` 在最右、`conn-dot` 紧挨在它左边；`new-session` 里的 SVG、`open-settings` 里的 SVG 与 `conn-dot` 三者的垂直中心两两相差 ≤ 0.5px，两个 SVG 一样大；没有 `open-sessions`，没有附加键
 2. **新建与切换**：点 `new-session` → 多一个标签且它是当前；点第一个标签 → `__webterm.sid()` 切回去；整个过程 `.term` 的矩形与 `__webterm.size()` 不变
-3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹确认，确认后标签消失；中键点标签同样关闭
+3. **关闭**：悬停非当前标签出现 ✕，点它 → 会话在跑时先弹 `close-confirm`（居中浮窗，不是浏览器对话框），点 `close-ok` 后标签消失；中键点标签同样先确认；焦点在终端里时按 `Ctrl+Shift+W` → 确认浮层，按 `Enter` → 关闭，焦点回到新的当前会话的终端（AC-4.11）
 4. **改名**：双击标签 → `rename-input` 出现，输入 `RENAMED` 回车 → 标签文字是 `RENAMED`；再双击、清空、回车 → 恢复自动命名（CWD 的 basename）
 5. **会话菜单**：右键标签 → `session-menu` 有 `session-rename` `session-pin` `session-close`；点 `session-pin` → 标签名前出现 `⇵`；切走后仍持续收到该会话的 OUTPUT 帧、`seq` 在涨，它也不出未读点（`__webterm.outSeq()` 只报当前会话，所以看帧）
 6. **未读**：A 跑持续输出，切到 B → A 的标签出现未读点；切回 A → 消失
-7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签 → `session-menu`；附加键在，左列只有 `toggle-text`；`new-session` 与 `tabbar` 右边缘相距 16px
+7. **触屏**（iPad Mini）：✕ 只在当前标签上；长按标签后原地松手 → `session-menu`；附加键在，左列只有 `toggle-text`；`new-session` 与 `tabbar` 右边缘相距 16px
 8. **等宽与滚动**（ADR-0031 / ADR-0035）：建到 3 个会话 → 三个标签等宽（差 ≤ 1px）、都是 240px，`tabbar` 正好是三个标签的宽度、不横向滚动（`scrollWidth` = `clientWidth`），`new-session` 的左边缘 = 最后一个标签的右边缘 + 12px；把窗口改成 600×900（`screen` 不变，仍是 `wide`）、建到 5 个 → 每个标签 120px（差 ≤ 1px），`tabbar` 放不下（`scrollWidth > clientWidth`），当前（最后建的）整个可见；**`new-session` 整个落在顶栏里、可点（`elementFromPoint` 命中它），左边缘 = `tabbar` 右边缘 + 12px**；把 `tabbar` 滚到最左（`scrollLeft = 0`）→ `new-session` 的位置不变；（此时 `scrollLeft` 为 0）鼠标悬在标签条上纵向滚轮向下再向上 → `scrollLeft` 先变大后变小；窗口改回 1440 → 5 个都是 240px，不再横向滚动
 9. **间隔不可点**（ADR-0035 §2）：两个会话，焦点在终端里；在最后一个标签右边缘与 `new-session` 左边缘之间那 12px 的正中点击 → 会话数不变、当前会话不变、焦点仍在终端里
+10. **设置是居中浮窗**（AC-5.11，ADR-0037 §4）：焦点在终端里，点 `open-settings` → `settings` 水平、垂直都居中（中心与可视区中心差 ≤ 1px），宽 420px，没有抓手；`.term` 的矩形与 `__webterm.size()` 不变；按 `Esc` → 浮层消失，焦点回到终端的 helper textarea（打字有回显）
 
 ---
 
@@ -607,3 +614,14 @@ xterm 一个接得住一个接不住（见 [input.md](../40-frontend/input.md#�
 - PWA 真机安装
 - Android 系统返回键（E2E 用 `page.goBack()` 模拟）
 - 触觉反馈
+
+## E2E-45 拖动排序（AC-4.13）
+
+> `web/e2e/order.spec.ts`。[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)。
+
+1. **wide 鼠标**（1440×900）：建到 3 个会话 A B C → 鼠标按住 C 的标签往左拖过 A 的中线松手 → 标签顺序是 C A B，当前会话不变（拖完不切换）；发出一条 `session.move{sid: C, before: A}`，随后收到 `session.order{sids: [C, A, B]}`；按住 B 横移 3px 松手 → 只是点击（切到 B），不发 `session.move`
+2. **拖到一半按 Esc**：按住 A 往右拖过 B，不松手按 `Esc` → 回到原位，松手后不发 `session.move`
+3. **顺序在 agent 上**：刷新页面 → 仍是 C A B；再开第二个 browser context（第二台设备）→ 它的标签顺序也是 C A B；在第一个里再拖一次（A 拖到最后）→ 第二个不刷新就变成 C B A
+4. **compact 拖动柄**（Pixel 5）：同一个 agent 上，打开抽屉 → 每行右端有 `session-<sid>-grip`；触摸按住最后一行的柄往上拖到第一行上方松手 → 它成为第一行、编号 `[1]`；按住一行的正文纵向拖 → 是滚动列表，顺序不变
+5. **触屏 Pad**（iPad Mini）：长按一个标签 500ms 后不松手横移过相邻标签再松手 → 顺序变了、不出现 `session-menu`；长按后原地松手 → 出现 `session-menu`
+6. **键盘切换按新顺序**：顺序是 C B A、当前是 C → `Ctrl+Shift+↓` 到 B

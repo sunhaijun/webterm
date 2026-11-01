@@ -1,6 +1,6 @@
 /**
  * E2E-5 连接状态指示 —— AC-2.10
- * E2E-12 阅读输出 —— AC-5.1 / AC-5.3 / AC-5.4
+ * E2E-12 阅读输出 —— AC-5.1 / AC-5.3 / AC-5.4（② 外观设置，ADR-0037）
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 
@@ -144,7 +144,7 @@ test.describe('E2E-12 阅读输出（1440×900）', () => {
     expect(sel1, '新输出不破坏选区').toBe(sel0)
   })
 
-  test('② 外观跟随系统、不刷新就换；字号 14px；没有设置入口，Ctrl+Shift+, 不弹东西（AC-5.3）', async ({ page }) => {
+  test('② 外观默认跟随系统；设置里改主题与字号，立刻生效、刷新后保留（AC-5.3，ADR-0037）', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'light' })
     await agent.open(page)
     // 终端区看到的底色是 .stage 的；xterm 自己的主题（ANSI 色、反色单元格用得上）写在
@@ -155,20 +155,59 @@ test.describe('E2E-12 阅读输出（1440×900）', () => {
         stage: getComputedStyle(document.querySelector('.stage')!).backgroundColor,
         xterm: document.querySelector<HTMLElement>('.xterm-viewport')!.style.backgroundColor,
       }))
+    const theme = () => page.evaluate(() => document.documentElement.getAttribute('data-theme'))
     const light = 'rgb(251, 251, 252)'
     const dark = 'rgb(13, 17, 23)'
-    expect(await bg(), '浅色：--bg / --term-bg').toEqual({ body: 'rgb(255, 255, 255)', stage: light, xterm: light })
+    const LIGHT = { body: 'rgb(255, 255, 255)', stage: light, xterm: light }
+    const DARK = { body: dark, stage: dark, xterm: dark }
+
+    // 默认：跟随系统
+    expect(await bg(), '浅色：--bg / --term-bg').toEqual(LIGHT)
     await page.emulateMedia({ colorScheme: 'dark' })
-    await expect
-      .poll(bg, { message: '系统切到深色：界面与 xterm 一起变，不用刷新' })
-      .toEqual({ body: dark, stage: dark, xterm: dark })
-
-    expect(await page.evaluate(() => getComputedStyle(document.querySelector('.xterm-rows')!).fontSize)).toBe('14px')
-
-    await expect(page.getByTestId('open-settings')).toHaveCount(0)
+    await expect.poll(bg, { message: '系统切到深色：界面与 xterm 一起变，不用刷新' }).toEqual(DARK)
+    expect(await theme(), '跟随系统时不打 data-theme').toBeNull()
+    expect(await hooks.fontSize(page), '默认字号').toBe(14)
     await focusTerm(page)
     await page.keyboard.press('Control+Shift+Comma')
     await page.waitForTimeout(300)
-    await expect(page.locator('.drawer'), 'Ctrl+Shift+, 不再打开任何浮层').toHaveCount(0)
+    await expect(page.locator('.drawer'), 'Ctrl+Shift+, 交给终端，不打开任何浮层').toHaveCount(0)
+
+    // 改主题：系统仍是深色，选浅色
+    await page.getByTestId('open-settings').click()
+    await expect(page.getByTestId('settings')).toBeVisible()
+    await expect(page.getByTestId('theme-system')).toHaveAttribute('aria-checked', 'true')
+    await page.getByTestId('theme-light').click()
+    await expect(page.getByTestId('theme-light')).toHaveAttribute('aria-checked', 'true')
+    expect(await theme()).toBe('light')
+    await expect.poll(bg, { message: '选了浅色：不刷新就换' }).toEqual(LIGHT)
+    await page.reload()
+    await waitOnline(page)
+    expect(await theme(), '刷新后仍是浅色').toBe('light')
+    await expect.poll(bg).toEqual(LIGHT)
+    await page.getByTestId('open-settings').click()
+    await page.getByTestId('theme-system').click()
+    expect(await theme(), '回到跟随系统：去掉 data-theme').toBeNull()
+    await expect.poll(bg, { message: '跟随系统：又是深色' }).toEqual(DARK)
+
+    // 改字号：两次 + → 16；列数变少，并且补发了 resize（字符格变了、容器没变）
+    const size0 = await hooks.size(page)
+    const r0 = await hooks.resizes(page)
+    await page.getByTestId('font-inc').click()
+    await page.getByTestId('font-inc').click()
+    await expect(page.getByTestId('font-size')).toHaveText('16')
+    expect(await hooks.fontSize(page)).toBe(16)
+    await expect.poll(async () => (await hooks.size(page)).cols, { message: '字号变大，列数变少' }).toBeLessThan(size0.cols)
+    await expect.poll(() => hooks.resizes(page), { message: '补发了 resize' }).toBeGreaterThan(r0)
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('settings')).toHaveCount(0)
+    await page.reload()
+    await waitOnline(page)
+    expect(await hooks.fontSize(page), '刷新后仍是 16').toBe(16)
+    await page.getByTestId('open-settings').click()
+    for (let i = 0; i < 6; i++) await page.getByTestId('font-dec').click()
+    await expect(page.getByTestId('font-size')).toHaveText('10')
+    await expect(page.getByTestId('font-dec'), '到下限').toBeDisabled()
+    const keys = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('webterm.font')))
+    expect(keys, '字号只存一份，不按形态分').toEqual(['webterm.fontSize'])
   })
 })

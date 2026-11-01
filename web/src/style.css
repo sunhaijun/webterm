@@ -1,5 +1,5 @@
 /* webterm —— Termux 式界面（ADR-0025，docs/40-frontend/layout.md）。
-   主题只跟随系统（ADR-0030）。所有颜色都是 :root 上的自定义属性，
+   主题三态：跟随系统 / 浅色 / 深色（ADR-0037，ui/prefs.ts）。所有颜色都是 :root 上的自定义属性，
    xterm 的主题也从这里读（--term-* / --ansi-*，term/terminal.ts::themeFromCss）。 */
 :root {
   color-scheme: light dark;
@@ -46,7 +46,7 @@
   --ansi-15: #8c959f;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --bg: #0d1117;
     --fg: #e6edf3;
     --muted: #8b949e;
@@ -77,6 +77,40 @@
     --ansi-15: #ffffff;
   }
 }
+/* 设置里选了深色（ADR-0037）：和上面同一份，让手动选择在两个方向都生效 */
+:root[data-theme='dark'] {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --line: #21262d;
+  --line-strong: #30363d;
+  --surface: #161b22;
+  --ring: rgba(230, 237, 243, 0.35);
+  --link: #6ea8fe;
+  --term-bg: #0d1117;
+  --term-fg: #e6edf3;
+  --term-cursor: #e6edf3;
+  --term-sel: rgba(110, 168, 254, 0.3);
+  --ansi-0: #484f58;
+  --ansi-1: #ff7b72;
+  --ansi-2: #3fb950;
+  --ansi-3: #d29922;
+  --ansi-4: #58a6ff;
+  --ansi-5: #bc8cff;
+  --ansi-6: #39c5cf;
+  --ansi-7: #b1bac4;
+  --ansi-8: #6e7681;
+  --ansi-9: #ffa198;
+  --ansi-10: #56d364;
+  --ansi-11: #e3b341;
+  --ansi-12: #79c0ff;
+  --ansi-13: #d2a8ff;
+  --ansi-14: #56d4dd;
+  --ansi-15: #ffffff;
+}
+/* 强制的那一种也管滚动条与原生控件 */
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 /* 整个 app 是固定视口，页面本就不该滚；overscroll-behavior:none 掐掉 iOS 的文档级橡皮筋 */
@@ -113,6 +147,10 @@ button { font: inherit; color: inherit; }
   padding: var(--sa-top) var(--sa-right) var(--sa-bottom) var(--sa-left);
   overflow: hidden;
   background: var(--term-bg);
+  /* fixed 定位的浮层以 .app 为包含块（ADR-0039 §3）：.app 跟着 visualViewport 走，
+     浮层的遮罩就盖住可见区，sheet 贴着键盘上沿。少了它，Android 弹键盘只缩可视视口，
+     贴着布局视口底边的 sheet 整个在键盘后面 */
+  contain: layout;
 }
 /* 网格行：标签栏（wide）· 终端（剩余全部）· 附加键（80px，显示时） */
 .app[data-form='compact'] { grid-template-rows: minmax(0, 1fr) auto; }
@@ -247,20 +285,25 @@ button { font: inherit; color: inherit; }
 }
 .app[data-coarse='true'] .tab-close { width: 30px; height: 30px; }
 .tab .rename-input { flex: 1 1 auto; min-width: 60px; }
-/* 前面 12px（触屏 16px）是顶栏自己的空白，点上去什么都不做：免得想新建却点到当前标签的 ✕（ADR-0035） */
-.tab-new {
-  flex: none; width: 36px; margin: 0 auto 0 12px; /* 右边的 auto 把状态点顶到最右 */
+/* `+` 与最右的 ⚙：同宽同高、同一种线条图标（ADR-0035 §3、ADR-0037 §2–3） */
+.tab-new, .topbar-btn {
+  flex: none; width: 36px;
   display: flex; align-items: center; justify-content: center;
   border: 0; padding: 0; background: transparent; color: var(--muted);
   cursor: pointer;
 }
-.app[data-coarse='true'] .tab-new { margin-left: 16px; }
-.tab-new:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+:is(.tab-new, .topbar-btn):hover:not(:disabled) { background: var(--hover); color: var(--fg); }
 .tab-new:disabled { opacity: 0.35; cursor: default; }
+/* `+` 前 12px（触屏 16px）是顶栏自己的空白，点上去什么都不做：免得想新建却点到当前标签的 ✕（ADR-0035）。
+   右边的 auto 把状态点与 ⚙ 顶到最右 */
+.tab-new { margin: 0 auto 0 12px; }
+.app[data-coarse='true'] .tab-new { margin-left: 16px; }
+/* 线条图标（ui/icons.tsx，layout.md §图标）：块级，按几何中心对齐 */
+.icon { display: block; flex: none; }
 
 .conn-dot {
   flex: none; align-self: center;
-  width: 8px; height: 8px; margin: 0 10px;
+  width: 8px; height: 8px; margin: 0 4px 0 10px;
   border-radius: 50%; background: var(--muted);
 }
 .conn-dot[data-state='online'] { background: var(--ok); }
@@ -346,51 +389,84 @@ button { font: inherit; color: inherit; }
 .extrakeys[data-page='keys'] .ek-text { display: none; }
 .extrakeys[data-page='text'] .ek-keys { display: none; }
 
-/* ---------- 浮层（ADR-0018，layout.md §浮层）：只有手机会话抽屉，贴底整宽 sheet ---------- */
+/* ---------- 浮层（ADR-0018 / ADR-0037 §4，layout.md §浮层）：wide 居中浮窗，compact 贴底 sheet ---------- */
 
 .drawer-backdrop {
   position: fixed; inset: 0; z-index: 40;
   background: rgba(0, 0, 0, 0.45);
-  display: flex; align-items: flex-end;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
 }
 .drawer {
-  width: 100%; max-height: 80vh;
+  width: min(420px, 100%); max-height: min(80%, 720px);
   display: flex; flex-direction: column; min-height: 0;
   background: var(--bg); color: var(--fg);
-  border: 1px solid var(--line); border-bottom: 0;
-  border-radius: 16px 16px 0 0; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   outline: none;
-  /* fixed 定位不在 .app 的 padding 里，自己让出 Home 指示条 */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.drawer-grab { display: none; }
+.drawer-head {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--line);
+}
+.drawer-title {
+  flex: 1; min-width: 0; margin: 0;
+  font-size: 16px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.drawer-close {
+  flex: none; width: 36px; height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted);
+  font-size: 15px; cursor: pointer;
+}
+.app[data-coarse='true'] .drawer-close { width: 44px; height: 44px; font-size: 17px; }
+.drawer-close:hover, .drawer-close:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
+.drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+
+/* 底部留出呼吸空间（ADR-0037 §5）：上 12、左右 16、下 16；sheet 的下边还要让出 Home 指示条 */
+.drawer:not([data-foot]) { padding-bottom: 16px; }
+.drawer-foot { flex: none; border-top: 1px solid var(--line); padding: 12px 16px 16px; }
+.drawer-actions { display: flex; gap: 12px; }
+.drawer-btn {
+  flex: 1 1 0; min-width: 0; height: 48px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); color: var(--fg);
+  font-size: 15px; cursor: pointer;
+}
+.app[data-coarse='false'] .drawer-btn { height: 40px; border-radius: 10px; font-size: 14px; }
+.drawer-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 6%, var(--surface)); }
+.drawer-btn:active:not(:disabled) { background: color-mix(in srgb, var(--fg) 12%, var(--surface)); }
+.drawer-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.drawer-btn:disabled { opacity: 0.4; cursor: default; }
+.drawer-btn.danger { color: var(--err); font-weight: 600; }
+.drawer-btn.primary { color: var(--accent); font-weight: 600; }
+/* 会话抽屉底部：「+ 新会话」占满，⚙ 是方块 */
+.drawer-new .icon { color: var(--muted); }
+.drawer-settings { flex: none; width: 48px; color: var(--muted); }
+
+/* compact：贴底整宽 sheet，抓手 + 下滑关闭 */
+.app[data-form='compact'] .drawer-backdrop { align-items: flex-end; padding: 0; }
+.app[data-form='compact'] .drawer {
+  width: 100%; max-height: 80%;
+  border-bottom: 0; border-radius: 16px 16px 0 0;
   animation: sheet-up 170ms ease;
 }
-.drawer-grab {
-  flex: none;
+.app[data-form='compact'] .drawer-grab {
+  display: block; flex: none;
   width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong);
   margin: 8px auto 2px;
 }
-.drawer-head {
-  flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px 8px 14px; border-bottom: 1px solid var(--line);
-}
-.drawer-title { flex: 1; margin: 0; font-size: 16px; font-weight: 600; }
-.drawer-close {
-  flex: none; width: 44px; height: 44px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 0; border-radius: 8px; background: transparent; color: var(--muted);
-  font-size: 17px; cursor: pointer;
-}
-.drawer-close:hover, .drawer-close:focus-visible { background: var(--surface); color: var(--fg); outline: none; }
-.drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.drawer-foot { flex: none; border-top: 1px solid var(--line); }
-.drawer-actions { display: flex; }
-.drawer-actions button {
-  flex: 1 1 0; min-height: 52px;
-  border: 0; background: transparent; cursor: pointer; font-size: 15px;
-}
-.drawer-actions button:hover:not(:disabled) { background: var(--hover); }
-.drawer-actions button:disabled { opacity: 0.4; cursor: default; }
+.app[data-form='compact'] .drawer-head { padding-top: 4px; }
+/* 浮层盖在 .app 的 padding 上，自己让出 Home 指示条。用 --sa-bottom 不用 env()：
+   键盘弹起时它被置 0（键盘已经盖住了指示条） */
+.app[data-form='compact'] .drawer:not([data-foot]),
+.app[data-form='compact'] .drawer-foot { padding-bottom: max(16px, var(--sa-bottom)); }
+/* 会话抽屉至少半屏（iOS sheet 的「中等」档）：多出来的高度给列表，底部一行贴着 sheet 底部 */
+.app[data-form='compact'] .drawer[data-variant='sessions'] { min-height: 50%; }
+
 @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .drawer { animation: none !important; }
@@ -399,14 +475,35 @@ button { font: inherit; color: inherit; }
 
 /* ---------- 会话列表（compact 抽屉） ---------- */
 
-.session-list { list-style: none; margin: 0; padding: 4px 0; }
+/* --row-actions = rowswipe.ts 的 ROW_ACTIONS_PX（三个按钮各 72px） */
+.session-list { list-style: none; margin: 0; padding: 4px 0; --row-actions: 216px; }
+/* 一行 = 底下的三个按钮 + 盖在上面的正文；左滑把正文推开（ADR-0039 §1） */
+.sl-item { position: relative; overflow: hidden; }
+.row-actions {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  display: flex; width: var(--row-actions);
+}
+.row-act {
+  flex: 1 1 0; border: 0; padding: 0 4px;
+  color: #fff; font-size: 14px; cursor: pointer;
+}
+.row-act[data-act='pin'] { background: var(--line-strong); color: var(--fg); }
+.row-act[data-act='rename'] { background: var(--accent); }
+.row-act[data-act='close'] { background: var(--err); font-weight: 600; }
 .session-row {
+  position: relative; z-index: 1;
   display: flex; align-items: center; gap: 8px;
-  height: 52px; padding: 0 14px;
+  height: 52px; padding: 0 0 0 14px;
+  background: var(--bg);
   cursor: pointer; outline: none;
   user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  /* 纵向交给列表滚动，横向归左滑 */
+  touch-action: pan-y;
+  transition: transform 180ms ease;
 }
-.session-row:hover:not([aria-current='true']) { background: var(--hover); }
+.sl-item[data-open='true'] .session-row { transform: translateX(calc(-1 * var(--row-actions))); }
+/* 底色必须不透明：半透明的 hover 会把底下的按钮透出来 */
+.session-row:hover:not([aria-current='true']) { background: color-mix(in srgb, var(--fg) 7%, var(--bg)); }
 .session-row:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
 /* 当前：强调色 3px 左条 + 强调色底色 + 名字用 --accent 加粗（AC-4.9） */
 .session-row[aria-current='true'] {
@@ -424,6 +521,31 @@ button { font: inherit; color: inherit; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl;
 }
 .sl-meta[data-failed='true'] { color: var(--err); font-weight: 600; direction: ltr; }
+/* 拖动柄（ADR-0040）：一行右端 44px，按住就拖，不让浏览器拿去滚动 */
+.row-grip {
+  flex: none; align-self: stretch; width: 44px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); touch-action: none; cursor: grab;
+}
+/* 拖动中：被拖的浮起来跟手，其余的带过渡让位 */
+[data-reordering] .sl-item, [data-reordering] .tab { transition: transform 150ms ease; }
+.sl-item[data-dragging], .tab[data-dragging] {
+  position: relative; z-index: 3; transition: none !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+.tab[data-dragging] { background: var(--bg); cursor: grabbing; }
+.sl-item[data-dragging] .row-grip { cursor: grabbing; }
+.tab[data-armed='true'] { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); }
+
+/* 改名 sheet（ADR-0039 §2）：一个整行宽的输入框 */
+.rename-field { padding: 16px; }
+.rename-sheet-input {
+  display: block; width: 100%; height: 44px; padding: 0 12px;
+  font: inherit; font-size: 16px; /* iOS 小于 16px 会在聚焦时放大页面 */
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: var(--bg); color: var(--fg); outline: none;
+}
+.rename-sheet-input:focus { border-color: var(--accent); }
 
 .rename-input {
   min-width: 0; width: 100%;
@@ -453,6 +575,47 @@ button { font: inherit; color: inherit; }
 .session-menu button:hover, .session-menu button:focus-visible { background: var(--hover); outline: none; }
 .session-menu .danger { color: var(--err); }
 .menu-check { color: var(--accent); font-weight: 700; }
+
+/* ---------- 设置（layout.md §设置，ADR-0037） ---------- */
+
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  min-height: 60px; padding: 10px 16px;
+}
+.settings-row + .settings-row { border-top: 1px solid var(--line); }
+.settings-label { font-size: 15px; }
+/* 主题：三段分段按钮，选中的用强调色（「选中的是这个」） */
+.segmented {
+  flex: none; display: inline-flex; gap: 2px; padding: 2px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.segmented button {
+  height: 32px; padding: 0 12px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted);
+  font-size: 14px; white-space: nowrap; cursor: pointer;
+}
+.segmented button:hover:not([aria-checked='true']) { color: var(--fg); }
+.segmented button[aria-checked='true'] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  color: var(--accent); font-weight: 600;
+}
+.segmented button:focus-visible, .stepper button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.app[data-coarse='true'] .segmented button { height: 40px; padding: 0 14px; }
+/* 字号：− 值 + */
+.stepper { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+.stepper button {
+  width: 36px; height: 36px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--fg); cursor: pointer;
+}
+.app[data-coarse='true'] .stepper button { width: 44px; height: 44px; }
+.stepper button:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 6%, var(--surface)); }
+.stepper button:disabled { opacity: 0.35; cursor: default; }
+.stepper-value { min-width: 3ch; text-align: center; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* 关闭确认（ADR-0038）：正文一句 */
+.confirm-text { margin: 0; padding: 16px; font-size: 15px; color: var(--muted); }
 
 /* ---------- 配对 / 闸门 ---------- */
 

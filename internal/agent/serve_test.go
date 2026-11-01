@@ -132,8 +132,7 @@ func TestCertManagerStagingSwitch(t *testing.T) {
 	}
 }
 
-// 对外地址的规则要和 cmd/webterm 的 baseURL 一致：443 不写，其它必须写。
-// 两边各自钉一遍 —— 它们是不同进程，改了一边不会自动带上另一边。
+// 对外地址：443 不写，其它必须写。cmd/webterm 的配对 URL 与状态总览也用它。
 func TestExternalURLIncludesNonDefaultPort(t *testing.T) {
 	cases := []struct {
 		port int
@@ -145,8 +144,8 @@ func TestExternalURLIncludesNonDefaultPort(t *testing.T) {
 		{8080, "https://term.example.com:8080"},
 	}
 	for _, tc := range cases {
-		if got := externalURL("term.example.com", tc.port); got != tc.want {
-			t.Errorf("externalURL(_, %d) = %q, 想要 %q", tc.port, got, tc.want)
+		if got := ExternalURL("term.example.com", tc.port); got != tc.want {
+			t.Errorf("ExternalURL(_, %d) = %q, 想要 %q", tc.port, got, tc.want)
 		}
 	}
 }

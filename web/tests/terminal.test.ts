@@ -6,12 +6,13 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { FONT_FAMILY, FONT_SIZE, SCROLLBACK, createTerminal, exitLine, proposeSize, themeFromCss } from '../src/term/terminal'
+import { FONT_FAMILY, SCROLLBACK, createTerminal, exitLine, proposeSize, themeFromCss } from '../src/term/terminal'
+import { FONT_DEFAULT } from '../src/ui/prefs'
 import { flush, lineText, lines } from './helpers'
 
 const bytes = (...xs: number[]) => new Uint8Array(xs)
 const enc = (s: string) => new TextEncoder().encode(s)
-const mk = () => createTerminal()
+const mk = () => createTerminal(undefined, FONT_DEFAULT)
 
 describe('UT-decode-1 切开的 UTF-8 不丢字', () => {
   it('。…— 各被切在第 2 字节之后、落在不同的 OUTPUT 帧里（E2E-43 的切法）', async () => {
@@ -198,10 +199,11 @@ describe('xterm 配置', () => {
     h.dispose()
   })
 
-  it('UT-look-1 字号 14px、字体是系统等宽栈，带 CJK 等宽回退（AC-5.3）', () => {
+  it('UT-look-1 默认字号 14px、字体是系统等宽栈，带 CJK 等宽回退（AC-5.3）', () => {
     const h = mk()
-    expect(FONT_SIZE).toBe(14)
+    expect(FONT_DEFAULT).toBe(14)
     expect(h.term.options.fontSize).toBe(14)
+    expect(createTerminal(undefined, 18).term.options.fontSize, '设置里改过字号：新实例用它').toBe(18)
     expect(h.term.options.fontFamily).toBe(FONT_FAMILY)
     expect(FONT_FAMILY).toMatch(/^ui-monospace, /)
     expect(FONT_FAMILY).toMatch(/"Noto Sans Mono CJK SC", "Sarasa Mono SC", monospace$/)

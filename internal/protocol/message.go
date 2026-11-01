@@ -11,6 +11,7 @@ const (
 	TSessionCreate = "session.create"
 	TSessionClose  = "session.close"
 	TSessionRename = "session.rename"
+	TSessionMove   = "session.move"
 	TSubscribe     = "subscribe"
 	TUnsubscribe   = "unsubscribe"
 	TResize        = "resize"
@@ -20,6 +21,7 @@ const (
 	TSessionCreated = "session.created"
 	TSessionClosed  = "session.closed"
 	TSessionUpdated = "session.updated"
+	TSessionOrder   = "session.order"
 	TAck            = "ack"
 	TPong           = "pong"
 	TError          = "error"
@@ -64,8 +66,8 @@ type ResumeReq struct {
 
 // Hello 是连接后的第一条消息。
 //
-// ClientID 是【每个标签页一个】的 id（存 sessionStorage，不是 localStorage ——
-// 后者同源共享，区分不了标签页），也是输入记账的 key。
+// ClientID 是【每次页面加载一个】的 id，只放内存（不能存 sessionStorage /
+// localStorage，协议 §4.1），也是输入记账的 key。
 // InstanceID 是上次 welcome 里拿到的值，与 agent 当前值不符时所有 resume 判 gone。
 type Hello struct {
 	T          string      `json:"t"`
@@ -95,6 +97,18 @@ type SessionRename struct {
 	ReqID string  `json:"req_id"`
 	SID   uint16  `json:"sid"`
 	Name  *string `json:"name"` // null 恢复自动改名
+}
+
+// SessionMove 把会话 SID 挪到 Before 前面（ADR-0040）。
+//
+// Before 为 null 时挪到最后；Before 不存在（刚被别处关掉）也当 null，等于 SID
+// 时原地不动 —— 都不报错。用"放到谁前面"而不是目标下标：两台设备同时操作时，
+// 下标指的位置可能已经变了。
+type SessionMove struct {
+	T      string  `json:"t"`
+	ReqID  string  `json:"req_id"`
+	SID    uint16  `json:"sid"`
+	Before *uint16 `json:"before"` // null = 挪到最后
 }
 
 type Subscribe struct {
@@ -202,6 +216,14 @@ type SessionUpdated struct {
 	HeadSeq      *uint64 `json:"head_seq,omitempty"`
 }
 
+// SessionOrder 是 session.move 之后的完整显示顺序，client 整个替换自己的（ADR-0040）。
+// 新建、关闭不发它：新建排最后、关掉的去掉，两边各自推得出来。
+type SessionOrder struct {
+	T     string   `json:"t"`
+	ReqID string   `json:"req_id,omitempty"` // 只出现在发起请求的那条连接的副本上
+	SIDs  []uint16 `json:"sids"`
+}
+
 type Ack struct {
 	T     string `json:"t"`
 	SID   uint16 `json:"sid"`
@@ -246,6 +268,8 @@ func Encode(msg any) ([]byte, error) {
 		m.T = TSessionClose
 	case *SessionRename:
 		m.T = TSessionRename
+	case *SessionMove:
+		m.T = TSessionMove
 	case *Subscribe:
 		m.T = TSubscribe
 	case *Unsubscribe:
@@ -262,6 +286,8 @@ func Encode(msg any) ([]byte, error) {
 		m.T = TSessionClosed
 	case *SessionUpdated:
 		m.T = TSessionUpdated
+	case *SessionOrder:
+		m.T = TSessionOrder
 	case *Ack:
 		m.T = TAck
 	case *Pong:
@@ -298,6 +324,8 @@ func Decode(data []byte) (any, error) {
 		dst = &SessionClose{}
 	case TSessionRename:
 		dst = &SessionRename{}
+	case TSessionMove:
+		dst = &SessionMove{}
 	case TSubscribe:
 		dst = &Subscribe{}
 	case TUnsubscribe:
@@ -314,6 +342,8 @@ func Decode(data []byte) (any, error) {
 		dst = &SessionClosed{}
 	case TSessionUpdated:
 		dst = &SessionUpdated{}
+	case TSessionOrder:
+		dst = &SessionOrder{}
 	case TAck:
 		dst = &Ack{}
 	case TPong:

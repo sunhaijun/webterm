@@ -297,3 +297,28 @@ func TestSessionInfoHasNoIntegrationFields(t *testing.T) {
 		}
 	}
 }
+
+// session.move 的 before 为 null 时照样写出来（协议 §4.1）；session.order 只有
+// 发起方的副本带 req_id，其余连接的副本里不能出现这个字段（ADR-0040）。
+func TestSessionMoveAndOrderShape(t *testing.T) {
+	b, err := protocol.Encode(&protocol.SessionMove{ReqID: "r5", SID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"before":null`)) {
+		t.Errorf("before 为 null 时没写出来: %s", b)
+	}
+
+	b, err = protocol.Encode(&protocol.SessionOrder{SIDs: []uint16{3, 1, 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	if _, ok := m["req_id"]; ok || len(m) != 2 { // t, sids
+		t.Errorf("广播副本 = %s, want 只有 t 与 sids", b)
+	}
+	if !bytes.Contains(b, []byte(`"sids":[3,1,2]`)) {
+		t.Errorf("sids 不是数字数组: %s", b)
+	}
+}

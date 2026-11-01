@@ -291,6 +291,25 @@
       }
     },
     {
+      "name": "session_move",
+      "json": {
+        "t": "session.move",
+        "req_id": "r4",
+        "sid": 3,
+        "before": 1
+      }
+    },
+    {
+      "name": "session_move_to_end",
+      "json": {
+        "t": "session.move",
+        "req_id": "r5",
+        "sid": 1,
+        "before": null
+      },
+      "note": "before 为 null = 挪到最后"
+    },
+    {
       "name": "session_closed",
       "json": {
         "t": "session.closed",
@@ -315,6 +334,23 @@
         "cwd": "/srv/api"
       },
       "note": "cwd 来自 /proc/<前台进程组>/cwd，每秒读一次，变了才发；name_is_manual == false 时 name 跟着变"
+    },
+    {
+      "name": "session_order",
+      "json": {
+        "t": "session.order",
+        "req_id": "r4",
+        "sids": [3, 1, 2]
+      },
+      "note": "session.move 成功后广播；sids 是完整的显示顺序，client 整个替换。req_id 只在发起方的副本上"
+    },
+    {
+      "name": "session_order_broadcast",
+      "json": {
+        "t": "session.order",
+        "sids": [3, 1, 2]
+      },
+      "note": "其它连接收到的副本：没有 req_id"
     },
     {
       "name": "subscribe",

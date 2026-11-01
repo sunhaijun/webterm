@@ -182,6 +182,18 @@ agent 在收到 `hello` 之前收到任何其它帧 → `error{code:"expected_he
 
 设置后该会话**停止**跟随 CWD 自动改名。`name` 传 `null` 恢复自动改名。
 
+#### `session.move`
+
+```json
+{ "t": "session.move", "req_id": "r4", "sid": 3, "before": 1 }
+```
+
+把会话 `sid` 挪到会话 `before` 的前面；`before` 为 `null` 时挪到最后（[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)）。
+
+- `sid` 不存在 → `error{code:"unknown_session"}`。
+- `before` 不存在（比如刚被别处关掉）→ 当作 `null`，挪到最后；`before` 等于 `sid` → 原地不动。都不报错。
+- 成功后广播 `session.order`（§4.2），**位置没变也广播**，发起方据此确认。
+
 #### `subscribe` / `unsubscribe`
 
 ```json
@@ -259,6 +271,8 @@ client 侧做 100ms 防抖。agent：
 | `snapshot` | 发快照 | 等 SNAPSHOT 帧（§3）；`from_seq` = 快照的 `seq` |
 | `gone` | 该 sid 已不存在（会话已销毁 / `instance_id` 不符） | 移除该会话的 UI，提示"会话已结束" |
 
+**`sessions[]` 的顺序就是会话的显示顺序**（[ADR-0040](../20-architecture/adr/0040-session-order-drag.md)）：新建的排在最后，`session.move` 可以调整。client 照这个顺序显示，不自己排序。
+
 `home` 是 agent 用户的家目录，client 用它把 CWD 缩写成 `~`（cwd 等于它或以 `home + "/"` 开头时）。没有这个字段时不缩写。
 
 `resumed[].in_ack` 是 agent 对 **该 `client_id`** 在该会话上已写入 PTY 的累计字节数（§5.4）。**client 必须据此裁剪重发队列，并重发其后的全部输入。**
@@ -277,6 +291,14 @@ client 侧做 100ms 防抖。agent：
 - `session.updated` 只包含**发生变化的字段** + `sid`。client 做增量合并
 - `cwd` 来自 agent 每秒读一次 `/proc/<前台进程组>/cwd`，变了才发；`name_is_manual == false` 时 `name` 跟着变（AC-4.4）
 - **会话退出**：`session.updated{status:"exited", exit_code, head_seq}` 一定排在该会话**最后一个 OUTPUT 之后**（agent 等 PTY 读到 EOF 再发，最多等 500 ms —— 后台进程占着 PTY 时 EOF 不会来）。`head_seq` 是最终的输出总量：client 的 `out_seq` 追到它，才说明输出收齐了
+
+#### `session.order`
+
+```json
+{ "t": "session.order", "req_id": "r4", "sids": [3, 1, 2] }
+```
+
+`session.move` 成功后广播给所有连接，`req_id` 只在发起方的副本上。`sids` 是**完整的**显示顺序，client 整个替换自己的顺序。新建、关闭会话不发它：新建的排在最后，关掉的直接去掉，两边各自推得出来。
 
 #### `ack`
 
@@ -397,13 +419,17 @@ pending     : [{seq, bytes}]  已发送但未被 ack 的输入
 
 - agent 为每个 `(client_id, sid)` 维护 `in_ack`，**保留到会话销毁为止**。刷新一次就多一个 `client_id`，条目数随刷新次数增长；每条是一个 id 加两个 `uint64`，长期运行的会话上也只是 KB 量级，所以不回收 —— 回收之后，那个页面带着 `pending` 重连会被判 `input_gap`
 - 该 `client_id` 从未对这个会话发过输入时 `in_ack = 0`，此时 client 侧的 `in_seq_next` 也必然是 0，两侧天然对齐。这一条成立的前提是 `client_id` 每次页面加载都是新的（§4.1）
-- 反过来，`seq == 0` 而这个 `(client_id, sid)` 已有记账，说明 client 把计数器重置了却沿用了旧 `client_id`。正常的重连不会出现这个形状：断开时 `accepted` 已回退到 `in_ack`，client 按 `in_ack` 裁剪后从 `seq = in_ack` 重发。agent 仍按重发处理（丢掉重复的部分），但**记一条 Warn**（`sid`、`client`、`accepted`、`len`）—— 这类丢弃在浏览器一侧看不出任何迹象（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 第 5 条）
+- 反过来，`seq == 0` 而这个 `(client_id, sid)` 已有记账，说明 client 把计数器重置了却沿用了旧 `client_id`。正常的重连不会出现这个形状：client 按 `in_ack` 裁剪后从 `seq = in_ack` 重发，`seq` 不会从 0 开始。agent 仍按重发处理（丢掉重复的部分），但**记一条 Warn**（`sid`、`client`、`accepted`、`len`）—— 这类丢弃在浏览器一侧看不出任何迹象（[ADR-0020](../20-architecture/adr/0020-input-never-silently-dropped.md) 第 5 条）
 - 若按连接记账，重连后 `in_ack` 归零而 client 的 `pending` 仍从旧 `seq` 起，agent 会判 `seq > in_ack` → `input_gap` → 关连接 → 无限重连。**断线期间的输入不丢**（US-2.2）整条就废了
 
-**连接断开时，agent 必须丢弃该 `client_id` 已入队但尚未写入 PTY 的输入**，并把
-`accepted` 回退到 `in_ack`。这些字节从未被 ack，client 仍持在 `pending` 里，
-重连后会重发；不丢的话它们会被写进 PTY 一次、重发时再写一次。回退之后
-`accepted == in_ack`，client 按 `in_ack` 重发就精确对齐。
+**连接断开时，agent 必须丢弃该 `client_id` 已入队但尚未写入 PTY 的输入**，并从
+`accepted` 里**减掉丢掉的字节数**。这些字节从未被 ack，client 仍持在 `pending` 里，
+重连后会重发；不丢的话它们会被写进 PTY 一次、重发时再写一次。
+
+**不能直接回退到 `in_ack`**：写循环已经从队列里取走、正在写的那一段既不在队列里，
+也还没 ack（前台程序不读输入时，这一次写会卡很久 —— 正是 `input_stalled` 断线重连的场景）。
+回退到 `in_ack` 的话，client 重发时这一段被当成新数据再接受一次，写进 PTY 两遍。
+只减丢掉的部分，`accepted = in_ack + 正在写的那段`，client 从 `in_ack` 重发的前缀按重复跳过，精确对齐。
 
 ### 5.5 心跳与超时
 

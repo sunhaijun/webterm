@@ -56,7 +56,7 @@ func New(cfg Config, st *store.Store, sessions *session.Manager) *Agent {
 		cfg:      cfg,
 		log:      log,
 		store:    st,
-		auth:     auth.New(st, cfg.Dev),
+		auth:     auth.New(st, cfg.Dev, cfg.TrustProxy),
 		sessions: sessions,
 		hub:      wsconn.NewHub(cfg.MaxConns),
 		mux:      http.NewServeMux(),

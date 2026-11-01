@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -86,19 +87,18 @@ func (c *Conn) readLoop(ctx context.Context) error {
 	}
 }
 
-// writeLoop 把写队列刷到线上。
+// writeLoop 把写队列刷到线上。每条连接只跑一次；不管从哪条路退出都关 flushed。
 func (c *Conn) writeLoop(ctx context.Context) {
+	defer close(c.flushed)
 	ticker := time.NewTicker(ackThrottle)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-c.done:
 			c.drain()
-			c.flushedOnce.Do(func() { close(c.flushed) })
 			return
 		case <-ctx.Done():
 			c.drain()
-			c.flushedOnce.Do(func() { close(c.flushed) })
 			return
 		case <-ticker.C:
 			c.flushPendingAcks()
@@ -115,7 +115,6 @@ func (c *Conn) writeLoop(ctx context.Context) {
 				err := c.ws.Write(wctx, frameType(f), f.data)
 				cancel()
 				if err != nil {
-					c.flushedOnce.Do(func() { close(c.flushed) })
 					c.closeWith(websocket.StatusInternalError, "写失败")
 					return
 				}
@@ -165,10 +164,7 @@ func (c *Conn) flushPendingAcks() {
 	c.mu.Unlock()
 
 	for sid, inAck := range pend {
-		b, err := protocol.Encode(&protocol.Ack{SID: sid, InAck: inAck})
-		if err == nil {
-			c.enqueue(outFrame{data: b})
-		}
+		c.send(&protocol.Ack{SID: sid, InAck: inAck})
 	}
 }
 
@@ -201,11 +197,7 @@ func (c *Conn) flushPendingHeads() {
 	c.mu.Unlock()
 
 	for sid, head := range ready {
-		h := head
-		b, err := protocol.Encode(&protocol.SessionUpdated{SID: sid, HeadSeq: &h})
-		if err == nil {
-			c.enqueue(outFrame{data: b})
-		}
+		c.send(&protocol.SessionUpdated{SID: sid, HeadSeq: &head})
 	}
 }
 
@@ -237,18 +229,13 @@ func (c *Conn) watchRevocation(ctx context.Context) {
 // 的输入（协议 §5.3）。
 func (c *Conn) detachAll() {
 	c.mu.Lock()
-	sids := make([]uint16, 0, len(c.subs))
-	for sid := range c.subs {
-		sids = append(sids, sid)
-	}
-	c.subs = make(map[uint16]bool)
+	clear(c.subs)
 	c.mu.Unlock()
 
 	for _, s := range c.deps.Sessions.List() {
 		s.Unsubscribe(c)
 		s.DetachClient(c.clientID)
 	}
-	_ = sids
 }
 
 // handleHello 处理首条消息并回 welcome。
@@ -260,7 +247,7 @@ func (c *Conn) detachAll() {
 func (c *Conn) handleHello(h *protocol.Hello) error {
 	if h.Protocol != protocol.Version {
 		c.sendError("", nil, protocol.CodeProtocolUnsupported,
-			"agent 支持协议版本 "+itoa(protocol.Version)+"，client 是 "+itoa(h.Protocol)+"；请刷新页面", true)
+			"agent 支持协议版本 "+strconv.Itoa(protocol.Version)+"，client 是 "+strconv.Itoa(h.Protocol)+"；请刷新页面", true)
 		return errors.New("协议版本不匹配")
 	}
 	c.clientID = h.ClientID
@@ -314,23 +301,4 @@ func (c *Conn) markSubscribed(sid uint16) {
 	c.subs[sid] = true
 	delete(c.pendHead, sid) // 订阅之后 head_seq 通知没有意义了
 	c.mu.Unlock()
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	if neg {
-		return "-" + string(b)
-	}
-	return string(b)
 }

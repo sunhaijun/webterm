@@ -1,32 +1,53 @@
 /**
- * 会话的列表与菜单（session-ux.md §切换会话）。
+ * 会话的列表、行操作与菜单（session-ux.md §切换会话）。
  *
- * - `SessionList`：compact 抽屉里的内容（一行一个会话，`[n] 名字  CWD / exit N`）；
- * - `SessionMenu`：长按 / 右键一个会话弹出的「改名 · 保持接收 · 关闭」，两种形态共用；
- * - `RenameInput`：改名时名字原地变成的输入框，`Enter` 确认、`Esc` 取消。
+ * - `SessionList`：compact 抽屉里的内容（一行一个会话，`[n] 名字  CWD / exit N  ≡`）。
+ *   一行左滑或长按露出「保持接收 / 改名 / 关闭」（ADR-0039）；右端的 ≡ 拖动排序（ADR-0040）；
+ * - `RenameSheet`：compact 上的改名，一张叠在抽屉上的小 sheet（ADR-0039 §2）；
+ * - `SessionMenu`：wide 上右键 / 长按标签弹出的「改名 · 保持接收 · 关闭」；
+ * - `RenameInput`：wide 上改名时标签名原地变成的输入框，`Enter` 确认、`Esc` 取消。
  */
-import { useLayoutEffect, useRef } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { SessionView } from '../sessions/store'
 import { shortCwd } from '../sessions/store'
+import { Drawer } from '../ui/drawer'
+import { GripIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
+import { capturePointer } from '../ui/pointer'
+import { DragReorder } from '../ui/reorder'
+import { RowSwipe } from '../ui/rowswipe'
 import { menuPosition } from '../ui/viewport'
 
 export interface SessionListProps {
   sessions: SessionView[]
   /** agent 用户的家目录（welcome.home），CWD 里的它缩成 `~`。 */
   home: string | null
-  renaming: number | null
   onSelect(sid: number): void
-  onMenu(sid: number, x: number, y: number): void
-  onRename(sid: number, name: string): void
-  onCancelRename(): void
+  onTogglePin(sid: number): void
+  onRename(sid: number): void
+  onClose(sid: number): void
+  /** 拖动排序松手：把 sid 挪到 before 前面（null = 最后）。 */
+  onMove(sid: number, before: number | null): void
 }
 
-export function SessionList({ sessions, home, renaming, onSelect, onMenu, onRename, onCancelRename }: SessionListProps) {
+interface RowGesture {
+  sid: number
+  row: HTMLElement
+  /** 这次手势之后的 click 要吞掉（左滑过、长按过）。 */
+  swallow: boolean
+}
+
+export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, onClose, onMove }: SessionListProps) {
   // 一次只会有一个按压：整张列表共用一个
   const press = useRef(new PressTracker()).current
+  const swipe = useRef(new RowSwipe()).current
+  const gesture = useRef<RowGesture | null>(null)
+  const swallowClick = useRef(false)
+  const grip = useRef<DragReorder | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
+  /** 同一时间只开一行（ADR-0039 §1）。 */
+  const [openSid, setOpenSid] = useState<number | null>(null)
   const active = sessions.find((s) => s.active)?.sid ?? null
 
   useLayoutEffect(() => {
@@ -35,61 +56,268 @@ export function SessionList({ sessions, home, renaming, onSelect, onMenu, onRena
     el?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [active])
 
+  // 开着的那行被关掉了（别处关的）：忘掉
+  useEffect(() => {
+    if (openSid !== null && !sessions.some((s) => s.sid === openSid)) setOpenSid(null)
+  }, [sessions, openSid])
+
+  // 拖到一半列表没了（抽屉被关）：清掉位移
+  useEffect(() => () => void grip.current?.finish(true), [])
+
+  /**
+   * 这次手势（左滑、长按）之后浏览器补发的那个 click 吞掉。【长按尤其要紧】：行被推开之后，
+   * 手指下面已经是按钮了，抬手补发的 click 会落在「改名」甚至「关闭」上（E2E 实测）。
+   * 标记在下一次按下时清掉，免得没有补发 click 时吞掉下一次真点击。
+   */
+  const takeSwallow = () => {
+    const s = swallowClick.current
+    swallowClick.current = false
+    return s
+  }
+
+  const act = (fn: (sid: number) => void, sid: number) => (e: MouseEvent) => {
+    e.stopPropagation()
+    if (takeSwallow()) return
+    setOpenSid(null)
+    fn(sid)
+  }
+
+  const onRowDown = (e: PointerEvent, s: SessionView) => {
+    if (e.button !== 0 || (e.target as Element).closest('.row-grip')) return
+    const row = e.currentTarget as HTMLElement
+    swipe.start(e.clientX, e.clientY, openSid === s.sid)
+    gesture.current = { sid: s.sid, row, swallow: false }
+    const { clientX: x, clientY: y } = e
+    press.down(x, y, () => {
+      // 长按 = 打开这一行（和左滑一样，ADR-0039 §1）
+      if (gesture.current) gesture.current.swallow = true
+      setOpenSid(s.sid)
+    })
+  }
+
+  const onRowMove = (e: PointerEvent) => {
+    if (e.buttons === 0) return // 没按着（鼠标悬停）：不是手势
+    press.move(e.clientX, e.clientY)
+    const g = gesture.current
+    if (!g) return
+    const off = swipe.move(e.clientX, e.clientY)
+    if (off === null) return
+    if (!g.swallow) {
+      g.swallow = true
+      press.cancel()
+      capturePointer(g.row, e.pointerId)
+      if (openSid !== null && openSid !== g.sid) setOpenSid(null)
+    }
+    g.row.style.transition = 'none'
+    g.row.style.transform = `translateX(${off}px)`
+  }
+
+  const onRowUp = () => {
+    press.up()
+    const g = gesture.current
+    gesture.current = null
+    const res = swipe.end()
+    if (!g) return
+    g.row.style.transition = ''
+    g.row.style.transform = '' // 停在哪由 data-open 决定（CSS），带过渡
+    if (res) setOpenSid(res === 'open' ? g.sid : openSid === g.sid ? null : openSid)
+    if (g.swallow) swallowClick.current = true
+  }
+
+  const onRowCancel = () => {
+    press.cancel()
+    swipe.end()
+    const g = gesture.current
+    gesture.current = null
+    if (g) {
+      g.row.style.transition = ''
+      g.row.style.transform = ''
+    }
+  }
+
+  const onRowClick = (s: SessionView) => {
+    if (takeSwallow()) return
+    // 有一行开着：点哪儿都只是把它关上，不切换
+    if (openSid !== null) {
+      setOpenSid(null)
+      return
+    }
+    onSelect(s.sid)
+  }
+
+  const onGripDown = (e: PointerEvent, index: number) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const list = listRef.current
+    if (!list) return
+    grip.current?.finish(true) // 上一次没收尾（拖到一半那一行没了）
+    setOpenSid(null)
+    capturePointer(e.currentTarget as Element, e.pointerId)
+    grip.current = new DragReorder({
+      axis: 'y',
+      scroller: list.closest<HTMLElement>('.drawer-body') ?? list,
+      items: [...list.children] as HTMLElement[],
+      order: sessions.map((s) => s.sid),
+      from: index,
+      start: e.clientY,
+    })
+  }
+
+  const onGripUp = (cancel: boolean) => {
+    const r = grip.current?.finish(cancel)
+    grip.current = null
+    if (r) onMove(r.sid, r.before)
+  }
+
   return (
-    <ul class="session-list" data-testid="session-list" ref={listRef}>
-      {sessions.map((s) => (
-        <li key={s.sid}>
-          <div
-            class="session-row"
-            role="button"
-            tabIndex={0}
-            data-testid={`session-${s.sid}`}
-            data-sid={s.sid}
-            data-exited={s.status === 'exited' ? 'true' : 'false'}
-            data-unread={s.unread ? 'true' : 'false'}
-            aria-current={s.active ? 'true' : undefined}
-            title={s.cwd}
-            onPointerDown={(e) => {
-              if (e.button !== 0) return
-              const { clientX: x, clientY: y } = e
-              press.down(x, y, () => onMenu(s.sid, x, y))
-            }}
-            onPointerMove={(e) => press.move(e.clientX, e.clientY)}
-            onPointerUp={() => press.up()}
-            onPointerCancel={() => press.cancel()}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              onMenu(s.sid, e.clientX, e.clientY)
-            }}
-            onClick={() => {
-              if (press.takeSwallowedClick() || renaming === s.sid) return
-              onSelect(s.sid)
-            }}
-            onKeyDown={(e) => {
-              if (e.target !== e.currentTarget) return
-              if (e.key === 'Enter' || e.key === ' ') {
+    <ul
+      class="session-list"
+      data-testid="session-list"
+      ref={listRef}
+      onPointerDownCapture={() => {
+        swallowClick.current = false
+      }}
+    >
+      {sessions.map((s, i) => {
+        const open = openSid === s.sid
+        return (
+          <li key={s.sid} class="sl-item" data-open={open ? 'true' : 'false'}>
+            <div class="row-actions" aria-hidden={open ? undefined : 'true'}>
+              <button
+                type="button"
+                class="row-act"
+                data-act="pin"
+                data-testid="row-pin"
+                tabIndex={open ? 0 : -1}
+                aria-pressed={s.pinned ? 'true' : 'false'}
+                onClick={act(onTogglePin, s.sid)}
+              >
+                {s.pinned ? '取消保持' : '保持接收'}
+              </button>
+              <button type="button" class="row-act" data-act="rename" data-testid="row-rename" tabIndex={open ? 0 : -1} onClick={act(onRename, s.sid)}>
+                改名
+              </button>
+              <button type="button" class="row-act" data-act="close" data-testid="row-close" tabIndex={open ? 0 : -1} onClick={act(onClose, s.sid)}>
+                关闭
+              </button>
+            </div>
+            <div
+              class="session-row"
+              role="button"
+              tabIndex={0}
+              data-testid={`session-${s.sid}`}
+              data-sid={s.sid}
+              data-exited={s.status === 'exited' ? 'true' : 'false'}
+              data-unread={s.unread ? 'true' : 'false'}
+              aria-current={s.active ? 'true' : undefined}
+              title={s.cwd}
+              onPointerDown={(e) => onRowDown(e, s)}
+              onPointerMove={onRowMove}
+              onPointerUp={onRowUp}
+              onPointerCancel={onRowCancel}
+              onContextMenu={(e) => {
                 e.preventDefault()
-                onSelect(s.sid)
-              }
-            }}
-          >
-            <span class="sl-idx">[{s.index}]</span>
-            <span class="sl-name">
-              {s.pinned && <span class="pin-mark" aria-label="保持接收">⇵</span>}
-              {renaming === s.sid ? (
-                <RenameInput initial={s.name} onCommit={(n) => onRename(s.sid, n)} onCancel={onCancelRename} />
-              ) : (
+                setOpenSid(s.sid)
+              }}
+              onClick={() => onRowClick(s)}
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onSelect(s.sid)
+                }
+              }}
+            >
+              <span class="sl-idx">[{s.index}]</span>
+              <span class="sl-name">
+                {s.pinned && <span class="pin-mark" aria-label="保持接收">⇵</span>}
                 <span class="sl-text">{s.name}</span>
-              )}
-            </span>
-            {s.unread && <span class="unread-dot" aria-label="有新输出" />}
-            <span class="sl-meta" data-failed={s.status === 'exited' && s.exitCode !== 0 ? 'true' : 'false'}>
-              {s.status === 'exited' ? `exit ${s.exitCode ?? '?'}` : shortCwd(s.cwd, home)}
-            </span>
-          </div>
-        </li>
-      ))}
+              </span>
+              {s.unread && <span class="unread-dot" aria-label="有新输出" />}
+              <span class="sl-meta" data-failed={s.status === 'exited' && s.exitCode !== 0 ? 'true' : 'false'}>
+                {s.status === 'exited' ? `exit ${s.exitCode ?? '?'}` : shortCwd(s.cwd, home)}
+              </span>
+              <span
+                class="row-grip"
+                data-testid={`session-${s.sid}-grip`}
+                aria-label="拖动排序"
+                onPointerDown={(e) => onGripDown(e, i)}
+                onPointerMove={(e) => grip.current?.move(e.clientY)}
+                onPointerUp={() => onGripUp(false)}
+                onPointerCancel={() => onGripUp(true)}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <GripIcon />
+              </span>
+            </div>
+          </li>
+        )
+      })}
     </ul>
+  )
+}
+
+export interface RenameSheetProps {
+  name: string
+  onCommit(name: string): void
+  onCancel(): void
+}
+
+/**
+ * compact 上的改名（ADR-0039 §2）：叠在抽屉上的小 sheet，一个整行宽的输入框。
+ * sheet 贴着键盘上沿（.app 是浮层的包含块），输入框在它最上面，不会被挡。失焦不算取消。
+ */
+export function RenameSheet({ name, onCommit, onCancel }: RenameSheetProps) {
+  const ref = useRef<HTMLInputElement>(null)
+  // Drawer 自己的 layout effect 先跑（子先于父），已经把焦点收进浮层；这里再落到输入框上
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    // 【必须 setAttribute】：autocorrect 在 Chrome 是 boolean IDL 属性（AC-3.10 同理）
+    el.setAttribute('autocorrect', 'off')
+    el.setAttribute('autocapitalize', 'off')
+    el.setAttribute('spellcheck', 'false')
+    el.setAttribute('enterkeyhint', 'done')
+    el.value = name
+    el.focus({ preventScroll: true })
+    el.select()
+  }, [])
+  const commit = () => onCommit(ref.current?.value ?? '')
+  return (
+    <Drawer
+      title="改名"
+      testid="rename-sheet"
+      backdropTestid="rename-backdrop"
+      variant="rename"
+      onClose={onCancel}
+      foot={
+        <div class="drawer-actions">
+          <button type="button" class="drawer-btn" data-testid="rename-cancel" onClick={onCancel}>
+            取消
+          </button>
+          <button type="button" class="drawer-btn primary" data-testid="rename-ok" onClick={commit}>
+            保存
+          </button>
+        </div>
+      }
+    >
+      <div class="rename-field">
+        <input
+          ref={ref}
+          class="rename-sheet-input"
+          data-testid="rename-input"
+          type="text"
+          autocomplete="off"
+          placeholder="留空 = 跟随目录"
+          aria-label="会话名（留空 = 跟随目录）"
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return
+            e.preventDefault()
+            commit()
+          }}
+        />
+      </div>
+    </Drawer>
   )
 }
 

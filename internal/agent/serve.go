@@ -80,9 +80,16 @@ func (s *Servers) listen(cfg ServeConfig, name, addr string) (net.Listener, erro
 
 // ExportListeners 把监听 socket 复制成可继承的 fd（ADR-0016）。
 // 返回的 *os.File 要一直持有到 exec，之后由内核在旧映像销毁时关掉。
+// 出错时已导出的都关掉：它们清了 CLOEXEC，留着会被之后起的 shell 继承。
 func (s *Servers) ExportListeners() ([]handoff.Listener, []*os.File, error) {
 	var out []handoff.Listener
 	var files []*os.File
+	fail := func(err error) ([]handoff.Listener, []*os.File, error) {
+		for _, f := range files {
+			f.Close()
+		}
+		return nil, nil, err
+	}
 	for name, ln := range s.lns {
 		tl, ok := ln.(*net.TCPListener)
 		if !ok {
@@ -90,19 +97,18 @@ func (s *Servers) ExportListeners() ([]handoff.Listener, []*os.File, error) {
 		}
 		f, err := tl.File()
 		if err != nil {
-			return nil, nil, fmt.Errorf("导出监听 %s: %w", name, err)
-		}
-		if err := handoff.Inherit(int(f.Fd())); err != nil {
-			f.Close()
-			return nil, nil, err
+			return fail(fmt.Errorf("导出监听 %s: %w", name, err))
 		}
 		files = append(files, f)
+		if err := handoff.Inherit(int(f.Fd())); err != nil {
+			return fail(err)
+		}
 		out = append(out, handoff.Listener{Name: name, FD: int(f.Fd())})
 	}
 	return out, files, nil
 }
 
-// Listen 按配置启动监听。阻塞直到出错或被 Shutdown。
+// Listen 按配置启动监听，立刻返回；服务出错从返回的 channel 报上来。
 func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan error, error) {
 	errCh := make(chan error, 2)
 	s := &Servers{}
@@ -189,7 +195,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 
 		go func() { errCh <- s.http.Serve(httpLn) }()
 		go func() { errCh <- s.https.ServeTLS(httpsLn, "", "") }()
-		a.log.Info("webterm 已启动", "url", externalURL(cfg.Domain, cfg.HTTPSPort))
+		a.log.Info("webterm 已启动", "url", ExternalURL(cfg.Domain, cfg.HTTPSPort))
 
 		// 主动预热证书。
 		//
@@ -381,15 +387,14 @@ func (s *Servers) Shutdown(ctx context.Context) {
 	}
 }
 
-// externalURL 是【对外可见的地址】：域名 + 非默认端口。
+// ExternalURL 是【对外可见的地址】：域名 + 非默认端口。
 //
 // 443 是默认端口，写出来是噪音；不是 443 就必须带上，否则用户拿到的
 // 地址是打不开的（443 被别的服务占着时会遇到 —— 见
-// docs/80-ops/install.md 的「跑在非标准端口上」）。
+// docs/80-ops/install.md 的「跑在非标准端口上」）。0 当默认处理，不拼出 :0。
 //
-// 启动日志、HTTPS 跳转、配对 URL 三处都要用同一条规则。配对 URL 在
-// cmd/webterm 里（那是独立进程），规则由 flags_test.go 与这里的测试各自钉住。
-func externalURL(domain string, httpsPort int) string {
+// 启动日志、HTTPS 跳转、Origin 校验、配对 URL、状态总览都用它这一条规则。
+func ExternalURL(domain string, httpsPort int) string {
 	return "https://" + externalHost(domain, httpsPort)
 }
 

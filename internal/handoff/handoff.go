@@ -11,6 +11,7 @@ package handoff
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -88,21 +90,7 @@ type Snapshot struct {
 	InstanceID  string     `json:"instance_id"`
 	NextSID     uint16     `json:"next_sid"`
 	Listeners   []Listener `json:"listeners"`
-	Sessions    []Session  `json:"sessions"`
-}
-
-// Meta 返回不含缓冲与待写输入的副本 —— 预检只需要验 schema 与字段形状，
-// 不必把几十 MiB 的环形缓冲喂给子进程。
-func (s *Snapshot) Meta() *Snapshot {
-	out := *s
-	out.Sessions = make([]Session, len(s.Sessions))
-	for i, se := range s.Sessions {
-		se.RingData = nil
-		se.VTerm = nil
-		se.Pending = nil
-		out.Sessions[i] = se
-	}
-	return &out
+	Sessions    []Session  `json:"sessions"` // 按显示顺序（ADR-0040）
 }
 
 // CloseFDs 关掉快照里为交接 dup 出来的会话 fd（交接中止时用）。监听 fd 由
@@ -224,28 +212,26 @@ func Check(exe string, meta *Snapshot, timeout time.Duration) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, "handoff-check")
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, "handoff-check")
 	cmd.Stdin = bytes.NewReader(raw)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	done := make(chan error, 1)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("handoff: 起不来新二进制 %s: %w", exe, err)
-	}
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("handoff: 新二进制拒绝了快照: %s", bytes.TrimSpace(out.Bytes()))
-		}
-		if !bytes.HasPrefix(bytes.TrimSpace(out.Bytes()), []byte("ok schema=")) {
-			return fmt.Errorf("handoff: 新二进制的预检输出不对: %q", out.String())
-		}
-		return nil
-	case <-time.After(timeout):
-		_ = cmd.Process.Kill()
+	cmd.WaitDelay = time.Second // 杀掉之后不再等它的子进程关管道
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+	case ctx.Err() != nil:
 		return errors.New("handoff: 新二进制预检超时")
+	case !errors.As(err, &exit):
+		return fmt.Errorf("handoff: 起不来新二进制 %s: %w", exe, err)
+	default:
+		return fmt.Errorf("handoff: 新二进制拒绝了快照: %s", bytes.TrimSpace(out))
 	}
+	if !bytes.HasPrefix(bytes.TrimSpace(out), []byte("ok schema=")) {
+		return fmt.Errorf("handoff: 新二进制的预检输出不对: %q", out)
+	}
+	return nil
 }
 
 // CheckOutput 是 handoff-check 成功时打的那一行。
@@ -261,18 +247,17 @@ func Exec(exe string, argv []string, fd int) error {
 }
 
 // StripFlag 去掉参数里的 --handoff-fd=N（新进程再交接时要用原参数）。
+// flag 包认的四种写法都要去：--x=N、-x=N、--x N、-x N。
 func StripFlag(args []string) []string {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "--"+FlagName || a == "-"+FlagName {
+		switch a := args[i]; {
+		case a == "--"+FlagName || a == "-"+FlagName:
 			i++ // 值在下一个
-			continue
+		case strings.HasPrefix(a, "--"+FlagName+"="), strings.HasPrefix(a, "-"+FlagName+"="):
+		default:
+			out = append(out, a)
 		}
-		if len(a) > len(FlagName)+3 && (a[:len(FlagName)+3] == "--"+FlagName+"=" || a[:len(FlagName)+2] == "-"+FlagName+"=") {
-			continue
-		}
-		out = append(out, a)
 	}
 	return out
 }

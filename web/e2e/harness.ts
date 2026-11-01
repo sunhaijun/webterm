@@ -336,6 +336,7 @@ interface WebtermWindow {
     resizes(): number
     sid(): number | null
     form(): 'compact' | 'wide'
+    fontSize(): number
     altScreen(): boolean
     unread(sid: number): boolean
     frames(): FrameRec[]
@@ -350,6 +351,7 @@ export const hooks = {
   text: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.text()),
   sid: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm?.sid() ?? null),
   form: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.form()),
+  fontSize: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.fontSize()),
   resizes: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.resizes()),
   size: (p: Page) => termSize(p),
   altScreen: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.altScreen()),

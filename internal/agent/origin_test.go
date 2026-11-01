@@ -54,8 +54,8 @@ func TestCheckOriginAbsent(t *testing.T) {
 func TestAllowedOriginMatchesExternalURL(t *testing.T) {
 	for _, port := range []int{0, 443, 8443} {
 		a := &Agent{cfg: Config{Domain: "t.awtto.com", HTTPSPort: port}}
-		if got, want := a.allowedOrigin(), externalURL("t.awtto.com", port); got != want {
-			t.Errorf("port %d: allowedOrigin=%q，externalURL=%q", port, got, want)
+		if got, want := a.allowedOrigin(), ExternalURL("t.awtto.com", port); got != want {
+			t.Errorf("port %d: allowedOrigin=%q，ExternalURL=%q", port, got, want)
 		}
 	}
 }
