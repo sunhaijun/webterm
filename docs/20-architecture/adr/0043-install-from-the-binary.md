@@ -8,7 +8,7 @@
 
 1. **私有仓库要先在服务器上 `gh auth login`**。这样做有两个代价：多一次浏览器设备授权；在一台把 shell 挂到公网的机器上，留下了一个能写用户**所有仓库**的 token。攻破 webterm 的人拿到的就不止这台机器了。
 2. **脚本和二进制的版本会错开**。install.sh 总是从 `main` 取，二进制默认取 `latest`（当时还是 v0.1.0，落后 main 55 个提交）。main 上的脚本写的是 ADR-0034 的系统单元（`OOMScoreAdjust=-900`），而 v0.1.0 起 shell 时不会把会话调回 0，于是**会话里所有进程都是 -900**，内存吃紧时内核反倒去杀别的进程。
-3. **staging 那一步是坏的**，见 [ADR-0042](0042-ip-address-certificates.md) §3。而且手工步骤多：先停服务，再用 staging 跑一遍，Ctrl+C，再启动服务。
+3. **staging 那一步是坏的**，见 [ADR-0042](0042-ip-address-certificates.md) §3（它已经删掉了）。而且手工步骤多：先停服务，再用 staging 跑一遍，Ctrl+C，再启动服务。
 4. **安装前的自检查不出最常见的故障**。云安全组有没有放行 80，在机器内部看不出来，`doctor` 自己也承认这一点。
 5. **装完不出二维码**。脚本开头注释写着「启动并打出配对二维码」，实际只提示你再去跑 `webterm pair`。
 6. README 说「`scp` 上去 `./webterm serve` 就能用」，但普通用户没做 setcap 就绑不上 80/443，这条路走不通。
@@ -52,11 +52,13 @@ scp webterm server:  &&  ssh -t server ./webterm install
 
 配置文件里的 `domain` / `http-port` / `https-port` 改成**每次安装都同步**：有这一行就改写，端口回到默认值就删掉这一行；其它键（用户自己加的 `session-env` 等）保持不动。原来的做法是「文件存在就整份不动」，从 IP 换到域名之后，`pair`、`doctor` 和状态总览还会继续用旧地址。
 
-### 4. 装前用 staging 实签一次：`webterm doctor --acme`
+### 4. 启动服务之前先把证书签好：`webterm doctor --acme`
 
-`doctor` 加一个 `--acme` 开关。在静态检查都通过后，它**临时监听** `--http-port` / `--https-port`，用 Let's Encrypt staging 实际签一张证书（缓存放临时目录，用完就删），把结果当作一项检查报告出来，然后释放端口。
+`doctor` 加一个 `--acme` 开关。在静态检查都通过后，它**临时监听** `--http-port` / `--https-port`，向 Let's Encrypt **正式环境**申请证书，存进 `certs/`，把结果当作一项检查报告出来，然后释放端口。服务启动时直接用这张证书，**不会再签第二次**。`certs/` 里已经有还有效的证书时就直接用它，并如实报告「没有找 CA」。
 
-这是唯一能在机器内部证明「CA 从公网连得进来」的检查，云安全组、NAT、运营商封 80 都会在这一步暴露出来。staging 的限额很宽，多跑几次也没关系。
+这是唯一能在机器内部证明「CA 从公网连得进来」的检查，云安全组、NAT、运营商封 80 都会在这一步暴露出来。
+
+**为什么不用 staging**：见 ADR-0042 §3。成功的那次就是正式签发，没有浪费；失败的那次只消耗按小时计的失败额度。
 
 install.sh 在**首次安装**（服务没在跑）时，在 setcap **之后**、启动服务**之前**跑它：要用已经有绑定权限的那个二进制，端口也还空着。原来在安装之前用临时二进制跑的静态自检合并进这一步。跑在 setcap 之后，「没有绑定权限」那条 ⚠ 就不会再出现了。
 
@@ -64,7 +66,7 @@ install.sh 在**首次安装**（服务没在跑）时，在 setcap **之后**�
 
 升级时（服务在跑）不跑：端口正被它自己占着。
 
-文档里原来的手工第 5 步（停服务 → `serve --acme-staging` → Ctrl+C → 再启动）**删掉**。`serve --acme-staging` 保留，留给排障用，它的证书放在 `certs-staging/`（ADR-0042 §3）。
+文档里原来的手工第 5 步（停服务 → `serve --acme-staging` → Ctrl+C → 再启动）**删掉**，`--acme-staging` 本身也删了（ADR-0042 §3）。
 
 ### 5. 机器自己的防火墙由脚本放行
 
@@ -91,7 +93,7 @@ install.sh 在**首次安装**（服务没在跑）时，在 setcap **之后**�
 # 机器之外，只有一件事：云安全组放行入方向 TCP 80、443（有域名的话再加一条 A 记录）
 scp webterm server: && ssh -t server ./webterm install            # IP 模式
 scp webterm server: && ssh -t server ./webterm install --domain term.example.com
-# → 放行防火墙 → staging 实签自检 → 装好并启动 → 打出二维码 → 扫码
+# → 放行防火墙 → 签证书（签不下来就停，不启动服务）→ 装好并启动 → 打出二维码 → 扫码
 ```
 
 - 私有仓库不再需要在服务器上留 GitHub 凭据。`gh` / `GH_TOKEN` 那条路仍然保留，`webterm update` 用的就是它。

@@ -125,7 +125,7 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 - `UT-ipcert-1`：续期时刻 = `NotAfter - 有效期/3`；失败后一小时重试
 - `UT-ipcert-2`：IPv6 字面量、非 IP 的地址不进 IP 模式 / 被拒绝；`IsIPAddress` 判定
 - `UT-ipcert-3`：CA 目录里没有 `shortlived` → 报错里说清楚「这个 CA 不签 IP 证书」
-- `UT-tls-staging-dir`：`--acme-staging` 的证书目录是 `certs-staging/`
+- `UT-config-removed-key`：配置文件里的 `acme-staging` 报「已删除」并给出行号，而不是笼统的「没有这个选项」
 - `UT-status-cert`：到期阈值 `min(10 天, 有效期/4)` —— 90 天证书剩 11 天不标黄、剩 9 天标黄；160 小时证书刚签下来不标黄、剩 30 小时标黄
 - `UT-doctor-ip`：IP 模式不做 DNS 检查，公网 IP 不等于 `--domain` 时给出 NAT / 换 IP 的说明
 - `UT-pair-wait`：`--wait` 在探针成功前不打印配对码；超时后提示看日志并照常打印
@@ -143,7 +143,7 @@ E2E-2c 是唯一不要求字节一致的变体 —— 快照是 agent 重新画�
 | `IT-pair-1..3` | 二维码输出、配对码不进日志、限速 |
 | `IT-tls-1..3` | 用本地假 ACME CA（`internal/acmetest`）验证：真的签出证书并能握手；`--dev` 一次都不找 CA；挑战打不进来时给可读诊断（AC-1.13）。见下方「为什么不用 pebble」 |
 | `IT-tls-4..6` | IP 模式（AC-1.16）：假 CA 收到的订单是 `ip` 标识 + `shortlived` profile，签出的证书带 IP SAN，**不带 SNI 的握手**能用 CA 根校验通过；重启读缓存、不再找 CA；有效期短到触发续期时会换一张新证书 |
-| `IT-doctor-acme-1..2` | `doctor --acme` 的签发核心：假 CA 能验证时签出证书、临时目录用完删掉、端口释放；挑战打不进来时给可读诊断。域名与 IP 两种模式都跑 |
+| `IT-doctor-acme-1..2` | `doctor --acme` 的签发核心：假 CA 能验证时签出证书、存进给定的证书目录、端口释放；**再跑一次直接用缓存、CA 收不到新订单**；挑战打不进来时给可读诊断。域名与 IP 两种模式都跑 |
 | `IT-privacy-1..2` | canary 字符串不出现在数据目录 / 日志中 |
 | `IT-embed-1` | 删掉 `web/dist` 后二进制仍能提供前端（证明真的嵌入了） |
 | `IT-resize-1` | `resize` 消息导致 PTY 的 `TIOCSWINSZ` 生效（在会话内跑 `stty size` 验证） |

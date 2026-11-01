@@ -288,8 +288,8 @@ m9 / m10 只依赖 m8，彼此独立。
 | 交付 | 对应文档 |
 |---|---|
 | `--domain` 接受公网 IPv4：自管的 IP 证书管理器（`shortlived` profile、HTTP-01、缓存、续期）；x/crypto 升到 v0.58.0 | ADR-0042、[install.md](../80-ops/install.md) |
-| staging 证书放 `certs-staging/`；状态总览的到期阈值随有效期缩放 | ADR-0042 §3–4 |
-| `webterm doctor --acme`（staging 实签）；IP 模式的 doctor 检查 | ADR-0043 §4、ADR-0042 §5 |
+| 删掉 `--acme-staging`；状态总览的到期阈值随有效期缩放 | ADR-0042 §3–4 |
+| `webterm doctor --acme`（启动前先签好正式证书）；IP 模式的 doctor 检查 | ADR-0043 §4、ADR-0042 §5 |
 | `webterm install`（嵌入 install.sh）；网上的 install.sh 下载后交接；不给 `--domain` 时沿用 install-state / 公网 IP；配置文件同步地址；放行 ufw/firewalld；首装 `doctor --acme` 前置、`pair --wait` 收尾 | ADR-0043、[install.md](../80-ops/install.md) |
 | 文档：install.md 的「从零到能用」重写，README 的部署说明 | — |
 

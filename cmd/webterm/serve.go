@@ -26,7 +26,6 @@ import (
 // 复用（TestConfigKeysAllExistOnServe / TestServeFlagsAreConfigurable），
 // 而不需要维护第二份 flag 清单 —— 两份必然漂移。
 type serveOpts struct {
-	acmeStaging       bool
 	httpPort          int
 	httpsPort         int
 	bind              string
@@ -44,7 +43,6 @@ type serveOpts struct {
 }
 
 func (o *serveOpts) register(fs *flag.FlagSet) {
-	fs.BoolVar(&o.acmeStaging, "acme-staging", false, "用 Let's Encrypt staging 环境（调试部署用）")
 	fs.IntVar(&o.httpPort, "http-port", 80, "ACME 挑战 + HTTPS 跳转")
 	fs.IntVar(&o.httpsPort, "https-port", 443, "HTTPS 端口")
 	fs.StringVar(&o.bind, "bind", "0.0.0.0", "监听地址。设为 127.0.0.1 配合隧道/反代")
@@ -148,15 +146,14 @@ func runServe(args []string) error {
 	}, st, sessions)
 
 	servers, errCh, err := a.Listen(agent.ServeConfig{
-		Domain:      c.domain,
-		Dev:         c.dev,
-		NoTLS:       o.noTLS,
-		ACMEStaging: o.acmeStaging,
-		Bind:        o.bind,
-		HTTPPort:    o.httpPort,
-		HTTPSPort:   o.httpsPort,
-		CertDir:     agent.CertDirFor(c.dataDir, o.acmeStaging), // staging 证书不进 certs/（ADR-0042 §3）
-		Inherited:   inheritedListeners(snap),
+		Domain:    c.domain,
+		Dev:       c.dev,
+		NoTLS:     o.noTLS,
+		Bind:      o.bind,
+		HTTPPort:  o.httpPort,
+		HTTPSPort: o.httpsPort,
+		CertDir:   agent.CertDirDefault(c.dataDir),
+		Inherited: inheritedListeners(snap),
 	}, a.Handler())
 	if err != nil {
 		return err

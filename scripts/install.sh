@@ -23,8 +23,8 @@
 #     -H 'Accept: application/vnd.github.raw' | bash -s -- --domain term.example.com
 #
 # 脚本会：取得二进制（下载 + 校验 SHA256，或 --binary 给的本地文件）→ 装到 /usr/local/bin →
-# setcap 让普通用户能绑 80/443 → 放行已启用的 ufw / firewalld → 首次安装先用
-# Let's Encrypt staging 实签一次（webterm doctor --acme）→ 生成以你的用户运行的
+# setcap 让普通用户能绑 80/443 → 放行已启用的 ufw / firewalld → 首次安装先把
+# 证书签好（webterm doctor --acme，签不下来就不启动服务）→ 生成以你的用户运行的
 # systemd 系统服务（ADR-0034）→ 启动 → 首次安装打出配对二维码。
 #
 # 部署前置条件见 docs/80-ops/install.md。
@@ -117,7 +117,7 @@ usage() {
 手边有二进制的话用 ./webterm install，不需要任何凭据。
 
 生产部署的硬前置：公网 IPv4（或解析到它的域名）、80 与 443 可用、云安全组放行。
-首次安装会先用 Let's Encrypt staging 实签一次，不通过就不启动服务。
+首次安装会先把证书签好，签不下来就不启动服务。
 EOF
 }
 
@@ -620,7 +620,8 @@ fi
 # 【放在 setcap 之后、启动服务之前】：用的是已经有绑定权限的那个二进制，
 # 端口也还空着。以前在装之前用刚下载、还没 setcap 的临时二进制跑静态检查，
 # 两件事都做不到，而且查不出最常见的故障 —— 云安全组没放行 80。
-# 现在 doctor --acme 用 Let's Encrypt staging 真的签一张，CA 连不进来当场就知道。
+# 现在 doctor --acme 真的签一张【正式】证书存进 certs/，服务启动直接用 —— 不多签；
+# CA 连不进来当场就知道，失败只消耗按小时计的失败额度（ADR-0042 §3）。
 
 # open_firewall 放行机器自己的防火墙。装的就是要监听这两个端口的服务，
 # 放行它们是安装的一部分。云安全组碰不到 —— 那个靠下面的实签测出来。
@@ -648,7 +649,7 @@ open_firewall() {
 }
 
 if [ "$FRESH" = 1 ]; then
-    step "4/6 放行防火墙 + 自检（用 Let's Encrypt staging 实签一次）"
+    step "4/6 放行防火墙 + 签证书"
     open_firewall
     if [ "$DRY_RUN" = 1 ]; then
         run "$PREFIX/webterm" doctor --acme --domain "$DOMAIN" --http-port "$HTTP_PORT" --https-port "$HTTPS_PORT"
@@ -754,7 +755,7 @@ if [ "$SETUP_SERVICE" = 0 ]; then
 
 手工启动（地址从 $CONFIG_FILE 读）：
 
-    webterm doctor --acme     先用 staging 实签一次
+    webterm doctor --acme     先把证书签好（安全组没开在这里暴露）
     webterm serve
 
 EOF

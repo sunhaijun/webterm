@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -27,14 +28,13 @@ import (
 // TLS 代码路径只有两条（ADR-0004）：生产走 ACME，--dev 走 localhost 明文。
 // --no-tls 是第三条，但它只允许绑回环/私有地址，用于用户自己套反代/隧道。
 type ServeConfig struct {
-	Domain      string
-	Dev         bool
-	NoTLS       bool
-	ACMEStaging bool
-	Bind        string
-	HTTPPort    int
-	HTTPSPort   int
-	CertDir     string
+	Domain    string
+	Dev       bool
+	NoTLS     bool
+	Bind      string
+	HTTPPort  int
+	HTTPSPort int
+	CertDir   string
 
 	// ACMEDirectoryURL 只为集成测试而存在：指向本地假 CA
 	// （internal/acmetest）。生产留空，走 Let's Encrypt。
@@ -202,8 +202,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 		// 主动预热证书。
 		//
 		// autocert 默认是【懒加载】的：证书要等第一次 TLS 握手才去申请。
-		// 那意味着启动时看不出 ACME 通不通 —— 用户得开浏览器才知道，
-		// 而 --acme-staging 那一步"先试通再上正式"也就失去了意义。
+		// 那意味着启动时看不出 ACME 通不通 —— 用户得开浏览器才知道。
 		// 这里主动触发一次，成功打出到期时间，失败给可读诊断（AC-1.13）。
 		// IP 模式下它还是续期循环（ADR-0042）：自管的证书没有 autocert 的定时器。
 		go warm(ctx)
@@ -221,10 +220,10 @@ type certSource interface {
 func (a *Agent) certSource(cfg ServeConfig) (certSource, func(context.Context)) {
 	if IsIPAddress(cfg.Domain) {
 		m := newIPCertManager(cfg)
-		return m, func(ctx context.Context) { a.runIPCert(ctx, m, cfg.ACMEStaging) }
+		return m, func(ctx context.Context) { a.runIPCert(ctx, m) }
 	}
 	m := newCertManager(cfg)
-	return m, func(context.Context) { a.warmCertificate(m, cfg.Domain, cfg.ACMEStaging) }
+	return m, func(context.Context) { a.warmCertificate(m, cfg.Domain) }
 }
 
 // tlsConfigFor 是 HTTPS 监听的 TLS 配置。
@@ -254,24 +253,36 @@ func prepareCertDir(dir string) error {
 }
 
 // IssueCheck 是 webterm doctor --acme 的核心（ADR-0043 §4）：临时监听
-// http / https 两个端口，按 cfg（通常是 staging + 临时证书目录）真的签一张证书，
-// 返回叶子证书，然后释放端口。
+// http / https 两个端口，把证书签好存进 cfg.CertDir（就是服务用的 certs/），
+// 返回叶子证书，然后释放端口。issued 报告这次是不是真的找 CA 签了一张 ——
+// 缓存里已经有有效证书时直接用它，不多签。
 //
 // 它证明的是机器内部唯一查不出来的那件事：CA 从公网连得进来
-// （云安全组、NAT、运营商封 80）。
-func IssueCheck(ctx context.Context, cfg ServeConfig) (*x509.Certificate, error) {
+// （云安全组、NAT、运营商封 80）。签的是【正式】证书：成功的那次就是正式签发，
+// 服务启动直接用；失败只消耗按小时计的失败额度（ADR-0042 §3），用不着 staging。
+func IssueCheck(ctx context.Context, cfg ServeConfig) (leaf *x509.Certificate, issued bool, err error) {
 	if err := CheckAddress(cfg.Domain); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := prepareCertDir(cfg.CertDir); err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	// 缓存文件签前签后比一比，就知道是新签的还是现成的 —— 两种模式缓存都在 certs/<地址>
+	cachePath := filepath.Join(cfg.CertDir, cfg.Domain)
+	before, _ := os.ReadFile(cachePath)
 	var src certSource
 	var issue func(context.Context) (*tls.Certificate, error)
 	if IsIPAddress(cfg.Domain) {
 		m := newIPCertManager(cfg)
 		src = m
-		issue = m.obtain
+		// ensure 而不是 obtain：缓存里有还不到续期时刻的证书就直接用，不多签
+		issue = func(ctx context.Context) (*tls.Certificate, error) {
+			if _, _, err := m.ensure(ctx); err != nil {
+				return nil, err
+			}
+			c, _ := m.current()
+			return c, nil
+		}
 	} else {
 		m := newCertManager(cfg)
 		src = m
@@ -280,12 +291,12 @@ func IssueCheck(ctx context.Context, cfg ServeConfig) (*x509.Certificate, error)
 
 	httpsLn, err := net.Listen("tcp", fmt.Sprintf("%s:%d", cfg.Bind, cfg.HTTPSPort))
 	if err != nil {
-		return nil, describeBindError(err, cfg.HTTPSPort)
+		return nil, false, describeBindError(err, cfg.HTTPSPort)
 	}
 	httpLn, err := net.Listen("tcp", fmt.Sprintf("%s:%d", cfg.Bind, cfg.HTTPPort))
 	if err != nil {
 		httpsLn.Close()
-		return nil, describeBindError(err, cfg.HTTPPort)
+		return nil, false, describeBindError(err, cfg.HTTPPort)
 	}
 	quiet := log.New(io.Discard, "", 0)
 	hs := &http.Server{Handler: http.NotFoundHandler(), TLSConfig: tlsConfigFor(cfg, src),
@@ -303,12 +314,15 @@ func IssueCheck(ctx context.Context, cfg ServeConfig) (*x509.Certificate, error)
 	cert, err := issue(ctx)
 	if err != nil {
 		// 直接给人看的诊断（与启动时同一套），doctor 原样打印
-		return nil, errors.New(strings.TrimSpace(describeACMEError(err, cfg.Domain, true)))
+		return nil, false, errors.New(strings.TrimSpace(describeACMEError(err, cfg.Domain)))
 	}
+	after, _ := os.ReadFile(cachePath)
+	issued = !bytes.Equal(before, after)
 	if cert.Leaf != nil {
-		return cert.Leaf, nil
+		return cert.Leaf, issued, nil
 	}
-	return x509.ParseCertificate(cert.Certificate[0])
+	leaf, err = x509.ParseCertificate(cert.Certificate[0])
+	return leaf, issued, err
 }
 
 // newCertManager 构造 autocert.Manager。
@@ -331,8 +345,6 @@ func newCertManager(cfg ServeConfig) *autocert.Manager {
 	switch {
 	case cfg.ACMEDirectoryURL != "":
 		m.Client = &acme.Client{DirectoryURL: cfg.ACMEDirectoryURL}
-	case cfg.ACMEStaging:
-		m.Client = &acme.Client{DirectoryURL: letsEncryptStagingURL}
 	}
 	return m
 }
@@ -356,12 +368,12 @@ func (a *Agent) certReport(failed bool) io.Writer {
 // autocert 的续期定时器是在证书【进入内存状态】时挂上的，而它默认懒加载 ——
 // 证书要等第一次 TLS 握手才加载。也就是说进程重启后一直没人访问的话，
 // 就没有续期定时器。这里主动触发一次，让定时器从启动那一刻就存在。
-func (a *Agent) warmCertificate(m *autocert.Manager, domain string, staging bool) {
-	env := envName(staging)
+func (a *Agent) warmCertificate(m *autocert.Manager, domain string) {
+	const env = "Let's Encrypt"
 	cert, err := m.GetCertificate(warmupHello(domain))
 	if err != nil {
 		a.log.Error("证书申请失败 —— HTTPS 还不可用", "domain", domain, "env", env)
-		fmt.Fprint(a.certReport(true), describeACMEError(err, domain, staging))
+		fmt.Fprint(a.certReport(true), describeACMEError(err, domain))
 		return
 	}
 	if len(cert.Certificate) == 0 {
@@ -438,7 +450,7 @@ func warmupHello(domain string) *tls.ClientHelloInfo {
 
 // describeACMEError 把 ACME 的失败翻译成"原因 + 怎么修"，
 // 而不是甩一行 Go 的 error（US-7.2 / AC-1.13）。domain 可以是 IP（ADR-0042）。
-func describeACMEError(err error, domain string, staging bool) string {
+func describeACMEError(err error, domain string) string {
 	msg := err.Error()
 	ip := IsIPAddress(domain)
 	var b strings.Builder
@@ -448,10 +460,10 @@ func describeACMEError(err error, domain string, staging bool) string {
 	case strings.Contains(msg, "does not support profiles"),
 		strings.Contains(msg, "does not advertise a profile"),
 		strings.Contains(msg, "invalidProfile"),
-		// Let's Encrypt 对不带 shortlived 的 IP 订单的原话（2026-10 用 staging 实测）
+		// Let's Encrypt 对不带 shortlived 的 IP 订单的原话（2026-10 实测）
 		strings.Contains(msg, "does not permit IP address identifiers"):
 		b.WriteString("  这个 CA 不签 IP 证书 —— 它的目录里没有 shortlived profile。\n")
-		b.WriteString("  目前只有 Let's Encrypt（正式与 staging）签 IP 证书；不然就改用域名。\n")
+		b.WriteString("  目前只有 Let's Encrypt 签 IP 证书；不然就改用域名。\n")
 	case strings.Contains(msg, "rateLimited"), strings.Contains(msg, "too many"):
 		b.WriteString("  撞上了 Let's Encrypt 的限流。\n")
 		b.WriteString("  失败的验证按小时限（每小时 5 次）：等一小时再试。\n")
@@ -483,10 +495,6 @@ func describeACMEError(err error, domain string, staging bool) string {
 	default:
 		b.WriteString("  " + msg + "\n")
 		b.WriteString("  排障清单见 docs/80-ops/troubleshooting.md 的「证书 / TLS」一节。\n")
-	}
-	if !staging {
-		b.WriteString("\n  提示：停掉服务跑 webterm doctor --acme —— 用 staging 实签一次，\n")
-		b.WriteString("  能看到完整的诊断，也不占正式环境的限额。\n")
 	}
 	return b.String()
 }
@@ -574,14 +582,3 @@ func isLoopbackOrPrivate(bind string) bool {
 
 // CertDirDefault 返回默认的证书缓存目录。
 func CertDirDefault(dataDir string) string { return filepath.Join(dataDir, "certs") }
-
-// CertDirFor 返回这次运行该用的证书目录：staging 的证书放 certs-staging/。
-//
-// 【不能共用 certs/】。autocert 读缓存时只检查有效期、主机名和私钥，不看签发者，
-// 共用的话 staging 证书会被正式运行拿去发给浏览器（ADR-0042 §3）。
-func CertDirFor(dataDir string, staging bool) string {
-	if staging {
-		return filepath.Join(dataDir, "certs-staging")
-	}
-	return CertDirDefault(dataDir)
-}

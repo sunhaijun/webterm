@@ -7,7 +7,7 @@
 ```
 
 不需要域名（直接用公网 IP 签证书），有域名就加 `--domain term.example.com`。
-安装会先用 Let's Encrypt staging 实签一次，安全组没放行在启动服务之前就报出来。
+安装会在启动服务之前先把证书签好，安全组没放行当场就报出来。
 手边还没有二进制就从源码构建（Go 1.27+、Node 22+）：`make build`。
 详见 [安装文档](docs/80-ops/install.md)；本地试跑：`./webterm serve --dev`。
 

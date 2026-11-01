@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -79,7 +80,7 @@ func TestPortBusy(t *testing.T) {
 }
 
 // runDoctorCapture 跑一次 doctor，把输出收进字符串；公网 IP 与实签都换成假的。
-func runDoctorCapture(t *testing.T, public string, issue func(context.Context, agent.ServeConfig) (*x509.Certificate, error), args ...string) (string, error) {
+func runDoctorCapture(t *testing.T, dataDir, public string, issue func(context.Context, agent.ServeConfig) (*x509.Certificate, bool, error), args ...string) (string, error) {
 	t.Helper()
 	var buf bytes.Buffer
 	oldOut, oldIP, oldIssue := doctorOut, lookupPublicIP, issueCheck
@@ -91,7 +92,10 @@ func runDoctorCapture(t *testing.T, public string, issue func(context.Context, a
 	}
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // 不读开发机上真的配置文件
 	ports := freeTCPPorts(t, 2)
-	base := []string{"--data-dir", t.TempDir(),
+	if dataDir == "" {
+		dataDir = t.TempDir()
+	}
+	base := []string{"--data-dir", dataDir,
 		"--http-port", strconv.Itoa(ports[0]), "--https-port", strconv.Itoa(ports[1])}
 	err := runDoctor(append(base, args...))
 	return buf.String(), err
@@ -119,7 +123,7 @@ func freeTCPPorts(t *testing.T, n int) []int {
 
 // UT-doctor-ip：IP 模式不查 DNS，查「--domain == 本机公网 IP」。
 func TestDoctorIPMode(t *testing.T) {
-	out, err := runDoctorCapture(t, "203.0.113.7", nil, "--domain", "203.0.113.7")
+	out, err := runDoctorCapture(t, "", "203.0.113.7", nil, "--domain", "203.0.113.7")
 	if err != nil {
 		t.Fatalf("IP 对得上时不该失败: %v\n%s", err, out)
 	}
@@ -130,7 +134,7 @@ func TestDoctorIPMode(t *testing.T) {
 		t.Errorf("缺「公网 IP」这一项:\n%s", out)
 	}
 
-	out, err = runDoctorCapture(t, "198.51.100.9", nil, "--domain", "203.0.113.7")
+	out, err = runDoctorCapture(t, "", "198.51.100.9", nil, "--domain", "203.0.113.7")
 	if err == nil {
 		t.Fatalf("公网 IP 不一致时应当失败:\n%s", out)
 	}
@@ -142,53 +146,59 @@ func TestDoctorIPMode(t *testing.T) {
 }
 
 func TestDoctorRejectsIPv6(t *testing.T) {
-	out, err := runDoctorCapture(t, "", nil, "--domain", "2001:db8::1")
+	out, err := runDoctorCapture(t, "", "", nil, "--domain", "2001:db8::1")
 	if err == nil || !strings.Contains(out, "IPv4") {
 		t.Fatalf("IPv6 应当被拒并说明，err=%v\n%s", err, out)
 	}
 }
 
-// --acme：静态检查都过了才实签；实签的结果是一项检查；不带 --acme 时提示安全组查不出来。
+// --acme：静态检查都过了才签；签进服务用的 certs/（不是临时目录、不是 staging）；
+// 签的结果是一项检查；用的是现成证书时如实说没验证安全组；不带 --acme 时提示安全组查不出来。
 func TestDoctorACME(t *testing.T) {
 	var called agent.ServeConfig
-	ok := func(_ context.Context, cfg agent.ServeConfig) (*x509.Certificate, error) {
+	issuedNow := true
+	ok := func(_ context.Context, cfg agent.ServeConfig) (*x509.Certificate, bool, error) {
 		called = cfg
-		return &x509.Certificate{NotAfter: time.Now().Add(160 * time.Hour)}, nil
+		return &x509.Certificate{NotAfter: time.Now().Add(160 * time.Hour)}, issuedNow, nil
 	}
-	out, err := runDoctorCapture(t, "203.0.113.7", ok, "--domain", "203.0.113.7", "--acme")
+	data := t.TempDir()
+	out, err := runDoctorCapture(t, data, "203.0.113.7", ok, "--domain", "203.0.113.7", "--acme")
 	if err != nil {
-		t.Fatalf("实签成功却失败了: %v\n%s", err, out)
+		t.Fatalf("签成功却失败了: %v\n%s", err, out)
 	}
-	if !called.ACMEStaging {
-		t.Error("doctor --acme 必须走 staging —— 正式环境的限额不该花在自检上")
+	if want := filepath.Join(data, "certs"); called.CertDir != want {
+		t.Errorf("证书目录 = %q，想要服务用的 %q —— 签下来的证书要留给服务", called.CertDir, want)
 	}
-	if called.CertDir == "" || strings.HasSuffix(called.CertDir, "/certs") {
-		t.Errorf("实签的证书目录 = %q，应当是临时目录，不碰 certs/", called.CertDir)
+	if called.ACMEDirectoryURL != "" {
+		t.Errorf("doctor 不该改 ACME 目录: %q", called.ACMEDirectoryURL)
 	}
-	if _, statErr := os.Stat(called.CertDir); !os.IsNotExist(statErr) {
-		t.Errorf("临时证书目录 %s 用完没删", called.CertDir)
-	}
-	if !strings.Contains(out, "✓ 证书实签") {
-		t.Errorf("缺实签那一项:\n%s", out)
+	if !strings.Contains(out, "✓ 证书") || !strings.Contains(out, "服务启动直接用") {
+		t.Errorf("缺签证书那一项:\n%s", out)
 	}
 
-	fail := func(context.Context, agent.ServeConfig) (*x509.Certificate, error) {
-		return nil, errors.New("CA 没能连上 http://203.0.113.7/ 做验证 …… 安全组")
+	issuedNow = false
+	out, _ = runDoctorCapture(t, data, "203.0.113.7", ok, "--domain", "203.0.113.7", "--acme")
+	if !strings.Contains(out, "没有找 CA") {
+		t.Errorf("用现成证书时要说清没验证安全组:\n%s", out)
 	}
-	out, err = runDoctorCapture(t, "203.0.113.7", fail, "--domain", "203.0.113.7", "--acme")
-	if err == nil || !strings.Contains(out, "✗ 证书实签") || !strings.Contains(out, "安全组") {
-		t.Fatalf("实签失败应当是一项 ✗ 并带诊断，err=%v\n%s", err, out)
+
+	fail := func(context.Context, agent.ServeConfig) (*x509.Certificate, bool, error) {
+		return nil, false, errors.New("CA 没能连上 http://203.0.113.7/ 做验证 …… 安全组")
+	}
+	out, err = runDoctorCapture(t, "", "203.0.113.7", fail, "--domain", "203.0.113.7", "--acme")
+	if err == nil || !strings.Contains(out, "✗ 证书") || !strings.Contains(out, "安全组") {
+		t.Fatalf("签失败应当是一项 ✗ 并带诊断，err=%v\n%s", err, out)
 	}
 
 	// 静态检查有 ✗ 时不去找 CA
 	called = agent.ServeConfig{}
-	out, _ = runDoctorCapture(t, "198.51.100.9", ok, "--domain", "203.0.113.7", "--acme")
+	out, _ = runDoctorCapture(t, "", "198.51.100.9", ok, "--domain", "203.0.113.7", "--acme")
 	if called.Domain != "" || !strings.Contains(out, "跳过") {
-		t.Errorf("静态检查失败时不该实签:\n%s", out)
+		t.Errorf("静态检查失败时不该签:\n%s", out)
 	}
 
-	out, _ = runDoctorCapture(t, "203.0.113.7", nil, "--domain", "203.0.113.7")
+	out, _ = runDoctorCapture(t, "", "203.0.113.7", nil, "--domain", "203.0.113.7")
 	if !strings.Contains(out, "--acme") || !strings.Contains(out, "安全组") {
-		t.Errorf("不带 --acme 时应当提示安全组只有实签才查得出来:\n%s", out)
+		t.Errorf("不带 --acme 时应当提示安全组只有真签才查得出来:\n%s", out)
 	}
 }

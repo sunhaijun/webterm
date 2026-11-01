@@ -118,7 +118,7 @@ func probeRunning(unit unitKind, domain string, httpPort, httpsPort int) (bool, 
 	// 那是服务端的拒绝，客户端 InsecureSkipVerify 救不了，
 	// 探针会把活得好好的服务判成"未运行"。
 	//
-	// 校验仍然跳过：staging 证书、自签、链不全都不该影响"在不在跑"这个判断。
+	// 校验仍然跳过：证书过期、链不全都不该影响"在不在跑"这个判断。
 	if domain != "" && healthzOK("https://127.0.0.1:"+strconv.Itoa(httpsPort)+"/healthz", domain) {
 		return true, ""
 	}

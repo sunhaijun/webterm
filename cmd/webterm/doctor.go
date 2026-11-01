@@ -43,7 +43,7 @@ func runDoctor(args []string) error {
 	c.register(fs)
 	httpPort := fs.Int("http-port", 80, "ACME 挑战端口")
 	httpsPort := fs.Int("https-port", 443, "HTTPS 端口")
-	acmeCheck := fs.Bool("acme", false, "再用 Let's Encrypt staging 实签一次证书（要临时占用两个端口，服务在跑时先停掉）")
+	acmeCheck := fs.Bool("acme", false, "再把证书签好存进 certs/，服务启动直接用（要临时占用两个端口，服务在跑时先停掉）")
 	if err := applyConfig(fs, args); err != nil {
 		return err
 	}
@@ -133,9 +133,9 @@ func runDoctor(args []string) error {
 			fmt.Fprintln(doctorOut, "  - 证书实签：跳过，先修好上面标 ✗ 的项"+
 				"（端口被 webterm 自己占着的话，先 sudo systemctl stop webterm）")
 		} else {
-			fmt.Fprintln(doctorOut, "  … 证书实签：用 Let's Encrypt staging 签一张（最多等 2 分钟）")
-			check("证书实签（Let's Encrypt staging）", func() (string, error) {
-				return runIssueCheck(c.domain, *httpPort, *httpsPort)
+			fmt.Fprintln(doctorOut, "  … 证书：向 Let's Encrypt 申请（最多等 2 分钟）")
+			check("证书", func() (string, error) {
+				return runIssueCheck(c.domain, agent.CertDirDefault(c.dataDir), *httpPort, *httpsPort)
 			})
 		}
 	}
@@ -143,23 +143,23 @@ func runDoctor(args []string) error {
 	return summarize(failed, warned, *acmeCheck)
 }
 
-// runIssueCheck 在临时目录里用 staging 签一张证书，用完连目录一起删（ADR-0043 §4）。
-func runIssueCheck(domain string, httpPort, httpsPort int) (string, error) {
-	dir, err := os.MkdirTemp("", "webterm-doctor-acme-*")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(dir)
+// runIssueCheck 把证书签好存进服务用的 certs/（ADR-0043 §4）。签下来的就是正式证书，
+// 服务启动直接用，不签第二次；已有有效证书时直接用它并如实说「没有找 CA」。
+func runIssueCheck(domain, certDir string, httpPort, httpsPort int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	leaf, err := issueCheck(ctx, agent.ServeConfig{
-		Domain: domain, ACMEStaging: true, Bind: "0.0.0.0",
-		HTTPPort: httpPort, HTTPSPort: httpsPort, CertDir: dir,
+	leaf, issued, err := issueCheck(ctx, agent.ServeConfig{
+		Domain: domain, Bind: "0.0.0.0",
+		HTTPPort: httpPort, HTTPSPort: httpsPort, CertDir: certDir,
 	})
 	if err != nil {
 		return "", err
 	}
-	return "CA 从公网连进来了，到期 " + leaf.NotAfter.Local().Format("2006-01-02 15:04"), nil
+	exp := leaf.NotAfter.Local().Format("2006-01-02 15:04")
+	if !issued {
+		return "已有证书，到期 " + exp + "；没有找 CA，所以这一项没验证安全组", nil
+	}
+	return "签下来了（CA 从公网连进来了），到期 " + exp + "，服务启动直接用它", nil
 }
 
 // checkPublicIP：IP 模式下 --domain 必须就是本机的公网 IP。
@@ -264,8 +264,8 @@ func summarize(failed, warned int, acmeChecked bool) error {
 	}
 	if !acmeChecked {
 		// 云安全组有没有放行，在机器内部只有真的让 CA 连一次才知道
-		fmt.Fprintln(doctorOut, "云安全组有没有放行 80/443 在机器内部查不出来：加 --acme 用 Let's Encrypt staging")
-		fmt.Fprintln(doctorOut, "实签一次（要临时占用两个端口，webterm 在跑的话先停掉）。")
+		fmt.Fprintln(doctorOut, "云安全组有没有放行 80/443 在机器内部查不出来：加 --acme 真的签一次证书")
+		fmt.Fprintln(doctorOut, "（要临时占用两个端口，webterm 在跑的话先停掉；签下来的证书留给服务用）。")
 	}
 	return nil
 }

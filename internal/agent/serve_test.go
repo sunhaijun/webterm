@@ -40,7 +40,7 @@ func TestDescribeACMEError(t *testing.T) {
 		{
 			"限流 → 说清窗口有多长（失败按小时、签发按周）",
 			errors.New("urn:ietf:params:acme:error:rateLimited: too many certificates"),
-			[]string{"限流", "每小时", "每周", "doctor --acme"},
+			[]string{"限流", "每小时", "每周"},
 		},
 		{
 			"域名解析不出来",
@@ -60,7 +60,7 @@ func TestDescribeACMEError(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := describeACMEError(tc.err, "term.example.com", false)
+			got := describeACMEError(tc.err, "term.example.com")
 			for _, want := range tc.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("诊断里没有 %q：\n%s", want, got)
@@ -74,21 +74,10 @@ func TestDescribeACMEError(t *testing.T) {
 	}
 }
 
-// 已经在用 staging 时不该再劝人用 staging。
-func TestDescribeACMEErrorStagingHint(t *testing.T) {
-	err := errors.New("rateLimited")
-	if strings.Contains(describeACMEError(err, "x.example.com", true), "doctor --acme") {
-		t.Error("已经在 staging 了还劝人用 staging")
-	}
-	if !strings.Contains(describeACMEError(err, "x.example.com", false), "doctor --acme") {
-		t.Error("正式环境失败时应当提示用 doctor --acme 实签 staging")
-	}
-}
-
 // IP 模式（ADR-0042）：挑战失败只提 80 与「是不是本机公网 IP」，
 // 不该让人去查 DNS、关 Cloudflare 小云朵 —— 那些和 IP 无关，只会把人带偏。
 func TestDescribeACMEErrorIPMode(t *testing.T) {
-	got := describeACMEError(errors.New("acme: authorization error for 203.0.113.7: Invalid response"), "203.0.113.7", true)
+	got := describeACMEError(errors.New("acme: authorization error for 203.0.113.7: Invalid response"), "203.0.113.7")
 	for _, want := range []string{"安全组", "curl -sI http://203.0.113.7/", "只走 80", "ifconfig.me"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("IP 模式的诊断里没有 %q：\n%s", want, got)
@@ -108,21 +97,10 @@ func TestDescribeACMEErrorNoShortlivedProfile(t *testing.T) {
 		"acme: certificate authority does not advertise a profile with name shortlived (supported profiles: classic)",
 		"400 urn:ietf:params:acme:error:rejectedIdentifier: Error creating new order :: Default profile does not permit IP address identifiers.",
 	} {
-		got := describeACMEError(errors.New(msg), "203.0.113.7", false)
+		got := describeACMEError(errors.New(msg), "203.0.113.7")
 		if !strings.Contains(got, "不签 IP 证书") || !strings.Contains(got, "shortlived") {
 			t.Errorf("%q 的诊断没说清：\n%s", msg, got)
 		}
-	}
-}
-
-// UT-tls-staging-dir：staging 证书不能和正式的共用目录（ADR-0042 §3）。
-func TestCertDirForSeparatesStaging(t *testing.T) {
-	prod, staging := CertDirFor("/d", false), CertDirFor("/d", true)
-	if prod != "/d/certs" || prod != CertDirDefault("/d") {
-		t.Errorf("正式证书目录 = %q", prod)
-	}
-	if staging != "/d/certs-staging" {
-		t.Errorf("staging 证书目录 = %q，必须和 certs/ 分开", staging)
 	}
 }
 
@@ -189,15 +167,15 @@ func TestCertManagerRenewBeforeUsesLibraryDefault(t *testing.T) {
 	}
 }
 
-// --acme-staging 才走 staging 目录，默认必须是正式环境。
-func TestCertManagerStagingSwitch(t *testing.T) {
+// 默认走 Let's Encrypt 正式环境（staging 已删，ADR-0042 §3）；只有测试注入的目录能改它。
+func TestCertManagerDirectory(t *testing.T) {
 	prod := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir()})
 	if prod.Client != nil {
 		t.Error("默认不该指定 ACME 目录（用 acme 包的正式默认值）")
 	}
-	staging := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir(), ACMEStaging: true})
-	if staging.Client == nil || !strings.Contains(staging.Client.DirectoryURL, "staging") {
-		t.Errorf("--acme-staging 没有切到 staging 目录: %+v", staging.Client)
+	fake := newCertManager(ServeConfig{Domain: "x.example.com", CertDir: t.TempDir(), ACMEDirectoryURL: "http://x/dir"})
+	if fake.Client == nil || fake.Client.DirectoryURL != "http://x/dir" {
+		t.Errorf("测试注入的目录没生效: %+v", fake.Client)
 	}
 }
 
@@ -370,15 +348,12 @@ func TestIPCertManagerHandshakeAndChallenge(t *testing.T) {
 	}
 }
 
-// 生产默认走 Let's Encrypt 正式目录，--acme-staging 走 staging。
+// IP 模式默认走 Let's Encrypt 正式目录；测试注入的目录优先。
 func TestACMEDirectorySelection(t *testing.T) {
 	if got := acmeDirectory(ServeConfig{}); !strings.Contains(got, "acme-v02.api.letsencrypt.org") {
 		t.Errorf("默认目录 = %q", got)
 	}
-	if got := acmeDirectory(ServeConfig{ACMEStaging: true}); !strings.Contains(got, "staging") {
-		t.Errorf("staging 目录 = %q", got)
-	}
-	if got := acmeDirectory(ServeConfig{ACMEStaging: true, ACMEDirectoryURL: "http://x/dir"}); got != "http://x/dir" {
+	if got := acmeDirectory(ServeConfig{ACMEDirectoryURL: "http://x/dir"}); got != "http://x/dir" {
 		t.Errorf("测试注入的目录被覆盖了: %q", got)
 	}
 }

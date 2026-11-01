@@ -14,7 +14,7 @@
 
 ```bash
 sudo systemctl stop webterm
-webterm doctor --acme              # 地址、端口，再用 staging 实签一次；失败会说为什么
+webterm doctor --acme              # 地址、端口，再真的签一次证书；失败会说为什么
 sudo systemctl start webterm
 ```
 
@@ -41,13 +41,13 @@ ss -lntp | grep -E ':(80|443)\b'   # 必须为空（除了 webterm 自己）
 | `no viable challenge type found`（最常见）或 `Invalid response from http://...` | CA 连不上本机 —— 80 和 443 上的挑战都没过 | **先查云安全组**（最常漏的一步）：在别的机器上 `curl -sI http://<域名>/`，超时就是没放行。再查本机 `ufw status` |
 | 用 Cloudflare 且开着代理（小云朵） | 挑战被 Cloudflare 截住，`Origin` 也会不对 | 该记录设为 DNS only |
 | `urn:ietf:params:acme:error:rateLimited` | 撞了 Let's Encrypt 限流 | 失败的验证按小时限（每小时 5 次），等一小时；签发成功的次数按周限（每域名 / 每个 IP 每周 50 张，同一组标识每周 5 张）—— 通常是反复删 `certs/` 造成的，只能等 |
-| `这个 CA 不签 IP 证书` / `shortlived` | `--domain` 是 IP，但 ACME 目录里没有 `shortlived` profile | 只有 Let's Encrypt（正式与 staging）签 IP 证书；用了自定义目录就换回去，或改用域名 |
+| `这个 CA 不签 IP 证书` / `shortlived` | `--domain` 是 IP，但 ACME 目录里没有 `shortlived` profile | 只有 Let's Encrypt 签 IP 证书；用了自定义目录就换回去，或改用域名 |
 | `暂只支持 IPv4` | `--domain` 给的是 IPv6 字面量 | 用域名（`AAAA` 记录），见 [install.md 的「IP 还是域名」](install.md#ip-还是域名) |
 | `公网 IP 是 …，不等于 --domain` | IP 模式下 IP 填错了，或者机器的公网 IP 变了 / 在 NAT 后面 | `./webterm install --domain <新 IP>` 重装；IP 变了设备要重新配对 |
 | DNS 解析到别的 IP | 记录没生效或指错了 | 等 TTL 过期；确认改的是 A/AAAA 而不是 CNAME 到别处 |
 
-> 安装脚本在首次安装时会先用 staging 实签一次（`webterm doctor --acme`），过不了就不启动服务，
-> 所以正式环境一般撞不上限流。手工部署也先跑它。
+> 安装脚本在首次安装时会先签好证书（`webterm doctor --acme`），签不下来就不启动服务。
+> 失败只消耗按小时计的失败额度（每小时 5 次，每 12 分钟恢复 1 次），撞上了等十几分钟再试。
 
 ### 日志里一堆 `TLS handshake error`
 
@@ -68,8 +68,8 @@ echo | openssl s_client -connect <域名>:<端口> -servername <域名> 2>/dev/n
 ```
 
 `issuer` 里带 `STAGING` 说明正式服务在发 staging 证书（没有客户端信任它）。
-**ADR-0042 之后不会再发生**：staging 证书放在 `certs-staging/`，与 `certs/` 分开。
-但**升级前**用 `--acme-staging` 跑过的机器，`certs/` 里可能还留着一张 —— autocert
+**ADR-0042 之后不会再发生**：`--acme-staging` 已经删了。
+但**以前**用它跑过的机器，`certs/` 里可能还留着一张 —— autocert
 判断缓存证书是否可用时只看有效期、域名、私钥匹配，**不看签发者**，所以它会一直被用到
 快过期才续。手工删掉：
 

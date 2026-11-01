@@ -24,7 +24,7 @@ var usage = "webterm " + version + ` —— 浏览器终端 agent
   webterm serve [选项]           启动服务
   webterm pair                   生成新的配对码（打印 URL + 二维码）
   webterm devices [子命令]        设备管理：list | revoke <id> | revoke-all
-  webterm doctor [--acme]        检查部署前置条件；--acme 再用 staging 实签一次
+  webterm doctor [--acme]        检查部署前置条件；--acme 再把证书签好
   webterm update                 升级到最新版（按上次的安装参数重装；默认热升级，会话保留）
   webterm reload [--when-idle]   让运行中的 agent 原地换成磁盘上的新二进制，会话保留
   webterm version                版本信息

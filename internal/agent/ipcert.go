@@ -40,8 +40,6 @@ const (
 	ipCertRetry = time.Hour
 	// ipCertAttemptTimeout 是一次签发（注册、下单、验证、出证）最多等多久。
 	ipCertAttemptTimeout = 5 * time.Minute
-
-	letsEncryptStagingURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
 )
 
 // IsIPAddress 报告 --domain 是不是 IPv4 字面量（IP 模式）。
@@ -67,8 +65,6 @@ func acmeDirectory(cfg ServeConfig) string {
 	switch {
 	case cfg.ACMEDirectoryURL != "":
 		return cfg.ACMEDirectoryURL
-	case cfg.ACMEStaging:
-		return letsEncryptStagingURL
 	}
 	return acme.LetsEncryptURL
 }
@@ -386,8 +382,8 @@ func writeFileAtomic(path string, data []byte) error {
 
 // runIPCert 启动时拿到证书并报告，之后在续期时刻续期，失败每小时重试。
 // ctx 取消（关闭监听）时退出。
-func (a *Agent) runIPCert(ctx context.Context, m *ipCertManager, staging bool) {
-	env := envName(staging)
+func (a *Agent) runIPCert(ctx context.Context, m *ipCertManager) {
+	const env = "Let's Encrypt"
 	first := true
 	for {
 		// 单次签发设上限：acme.Client 默认的 HTTP 客户端没有超时，CA 那边一挂起，
@@ -405,7 +401,7 @@ func (a *Agent) runIPCert(ctx context.Context, m *ipCertManager, staging bool) {
 			// 手里一张都没有：HTTPS 不可用，这是要大声说的
 			a.log.Error("证书申请失败 —— HTTPS 还不可用", "ip", m.ip, "env", env, "retry", ipCertRetry)
 			if first {
-				fmt.Fprint(a.certReport(true), describeACMEError(err, m.ip, staging))
+				fmt.Fprint(a.certReport(true), describeACMEError(err, m.ip))
 			}
 		case err != nil:
 			// 还有一张没过期的在用，只是续不上：HTTPS 照常，但几天之内会过期
@@ -444,11 +440,4 @@ func (a *Agent) runIPCert(ctx context.Context, m *ipCertManager, staging bool) {
 func (a *Agent) reportCertReady(env string, leaf *x509.Certificate) {
 	fmt.Fprintf(a.certReport(false), "证书已就绪（%s，IP 证书，到期 %s，自动续期）\n",
 		env, leaf.NotAfter.Local().Format("2006-01-02 15:04"))
-}
-
-func envName(staging bool) string {
-	if staging {
-		return "Let's Encrypt staging"
-	}
-	return "Let's Encrypt"
 }

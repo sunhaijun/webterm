@@ -13,7 +13,7 @@
 **入方向 TCP `80` 和 `443`**（阿里云、腾讯云叫「安全组」，AWS 叫「Security Group」）。
 
 机器自己的防火墙（ufw / firewalld）不用管，脚本发现它们开着会自己放行。
-忘了这一步也不要紧：安装时的自检会在启动服务**之前**用 Let's Encrypt staging 实签一次，
+忘了这一步也不要紧：安装脚本会在启动服务**之前**先把证书签好，
 安全组没开会当场报出来。
 
 > 有域名的话，再加一条 `A` 记录指向这台机器的公网 IP。**不要用 CNAME 指到别处**；
@@ -52,8 +52,9 @@ root shell 挂到公网。）装出来的是**以你的用户运行的系统服�
 1. 不给 `--domain` 时取本机公网 IP（以前装过就沿用上次的参数）
 2. 装到 `/usr/local/bin`，`setcap` 让普通用户能绑 80/443
 3. 放行已启用的 ufw / firewalld
-4. **自检**：`webterm doctor --acme` —— DNS、端口，再用 Let's Encrypt staging **实签一张证书**。
-   不通过就停在这里，服务不会被写成 systemd 单元；修好重跑同一条命令
+4. **自检 + 签证书**：`webterm doctor --acme` —— 地址、端口，再**向 Let's Encrypt 申请证书**。
+   签下来的证书存进 `certs/`，服务启动直接用；签不下来就停在这里，服务不会被写成 systemd 单元，
+   修好重跑同一条命令
 5. 写配置文件、生成 systemd 系统服务、启动
 6. 等正式证书签下来，打出**配对二维码**
 
@@ -135,7 +136,7 @@ journalctl -u webterm -n 20               # 有"证书已就绪"
 | 公网 IPv4，或者一个解析到它的域名 | ACME 要验证这个地址 | `webterm doctor`：域名查 DNS 是否指向本机，IP 查是否等于本机公网 IP |
 | **80 端口可用** | HTTP-01 挑战走 80 | `webterm doctor` |
 | **443 端口可用** | 服务本体（被占了就换 `--https-port`） | `webterm doctor` |
-| 80/443 在**云安全组**里放行 | 挑战要从外网打进来 | `webterm doctor --acme`（staging 实签，机器内部唯一查得出来的办法） |
+| 80/443 在**云安全组**里放行 | 挑战要从外网打进来 | `webterm doctor --acme`（真的签一次，机器内部唯一查得出来的办法） |
 | Linux（x86_64 / arm64） | | `uname -m` |
 
 webterm 不往 shell 里注入任何东西，用哪个 shell、哪个版本都行。想让多行粘贴不被逐行执行，shell 要支持 bracketed paste（bash 4.4+、zsh、fish 都支持）。
@@ -149,7 +150,9 @@ webterm 不往 shell 里注入任何东西，用哪个 shell、哪个版本都�
 端口【真的被别人占着】仍然是 `✗`：那时探测能连上去，两种情况分得开。
 
 `--acme` 那一项要**真的绑上**两个端口，所以只能在服务没在跑的时候做（升级时安装脚本会跳过它）。
-它签的是 staging 证书，缓存在临时目录、用完就删，不碰 `certs/`，staging 的限额也宽，反复跑没关系。
+它签的是**正式证书**，存进 `certs/`，服务启动直接用 —— 不多签一张。`certs/` 里已经有有效证书时直接用它，
+会说「没有找 CA」。签失败只消耗按小时计的失败额度（[ADR-0042](../20-architecture/adr/0042-ip-address-certificates.md) §3），
+所以不需要先拿 staging 试。
 
 ## 安装
 
@@ -256,7 +259,7 @@ CGO_ENABLED=0 go build -ldflags "-s -w" -o webterm ./cmd/webterm
 ```bash
 sudo setcap 'cap_net_bind_service=+ep' ./webterm
 
-# 1. 检查环境（地址、端口），并用 staging 实签一次 —— 安全组没开在这里暴露
+# 1. 检查环境（地址、端口），并把证书签好 —— 安全组没开在这里暴露
 ./webterm doctor --domain term.example.com --acme
 
 # 2. 正式运行
@@ -319,7 +322,7 @@ time=... level=INFO msg="webterm 已启动" url=https://term.example.com
 agent 会在监听起来之后主动触发一次。失败时打出的是「原因 + 怎么修」，不是一行 Go 的 error：
 
 ```
-level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.example.com env="Let's Encrypt staging"
+level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.example.com
 
   HTTP-01 挑战没能打到本机的 80 端口。按顺序查：
     1. 云安全组 / 防火墙放行了入方向 TCP 80 吗？（最常漏的一步）
@@ -337,7 +340,6 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 |---|---|---|
 | `--domain` | — | 域名，或公网 IPv4（[IP 模式](#ip-证书)）。生产必填 |
 | `--dev` | false | 本地开发：`127.0.0.1:8080` 明文，不申请证书 |
-| `--acme-staging` | false | 用 Let's Encrypt staging 环境（排障用）。证书放在 `certs-staging/`，不会被正式运行拿去用 |
 | `--data-dir` | `$XDG_DATA_HOME/webterm` | 数据目录 |
 | `--http-port` | 80 | ACME 挑战 + HTTPS 跳转 |
 | `--https-port` | 443 | 非 443 时**配对 URL 与启动日志会带上端口**，见[跑在非标准端口上](#跑在非标准端口上) |
@@ -360,7 +362,7 @@ level=ERROR msg="证书申请失败 —— HTTPS 还不可用" domain=term.examp
 | 命令 | 说明 |
 |---|---|
 | `webterm install [参数]` | 用这个二进制本身安装 / 升级成系统服务（参数同 `install.sh`，见[安装](#安装)） |
-| `webterm doctor [--domain X] [--acme]` | 检查部署前置条件；`--acme` 再用 Let's Encrypt staging 实签一次（服务没在跑时才能用） |
+| `webterm doctor [--domain X] [--acme]` | 检查部署前置条件；`--acme` 再把证书签好存进 `certs/`（服务没在跑时才能用） |
 | `webterm update` | 从网上升级到最新版（按上次的安装参数重装） |
 | `webterm pair [--wait]` | 生成新的配对码（打印 URL + 二维码 + 可手输的 16 位数字）；`--wait` 先等 HTTPS 证书就绪 |
 | `webterm devices [list\|revoke <id>\|revoke-all]` | 设备管理（CLI 侧，UI 里也有） |
@@ -451,7 +453,6 @@ ss -lntp | grep -E ':(80|443)\b'
 $XDG_DATA_HOME/webterm/     （默认 ~/.local/share/webterm/）
 ├── webterm.db       ← 设备授权与配对（只存哈希）
 ├── certs/           ← 证书缓存（丢了会重新申请，注意 Let's Encrypt 限流）
-├── certs-staging/   ← --acme-staging 的证书，和正式的分开放；可以随便删
 └── run/             ← 控制 socket，无需备份
 ```
 
@@ -599,7 +600,7 @@ log-level  = info
 可以放进配置文件的键，就是 `webterm serve --help` 列出的那些：
 
 `domain` · `data-dir` · `bind` · `http-port` · `https-port` · `no-tls` ·
-`trust-proxy` · `acme-staging` · `shell` · `max-sessions` · `max-conns` ·
+`trust-proxy` · `shell` · `max-sessions` · `max-conns` ·
 `ring-bytes` · `session-env` · `no-altscreen-compat` · `no-login-shell` · `log-level`
 
 > `--dev` 与 `--config` 【不能】写进配置文件：前者是"临时本地跑一下"的开关，

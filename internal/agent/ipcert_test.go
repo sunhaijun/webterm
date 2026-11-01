@@ -229,7 +229,8 @@ func TestIPModeCAWithoutProfiles(t *testing.T) {
 }
 
 // IT-doctor-acme-1..2：doctor --acme 的签发核心。两种模式都签得出来，
-// 证书放在给定的（临时）目录，返回之后端口已经释放。
+// 证书存进给定的证书目录（服务用的 certs/），返回之后端口已经释放；
+// 再跑一次直接用缓存，CA 收不到新订单 —— 签好的证书留给服务，不多签。
 func TestIssueCheck(t *testing.T) {
 	for _, tc := range []struct{ name, addr string }{
 		{"域名", "term.test"},
@@ -240,17 +241,24 @@ func TestIssueCheck(t *testing.T) {
 			ports := freePorts(t, 2)
 			ca.ValidateAgainst(fmt.Sprintf("127.0.0.1:%d", ports[0]))
 			dir := filepath.Join(t.TempDir(), "certs")
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			leaf, err := agent.IssueCheck(ctx, agent.ServeConfig{
+			cfg := agent.ServeConfig{
 				Domain: tc.addr, Bind: "127.0.0.1", HTTPPort: ports[0], HTTPSPort: ports[1],
 				CertDir: dir, ACMEDirectoryURL: ca.DirectoryURL(),
-			})
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			leaf, issued, err := agent.IssueCheck(ctx, cfg)
 			if err != nil {
 				t.Fatalf("签发失败: %v", err)
 			}
+			if !issued {
+				t.Error("第一次应当是新签的")
+			}
 			if err := leaf.VerifyHostname(tc.addr); err != nil {
 				t.Errorf("签出来的证书不是给 %s 的: %v", tc.addr, err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, tc.addr)); err != nil {
+				t.Errorf("证书没存进证书目录（服务要直接用它）: %v", err)
 			}
 			for _, p := range ports {
 				ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
@@ -260,6 +268,18 @@ func TestIssueCheck(t *testing.T) {
 				}
 				ln.Close()
 			}
+
+			orders := len(ca.Orders())
+			again, issued, err := agent.IssueCheck(ctx, cfg)
+			if err != nil {
+				t.Fatalf("第二次失败: %v", err)
+			}
+			if issued || len(ca.Orders()) != orders {
+				t.Errorf("已有有效证书还去签了（issued=%v，订单 %d → %d）", issued, orders, len(ca.Orders()))
+			}
+			if again.SerialNumber.Cmp(leaf.SerialNumber) != 0 {
+				t.Error("第二次拿到的不是缓存里那张")
+			}
 		})
 	}
 
@@ -268,7 +288,7 @@ func TestIssueCheck(t *testing.T) {
 		ports := freePorts(t, 2)
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		_, err := agent.IssueCheck(ctx, agent.ServeConfig{
+		_, _, err := agent.IssueCheck(ctx, agent.ServeConfig{
 			Domain: testIP, Bind: "127.0.0.1", HTTPPort: ports[0], HTTPSPort: ports[1],
 			CertDir: t.TempDir(), ACMEDirectoryURL: ca.DirectoryURL(),
 		})
