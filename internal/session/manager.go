@@ -297,6 +297,13 @@ func (m *Manager) Create(spec Spec) (*Session, error) {
 		return nil, err
 	}
 	m.mu.Lock()
+	if m.frozen {
+		// 起 shell 期间开始了热升级：Freeze / Export 都没看见它，留着就没人接
+		delete(m.sessions, sid)
+		m.mu.Unlock()
+		s.close()
+		return nil, ErrFrozen
+	}
 	m.sessions[sid] = s
 	m.order = append(m.order, sid) // 新建的排最后
 	m.mu.Unlock()
@@ -384,8 +391,11 @@ func (m *Manager) start(sid uint16, spec Spec, cwd string) (*Session, error) {
 
 // pollable 把 creack/pty 给的阻塞 master 换成 Go poller 里的非阻塞文件。
 // 返回新文件与它的 fd 号（fd 单独记着 —— 之后不能再对文件调 Fd()）。
+//
+// dup 必须带 CLOEXEC：裸 dup 的 fd 会被之后起的每个 shell 及其子孙继承，
+// 关掉的会话的 pty 就一直释放不了。
 func pollable(raw *os.File) (*os.File, int, error) {
-	fd, err := unix.Dup(int(raw.Fd()))
+	fd, err := unix.FcntlInt(raw.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
 		return nil, -1, err
 	}

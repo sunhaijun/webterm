@@ -12,13 +12,17 @@ import (
 )
 
 func newAuth(t *testing.T) (*auth.Auth, *store.Store) {
+	return newAuthTrusting(t, false)
+}
+
+func newAuthTrusting(t *testing.T, trustProxy bool) (*auth.Auth, *store.Store) {
 	t.Helper()
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return auth.New(st, false), st
+	return auth.New(st, false, trustProxy), st
 }
 
 // UT-pair-1..4：一次性、过期、熵、常数时间比较（AC-1.4）。
@@ -160,6 +164,56 @@ func TestClientIPIgnoresForwardedByDefault(t *testing.T) {
 	// 开了 --trust-proxy 才取【最后一跳】：那是最近的可信代理写进去的
 	if got := auth.ClientIP(r, true); got != "2.2.2.2" {
 		t.Fatalf("--trust-proxy 下应当取最后一跳，得到 %q", got)
+	}
+}
+
+// last_ip 与限速同一个口径：开了 --trust-proxy 取 X-Forwarded-For 的最后一跳。
+// 否则反代后面所有设备的 last_ip 都是代理的地址。
+func TestLastIPHonoursTrustProxy(t *testing.T) {
+	for _, tc := range []struct {
+		trust bool
+		want  string
+	}{{false, "203.0.113.9"}, {true, "2.2.2.2"}} {
+		a, st := newAuthTrusting(t, tc.trust)
+		code, err := a.NewPairingCode(time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, token, err := a.Pair(code, "UA", "198.51.100.1", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+		r.RemoteAddr = "203.0.113.9:5555"
+		r.Header.Set("X-Forwarded-For", "1.1.1.1, 2.2.2.2")
+		r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+		if dev, err := a.Authenticate(r); err != nil || dev == nil {
+			t.Fatalf("Authenticate = %v, %v", dev, err)
+		}
+		dev, err := st.DeviceByToken(token)
+		if err != nil || dev == nil {
+			t.Fatal(err)
+		}
+		if dev.LastIP != tc.want {
+			t.Errorf("trustProxy=%v: last_ip = %q, want %q", tc.trust, dev.LastIP, tc.want)
+		}
+	}
+}
+
+// 闲下来的 IP 要被清掉：只试过一次、或失败过就再没来的 IP 不能永远留在表里 ——
+// 配对接口对整个互联网开放。
+func TestLimiterForgetsIdleIPs(t *testing.T) {
+	l := auth.NewLimiter()
+	now := time.Now()
+	l.Allow("1.1.1.1", now)
+	l.Failed("1.1.1.1", now)
+	l.Allow("2.2.2.2", now)
+
+	later := now.Add(11 * time.Minute) // 过了 GC 周期
+	l.Allow("3.3.3.3", later.Add(-30*time.Second))
+	l.Allow("4.4.4.4", later)
+	if n := l.TrackedIPsForTest(); n != 2 {
+		t.Fatalf("还记着 %d 个 IP, want 2（闲了 10 分钟的两个该清掉）", n)
 	}
 }
 

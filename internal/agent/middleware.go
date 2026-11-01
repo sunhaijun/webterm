@@ -104,10 +104,10 @@ func (a *Agent) checkOrigin(r *http.Request) bool {
 // 什么日志都没有。--https-port 那个特性让对外 URL 带上了端口，
 // 这里当时漏了。
 //
-// 复用 externalURL：配对二维码、301 跳转、启动日志都走它，
+// 复用 ExternalURL：配对二维码、301 跳转、启动日志都走它，
 // 一处定义就不会再漂。
 func (a *Agent) allowedOrigin() string {
-	return externalURL(a.cfg.Domain, a.cfg.HTTPSPort)
+	return ExternalURL(a.cfg.Domain, a.cfg.HTTPSPort)
 }
 
 // isLocalOrigin 报告 origin 是不是本机地址（仅 --dev 下允许）。

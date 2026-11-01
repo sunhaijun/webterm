@@ -7,6 +7,19 @@ import (
 	"github.com/sunhaijun/webterm/internal/session"
 )
 
+// session 按 sid 取会话；不存在就回 unknown_session（不关连接）。
+func (c *Conn) session(reqID string, sid uint16) (*session.Session, bool) {
+	s, ok := c.deps.Sessions.Get(sid)
+	if !ok {
+		c.unknownSession(reqID, sid)
+	}
+	return s, ok
+}
+
+func (c *Conn) unknownSession(reqID string, sid uint16) {
+	c.sendError(reqID, &sid, protocol.CodeUnknownSession, "会话不存在", false)
+}
+
 // handleBinary 处理 INPUT 帧。
 func (c *Conn) handleBinary(data []byte) {
 	f, err := protocol.DecodeFrame(data)
@@ -24,9 +37,8 @@ func (c *Conn) handleBinary(data []byte) {
 		return
 	}
 	sid := f.SID
-	s, ok := c.deps.Sessions.Get(sid)
+	s, ok := c.session("", sid)
 	if !ok {
-		c.sendError("", &sid, protocol.CodeUnknownSession, "会话不存在", false)
 		return
 	}
 	switch err := s.Write(c.clientID, f.Seq, f.Payload); {
@@ -64,28 +76,23 @@ func (c *Conn) handleControl(data []byte) {
 		c.handleSessionCreate(m)
 
 	case *protocol.SessionClose:
-		c.handleSessionClose(m)
+		// 不在读循环里等：shell 不理 SIGHUP 时要等宽限期，而这条连接还载着别的会话
+		go c.handleSessionClose(m)
 
 	case *protocol.SessionRename:
-		s, ok := c.deps.Sessions.Get(m.SID)
-		if !ok {
-			c.sendError(m.ReqID, &m.SID, protocol.CodeUnknownSession, "会话不存在", false)
-			return
+		if s, ok := c.session(m.ReqID, m.SID); ok {
+			s.Rename(m.Name)
 		}
-		s.Rename(m.Name)
 
 	case *protocol.SessionMove:
 		c.handleSessionMove(m)
 
 	case *protocol.Subscribe:
-		s, ok := c.deps.Sessions.Get(m.SID)
-		if !ok {
-			c.sendError("", &m.SID, protocol.CodeUnknownSession, "会话不存在", false)
-			return
-		}
 		// 增量还是快照由会话判定（协议 §5.1）。尺寸跟着这条消息走，【不能单发
 		// resize】：列数变了要先改模拟器再出快照，TIOCSWINSZ 排在入队之后（§4.1）
-		c.subscribe(s, m.OutSeq, m.Cols, m.Rows)
+		if s, ok := c.session("", m.SID); ok {
+			c.subscribe(s, m.OutSeq, m.Cols, m.Rows)
+		}
 
 	case *protocol.Unsubscribe:
 		if s, ok := c.deps.Sessions.Get(m.SID); ok {
@@ -96,14 +103,11 @@ func (c *Conn) handleControl(data []byte) {
 		c.mu.Unlock()
 
 	case *protocol.Resize:
-		s, ok := c.deps.Sessions.Get(m.SID)
-		if !ok {
-			c.sendError("", &m.SID, protocol.CodeUnknownSession, "会话不存在", false)
-			return
-		}
 		// 列数变了：会话给每个订阅者（包括本连接）重发一份快照（协议 §4.1）
-		if err := s.Resize(m.Cols, m.Rows); err != nil {
-			c.sendError("", &m.SID, protocol.CodeBadRequest, err.Error(), false)
+		if s, ok := c.session("", m.SID); ok {
+			if err := s.Resize(m.Cols, m.Rows); err != nil {
+				c.sendError("", &m.SID, protocol.CodeBadRequest, err.Error(), false)
+			}
 		}
 
 	case *protocol.Ping:
@@ -133,10 +137,11 @@ func (c *Conn) handleSessionCreate(m *protocol.SessionCreate) {
 		&protocol.SessionCreated{ReqID: m.ReqID, Session: info})
 }
 
+// handleSessionClose 在自己的 goroutine 里跑：里面只有入队，连接关了也只是丢弃。
 func (c *Conn) handleSessionClose(m *protocol.SessionClose) {
 	code, err := c.deps.Sessions.Close(m.SID)
 	if err != nil {
-		c.sendError(m.ReqID, &m.SID, protocol.CodeUnknownSession, "会话不存在", false)
+		c.unknownSession(m.ReqID, m.SID)
 		return
 	}
 	c.deps.Hub.Broadcast(&protocol.SessionClosed{SID: m.SID, ExitCode: code}, c,
@@ -151,6 +156,6 @@ func (c *Conn) handleSessionMove(m *protocol.SessionMove) {
 			&protocol.SessionOrder{ReqID: m.ReqID, SIDs: sids})
 	})
 	if err != nil {
-		c.sendError(m.ReqID, &m.SID, protocol.CodeUnknownSession, "会话不存在", false)
+		c.unknownSession(m.ReqID, m.SID)
 	}
 }

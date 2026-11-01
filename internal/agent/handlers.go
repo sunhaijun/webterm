@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/sunhaijun/webterm/internal/auth"
+	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/webui"
 	"github.com/sunhaijun/webterm/internal/wsconn"
 )
@@ -107,7 +108,6 @@ func (a *Agent) handleWS(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusServiceUnavailable, "too_many_conns", "并发连接数已达上限")
 		return
 	}
-	dev := deviceFrom(r)
 
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// Origin 已经在上面按配置域名严格校验过了
@@ -141,7 +141,6 @@ func (a *Agent) handleWS(w http.ResponseWriter, r *http.Request) {
 		a.sessions.RemoveObserver(c)
 		a.hub.Remove(c)
 	}()
-	_ = dev
 	c.Serve(r.Context())
 }
 
@@ -153,7 +152,7 @@ func sessionTokenOf(r *http.Request) string {
 }
 
 // maxWSRead 是单条 WebSocket 消息的读上限：帧头 + payload 上限，再留一点余量。
-const maxWSRead = 12 + (256 << 10) + 1024
+const maxWSRead = protocol.HeaderSize + protocol.MaxPayload + 1024
 
 // ---------- 设备 ----------
 

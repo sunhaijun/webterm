@@ -66,8 +66,8 @@ type ResumeReq struct {
 
 // Hello 是连接后的第一条消息。
 //
-// ClientID 是【每个标签页一个】的 id（存 sessionStorage，不是 localStorage ——
-// 后者同源共享，区分不了标签页），也是输入记账的 key。
+// ClientID 是【每次页面加载一个】的 id，只放内存（不能存 sessionStorage /
+// localStorage，协议 §4.1），也是输入记账的 key。
 // InstanceID 是上次 welcome 里拿到的值，与 agent 当前值不符时所有 resume 判 gone。
 type Hello struct {
 	T          string      `json:"t"`

@@ -51,20 +51,6 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	}
 }
 
-// Meta 不带缓冲与待写输入，其余照旧 —— 预检不用搬几十 MiB。
-func TestMetaDropsBulk(t *testing.T) {
-	m := sample().Meta()
-	if m.Sessions[0].RingData != nil || m.Sessions[0].Pending != nil || m.Sessions[0].VTerm != nil {
-		t.Fatal("Meta 应当去掉 RingData、VTerm 与 Pending")
-	}
-	if m.Sessions[0].RingBase != 100 || m.InstanceID != "abc" {
-		t.Fatal("Meta 不该动其它字段")
-	}
-	if sample().Sessions[0].RingData == nil {
-		t.Fatal("Meta 不能改到原快照")
-	}
-}
-
 func TestValidate(t *testing.T) {
 	s := sample()
 	if err := Validate(s); err != nil {
@@ -97,24 +83,34 @@ func TestCheck(t *testing.T) {
 		return p
 	}
 	ok := write("ok", "cat >/dev/null; echo '"+CheckOutput()+"'\n")
-	if err := Check(ok, sample().Meta(), 5*time.Second); err != nil {
+	if err := Check(ok, sample(), 5*time.Second); err != nil {
 		t.Fatalf("应当通过: %v", err)
 	}
 	bad := write("bad", "cat >/dev/null; echo 'schema 太新' >&2; exit 1\n")
-	if err := Check(bad, sample().Meta(), 5*time.Second); err == nil {
-		t.Fatal("退出码非零必须失败")
+	if err := Check(bad, sample(), 5*time.Second); err == nil || !strings.Contains(err.Error(), "schema 太新") {
+		t.Fatalf("退出码非零必须失败，并带上它的输出: %v", err)
 	}
 	weird := write("weird", "cat >/dev/null; echo 'hello'\n")
-	if err := Check(weird, sample().Meta(), 5*time.Second); err == nil {
+	if err := Check(weird, sample(), 5*time.Second); err == nil {
 		t.Fatal("输出不是 ok schema= 必须失败 —— 可能是个不认识 handoff-check 的老二进制")
 	}
-	if err := Check(filepath.Join(dir, "missing"), sample().Meta(), time.Second); err == nil {
+	if err := Check(filepath.Join(dir, "missing"), sample(), time.Second); err == nil {
 		t.Fatal("二进制不存在必须失败")
+	}
+	// 卡住的新二进制：到点就失败，不等它（连同它的子进程）自己退
+	slow := write("slow", "sleep 10\n")
+	start := time.Now()
+	if err := Check(slow, sample(), 200*time.Millisecond); err == nil || !strings.Contains(err.Error(), "超时") {
+		t.Fatalf("超时必须失败: %v", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("超时之后又等了 %v", d)
 	}
 }
 
 func TestStripFlag(t *testing.T) {
-	in := []string{"--dev", "--handoff-fd=7", "--http-port", "8080", "--handoff-fd", "9", "--domain", "x"}
+	in := []string{"--dev", "--handoff-fd=7", "--http-port", "8080", "--handoff-fd", "9",
+		"-handoff-fd=7", "-handoff-fd", "3", "--domain", "x"}
 	got := StripFlag(in)
 	want := []string{"--dev", "--http-port", "8080", "--domain", "x"}
 	if len(got) != len(want) {

@@ -154,6 +154,7 @@ func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
 	if err := unix.SetNonblock(hs.PtmxFD, true); err != nil {
 		return nil, fmt.Errorf("ptmx fd %d: %w", hs.PtmxFD, err)
 	}
+	unix.CloseOnExec(hs.PtmxFD) // 交接时清掉的 CLOEXEC 置回来（见 pollable）
 	f := os.NewFile(uintptr(hs.PtmxFD), "ptmx")
 	if f == nil {
 		return nil, fmt.Errorf("ptmx fd %d 无效", hs.PtmxFD)

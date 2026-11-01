@@ -8,3 +8,6 @@ func SetChildOOMAdjForTest(v int) (restore func()) {
 	childOOMAdj = v
 	return func() { childOOMAdj = old }
 }
+
+// ShellPIDForTest 返回会话 shell 的 pid。
+func ShellPIDForTest(s *Session) int { return s.proc.Pid }

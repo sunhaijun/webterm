@@ -3,6 +3,7 @@ package session_test
 import (
 	"bytes"
 	"log/slog"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -179,6 +180,54 @@ func TestInputResendIsDeduplicated(t *testing.T) {
 		t.Fatal("重发的部分被重复写进了 PTY")
 	}
 	waitFor(t, "in_ack 推进到整段长度", func() bool { return s.InAck("tab") == uint64(len(whole)) })
+}
+
+// 断线时 writeLoop 正卡在一段输入上（前台程序不读 stdin，PTY 输入满了）：它已被
+// 取出、还没 ack，后面还排着一段。重连后客户端从 in_ack 起整段重发 —— 每个字节
+// 只能进 PTY 一次。
+func TestDetachKeepsInFlightInput(t *testing.T) {
+	m := newManager(t, cfg())
+	s := create(t, m)
+	c := newConn(t, m, "tab")
+	s.Subscribe(c, 0, 0, 0)
+
+	// raw 模式下 1 秒不读 stdin，之后把收到的全部读下来、数字节
+	f := t.TempDir() + "/in"
+	cmd := "stty raw -echo; printf 'STALL-%s\\n' ON; sleep 1; timeout --foreground 1 cat >" + f +
+		"; stty sane; echo COUNT=$(wc -c <" + f + ")\r"
+	if err := c.Send(s, cmd); err != nil {
+		t.Fatal(err)
+	}
+	waitScreen(t, c, "STALL-ON")
+	ack0 := s.InAck("tab")
+
+	stuck, tail := strings.Repeat("x", 128<<10), strings.Repeat("y", 1<<10)
+	if err := c.Send(s, stuck); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // writeLoop 取走 stuck，卡在 ptmx.Write 里
+	if err := c.Send(s, tail); err != nil {
+		t.Fatal(err)
+	}
+
+	// 断线（tail 被丢掉）→ 重连拿 in_ack → 从那里整段重发
+	s.Unsubscribe(c)
+	s.DetachClient("tab")
+	r := m.Resume(c, m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: c.OutSeq()}})[0]
+	if r.InAck != ack0 {
+		t.Fatalf("前提不成立：in_ack = %d, want %d（stuck 应当还卡着）", r.InAck, ack0)
+	}
+	c.TrimTo(r.InAck)
+	if err := c.Send(s, stuck+tail); err != nil {
+		t.Fatal(err)
+	}
+
+	re := regexp.MustCompile(`COUNT=(\d+)`)
+	var got []string
+	waitFor(t, "COUNT", func() bool { got = re.FindStringSubmatch(c.Screen()); return got != nil })
+	if want := itoa(len(stuck) + len(tail)); got[1] != want {
+		t.Fatalf("PTY 收到 %s 字节, want %s（卡着的那段被写了两遍？）", got[1], want)
+	}
 }
 
 // 输入出现空洞必须报 ErrInputGap，让连接层关连接。

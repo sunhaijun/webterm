@@ -664,6 +664,53 @@ func TestHeartbeatKeepsConnectionAlive(t *testing.T) {
 	}
 }
 
+// 关会话不占连接的读循环：shell 不理 SIGHUP 时关闭要等 2 秒宽限期，这期间同一
+// 条连接上的 ping 与别的会话的输入照常走。
+func TestSlowCloseDoesNotStallConnection(t *testing.T) {
+	h := newHarness(t)
+	c := h.client()
+	h.pair(c).Body.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	cl.welcome()
+	dir := t.TempDir()
+	slow, other := cl.createSession(dir), cl.createSession(dir)
+	cl.input(slow, "trap '' HUP; echo HUP-$((1+1))\r")
+	waitFor(t, "slow 的 shell 不理 SIGHUP", func() bool { return cl.screenHas(slow, "HUP-2") })
+
+	start := time.Now()
+	cl.send(&protocol.SessionClose{ReqID: "cl", SID: slow})
+	cl.send(&protocol.Ping{TS: 4242})
+	cl.input(other, "echo OTHER-$((40+2))\r")
+	waitFor(t, "pong 与另一个会话的输出", func() bool {
+		if !cl.screenHas(other, "OTHER-42") {
+			return false
+		}
+		for _, m := range cl.messages() {
+			if p, ok := m.(*protocol.Pong); ok && p.TS == 4242 {
+				return true
+			}
+		}
+		return false
+	})
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("关会话期间连接卡了 %v", d)
+	}
+	waitFor(t, "session.closed", func() bool {
+		for _, m := range cl.messages() {
+			if v, ok := m.(*protocol.SessionClosed); ok && v.ReqID == "cl" {
+				return true
+			}
+		}
+		return false
+	})
+	if d := time.Since(start); d < 1500*time.Millisecond {
+		t.Fatalf("关闭只用了 %v —— 前提不成立，shell 没在宽限期里撑着", d)
+	}
+}
+
 // 未知的控制消息必须被【忽略】而不是关连接（协议 §4，前向兼容）。
 func TestUnknownControlMessageIgnored(t *testing.T) {
 	h := newHarness(t)

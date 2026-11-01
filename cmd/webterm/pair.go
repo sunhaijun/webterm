@@ -36,7 +36,7 @@ func runPair(args []string) error {
 	}
 	defer st.Close()
 
-	codes, err := auth.New(st, c.dev).NewPairingCodes(time.Now())
+	codes, err := auth.New(st, c.dev, false).NewPairingCodes(time.Now())
 	if err != nil {
 		return err
 	}

@@ -38,19 +38,22 @@ var ErrInvalidCode = errors.New("auth: 配对码无效")
 
 // Auth 是认证服务。
 type Auth struct {
-	store   *store.Store
-	dev     bool // --dev：Cookie 不带 Secure
-	limiter *Limiter
+	store      *store.Store
+	dev        bool // --dev：Cookie 不带 Secure
+	trustProxy bool // --trust-proxy：last_ip 取 X-Forwarded-For 的最后一跳
+	limiter    *Limiter
 
 	mu          sync.Mutex
 	lastTouched map[string]time.Time // device id → 上次写库时间
 }
 
-// New 创建认证服务。dev 为 true 时 Cookie 省略 Secure（localhost 明文）。
-func New(st *store.Store, dev bool) *Auth {
+// New 创建认证服务。dev 为 true 时 Cookie 省略 Secure（localhost 明文）；
+// trustProxy 同 --trust-proxy，决定记下的 last_ip 从哪取（见 ClientIP）。
+func New(st *store.Store, dev, trustProxy bool) *Auth {
 	return &Auth{
 		store:       st,
 		dev:         dev,
+		trustProxy:  trustProxy,
 		limiter:     NewLimiter(),
 		lastTouched: make(map[string]time.Time),
 	}
@@ -183,7 +186,7 @@ func (a *Auth) Authenticate(r *http.Request) (*store.Device, error) {
 	if err != nil || dev == nil {
 		return nil, err
 	}
-	a.touch(dev, ClientIP(r, false), time.Now())
+	a.touch(dev, ClientIP(r, a.trustProxy), time.Now())
 	return dev, nil
 }
 

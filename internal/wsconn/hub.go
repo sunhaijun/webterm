@@ -59,8 +59,9 @@ func (h *Hub) Full() bool { return h.Count() >= h.maxConns }
 
 // Broadcast 把 msg 发给除 origin 外的所有连接，把 originMsg 发给 origin。
 //
-// session.created / closed / updated / order 都要广播 —— 否则 B 标签页看不到
-// A 新建的会话。req_id 只出现在发起请求的那条连接的副本上。
+// session.created / closed / order 走这里 —— 否则 B 标签页看不到 A 新建的会话。
+// req_id 只出现在发起请求的那条连接的副本上。session.updated 由会话经
+// Manager 的 observer 发。
 func (h *Hub) Broadcast(msg any, origin *Conn, originMsg any) {
 	h.mu.Lock()
 	targets := make([]*Conn, 0, len(h.conns))

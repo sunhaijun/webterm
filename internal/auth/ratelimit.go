@@ -49,7 +49,7 @@ func (l *Limiter) Allow(ip string, now time.Time) (bool, time.Duration) {
 	defer l.mu.Unlock()
 	l.gcLocked(now)
 
-	// 全局熔断：任意 IP 累计失败到阈值就整体停一会儿，并在 stdout 打告警
+	// 全局熔断：任意 IP 累计失败到阈值就整体停一会儿（告警由 Failed 的调用方打）
 	if now.Before(l.globalBlockedTo) {
 		return false, l.globalBlockedTo.Sub(now)
 	}
@@ -139,13 +139,17 @@ func (l *Limiter) backoffFor(n int) time.Duration {
 }
 
 // gcLocked 定期丢掉长时间没动静的 IP 记录，防止 map 无界增长。
+//
+// 闲 = 最后一次尝试已滑出一分钟窗口、且不在封禁中。attempts 只在这个 IP 再来时
+// 才裁剪，所以不能拿它空不空来判断 —— 试过一次就再没来的 IP 会永远留着。
 func (l *Limiter) gcLocked(now time.Time) {
 	if now.Sub(l.lastGC) < limiterGCPeriod {
 		return
 	}
 	l.lastGC = now
+	cutoff := now.Add(-time.Minute)
 	for ip, st := range l.ips {
-		if len(st.attempts) == 0 && now.After(st.blockedTo) {
+		if n := len(st.attempts); (n == 0 || !st.attempts[n-1].After(cutoff)) && now.After(st.blockedTo) {
 			delete(l.ips, ip)
 		}
 	}
