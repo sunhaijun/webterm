@@ -6,8 +6,12 @@
  *   pending:   input sent but not yet acked
  */
 
-/** Cap on pending bytes. Exceeding it raises a visible error instead of dropping silently. */
-export const PENDING_LIMIT = 64 * 1024
+/**
+ * Cap on pending bytes: what the agent's per-session input queue holds (protocol §5.6), so
+ * a resend after reconnecting always fits. Exceeding it raises a visible error instead of
+ * dropping silently.
+ */
+export const PENDING_LIMIT = 256 * 1024
 
 export interface PendingItem {
   seq: number
@@ -16,7 +20,7 @@ export interface PendingItem {
 
 export class PendingFullError extends Error {
   constructor() {
-    super('Offline input buffer full')
+    super('Input buffer full')
     this.name = 'PendingFullError'
   }
 }

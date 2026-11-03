@@ -22,12 +22,18 @@ class FakeSocket implements WebSocketLike {
   onerror: ((ev: unknown) => void) | null = null
   onmessage: ((ev: { data: unknown }) => void) | null = null
   closed = false
+  /** A dead link: close() starts the closing handshake but onclose never fires. */
+  hang = false
 
   send(data: string | ArrayBufferLike | ArrayBufferView): void {
     this.sent.push(typeof data === 'string' ? data : new Uint8Array(data as ArrayBuffer))
   }
   close(): void {
     this.closed = true
+    if (this.hang) {
+      this.readyState = 2
+      return
+    }
     this.readyState = 3
     this.onclose?.({})
   }
@@ -67,7 +73,7 @@ interface Harness {
   states: { state: string; retryInMs?: number; rttMs?: number }[]
 }
 
-function harness(opts: { backoff?: Backoff } = {}): Harness {
+function harness(opts: { backoff?: Backoff } = {}): Harness & { sockets: FakeSocket[] } {
   const sockets: FakeSocket[] = []
   const h: Omit<Harness, 'conn' | 'socket'> = {
     output: [],
@@ -108,7 +114,7 @@ function harness(opts: { backoff?: Backoff } = {}): Harness {
       onClosed: (w) => h.closed.push(w),
     },
   })
-  return { conn, socket: () => sockets[sockets.length - 1]!, ...h }
+  return { conn, socket: () => sockets[sockets.length - 1]!, sockets, ...h }
 }
 
 function welcome(extra: Record<string, unknown> = {}) {
@@ -483,6 +489,24 @@ describe('input resend queue', () => {
     q.push(new Uint8Array(PENDING_LIMIT))
     expect(() => q.push(text('x'))).toThrow(PendingFullError)
   })
+
+  it('holds as much as the agent input queue (256 KiB), so a large paste goes through online', () => {
+    expect(PENDING_LIMIT).toBe(256 * 1024)
+  })
+
+  // UT-input-size-1: refused input is reported, and the caller is told it didn't go out
+  it('sendInput returns false and explains when input is refused', () => {
+    const h = harness()
+    online(h)
+    expect(h.conn.sendInput(1, new Uint8Array(PENDING_LIMIT + 1))).toBe(false)
+    expect(h.errors[0]).toMatch(/too large/)
+    expect(h.socket().inputFrames()).toEqual([])
+
+    h.socket().close()
+    expect(h.conn.sendInput(1, new Uint8Array(PENDING_LIMIT))).toBe(true)
+    expect(h.conn.sendInput(1, text('x'))).toBe(false)
+    expect(h.errors[1]).toMatch(/buffer full/)
+  })
 })
 
 // UT-reconnect-1: exponential backoff sequence, jitter range, immediate retry.
@@ -632,6 +656,48 @@ describe('resume on reconnect', () => {
     const payloads = h.socket().inputFrames().map((f) => str(f.payload))
     expect(payloads).toEqual(['echo A1\r', 'echo A2\r']) // in order, no duplicates, nothing lost
   })
+
+  // UT-reconnect-2: typed into A while offline, then switched to B. Only B is resumed, so
+  // A's input has no in_ack to trim by; it must still go out right after welcome.
+  it('resends pending input of a session that was switched away from while offline', () => {
+    const h = harness()
+    online(h, { sessions: [sessionInfo(1, 0), sessionInfo(2, 0)] })
+    h.conn.subscribe(1)
+    h.conn.sendInput(1, text('ab')) // sent and acked
+    h.socket().deliverText({ t: 'ack', sid: 1, in_ack: 2 })
+    h.socket().close()
+
+    h.conn.sendInput(1, text('ls\r'))
+    h.conn.unsubscribe(1)
+    h.conn.subscribe(2)
+
+    vi.advanceTimersByTime(20_000)
+    h.socket().open()
+    expect(h.socket().hello().resume).toEqual([{ sid: 2, out_seq: 0 }])
+    h.socket().deliverText(
+      welcome({
+        sessions: [sessionInfo(1, 0), sessionInfo(2, 0)],
+        resumed: [{ sid: 2, status: 'ok', from_seq: 0, in_ack: 0 }],
+      }),
+    )
+
+    const frames = h.socket().inputFrames()
+    expect(frames.map((f) => [f.sid, Number(f.seq), str(f.payload)])).toEqual([[1, 2, 'ls\r']])
+  })
+
+  it('does not resend to a session that is gone or exited', () => {
+    const h = harness()
+    online(h, { sessions: [sessionInfo(1, 0), sessionInfo(2, 0)] })
+    h.socket().close()
+    h.conn.sendInput(1, text('x'))
+    h.conn.sendInput(2, text('y'))
+
+    vi.advanceTimersByTime(20_000)
+    h.socket().open()
+    h.socket().deliverText(welcome({ sessions: [{ ...sessionInfo(2, 0), status: 'exited' }] }))
+
+    expect(h.socket().inputFrames()).toEqual([])
+  })
 })
 
 // UT-hb-1: heartbeat interval and pong timeout.
@@ -747,6 +813,65 @@ describe('UT-hb-2 immediate probe for zombie connections', () => {
 
     expect(h.socket(), 'should have opened a new socket').not.toBe(closedAt)
     expect(backoff.attempts, 'retryNow must reset the backoff').toBe(0)
+  })
+
+  // UT-hb-3: a dead link may not fire onclose for a minute after close(); waiting for it
+  // would leave the page "online" on a zombie. Giving up must not depend on onclose.
+  it('reconnects after a pong timeout even when onclose never fires', () => {
+    const h = harness()
+    online(h)
+    const zombie = h.socket()
+    zombie.hang = true
+
+    h.conn.retryNow()
+    vi.advanceTimersByTime(PROBE_TIMEOUT)
+    expect(zombie.closed).toBe(true)
+    expect(h.conn.currentState).toBe('reconnecting')
+    expect(h.closed).toEqual([true])
+
+    vi.advanceTimersByTime(20_000)
+    expect(h.socket(), 'a new socket was opened').not.toBe(zombie)
+    // Input typed now goes to the new socket once it is up, not into the zombie
+    h.socket().open()
+    h.socket().deliverText(welcome())
+    h.conn.sendInput(1, text('x'))
+    expect(zombie.inputFrames()).toEqual([])
+    expect(h.socket().inputFrames()).toHaveLength(1)
+  })
+
+  it('stops reading a socket after a protocol error', () => {
+    const h = harness()
+    online(h)
+    h.conn.subscribe(1)
+    const s = h.socket()
+    s.hang = true
+    s.deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 9n, payload: text('gap') })
+    expect(h.errors).toHaveLength(1)
+    // Frames still in flight on the broken socket are ignored
+    s.deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('late') })
+    expect(h.output).toEqual([])
+    expect(h.conn.currentState).toBe('reconnecting')
+  })
+
+  // UT-reconnect-3: retryNow while a socket is still connecting replaces it; the old one
+  // must not later complete a hello and live on as an orphan.
+  it('retryNow while connecting abandons the socket in progress', () => {
+    const h = harness()
+    online(h)
+    h.socket().close()
+    vi.advanceTimersByTime(20_000) // a reconnect attempt is in progress
+    const first = h.socket()
+
+    h.conn.retryNow()
+    h.conn.retryNow()
+    expect(h.sockets).toHaveLength(4)
+    expect(first.closed).toBe(true)
+    expect(h.sockets[2]!.closed).toBe(true)
+
+    first.open() // too late: it was abandoned
+    expect(first.sent).toEqual([])
+    h.socket().open()
+    expect(h.socket().hello().t).toBe('hello')
   })
 
   it('does not probe after close()', () => {
