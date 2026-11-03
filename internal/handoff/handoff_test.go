@@ -84,25 +84,31 @@ func TestCheck(t *testing.T) {
 		return p
 	}
 	ok := write("ok", "cat >/dev/null; echo '"+CheckOutput()+"'\n")
-	if err := Check(ok, sample(), 5*time.Second); err != nil {
+	if err := Check(ok, []string{"serve"}, sample(), 5*time.Second); err != nil {
 		t.Fatalf("should pass: %v", err)
 	}
 	bad := write("bad", "cat >/dev/null; echo 'schema too new' >&2; exit 1\n")
-	if err := Check(bad, sample(), 5*time.Second); err == nil || !strings.Contains(err.Error(), "schema too new") {
+	if err := Check(bad, []string{"serve"}, sample(), 5*time.Second); err == nil || !strings.Contains(err.Error(), "schema too new") {
 		t.Fatalf("a non-zero exit must fail and include its output: %v", err)
 	}
 	weird := write("weird", "cat >/dev/null; echo 'hello'\n")
-	if err := Check(weird, sample(), 5*time.Second); err == nil {
+	if err := Check(weird, []string{"serve"}, sample(), 5*time.Second); err == nil {
 		t.Fatal("output other than ok schema= must fail (likely an old binary without handoff-check)")
 	}
-	if err := Check(filepath.Join(dir, "missing"), sample(), time.Second); err == nil {
+	if err := Check(filepath.Join(dir, "missing"), []string{"serve"}, sample(), time.Second); err == nil {
 		t.Fatal("a missing binary must fail")
+	}
+	// The new process's serve arguments reach handoff-check, which rejects
+	// what the new binary can't start with (ADR-0047 §1).
+	args := write("args", `cat >/dev/null; [ "$*" = "handoff-check serve --domain new.example.com" ] && echo '`+CheckOutput()+`' || { echo "got: $*" >&2; exit 1; }`+"\n")
+	if err := Check(args, []string{"serve", "--domain", "new.example.com"}, sample(), 5*time.Second); err != nil {
+		t.Fatalf("serve arguments not passed to handoff-check: %v", err)
 	}
 	// A hung new binary fails at the deadline without waiting for it (or its
 	// children) to exit.
 	slow := write("slow", "sleep 10\n")
 	start := time.Now()
-	if err := Check(slow, sample(), 200*time.Millisecond); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if err := Check(slow, []string{"serve"}, sample(), 200*time.Millisecond); err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("a timeout must fail: %v", err)
 	}
 	if d := time.Since(start); d > 3*time.Second {

@@ -60,6 +60,12 @@ func colorEnabled(f *os.File) bool {
 	if os.Getenv("TERM") == "dumb" {
 		return false
 	}
+	return isTerminal(f)
+}
+
+// isTerminal reports whether f is a character device (a terminal, as far as
+// output decisions go).
+func isTerminal(f *os.File) bool {
 	fi, err := f.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
