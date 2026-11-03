@@ -42,7 +42,7 @@ func (c *Conn) handleBinary(data []byte) {
 	if !ok {
 		return
 	}
-	switch err := s.Write(c.clientID, f.Seq, f.Payload); {
+	switch err := s.Write(c.ClientID(), f.Seq, f.Payload); {
 	case err == nil:
 	case errors.Is(err, session.ErrSessionExited):
 		// Input to an exited session: drop it and reply with an error, but keep
@@ -85,8 +85,8 @@ func (c *Conn) handleControl(data []byte) {
 		go c.handleSessionClose(m)
 
 	case *protocol.SessionRename:
-		if s, ok := c.session(m.ReqID, m.SID); ok {
-			s.Rename(m.Name)
+		if err := c.deps.Sessions.Rename(m.SID, m.Name); err != nil {
+			c.unknownSession(m.ReqID, m.SID)
 		}
 
 	case *protocol.SessionMove:

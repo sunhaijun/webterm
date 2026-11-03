@@ -245,6 +245,78 @@ func TestDetachKeepsInFlightInput(t *testing.T) {
 	}
 }
 
+// An abandoned connection that ends after its page reconnected must not
+// discard what the new connection queued (ADR-0047 §2). The page's new
+// connection takes over the client's input at hello; when the old one finally
+// times out, its Detach leaves the queue alone.
+func TestStaleDetachKeepsNewConnectionInput(t *testing.T) {
+	m := newManager(t, cfg())
+	s := create(t, m)
+	old := newConn(t, m, "tab")
+	m.Resume(old, m.InstanceID(), nil)
+	s.Subscribe(old, 0, 0, 0)
+
+	f := t.TempDir() + "/in"
+	cmd := "stty raw -echo; printf 'STALL-%s\\n' ON; sleep 1; timeout --foreground 1 cat >" + f +
+		"; stty sane; echo COUNT=$(wc -c <" + f + ")\r"
+	if err := old.Send(s, cmd); err != nil {
+		t.Fatal(err)
+	}
+	waitScreen(t, old, "STALL-ON")
+
+	// The page gave up on old (no close reached the agent) and reconnected.
+	cur := newConn(t, m, "tab")
+	r := m.Resume(cur, m.InstanceID(), []protocol.ResumeReq{{SID: s.SID(), OutSeq: old.OutSeq()}})[0]
+	cur.TrimTo(r.InAck)
+	stuck, tail := strings.Repeat("x", 128<<10), strings.Repeat("y", 1<<10)
+	if err := cur.Send(s, stuck); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // writeLoop takes stuck and blocks in ptmx.Write
+	if err := cur.Send(s, tail); err != nil {
+		t.Fatal(err)
+	}
+
+	m.Detach(old) // the abandoned connection finally ends
+
+	re := regexp.MustCompile(`COUNT=(\d+)`)
+	var got []string
+	waitFor(t, "COUNT", func() bool { got = re.FindStringSubmatch(cur.Screen()); return got != nil })
+	if want := itoa(len(stuck) + len(tail)); got[1] != want {
+		t.Fatalf("PTY received %s bytes, want %s (the old connection's teardown dropped queued input)", got[1], want)
+	}
+}
+
+// A connection that is still its client's newest discards the client's queued
+// input when it ends; the client resends it after reconnecting.
+func TestDetachDropsOwnQueuedInput(t *testing.T) {
+	m := newManager(t, cfg())
+	s := create(t, m)
+	c := newConn(t, m, "tab")
+	m.Resume(c, m.InstanceID(), nil)
+	s.Subscribe(c, 0, 0, 0)
+
+	if err := c.Send(s, "stty raw -echo; printf 'STALL-%s\\n' ON; sleep 2\r"); err != nil {
+		t.Fatal(err)
+	}
+	waitScreen(t, c, "STALL-ON")
+	ack0 := s.InAck("tab")
+	if err := c.Send(s, strings.Repeat("x", 128<<10)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := c.Send(s, "tail"); err != nil {
+		t.Fatal(err)
+	}
+	m.Detach(c)
+
+	// accepted is back to in_ack + the chunk being written, so a resend of the
+	// tail from where it started is accepted rather than a gap.
+	if err := c.Resend(s, ack0+128<<10, "tail"); err != nil {
+		t.Fatalf("resend after detach: %v", err)
+	}
+}
+
 // A gap in input must return ErrInputGap so the connection layer closes the
 // connection.
 func TestInputGapDetected(t *testing.T) {

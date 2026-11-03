@@ -294,6 +294,12 @@ func (c *wsClient) send(msg any) {
 	}
 }
 
+func (c *wsClient) inSeqOf(sid uint16) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.inSeq[sid]
+}
+
 // input sends input, tracking in_seq itself.
 func (c *wsClient) input(sid uint16, data string) {
 	c.mu.Lock()

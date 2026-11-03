@@ -57,6 +57,11 @@ type Session struct {
 	fd        int
 	proc      *os.Process // the shell; handed-over sessions reattach via os.FindProcess
 	createdAt time.Time
+	// winMu orders size changes end to end: the emulator update under mu and
+	// the TIOCSWINSZ after it. Without it two resizes could reach the emulator
+	// as A, B and the PTY as B, A, leaving the program drawing for the wrong
+	// size. Taken before mu, never while holding it.
+	winMu sync.Mutex
 
 	mu         sync.RWMutex // guards all fields below
 	name       string
@@ -210,6 +215,8 @@ func (s *Session) Resize(cols, rows uint16) error {
 	if !validSize(cols, rows) {
 		return ErrBadSize
 	}
+	s.winMu.Lock()
+	defer s.winMu.Unlock()
 	s.mu.Lock()
 	changed := s.applySizeLocked(cols, rows, nil)
 	running := s.status == protocol.StatusRunning
@@ -272,6 +279,8 @@ func (s *Session) applySizeLocked(cols, rows uint16, extra Subscriber) bool {
 // In the other order they would land before the snapshot and the client would
 // miss that screen (protocol §4.1).
 func (s *Session) Subscribe(sub Subscriber, outSeq uint64, cols, rows uint16) (status string, fromSeq uint64) {
+	s.winMu.Lock()
+	defer s.winMu.Unlock()
 	s.mu.Lock()
 	resized, colsChanged := false, false
 	if validSize(cols, rows) {
@@ -326,14 +335,15 @@ func (s *Session) Unsubscribe(sub Subscriber) {
 // in_ack: the chunk writeLoop has already taken and is writing (which can
 // block for a long time when the PTY input buffer is full) still counts as
 // accepted, so the resend skips it as a duplicate instead of writing it twice.
+//
+// Dropping and subtracting happen under mu, like Write's accept-and-enqueue,
+// so export never sees the count and the queue disagree.
 func (s *Session) DetachClient(clientID string) {
-	dropped := s.inputQ.dropClient(clientID)
-	if dropped == 0 {
-		return
-	}
 	s.mu.Lock()
-	s.inQueued[clientID] -= uint64(dropped)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if dropped := s.inputQ.dropClient(clientID); dropped > 0 {
+		s.inQueued[clientID] -= uint64(dropped)
+	}
 }
 
 // ---------- input ----------
@@ -372,20 +382,18 @@ func (s *Session) Write(clientID string, seq uint64, data []byte) error {
 		}
 		data = data[skip:]
 	}
-	s.inQueued[clientID] = queued + uint64(len(data))
-	s.mu.Unlock()
-
+	// Count and enqueue under one lock (push never blocks). Apart, a handoff
+	// export in between would carry a count that includes bytes missing from
+	// its queue; the new process would then skip their resend as a duplicate
+	// and they would never reach the PTY.
 	cp := make([]byte, len(data))
 	copy(cp, data)
 	if err := s.inputQ.push(clientID, cp); err != nil {
-		// Enqueue failed: roll back the accounting so a resend after reconnect
-		// lines up. Subtract rather than restore, since DetachClient may have
-		// changed it meanwhile.
-		s.mu.Lock()
-		s.inQueued[clientID] -= uint64(len(data))
 		s.mu.Unlock()
 		return err
 	}
+	s.inQueued[clientID] = queued + uint64(len(data))
+	s.mu.Unlock()
 	return nil
 }
 
@@ -583,7 +591,12 @@ func (s *Session) emitTo(clientID string, msg any) {
 //
 // The fallback (not gone within the grace period) must sweep the whole
 // session: bash no longer gets a chance to forward, and unswept jobs would
-// keep running as orphans. See killSession.
+// keep running as orphans. See killSession, which spares processes that
+// ignore SIGHUP: that is what nohup does, and it is the user asking for the
+// process to outlive the terminal.
+//
+// A session closed during a hot-upgrade freeze is thawed at the end: it is no
+// longer listed, so the manager's Thaw would never release its loops.
 func (s *Session) close() {
 	s.closeOnce.Do(func() {
 		if s.Status() == protocol.StatusRunning && s.proc != nil {
@@ -611,6 +624,7 @@ func (s *Session) close() {
 		s.mu.Lock()
 		s.subs = map[Subscriber]struct{}{}
 		s.mu.Unlock()
+		s.thaw()
 	})
 }
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -421,28 +423,17 @@ func TestITSession5_CloseKillsProcessGroup(t *testing.T) {
 	waitFor(t, "background job reaped", func() bool { return !processAlive(pid) })
 }
 
-// A background job that ignores SIGHUP must be killed too, via the SIGKILL
-// fallback.
-//
-// Interactive bash runs with job control, so a background job has its own
-// process group that kill(-pgid) never reaches. The graceful path relies on
-// bash forwarding SIGHUP; if the job ignores SIGHUP, sweeping the session is
-// the only way left.
-func TestCloseKillsHupImmuneJob(t *testing.T) {
-	m := newManager(t, cfg())
-	s := create(t, m)
-	c := newConn(t, m, "tab")
-	s.Subscribe(c, 0, 0, 0)
-
+// spawnJob starts a background job in the session that writes its pid to a
+// file, and returns that pid once it is running. The process is killed at
+// test cleanup in case the session didn't.
+func spawnJob(t *testing.T, c *fakeConn, s *session.Session, job string) int {
+	t.Helper()
 	marker := t.TempDir() + "/child.pid"
-	script := fmt.Sprintf(
-		`bash -c 'trap "" HUP; echo $$ > %s; sleep 300' & printf 'SPAWN-%%s\n' OK`+"\r",
-		marker)
+	script := fmt.Sprintf(job+` & printf 'SPAWN-%%s\n' OK`+"\r", marker)
 	if err := c.Send(s, script); err != nil {
 		t.Fatal(err)
 	}
 	waitScreen(t, c, "SPAWN-OK")
-
 	var pid int
 	waitFor(t, "child pid written", func() bool {
 		b, err := os.ReadFile(marker)
@@ -455,11 +446,81 @@ func TestCloseKillsHupImmuneJob(t *testing.T) {
 	if !processAlive(pid) {
 		t.Fatal("precondition failed: child process is not running")
 	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	return pid
+}
+
+// A background job that catches SIGHUP but keeps running is killed by the
+// sweep after the shell exits.
+//
+// Interactive bash runs with job control, so a background job has its own
+// process group that kill(-pgid) never reaches. The graceful path relies on
+// bash forwarding SIGHUP; a job that survives it is swept.
+func TestCloseKillsJobThatSurvivesHup(t *testing.T) {
+	m := newManager(t, cfg())
+	s := create(t, m)
+	c := newConn(t, m, "tab")
+	s.Subscribe(c, 0, 0, 0)
+
+	pid := spawnJob(t, c, s, `bash -c 'trap "echo hup" HUP; echo $$ > %s; while :; do sleep 1; done'`)
 
 	if _, err := m.Close(s.SID()); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "SIGHUP-immune job killed", func() bool { return !processAlive(pid) })
+	waitFor(t, "job that caught SIGHUP killed", func() bool { return !processAlive(pid) })
+}
+
+// A job that ignores SIGHUP survives closing the session: that's what nohup
+// does, and the user asked for it to outlive the terminal (ADR-0047 §5).
+func TestCloseSparesNohupJob(t *testing.T) {
+	for name, job := range map[string]string{
+		"nohup":    `nohup bash -c 'echo $$ > %s; exec sleep 300' >/dev/null 2>&1`,
+		"trap HUP": `bash -c 'trap "" HUP; echo $$ > %s; sleep 300'`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := newManager(t, cfg())
+			s := create(t, m)
+			c := newConn(t, m, "tab")
+			s.Subscribe(c, 0, 0, 0)
+
+			pid := spawnJob(t, c, s, job)
+
+			if _, err := m.Close(s.SID()); err != nil {
+				t.Fatal(err)
+			}
+			if !processAlive(pid) {
+				t.Fatal("a job that ignores SIGHUP was killed when the session closed")
+			}
+		})
+	}
+}
+
+// Concurrent resizes (two tabs, a rotating phone) leave the PTY at the size
+// the emulator ended at. The TIOCSWINSZ after each emulator update must not be
+// reordered against another resize's, or the program would draw for a size
+// the agent's screen isn't (ADR-0047 §4).
+func TestConcurrentResizesAgree(t *testing.T) {
+	m := newManager(t, cfg())
+	s := create(t, m)
+	c := newConn(t, m, "tab")
+	s.Subscribe(c, 0, 0, 0)
+	waitFor(t, "shell ready", func() bool { return s.HeadSeq() > 0 })
+
+	var wg sync.WaitGroup
+	for i := range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = s.Resize(uint16(60+i%40), uint16(20+i%10))
+		}()
+	}
+	wg.Wait()
+	info := s.Info()
+	if err := c.Send(s, "printf 'SIZE=%s\\n' \"$(stty size)\"\r"); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("SIZE=%d %d", info.Rows, info.Cols)
+	waitFor(t, want, func() bool { return strings.Contains(c.Screen(), want) })
 }
 
 // Closing an exited session skips the signal sequence and is idempotent.

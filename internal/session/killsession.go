@@ -19,8 +19,10 @@ import (
 // keep running as orphans, so the whole session has to be swept.
 //
 // pty.Start calls setsid, so the shell's session id equals its pid and every
-// descendant inherits it. Processes that detach with setsid (nohup, setsid,
-// systemd-run) escape, which is what the user asked for.
+// descendant inherits it. Processes that leave the session (setsid,
+// systemd-run) escape, and so do processes that ignore SIGHUP: nohup stays in
+// the session but sets SIGHUP to SIG_IGN. Either way the user asked for the
+// process to outlive the terminal.
 func killSession(sid int, sig syscall.Signal) {
 	self := os.Getpid()
 	entries, err := os.ReadDir("/proc")
@@ -32,10 +34,26 @@ func killSession(sid int, sig syscall.Signal) {
 		if err != nil || pid == self || pid == sid {
 			continue
 		}
-		if procSessionID(pid) == sid {
+		if procSessionID(pid) == sid && !ignoresSIGHUP(pid) {
 			_ = syscall.Kill(pid, sig)
 		}
 	}
+}
+
+// ignoresSIGHUP reports whether the process has SIGHUP set to SIG_IGN (bit 0
+// of SigIgn in /proc/<pid>/status), as nohup leaves it.
+func ignoresSIGHUP(pid int) bool {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return false
+	}
+	for line := range strings.Lines(string(b)) {
+		if v, ok := strings.CutPrefix(line, "SigIgn:"); ok {
+			mask, err := strconv.ParseUint(strings.TrimSpace(v), 16, 64)
+			return err == nil && mask&1 != 0
+		}
+	}
+	return false
 }
 
 // procSessionID returns field 6 (session id) of /proc/<pid>/stat, or -1 if it
