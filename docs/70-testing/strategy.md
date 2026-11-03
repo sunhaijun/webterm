@@ -110,6 +110,7 @@ Only what's visible is compared: the foreground color of blank cells is normaliz
 
 - `UT-pair-1..4`: single use, expiry, entropy, constant-time comparison
 - `UT-auth-1`: the database stores the hash, not the raw token
+- `UT-pair-budget`: pairing attempts in flight count against the global budget; 80 parallel attempts from different IPs let exactly 50 through, and a finished one frees its slot (ADR-0047 §3)
 
 ### `internal/session`: OOM priority when starting a shell ([ADR-0034](../20-architecture/adr/0034-system-service-oom-priority.md) §3)
 
@@ -122,6 +123,11 @@ Only what's visible is compared: the foreground color of blank cells is normaliz
 - `UT-install-handover`: with `--base-url file://…` pointing at a fake binary + `SHA256SUMS`, install.sh downloads and verifies it, then runs `<fake binary> install <original args>`; when the fake binary doesn't know `install`, the script aborts with "version too old" and installs nothing. No network, no sudo
 - `UT-install-default-addr`: without `--domain`, an existing `install-state` is reused (command-line flags override matching keys); otherwise the public IP is used (injected via `WEBTERM_PUBLIC_IP`, no network); checked through `ExecStart` in `--print-unit`
 - `UT-install-config-sync`: with an existing config file, reinstalling rewrites `domain` / the ports, deletes the port line when the port goes back to its default, and leaves other keys untouched
+- `UT-domain-case`: `--domain Term.Example.COM.` becomes `term.example.com`, in `ExecStart` and in `serve` (ADR-0047 §1)
+
+### `cmd/webterm`: hot upgrade ([ADR-0047](../20-architecture/adr/0047-review-fixes.md) §1)
+
+- `UT-reload-args`: against a fake agent on a control socket, `reload -- serve …` hands it the new command line; an agent without `exec_args` gets a plain reexec and then a second one with the command line; a new `instance_id` after the request is reported as lost sessions; a new request clears `last_error`; `handoff-check`'s parse rejects a removed config key, a missing domain and an unknown flag
 
 ### `internal/agent`: IP certificates ([ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md))
 
@@ -157,6 +163,13 @@ Real PTY + real SQLite + in-process HTTP server.
 | `IT-queue-2` | Connection write queue full → that connection is closed instead of blocking the Session (m2, needs the connection layer) |
 | `IT-sub-1` | Unsubscribed sessions keep buffering and feeding the emulator; `subscribe{out_seq}` catches up incrementally or with a snapshot |
 | `IT-handoff-1` | Across a hot upgrade: the incremental path is byte-continuous and a session's snapshot is byte-identical (`TestHandoffByteLevelContinuity`) |
+| `IT-handoff-wait` | While frozen, close / rename / move wait and the exported snapshot doesn't show them; after `Thaw` they go through. A session closed while frozen stops its loops (ADR-0047 §4) |
+| `IT-handoff-listen` | An inherited listener on another address isn't reused and its fd is closed, as is an inherited fd nothing adopts; one on the configured address is reused; exporting leaves the serving listener non-blocking (ADR-0047 §1) |
+| `IT-stale-detach` | An abandoned connection that ends after its page's new one queued input doesn't discard it: the PTY receives every byte. A connection that is still the newest discards its queued input and the resend lines up (ADR-0047 §2) |
+| `IT-resume-big` | Resume catch-up across two sessions larger than the write queue (64 KiB in the test) still gets `welcome` and both sessions catch up; a second `hello` with the same `client_id` closes the first connection and only that one (ADR-0047 §2) |
+| `IT-close-nohup` | Closing a session spares `nohup` and `trap "" HUP` jobs and kills a job that catches `SIGHUP` and keeps running (ADR-0047 §5) |
+| `IT-resize-order` | 64 concurrent resizes leave `stty size` equal to the session's size (ADR-0047 §4) |
+| `IT-control-1` | A second `ServeControl` on a live socket fails with `ErrAgentRunning` and the first keeps answering; closing an old server doesn't remove a newer socket at the same path (ADR-0047 §3) |
 | `IT-order-1` | Session order (AC-4.13): new sessions go last, closed ones are removed; `session.move` moves before `before` / to the end for `null`, an unknown `before` means last, an unknown `sid` returns `unknown_session`; on success `session.order` is broadcast to every connection (`req_id` only to the requester); `welcome.sessions[]` is in order; order survives a hot upgrade |
 | `IT-oom-1` | Real `/proc`, real PTY, no root: set the child target to "self + 100" (raising needs no privilege, and writing self back doesn't go below the floor) and start several sessions concurrently; every shell's `oom_score_adj` is the target, and the agent ends up back at self (ADR-0034 §3) |
 
@@ -201,6 +214,10 @@ They do **not** prove protocol compatibility with Let's Encrypt — that's `gola
 | `UT-reconnect-1` | Exponential backoff sequence, jitter range, immediate retry on the `online` event |
 | `UT-hb-1` | Heartbeat interval, pong timeout declares the connection dead |
 | `UT-hb-2` | Immediate liveness probe while believing it's online: `online` / page becomes visible → send `ping`; no `pong` within 2 seconds → close the connection; a `pong` keeps it open (AC-2.20) |
+| `UT-hb-3` | A socket that never fires `onclose` after `close()` (a dead link) is still given up on at the pong timeout, and the page reconnects; after a protocol error, frames still arriving on that socket are ignored (ADR-0047 §2) |
+| `UT-reconnect-2` | Input typed into a session that was then switched away from while offline is resent right after `welcome`, untrimmed, though the session isn't in `resume`; nothing is resent to a gone or exited session (AC-2.4) |
+| `UT-reconnect-3` | `retryNow` while a socket is connecting abandons it: it never sends a `hello` (ADR-0047 §2) |
+| `UT-input-size-1` | The pending cap is 256 KiB; refused input returns false with "too large" / "buffer full"; on the text page a refused paste sends no Enter and keeps the draft (AC-2.4) |
 | `UT-replay-2` | Replay gate: `onData` during the dispatch of a user input event passes; `onData` from `message` / timers during replay (incremental catch-up, snapshot) is dropped (AC-2.15) |
 | `UT-raw-2` | Fallback composition reset: `blur` and a `keydown` with `isComposing === false` both set `composing` back to false (AC-3.3) |
 | `UT-resize-1` | resize debounce |

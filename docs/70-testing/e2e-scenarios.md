@@ -121,7 +121,19 @@ Use `emit.sh <lines> <delay> mono` to output a same-colored span across many fra
 6. `A1`, `A2`, `A3` appear in the terminal **in order, with no duplicates and no losses**. **Search for substrings; don't compare whole lines**: the three commands arrive in one batch after the reconnect, and while bash runs the first, the kernel echoes the typed-ahead other two, so after readline redraws, output lines can carry leftover echo fragments (seen: `A1p`, `inA1`, `A2r`, 4 times in 12 runs on main). So pick output markers that can't appear in the echoed command (write the command as `printf "A%s-OK\n" 1`; the output is `A1-OK`, the echo only contains `A%s-OK`), and count occurrences and compare positions in the full terminal text
 7. Assert **no `input_gap`** during the reconnect: `welcome.resumed[].in_ack` must be the cumulative value from before the disconnect, not 0 (AC-2.12)
 
-Variant: submit more than 64 KiB of input while disconnected → the UI clearly says the offline input buffer is full, instead of dropping it silently.
+Variants:
+
+- Paste more than 256 KiB while disconnected → the UI clearly says the input is too large, instead of dropping it silently
+- Paste 70 KB while online → all of it reaches the PTY (the cap is the agent's input queue, not 64 KiB) and no notice appears
+
+### E2E-3b Input in a session switched away from
+
+> AC-2.4, [ADR-0047](../20-architecture/adr/0047-review-fixes.md) §2
+
+1. Two sessions A and B; A is active
+2. Cut the WS, type into A a command that writes a marker file, switch to B
+3. Restore the connection; `resume` lists only B
+4. Within 15 seconds the marker file exists, **while B is still active**: A's pending input went out right after `welcome`, not when the user switches back
 
 ---
 

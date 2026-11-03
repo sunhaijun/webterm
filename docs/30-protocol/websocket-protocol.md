@@ -49,6 +49,7 @@ Origin: https://<configured domain>
 
 - One WebSocket carries all sessions; the frame header carries `sid`
 - One device may open several connections (several tabs). **The agent allows this and doesn't make them exclusive**: each connection subscribes and tracks `out_seq` independently
+- **One page, one connection.** A page holds a single socket; when it gives up on one (no pong, protocol error, `retryNow`), it detaches it at once and doesn't wait for `onclose`. A `hello` with a `client_id` the agent already has a connection for means the page abandoned that one: the agent closes it, and the new connection owns the page's input from then on (§5.4, [ADR-0047](../20-architecture/adr/0047-review-fixes.md) §2)
 - Several connections writing input to the same session at once is allowed, and what that means is up to the user (like two people attached to the same tmux). `in_seq` is accounted per **`client_id`**, see §5.4
 
 ---
@@ -170,7 +171,7 @@ Any other frame before `hello` → `error{code:"expected_hello"}` and close.
 { "t": "session.close", "req_id": "r2", "sid": 1 }
 ```
 
-For a `running` session: `SIGHUP` → `SIGKILL` if it's still alive after 2 seconds.
+For a `running` session: `SIGHUP` → `SIGKILL` if it's still alive after 2 seconds. Processes that ignore `SIGHUP` (`nohup`) are left running ([ADR-0047](../20-architecture/adr/0047-review-fixes.md) §5).
 For an `exited` session: free the buffers and destroy it immediately.
 Both reply `session.closed`.
 
@@ -390,7 +391,7 @@ output stream: ───────────┼─────────�
 
 **A hot upgrade isn't a restart** ([ADR-0016](../20-architecture/adr/0016-hot-reexec.md)): when the agent re-execs in place, it hands `instance_id`, each session's ring buffer, emulator state and `in_ack` to the new process, so clients reconnecting after an upgrade still resume incrementally rather than getting `gone`. Only a real process restart (`SIGTERM`, crash) changes `instance_id`.
 
-**Recommended**: list only visible sessions in `resume`, and catch up the others with `subscribe{out_seq}` when the user switches to them, to avoid a flood of data right after reconnecting.
+**Recommended**: list only visible sessions in `resume`, and catch up the others with `subscribe{out_seq}` when the user switches to them, to avoid a flood of data right after reconnecting. **Their pending input doesn't wait for that**: right after `welcome`, the client resends `pending` for every running session that isn't in `resume`, as is. It starts at or before what the agent accepted, so the agent drops the duplicate prefix (§3).
 
 **Replay gate: while catch-up and snapshot bytes are being written to the terminal, the terminal's automatic replies don't go to the PTY.** Historical output contains terminal queries that programs sent (DSR / DA / `CSI ?u` …). Writing those bytes into xterm makes it **answer them again** — that isn't user input, and sending it to the PTY types garbage. The client keeps a `catchup_to` per session: OUTPUT received before `out_seq` reaches it counts as replay; SNAPSHOT always counts as replay.
 
@@ -413,8 +414,8 @@ pending     : [{seq, bytes}]  input sent but not yet acked
 
 - On send: assign `seq = in_seq_next`, `in_seq_next += len`, append to `pending`
 - On `ack{in_ack}`: drop the `pending` entries with `seq + len <= in_ack`; trim the front of an entry that is partly acked
-- After reconnecting: trim by `welcome.resumed[].in_ack`, then **resend everything in `pending` in ascending seq order**
-- `pending` is capped at **64 KiB**. Beyond that, stop accepting new input and say so clearly in the UI ("Offline input buffer full"); **never drop input silently**
+- After reconnecting: trim by `welcome.resumed[].in_ack`, then **resend everything in `pending` in ascending seq order**; sessions not in `resume` resend `pending` untrimmed (§5.3)
+- `pending` is capped at **256 KiB**, what the agent's input queue holds (§5.6). Input that would exceed it is refused with a clear message ("Input too large" / "Input buffer full"), and the caller is told: **never drop input silently**, and never act as if it went out (the text page keeps its draft and sends no Enter)
 
 **The accounting key is `(client_id, sid)`, not the connection.** Two tabs count independently (mixing them would make no sense), but **a reconnect from the same page must inherit `in_ack`**:
 
@@ -426,6 +427,7 @@ pending     : [{seq, bytes}]  input sent but not yet acked
 **When a connection drops, the agent must discard that `client_id`'s input that is queued but not yet written to the PTY**, and
 **subtract the discarded bytes** from `accepted`. Those bytes were never acked and the client still holds them in `pending`,
 so it will resend them; if they weren't discarded they'd be written to the PTY once now and once more on resend.
+The agent does this at the new connection's `hello`, and again when a connection ends **only if it is still the newest one for its `client_id`**: an abandoned socket can end long after its page reconnected, and by then the queue holds the new connection's input.
 
 **Don't simply roll back to `in_ack`**: the chunk the write loop has already taken off the queue and is writing is neither in the queue
 nor acked yet (when the foreground program isn't reading input, that write can block for a long time — exactly the `input_stalled` disconnect case).
@@ -438,7 +440,7 @@ Subtracting only the discarded part leaves `accepted = in_ack + the chunk being 
 |---|---|
 | client → agent | `ping` every 30 seconds |
 | agent → client | reply `pong` immediately on `ping` |
-| client declares dead | no `pong` within 10 seconds of a `ping` → close and reconnect |
+| client declares dead | no `pong` within 10 seconds of a `ping` → detach the socket and reconnect, without waiting for `onclose` (§1) |
 | client probes | on the `online` event / page becoming visible, send a `ping` **immediately**; no `pong` within **2 seconds** → close and reconnect |
 | agent declares dead | no frame of any kind for 60 seconds → close the connection |
 
@@ -454,12 +456,14 @@ Rationale and trade-offs: [ADR-0020](../20-architecture/adr/0020-input-never-sil
 
 | Queue | Limit | When full |
 |---|---|---|
-| Connection write queue (output → client) | 4 MiB (constant) | close that connection |
+| Connection write queue (output → client) | 4 MiB (constant), on top of the catch-up for `hello` | close that connection |
 | Session input queue (client → PTY) | 256 KiB | reply `error{code:"input_stalled", sid}` and close that connection |
 
 **Neither side ever blocks.** A blocked write side backpressures into `PTY.Read()` and stalls the shell — one slow client must not slow down the real work running on the server. A blocked read side is worse: **one WebSocket carries all sessions**, so a foreground program that doesn't read stdin (`sleep`, some TUIs) fills the PTY's input buffer and then stalls the whole connection's read loop — ping/pong, `resize`, `session.create` and every other session's input all stop.
 
 Closing the connection is lossless: the client reconnects automatically and resumes, output via incremental or snapshot, input resent from `in_ack` (§5.4).
+
+**The catch-up for `hello` is exempt from the write-queue limit.** It is what the client asked for (bounded by the sessions it resumes), and counting it would close the connection before `welcome`, again on every reconnect, so the client could never get back in. The limit applies to everything enqueued after `welcome`, on top of it.
 
 ---
 

@@ -64,7 +64,7 @@ webterm devices              # list or revoke devices
 journalctl -u webterm -f     # logs
 ```
 
-`webterm update --when-idle` waits until no session is running a command; `--force-restart` restarts instead (closes all sessions).
+`webterm update --when-idle` waits until no session is running a command; `--force-restart` restarts instead (closes all sessions). Changing the address or ports with `webterm install --domain … --https-port …` is a hot upgrade too: sessions survive. If the running agent can't be upgraded in place, the installer stops and says so rather than restarting.
 
 Problems: [troubleshooting.md](troubleshooting.md).
 
@@ -181,7 +181,7 @@ Command-line flags override the file; unknown keys are an error with the line nu
 | `webterm pair [--wait]` | Print a pairing code and QR code |
 | `webterm devices [list \| revoke <id> \| revoke-all]` | Manage devices |
 | `webterm doctor [--acme] [--guide]` | Check prerequisites; `--acme` obtains the certificate, `--guide` waits for you to fix things |
-| `webterm reload [--when-idle]` | Hot-upgrade to the binary on disk |
+| `webterm reload [--when-idle] [-- serve …]` | Hot-upgrade to the binary on disk; after `--`, the command line the new process starts with |
 | `webterm version` | Version |
 
 ## Data and backups

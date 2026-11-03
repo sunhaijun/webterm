@@ -56,6 +56,8 @@ export class Agent {
   private readonly dataDir: string
   private readonly opts: AgentOptions
   private pairURL = ''
+  /** Output of the `webterm pair` run that minted pairURL (it also carries the digits). */
+  private pairOut = ''
   private pairUsed = false
   private log = ''
 
@@ -82,15 +84,18 @@ export class Agent {
     const proc = spawn(BINARY, Agent.args(port, dataDir, opts), { stdio: ['ignore', 'pipe', 'pipe'] })
     const agent = new Agent(proc, port, dataDir, opts)
     agent.collect(proc)
-    await waitFor(async () => (await agent.healthy()) && agent.pairURL !== '', 'agent started and printed a pairing code')
+    await waitFor(() => agent.healthy(), 'agent started')
+    // serve prints a pairing code only to a terminal (AC-1.3); this is a pipe, so mint one the
+    // way an admin would.
+    const first = await agent.mintPair()
+    agent.pairURL = first.url
+    agent.pairOut = first.out
     return agent
   }
 
   private collect(proc: ChildProcess): void {
     const on = (chunk: Buffer) => {
       this.log += chunk.toString()
-      const m = this.log.match(/http:\/\/127\.0\.0\.1:\d+\/pair#[A-Za-z0-9_-]+/g)
-      if (m) this.pairURL = m[m.length - 1]!
     }
     proc.stdout?.on('data', on)
     proc.stderr?.on('data', on)
@@ -125,19 +130,20 @@ export class Agent {
     return this.pairURL
   }
 
-  /** pairDigits returns the numeric form of the same pairing code (ADR-0017), scraped from stdout as dddd-dddd-dddd-dddd. */
+  /** pairDigits returns the numeric form of the same pairing code (ADR-0017), as printed: dddd-dddd-dddd-dddd. */
   async pairDigits(): Promise<string> {
-    let found = ''
-    await waitFor(() => {
-      const m = this.log.match(/\b(\d{4}-\d{4}-\d{4}-\d{4})\b/)
-      if (m) found = m[1]!
-      return found !== ''
-    }, 'numeric pairing code on stdout', 10_000)
-    return found
+    const m = this.pairOut.match(/\b(\d{4}-\d{4}-\d{4}-\d{4})\b/)
+    if (!m) throw new Error(`webterm pair printed no numeric code:\n${this.pairOut}`)
+    return m[1]!
   }
 
   /** newPairLink mints a fresh pairing code, for a second device. */
   async newPairLink(): Promise<string> {
+    return (await this.mintPair()).url
+  }
+
+  /** mintPair runs `webterm pair` and returns the pairing link with the full output. */
+  private async mintPair(): Promise<{ url: string; out: string }> {
     const proc = spawn(BINARY, ['pair', '--dev', '--data-dir', this.dataDir, '--http-port', String(this.port)], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -147,7 +153,7 @@ export class Agent {
     await new Promise<void>((res) => proc.on('exit', () => res()))
     const m = out.match(/http:\/\/127\.0\.0\.1:\d+\/pair#[A-Za-z0-9_-]+/)
     if (!m) throw new Error(`webterm pair printed no pairing link:\n${out}`)
-    return m[0]
+    return { url: m[0], out }
   }
 
   /**

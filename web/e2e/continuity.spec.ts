@@ -1,6 +1,6 @@
 /**
  * E2E-2 Resume after disconnect, the core guarantee (AC-2.1 / AC-2.2 / AC-2.3 / AC-2.5 / AC-2.21)
- * E2E-3 Input typed while disconnected is not lost (AC-2.4 / AC-2.12)
+ * E2E-3 Input typed while disconnected is not lost (AC-2.4 / AC-2.12), E2E-3b in a session switched away from
  * E2E-4 UI behavior on the snapshot path (AC-2.6)
  *
  * These tests do not check that reconnecting works (too weak); they check that the final screen is
@@ -12,6 +12,10 @@
  * command line. Baseline and test runs use different per-line delays (different command lines);
  * after the clear only emit.sh output remains.
  */
+import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { expect, test, type Page } from '@playwright/test'
 
 import {
@@ -26,6 +30,7 @@ import {
   outSeq,
   serialize,
   submit,
+  switchTo,
   terminalText,
   waitFor,
   waitOnline,
@@ -38,6 +43,17 @@ import {
 // output frames can clog Playwright's protocol channel for tens of seconds (one waitForTimeout(300)
 // once took 44s).
 test.use({ trace: 'off' })
+
+/** paste pastes text into the current terminal (xterm's paste event -> one onData call). */
+async function paste(page: Page, text: string): Promise<void> {
+  await page.evaluate((text) => {
+    const ta = document.querySelector<HTMLTextAreaElement>('.term .xterm-helper-textarea')!
+    ta.focus()
+    const dt = new DataTransfer()
+    dt.setData('text/plain', text)
+    ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+  }, text)
+}
 
 /** waitQuiet waits until output has fully stopped (outSeq and buffer text unchanged), giving each round a fixed cutoff. */
 async function waitQuiet(page: Page, quietMs = 700): Promise<void> {
@@ -327,21 +343,60 @@ test.describe('E2E-3 input typed while disconnected is not lost', () => {
     await expect.poll(async () => (await hooks.inputStats(page)).unackedBytes, { message: 'all acked after resend' }).toBe(0)
   })
 
-  test('variant: more than 64 KiB of input submitted while disconnected -> clear "offline input full" notice', async ({ page }) => {
+  test('variant: input over the 256 KiB cap is refused with a clear notice, not dropped silently', async ({ page }) => {
     const net = await installWSControl(page)
     await agent.open(page)
 
     await net.goOffline()
     await expect(page.getByTestId('conn-text')).toContainText('Reconnecting', { timeout: 20_000 })
 
-    // Paste 70 KB into the terminal (xterm's paste event -> one onData call).
-    await page.evaluate(() => {
-      const ta = document.querySelector<HTMLTextAreaElement>('.term .xterm-helper-textarea')!
-      ta.focus()
-      const dt = new DataTransfer()
-      dt.setData('text/plain', 'x'.repeat(70 * 1024))
-      ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
-    })
-    await expect(page.getByTestId('toast')).toContainText('Offline input buffer full')
+    // Paste 260 KB into the terminal (xterm's paste event -> one onData call).
+    await paste(page, 'x'.repeat(260 * 1024))
+    await expect(page.getByTestId('toast')).toContainText('Input too large')
+  })
+
+  // The cap is the agent's input queue (256 KiB), so a large paste goes through online. With the
+  // old 64 KiB cap it was refused even while connected (ADR-0047 §2).
+  test('variant: a 70 KB paste goes through while online', async ({ page }) => {
+    await agent.open(page)
+    const f = join(tmpdir(), `webterm-e2e-paste-${process.pid}-${Date.now()}`)
+    try {
+      await submit(page, `stty raw -echo; head -c 71680 > ${f}; stty sane; printf 'GOT-%s\\n' $(wc -c < ${f})`)
+      await page.waitForTimeout(300)
+      await paste(page, 'x'.repeat(70 * 1024))
+      await waitText(page, 'GOT-71680', 'all 70 KB reached the PTY')
+      await expect(page.getByTestId('toast')).toHaveCount(0)
+    } finally {
+      rmSync(f, { force: true })
+    }
+  })
+
+  // E2E-3b: the session typed into isn't in resume (the user switched away), so it has no in_ack
+  // to trim by. Its input must still go out right after the reconnect, not when the user switches
+  // back (AC-2.4, ADR-0047 §2).
+  test('E2E-3b input typed into a session that was then switched away from runs right after reconnect', async ({ page }) => {
+    const net = await installWSControl(page)
+    await agent.open(page)
+    const a = (await hooks.sid(page))!
+    const b = await newSession(page)
+    await switchTo(page, a)
+    const marker = join(tmpdir(), `webterm-e2e-3b-${process.pid}-${Date.now()}`)
+    try {
+      await net.goOffline()
+      await expect(page.getByTestId('conn-text')).toContainText('Reconnecting', { timeout: 20_000 })
+      await submit(page, `printf 'SWITCHED-%s\\n' AWAY > ${marker}`)
+      await switchTo(page, b)
+
+      net.goOnline()
+      await waitOnline(page, 40_000)
+      await waitFor(
+        async () => existsSync(marker) && readFileSync(marker, 'utf8').includes('SWITCHED-AWAY'),
+        "session A's input ran without switching back to it",
+        15_000,
+      )
+      expect(await hooks.sid(page), 'still on B').toBe(b)
+    } finally {
+      rmSync(marker, { force: true })
+    }
   })
 })
