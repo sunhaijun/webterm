@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -150,6 +151,28 @@ func TestLimiterBackoff(t *testing.T) {
 			t.Fatal("rate limit on one IP affected another")
 		}
 	})
+}
+
+// The global budget (50 failures an hour) counts attempts still in flight
+// (ADR-0047 §3). Otherwise a burst from many IPs at once all pass Allow
+// before the first failure is recorded, and the cap doesn't bound anything.
+func TestLimiterGlobalBudgetCountsInFlight(t *testing.T) {
+	l := auth.NewLimiter()
+	now := time.Now()
+	passed := 0
+	for i := range 80 {
+		if ok, _ := l.Allow(fmt.Sprintf("10.0.%d.%d", i/250, i%250), now); ok {
+			passed++
+		}
+	}
+	if passed != 50 {
+		t.Fatalf("%d parallel attempts passed, want 50 (the global budget)", passed)
+	}
+	// Each finished attempt frees its slot.
+	l.Succeeded("10.0.0.1")
+	if ok, _ := l.Allow("10.9.9.9", now); !ok {
+		t.Fatal("a finished attempt should free its slot")
+	}
 }
 
 // X-Forwarded-For is ignored by default; otherwise forging it would bypass

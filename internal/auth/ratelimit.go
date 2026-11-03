@@ -31,9 +31,14 @@ type ipState struct {
 // State lives only in memory and resets on restart. It protects a one-time
 // code that expires in 5 minutes, so the extra window a restart opens is tiny.
 type Limiter struct {
-	mu              sync.Mutex
-	ips             map[string]*ipState
-	global          []time.Time // global failure timestamps
+	mu     sync.Mutex
+	ips    map[string]*ipState
+	global []time.Time // global failure timestamps
+	// inflight counts attempts that passed Allow and haven't reported Failed
+	// or Succeeded yet. They count against the global budget: otherwise a
+	// burst of parallel attempts from many IPs all pass Allow before the first
+	// failure is recorded, and the hourly cap means nothing.
+	inflight        int
 	globalBlockedTo time.Time
 	lastGC          time.Time
 }
@@ -54,6 +59,12 @@ func (l *Limiter) Allow(ip string, now time.Time) (bool, time.Duration) {
 	// pause everyone for a while. The caller of Failed logs the alert.
 	if now.Before(l.globalBlockedTo) {
 		return false, l.globalBlockedTo.Sub(now)
+	}
+	// Attempts in flight could each still fail: don't let them overshoot the
+	// global budget. Once the breaker has tripped and cooled down, this
+	// allows one at a time, as before (the next failure trips it again).
+	if l.inflight > 0 && l.recentGlobalLocked(now)+l.inflight >= globalFailures {
+		return false, time.Second
 	}
 
 	st := l.ips[ip]
@@ -89,7 +100,29 @@ func (l *Limiter) Allow(ip string, now time.Time) (bool, time.Duration) {
 		return false, wait
 	}
 	st.attempts = append(st.attempts, now)
+	l.inflight++
 	return true, 0
+}
+
+// recentGlobalLocked drops global failures older than the window and returns
+// how many remain.
+func (l *Limiter) recentGlobalLocked(now time.Time) int {
+	cutoff := now.Add(-globalWindow)
+	kept := l.global[:0]
+	for _, t := range l.global {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	l.global = kept
+	return len(l.global)
+}
+
+// doneLocked ends an attempt that Allow let through.
+func (l *Limiter) doneLocked() {
+	if l.inflight > 0 {
+		l.inflight--
+	}
 }
 
 // Failed records a failed pairing attempt and advances the backoff.
@@ -103,15 +136,10 @@ func (l *Limiter) Failed(ip string, now time.Time) (globalTripped bool) {
 	}
 	st.failures++
 	st.blockedTo = now.Add(l.backoffFor(st.failures - 1))
+	l.doneLocked()
 
-	cutoff := now.Add(-globalWindow)
-	kept := l.global[:0]
-	for _, t := range l.global {
-		if t.After(cutoff) {
-			kept = append(kept, t)
-		}
-	}
-	l.global = append(kept, now)
+	l.recentGlobalLocked(now)
+	l.global = append(l.global, now)
 	if len(l.global) >= globalFailures && now.After(l.globalBlockedTo) {
 		l.globalBlockedTo = now.Add(globalCooldown)
 		return true
@@ -124,6 +152,7 @@ func (l *Limiter) Succeeded(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.ips, ip)
+	l.doneLocked()
 }
 
 // backoffFor returns the backoff after n consecutive failures: 1s, 2s, 4s…,

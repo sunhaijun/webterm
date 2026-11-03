@@ -15,11 +15,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/sys/unix"
 
 	"github.com/sunhaijun/webterm/internal/handoff"
 )
@@ -57,17 +59,27 @@ type Servers struct {
 	https *http.Server
 	http  *http.Server
 	lns   map[string]net.Listener
+	// adopted records which inherited fds became listeners; Listen closes the
+	// rest, which would otherwise leak into every shell started later (the
+	// old process cleared their CLOEXEC for the exec).
+	adopted map[string]bool
 	// stop stops the background certificate loop (IP-mode renewal, ADR-0044).
 	stop context.CancelFunc
 }
 
 // listen opens the named listener, preferring an inherited fd over a new
-// bind.
+// bind. An inherited listener is used only if it is on the configured
+// address: a hot upgrade can change the ports or bind address (ADR-0047 §1),
+// and the old socket would keep answering on the old one.
 func (s *Servers) listen(cfg ServeConfig, name, addr string) (net.Listener, error) {
 	if s.lns == nil {
 		s.lns = make(map[string]net.Listener)
 	}
 	if fd, ok := cfg.Inherited[name]; ok {
+		if s.adopted == nil {
+			s.adopted = make(map[string]bool)
+		}
+		s.adopted[name] = true
 		f := os.NewFile(uintptr(fd), name)
 		if f == nil {
 			return nil, fmt.Errorf("inherited listener fd %d (%s) is invalid", fd, name)
@@ -77,8 +89,11 @@ func (s *Servers) listen(cfg ServeConfig, name, addr string) (net.Listener, erro
 		if err != nil {
 			return nil, fmt.Errorf("restore listener %s: %w", name, err)
 		}
-		s.lns[name] = ln
-		return ln, nil
+		if sameAddr(ln.Addr(), addr) {
+			s.lns[name] = ln
+			return ln, nil
+		}
+		ln.Close() // the configuration moved; bind the new address below
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -86,6 +101,34 @@ func (s *Servers) listen(cfg ServeConfig, name, addr string) (net.Listener, erro
 	}
 	s.lns[name] = ln
 	return ln, nil
+}
+
+// closeUnadopted closes inherited listener fds that no listener took over (a
+// mode or port change across a hot upgrade).
+func (s *Servers) closeUnadopted(cfg ServeConfig) {
+	for name, fd := range cfg.Inherited {
+		if !s.adopted[name] {
+			_ = unix.Close(fd)
+		}
+	}
+}
+
+// sameAddr reports whether a listener's address is the host:port to listen
+// on. An unspecified host (0.0.0.0, ::, empty) matches any unspecified one.
+func sameAddr(have net.Addr, want string) bool {
+	ta, ok := have.(*net.TCPAddr)
+	if !ok {
+		return false
+	}
+	host, port, err := net.SplitHostPort(want)
+	if err != nil || strconv.Itoa(ta.Port) != port {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if host == "" || (ip != nil && ip.IsUnspecified()) {
+		return ta.IP == nil || ta.IP.IsUnspecified()
+	}
+	return ip != nil && ip.Equal(ta.IP)
 }
 
 // ExportListeners duplicates the listening sockets as inheritable fds
@@ -112,24 +155,51 @@ func (s *Servers) ExportListeners() ([]handoff.Listener, []*os.File, error) {
 			return fail(fmt.Errorf("export listener %s: %w", name, err))
 		}
 		files = append(files, f)
-		if err := handoff.Inherit(int(f.Fd())); err != nil {
+		// Not f.Fd(): that puts the fd in blocking mode, and the dup shares
+		// its file status flags with the listener still serving here, so
+		// Accept would block a thread, and stay blocking if the upgrade is
+		// abandoned.
+		fd, err := rawFD(f)
+		if err != nil {
+			return fail(fmt.Errorf("export listener %s: %w", name, err))
+		}
+		if err := handoff.Inherit(fd); err != nil {
 			return fail(err)
 		}
-		out = append(out, handoff.Listener{Name: name, FD: int(f.Fd())})
+		out = append(out, handoff.Listener{Name: name, FD: fd})
 	}
 	return out, files, nil
 }
+
+// rawFD returns f's descriptor without changing its blocking mode.
+func rawFD(f *os.File) (int, error) {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return -1, err
+	}
+	fd := -1
+	if err := rc.Control(func(u uintptr) { fd = int(u) }); err != nil {
+		return -1, err
+	}
+	return fd, nil
+}
+
+// httpIdleTimeout closes keep-alive connections idle this long. Without it a
+// connection that never sends another request (no auth needed for that) is
+// held forever. WebSocket connections are hijacked and unaffected.
+const httpIdleTimeout = 2 * time.Minute
 
 // Listen starts listening as configured and returns immediately. Server
 // errors are reported on the returned channel.
 func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan error, error) {
 	errCh := make(chan error, 2)
 	s := &Servers{}
+	defer s.closeUnadopted(cfg)
 
 	switch {
 	case cfg.Dev:
 		addr := fmt.Sprintf("127.0.0.1:%d", cfg.HTTPPort)
-		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second,
+		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: httpIdleTimeout,
 			ErrorLog: a.httpErrorLog()}
 		ln, err := s.listen(cfg, "http", addr)
 		if err != nil {
@@ -146,7 +216,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 					"serving webterm over plain HTTP on the internet hands out your shell", cfg.Bind)
 		}
 		addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.HTTPPort)
-		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second,
+		s.http = &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: httpIdleTimeout,
 			ErrorLog: a.httpErrorLog()}
 		ln, err := s.listen(cfg, "http", addr)
 		if err != nil {
@@ -184,6 +254,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 			Handler:           handler,
 			TLSConfig:         tlsConfigFor(cfg, src),
 			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       httpIdleTimeout,
 			ErrorLog:          a.httpErrorLog(),
 		}
 		httpsLn, err := s.listen(cfg, "https", httpsAddr)
@@ -198,6 +269,7 @@ func (a *Agent) Listen(cfg ServeConfig, handler http.Handler) (*Servers, <-chan 
 			Addr:              httpAddr,
 			Handler:           src.HTTPHandler(redirectToHTTPS(cfg.Domain, cfg.HTTPSPort)),
 			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       httpIdleTimeout,
 			ErrorLog:          a.httpErrorLog(),
 		}
 		httpLn, err := s.listen(cfg, "http", httpAddr)
@@ -323,8 +395,8 @@ func IssueCheck(ctx context.Context, cfg ServeConfig) (leaf *x509.Certificate, i
 	}
 	quiet := log.New(io.Discard, "", 0)
 	hs := &http.Server{Handler: http.NotFoundHandler(), TLSConfig: tlsConfigFor(cfg, src),
-		ReadHeaderTimeout: 10 * time.Second, ErrorLog: quiet}
-	h := &http.Server{Handler: src.HTTPHandler(nil), ReadHeaderTimeout: 10 * time.Second, ErrorLog: quiet}
+		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: httpIdleTimeout, ErrorLog: quiet}
+	h := &http.Server{Handler: src.HTTPHandler(nil), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: httpIdleTimeout, ErrorLog: quiet}
 	go func() { _ = hs.ServeTLS(httpsLn, "", "") }()
 	go func() { _ = h.Serve(httpLn) }()
 	defer func() {

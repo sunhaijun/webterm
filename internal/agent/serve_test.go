@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/acme"
+	"golang.org/x/sys/unix"
 )
 
 // A failed certificate request explains what happened and how to fix it,
@@ -408,5 +409,133 @@ func TestFailureClassification(t *testing.T) {
 				t.Errorf("diagnosis lacks %q:\n%s", tc.advice, d)
 			}
 		})
+	}
+}
+
+// freePort returns a TCP port that was free a moment ago.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// inheritable returns a dup of ln's fd, as a hot upgrade hands it over.
+func inheritable(t *testing.T, ln net.Listener) int {
+	t.Helper()
+	f, err := ln.(*net.TCPListener).File()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fd, err := rawFD(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nfd, err := unix.Dup(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nfd
+}
+
+func fdOpen(fd int) bool {
+	_, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+	return err == nil
+}
+
+// A hot upgrade can change the port (ADR-0047 §1). An inherited listener on
+// another address is not reused, and inherited fds nothing adopted are closed
+// instead of leaking into every shell started later.
+func TestInheritedListenersFollowConfig(t *testing.T) {
+	oldLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldLn.Close()
+	spare, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spare.Close()
+	httpFD, httpsFD := inheritable(t, oldLn), inheritable(t, spare)
+
+	port := freePort(t)
+	a := &Agent{cfg: Config{Dev: true}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s, _, err := a.Listen(ServeConfig{
+		Dev: true, HTTPPort: port,
+		Inherited: map[string]int{"http": httpFD, "https": httpsFD},
+	}, http.NotFoundHandler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(context.Background())
+
+	if got := s.lns["http"].Addr().(*net.TCPAddr).Port; got != port {
+		t.Fatalf("listening on %d, want the configured %d", got, port)
+	}
+	for name, fd := range map[string]int{"http": httpFD, "https": httpsFD} {
+		if fdOpen(fd) {
+			t.Errorf("inherited %s fd %d left open", name, fd)
+		}
+	}
+	if s.http.IdleTimeout != httpIdleTimeout {
+		t.Errorf("IdleTimeout = %v, want %v", s.http.IdleTimeout, httpIdleTimeout)
+	}
+}
+
+// An inherited listener on the configured address is reused, so the port
+// never goes unanswered during an upgrade (ADR-0016).
+func TestInheritedListenerReused(t *testing.T) {
+	oldLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := oldLn.Addr().(*net.TCPAddr).Port
+	fd := inheritable(t, oldLn)
+	oldLn.Close() // the old process's own copy is gone after exec
+
+	a := &Agent{cfg: Config{Dev: true}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s, _, err := a.Listen(ServeConfig{Dev: true, HTTPPort: port, Inherited: map[string]int{"http": fd}}, http.NotFoundHandler())
+	if err != nil {
+		t.Fatalf("Listen: %v (the inherited socket should have been reused, not rebound)", err)
+	}
+	defer s.Shutdown(context.Background())
+	if got := s.lns["http"].Addr().(*net.TCPAddr).Port; got != port {
+		t.Fatalf("port = %d, want %d", got, port)
+	}
+}
+
+// Exporting listeners for a hot upgrade must leave them non-blocking: the
+// export shares file status flags with the listener still serving, and a
+// blocking one ties up a thread in accept (and stays that way if the upgrade
+// is abandoned).
+func TestExportListenersKeepsNonBlocking(t *testing.T) {
+	a := &Agent{cfg: Config{Dev: true}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s, _, err := a.Listen(ServeConfig{Dev: true, HTTPPort: freePort(t)}, http.NotFoundHandler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(context.Background())
+	_, files, err := s.ExportListeners()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, f := range files {
+			f.Close()
+		}
+	}()
+	rc, err := s.lns["http"].(*net.TCPListener).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flags int
+	_ = rc.Control(func(fd uintptr) { flags, _ = unix.FcntlInt(fd, unix.F_GETFL, 0) })
+	if flags&unix.O_NONBLOCK == 0 {
+		t.Fatal("the serving listener became blocking after ExportListeners")
 	}
 }

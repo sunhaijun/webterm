@@ -169,6 +169,30 @@ func TestITAuth2_OriginCheck(t *testing.T) {
 		}
 		ws.CloseNow()
 	})
+
+	// State-changing /api requests get the same check (ADR-0047 §3): the
+	// SameSite cookie is the first line, this the second.
+	t.Run("cross-origin /api mutations are refused", func(t *testing.T) {
+		send := func(method, path, origin string) int {
+			req, _ := http.NewRequest(method, h.srv.URL+path, nil)
+			req.Header.Set("Origin", origin)
+			resp, err := c.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			return resp.StatusCode
+		}
+		if got := send(http.MethodPost, "/api/devices/revoke-all", "https://evil.example.com"); got != http.StatusForbidden {
+			t.Fatalf("cross-origin revoke-all: status %d, want 403", got)
+		}
+		if got := send(http.MethodDelete, "/api/devices/no-such-device", h.srv.URL); got == http.StatusForbidden {
+			t.Fatal("same-origin request refused")
+		}
+		if resp := h.do(c, http.MethodGet, "/api/devices", nil); resp.StatusCode != http.StatusOK {
+			t.Fatalf("device lost after a refused request: %d", resp.StatusCode)
+		}
+	})
 }
 
 // IT-auth-3: cookie attributes (AC-1.9).

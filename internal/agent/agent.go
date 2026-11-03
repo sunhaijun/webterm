@@ -102,9 +102,9 @@ func (a *Agent) routes() {
 	// Auth required.
 	a.mux.Handle("GET /ws", a.requireAuth(http.HandlerFunc(a.handleWS)))
 	a.mux.Handle("GET /api/devices", a.requireAuth(http.HandlerFunc(a.handleListDevices)))
-	a.mux.Handle("PATCH /api/devices/{id}", a.requireAuth(http.HandlerFunc(a.handlePatchDevice)))
-	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeDevice)))
-	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(http.HandlerFunc(a.handleRevokeAll)))
+	a.mux.Handle("PATCH /api/devices/{id}", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handlePatchDevice))))
+	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeDevice))))
+	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeAll))))
 
 	// Every other /api/* path authenticates first, then 404s (auth matrix:
 	// /api/* ✓). Without this they would fall through to the SPA fallback on
