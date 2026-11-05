@@ -226,16 +226,18 @@ func Inherit(fd int) error {
 }
 
 // Check is the pre-flight check: it runs the new binary's handoff-check as a
-// child process and feeds it the metadata snapshot. If the new binary cannot
-// read it, fail here; there is no way back after exec.
-func Check(exe string, meta *Snapshot, timeout time.Duration) error {
+// child process, with the serve arguments the new process will get, and feeds
+// it the metadata snapshot. If the new binary cannot read the snapshot or
+// rejects the arguments or config file, fail here; there is no way back after
+// exec. argv starts with "serve".
+func Check(exe string, argv []string, meta *Snapshot, timeout time.Duration) error {
 	raw, err := Encode(meta)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "handoff-check")
+	cmd := exec.CommandContext(ctx, exe, append([]string{"handoff-check"}, argv...)...)
 	cmd.Stdin = bytes.NewReader(raw)
 	cmd.WaitDelay = time.Second // after the kill, don't wait for its children to close the pipe
 	out, err := cmd.CombinedOutput()
@@ -247,7 +249,7 @@ func Check(exe string, meta *Snapshot, timeout time.Duration) error {
 	case !errors.As(err, &exit):
 		return fmt.Errorf("handoff: cannot start new binary %s: %w", exe, err)
 	default:
-		return fmt.Errorf("handoff: new binary rejected the snapshot: %s", bytes.TrimSpace(out))
+		return fmt.Errorf("handoff: new binary rejected the upgrade: %s", bytes.TrimSpace(out))
 	}
 	if !bytes.HasPrefix(bytes.TrimSpace(out), []byte("ok schema=")) {
 		return fmt.Errorf("handoff: unexpected pre-flight output from new binary: %q", out)

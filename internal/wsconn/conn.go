@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -71,6 +72,9 @@ func (d Deps) writeQueueBytes() int {
 type outFrame struct {
 	binary bool
 	data   []byte
+	// resume marks frames produced before welcome (the hello catch-up); they
+	// don't count against the write queue limit, see enqueue.
+	resume bool
 }
 
 // Conn is one WebSocket connection.
@@ -79,7 +83,9 @@ type Conn struct {
 	deps Deps
 	log  *slog.Logger
 
-	clientID string
+	// clientID is set once by hello on the read goroutine and read from
+	// others (session fan-out, the hub), hence atomic.
+	clientID atomic.Pointer[string]
 
 	mu       sync.Mutex
 	subs     map[uint16]bool      // subscribed sessions
@@ -94,6 +100,8 @@ type Conn struct {
 	// while hello was being handled.
 	q      []outFrame
 	queued int // bytes in the write queue, including held
+	// resumeBytes is the part of queued that came from before welcome.
+	resumeBytes int
 	// holding: everything enqueued before welcome is parked in held.
 	//
 	// Deciding hello.resume and enqueueing the catch-up frames must be one
@@ -147,7 +155,12 @@ func New(ws *websocket.Conn, deps Deps) *Conn {
 }
 
 // ClientID implements session.Subscriber.
-func (c *Conn) ClientID() string { return c.clientID }
+func (c *Conn) ClientID() string {
+	if p := c.clientID.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
 
 // Push implements session.Subscriber: it encodes output as OUTPUT frames and
 // enqueues them.
@@ -251,6 +264,11 @@ func (c *Conn) allowHeadSeq(sid uint16, head uint64) bool {
 
 // enqueue atomically appends a batch of frames to the write queue. If the
 // queue is full it closes the connection; it never blocks.
+//
+// Frames enqueued before welcome are exempt from the limit. They are the
+// catch-up the client asked for in hello (bounded by the sessions it resumes),
+// and closing over them would repeat on every reconnect: the client would
+// never get back in. The limit applies to everything after, on top of them.
 func (c *Conn) enqueue(frames ...outFrame) {
 	if len(frames) == 0 {
 		return
@@ -264,15 +282,19 @@ func (c *Conn) enqueue(frames ...outFrame) {
 		c.mu.Unlock()
 		return
 	}
-	if c.queued+n > c.deps.writeQueueBytes() {
+	holding := c.holding
+	if !holding && c.queued-c.resumeBytes+n > c.deps.writeQueueBytes() {
 		c.mu.Unlock()
-		c.log.Warn("conn queue full, disconnecting slow client", "client_id", c.clientID)
+		c.log.Warn("conn queue full, disconnecting slow client", "client_id", c.ClientID())
 		c.closeWith(websocket.StatusTryAgainLater, "write queue full")
 		return
 	}
 	c.queued += n
-	holding := c.holding
 	if holding {
+		for i := range frames {
+			frames[i].resume = true
+		}
+		c.resumeBytes += n
 		c.held = append(c.held, frames...)
 	} else {
 		c.q = append(c.q, frames...)
@@ -297,11 +319,13 @@ func (c *Conn) releaseWith(first []byte) {
 	held := c.held
 	c.held = nil
 	if c.closed {
-		c.queued = 0
+		c.queued, c.resumeBytes = 0, 0
 		c.mu.Unlock()
 		return
 	}
-	c.queued += len(first) // welcome may exceed a slow client's remaining budget, but it must go out
+	f.resume = true // welcome goes out whatever the budget
+	c.queued += len(first)
+	c.resumeBytes += len(first)
 	c.q = append(c.q, f)
 	c.q = append(c.q, held...)
 	c.mu.Unlock()
@@ -326,6 +350,9 @@ func (c *Conn) pop() (outFrame, bool) {
 	c.q[0] = outFrame{}
 	c.q = c.q[1:]
 	c.queued -= len(f.data)
+	if f.resume {
+		c.resumeBytes -= len(f.data)
+	}
 	return f, true
 }
 
@@ -383,7 +410,7 @@ func (c *Conn) sendError(reqID string, sid *uint16, code, message string, fatal 
 	}
 }
 
-func (c *Conn) String() string { return fmt.Sprintf("conn(%s)", c.clientID) }
+func (c *Conn) String() string { return fmt.Sprintf("conn(%s)", c.ClientID()) }
 
 // onlyHeadSeq reports whether m carries only head_seq (plus sid).
 func onlyHeadSeq(m *protocol.SessionUpdated) bool {

@@ -169,6 +169,30 @@ func TestITAuth2_OriginCheck(t *testing.T) {
 		}
 		ws.CloseNow()
 	})
+
+	// State-changing /api requests get the same check (ADR-0047 §3): the
+	// SameSite cookie is the first line, this the second.
+	t.Run("cross-origin /api mutations are refused", func(t *testing.T) {
+		send := func(method, path, origin string) int {
+			req, _ := http.NewRequest(method, h.srv.URL+path, nil)
+			req.Header.Set("Origin", origin)
+			resp, err := c.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			return resp.StatusCode
+		}
+		if got := send(http.MethodPost, "/api/devices/revoke-all", "https://evil.example.com"); got != http.StatusForbidden {
+			t.Fatalf("cross-origin revoke-all: status %d, want 403", got)
+		}
+		if got := send(http.MethodDelete, "/api/devices/no-such-device", h.srv.URL); got == http.StatusForbidden {
+			t.Fatal("same-origin request refused")
+		}
+		if resp := h.do(c, http.MethodGet, "/api/devices", nil); resp.StatusCode != http.StatusOK {
+			t.Fatalf("device lost after a refused request: %d", resp.StatusCode)
+		}
+	})
 }
 
 // IT-auth-3: cookie attributes (AC-1.9).
@@ -943,6 +967,78 @@ func TestResumeOverRealSocket(t *testing.T) {
 			t.Fatal("input_gap after reconnect")
 		}
 	}
+}
+
+// Resume catch-up larger than the write queue still gets the client back in
+// (ADR-0047 §2). The catch-up for hello is bounded by the sessions the client
+// resumes and is exempt from the queue limit; counting it closed the
+// connection before welcome, and every reconnect after that did the same.
+func TestResumeCatchUpLargerThanWriteQueue(t *testing.T) {
+	h := newHarness(t, func(c *agent.Config) { c.WSWriteQueueMax = 64 << 10 })
+	c := h.client()
+	h.pair(c).Body.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cl := h.connect(ctx, c, "tab-1", nil, "")
+	w := cl.welcome()
+	a, b := cl.createSession(t.TempDir()), cl.createSession(t.TempDir())
+	cl.mu.Lock()
+	atA, atB := cl.outSeq[a], cl.outSeq[b]
+	cl.mu.Unlock()
+
+	// Drop the connection, then let both sessions produce 60 KB each.
+	cl.ws.CloseNow()
+	waitFor(t, "old connection gone", func() bool { return h.agent.Hub().Count() == 0 })
+	for _, sid := range []uint16{a, b} {
+		s, _ := h.sessions.Get(sid)
+		if err := s.Write("tab-1", 0, []byte("head -c 60000 /dev/zero | tr '\\0' x; echo; echo DONE-$((6*7))\r")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, "output produced", func() bool {
+		sa, _ := h.sessions.Get(a)
+		sb, _ := h.sessions.Get(b)
+		return sa.HeadSeq() > atA+60000 && sb.HeadSeq() > atB+60000
+	})
+
+	cl2 := h.connect(ctx, c, "tab-1", []protocol.ResumeReq{{SID: a, OutSeq: atA}, {SID: b, OutSeq: atB}}, w.InstanceID)
+	w2 := cl2.welcome()
+	for _, r := range w2.Resumed {
+		if r.Status != protocol.ResumeOK {
+			t.Fatalf("resumed = %+v, want ok for both", w2.Resumed)
+		}
+	}
+	waitFor(t, "both sessions caught up", func() bool { return cl2.screenHas(a, "DONE-42") && cl2.screenHas(b, "DONE-42") })
+}
+
+// A page holds one socket at a time: a second connection with the same
+// client_id means the page gave up on the first, so the agent closes it
+// instead of feeding it until the idle timeout (ADR-0047 §2).
+func TestNewConnectionSupersedesOldOne(t *testing.T) {
+	h := newHarness(t)
+	c := h.client()
+	h.pair(c).Body.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	old := h.connect(ctx, c, "tab-1", nil, "")
+	w := old.welcome()
+	sid := old.createSession(t.TempDir())
+	other := h.connect(ctx, h.reuse(c), "tab-2", nil, "")
+	other.welcome()
+
+	cur := h.connect(ctx, h.reuse(c), "tab-1", []protocol.ResumeReq{{SID: sid}}, w.InstanceID)
+	cur.welcome()
+	waitFor(t, "abandoned connection closed", func() bool { return old.isClosed() })
+	if other.isClosed() {
+		t.Fatal("a connection of another page was closed")
+	}
+	cur.mu.Lock()
+	cur.inSeq[sid] = old.inSeqOf(sid)
+	cur.mu.Unlock()
+	cur.input(sid, "printf 'NEW-%s\\n' OK\r")
+	waitFor(t, "input over the new connection", func() bool { return cur.screenHas(sid, "NEW-OK") })
 }
 
 // Multiple tabs: a session created in A is visible in B (broadcast rule,

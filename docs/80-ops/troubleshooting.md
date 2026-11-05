@@ -118,6 +118,7 @@ sudo journalctl -u webterm | grep -iE 'oom|Main process exited|Stopping'
 | Log | Cause |
 |---|---|
 | `Stopping webterm.service` | A restart or `update --force-restart`. Use `webterm update` to keep sessions |
+| `reload` said "the agent restarted … sessions were lost" | The new binary failed after taking over and systemd started it again. File a bug with the log around it |
 | `oom-kill` | Out of memory. If `systemctl cat webterm` lacks `OOMScoreAdjust=-900`, it's an old user service: migrate. Otherwise the machine needs more memory |
 | `code=killed` without OOM | A crash: please file a bug with 200 lines of log |
 
@@ -146,7 +147,11 @@ While it's stuck, run `__webterm.inputStats()` in the browser console. Its `verd
 
 ### Programs keep running after closing a session
 
-Closing hangs up every job in the session. Programs started with `nohup`, `setsid` or `systemd-run` left the session on purpose (`ps -eo pid,sid,cmd`). Anything else is a bug.
+Closing hangs up every job in the session. Programs started with `nohup` (they ignore the hangup), `setsid` or `systemd-run` (they left the session) keep running on purpose (`ps -eo pid,sid,cmd`). Anything else is a bug.
+
+### `another webterm agent is already running with this data directory`
+
+A second `webterm serve` (say `--dev` on a server that runs the service) would share the service's data directory and control socket. Give it its own: `webterm serve --dev --data-dir /tmp/webterm-dev`.
 
 ### "Session limit reached"
 

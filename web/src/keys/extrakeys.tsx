@@ -38,7 +38,8 @@ export interface ExtraKeysProps {
   /** A non-modifier key was pressed (called from the pointerup dispatch). */
   onKey(id: ExtraKeyId): void
   /** Enter on the text page (called from the keydown dispatch). */
-  onSend(send: TextSend): void
+  /** Returns false when the text wasn't sent (too large); the box keeps it. */
+  onSend(send: TextSend): boolean
   register(els: TextPageEls | null): void
 }
 
@@ -112,8 +113,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
     const send = textEnter(ta.value, e)
     if (send.kind === 'none') return // Mid-composition: let the IME pick the candidate
     e.preventDefault() // Enter never inserts a newline in the text box
-    ta.value = ''
-    p.onSend(send) // Stay on the text page with focus unchanged
+    if (p.onSend(send)) ta.value = '' // Stay on the text page with focus unchanged
   }
 
   return (

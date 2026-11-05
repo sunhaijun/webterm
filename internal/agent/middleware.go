@@ -77,6 +77,21 @@ func (a *Agent) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// sameOrigin guards state-changing /api requests with the same Origin check
+// as the WebSocket handshake. The SameSite=Strict cookie already keeps
+// cross-site requests unauthenticated; this is the second line of defense, so
+// that a browser or proxy that gets SameSite wrong can't be used to revoke
+// devices from another site (threat model T4).
+func (a *Agent) sameOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !a.checkOrigin(r) {
+			a.writeError(w, http.StatusForbidden, "forbidden", "Cross-origin request refused")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // checkOrigin validates the Origin of a WebSocket handshake.
 //
 // WebSocket handshakes are not protected by CORS. Modern browsers don't send

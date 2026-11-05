@@ -39,7 +39,7 @@ func (c *Conn) Serve(ctx context.Context) {
 	_ = c.ws.Close(code, msg)
 
 	if err != nil && !errors.Is(err, context.Canceled) {
-		c.log.Debug("connection ended", "client_id", c.clientID, "err", err)
+		c.log.Debug("connection ended", "client_id", c.ClientID(), "err", err)
 	}
 }
 
@@ -235,17 +235,13 @@ func (c *Conn) watchRevocation(ctx context.Context) {
 }
 
 // detachAll cleans up when the connection ends: it unsubscribes from every
-// session and discards this client's input not yet written to the PTY
-// (protocol §5.3).
+// session and, unless a newer connection of the same page has taken over,
+// discards this client's input not yet written to the PTY (protocol §5.4).
 func (c *Conn) detachAll() {
 	c.mu.Lock()
 	clear(c.subs)
 	c.mu.Unlock()
-
-	for _, s := range c.deps.Sessions.List() {
-		s.Unsubscribe(c)
-		s.DetachClient(c.clientID)
-	}
+	c.deps.Sessions.Detach(c)
 }
 
 // handleHello handles the first message and replies with welcome.
@@ -262,10 +258,16 @@ func (c *Conn) handleHello(h *protocol.Hello) error {
 			"agent speaks protocol "+strconv.Itoa(protocol.Version)+", client speaks "+strconv.Itoa(h.Protocol)+"; reload the page", true)
 		return errors.New("protocol version mismatch")
 	}
-	c.clientID = h.ClientID
-	if c.clientID == "" {
+	if h.ClientID == "" {
 		c.sendError("", nil, protocol.CodeBadRequest, "hello is missing client_id", true)
 		return errors.New("missing client_id")
+	}
+	id := h.ClientID
+	c.clientID.Store(&id)
+	// The page has given up on any older connection it had (it holds one
+	// socket at a time); close those now rather than at their idle timeout.
+	if c.deps.Hub != nil {
+		c.deps.Hub.Supersede(c)
 	}
 
 	// Subscribe only to sessions the client asked to resume; it subscribes to

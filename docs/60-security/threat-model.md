@@ -118,7 +118,7 @@ Session name and CWD are the only server data that reaches the DOM (tab bar, ses
 | A stuck shell stalling the whole connection | The session input queue is bounded (256 KiB); when it's full, reply `input_stalled` and **drop that connection**, never blocking the connection's read loop (same section) |
 | Memory amplification through huge frames | Frames are capped at 256 KiB; anything larger disconnects |
 | Output flood | The agent-side emulator runs at about 20 MB/s per core and backpressures PTY reads, so nothing piles up without bound; history is fixed at 2000 lines |
-| Input queue growth | The client-side `pending` is capped at 64 KiB |
+| Input queue growth | The client-side `pending` is capped at 256 KiB, the agent's per-session input queue |
 
 **Note**: without Cloudflare there's no DDoS protection ([ADR-0002](../20-architecture/adr/0002-self-contained-binary.md)). Mitigation is limited to the application layer. Network-layer volumetric attacks are out of scope for this project — a user facing them should put a tunnel or CDN in front (the architecture supports that).
 

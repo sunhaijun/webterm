@@ -20,7 +20,10 @@ type commonFlags struct {
 
 func (c *commonFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.dataDir, "data-dir", defaultDataDir(), "data directory")
-	fs.StringVar(&c.domain, "domain", "", "domain name or public IPv4 address (required in production; used for ACME and Origin checks)")
+	fs.Func("domain", "domain name or public IPv4 address (required in production; used for ACME and Origin checks)", func(v string) error {
+		c.domain = normalizeDomain(v)
+		return nil
+	})
 	fs.BoolVar(&c.dev, "dev", false, "local development: plain HTTP on 127.0.0.1, no certificate")
 }
 
@@ -32,6 +35,13 @@ func (c *commonFlags) baseURL(httpPort, httpsPort int) string {
 		return "http://127.0.0.1:" + strconv.Itoa(httpPort)
 	}
 	return agent.ExternalURL(c.domain, httpsPort)
+}
+
+// normalizeDomain lowercases a domain and drops a trailing dot. Browsers send
+// the Origin host in lowercase and certificates match case-insensitively, so
+// "Term.Example.com" must behave exactly like "term.example.com".
+func normalizeDomain(v string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(v)), ".")
 }
 
 // envList collects repeatable --session-env KEY=VAL flags (AC-7.8).

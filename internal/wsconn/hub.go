@@ -49,6 +49,25 @@ func (h *Hub) Remove(c *Conn) {
 	h.mu.Unlock()
 }
 
+// Supersede closes the other connections with c's client_id. A page holds
+// one socket at a time, so those are sockets it abandoned without a close
+// reaching us (a dead link). Left alone they would linger until the idle
+// timeout, pushing output into the void.
+func (h *Hub) Supersede(c *Conn) {
+	id := c.ClientID()
+	h.mu.Lock()
+	var old []*Conn
+	for o := range h.conns {
+		if o != c && o.ClientID() == id {
+			old = append(old, o)
+		}
+	}
+	h.mu.Unlock()
+	for _, o := range old {
+		o.closeWith(websocket.StatusGoingAway, "superseded by a newer connection")
+	}
+}
+
 // Count returns the number of live connections.
 func (h *Hub) Count() int {
 	h.mu.Lock()

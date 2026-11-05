@@ -51,7 +51,7 @@ python3 scripts/check-doc-links.py               # links and anchors in all Mark
 ## Frontend with hot reload
 
 ```bash
-./webterm serve --dev &        # agent on :8080
+./webterm serve --dev --data-dir /tmp/webterm-dev &   # agent on :8080; its own data dir, so it runs beside an installed service
 cd web && npm run dev          # Vite on :5173, proxies /api, /auth and /ws to :8080
 ```
 

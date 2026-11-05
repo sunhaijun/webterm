@@ -102,6 +102,8 @@ export class AppController {
   private closeSent = new Set<number>()
   /** Extra keys or the text page are feeding the terminal; onData must not apply sticky modifiers again. */
   private keyBypass = false
+  /** Set when the connection refuses input (too large, queue full); sendText checks it after paste(). */
+  private inputRefused = false
   private lastW = 0
   private lastH = 0
   private readonly sendResize = debounce(() => this.sendResizeNow(), 100)
@@ -538,13 +540,19 @@ export class AppController {
    * treats it as one paste and swallows the \r. Sticky modifiers apply to neither; with ALT
    * active, Enter would become ESC \r, which claude reads as a newline.
    */
-  sendText(send: TextSend): void {
+  sendText(send: TextSend): boolean {
     const t = this.activeTerm()
-    if (!t || send.kind !== 'submit') return
+    if (!t || send.kind !== 'submit') return false
     this.keyBypass = true
+    this.inputRefused = false
     try {
+      // paste() reaches onTermData synchronously, so a refusal is known right after it.
+      // A refused paste must not be followed by Enter: that would run whatever was on the
+      // line, and the text box would be cleared as if the text had gone out.
       if (send.text !== '') t.term.paste(send.text)
+      if (this.inputRefused) return false
       t.term.input('\r', true)
+      return true
     } finally {
       this.keyBypass = false
     }
@@ -609,7 +617,7 @@ export class AppController {
     if (!info) return
     switch (routeInput(info.status, out)) {
       case 'send':
-        this.conn.sendInput(sid, this.enc.encode(out))
+        if (!this.conn.sendInput(sid, this.enc.encode(out))) this.inputRefused = true
         break
       case 'close':
         this.requestClose(sid)

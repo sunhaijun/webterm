@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -70,29 +71,46 @@ func serveFlagSet() *flag.FlagSet {
 	return fs
 }
 
-func runServe(args []string) error {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+// parseServe parses serve's arguments on top of the config file and checks
+// what can be checked without starting. handoff-check runs it too, so a hot
+// upgrade fails its preflight, instead of crash-looping after exec, when the
+// new binary rejects the arguments or the config file (ADR-0047 §1).
+func parseServe(args []string, onError flag.ErrorHandling) (commonFlags, serveOpts, error) {
+	fs := flag.NewFlagSet("serve", onError)
+	if onError == flag.ContinueOnError {
+		fs.SetOutput(io.Discard) // the caller reports the error; no usage dump
+	}
 	var c commonFlags
 	var o serveOpts
 	c.register(fs)
 	o.register(fs)
 	if err := applyConfig(fs, args); err != nil {
-		return err
+		return c, o, err
 	}
 	if err := fs.Parse(args); err != nil {
-		return err
+		return c, o, err
+	}
+	if fs.NArg() > 0 {
+		return c, o, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
 	// --dev listens on 8080 unless a port is given explicitly (AC-1.2).
 	if c.dev && !isFlagSet(fs, "http-port") {
 		o.httpPort = 8080
 	}
+	if !c.dev && !o.noTLS && c.domain == "" {
+		return c, o, fmt.Errorf("production mode requires --domain (used for ACME and Origin checks); use --dev for local development")
+	}
+	return c, o, nil
+}
+
+func runServe(args []string) error {
+	c, o, err := parseServe(args, flag.ExitOnError)
+	if err != nil {
+		return err
+	}
 
 	log := newLogger(o.logLevel)
 	slog.SetDefault(log)
-
-	if !c.dev && !o.noTLS && c.domain == "" {
-		return fmt.Errorf("production mode requires --domain (used for ACME and Origin checks); use --dev for local development")
-	}
 
 	// Hot upgrade (ADR-0016): a process started with --handoff-fd is taking
 	// over, so read the snapshot back first.
@@ -114,6 +132,12 @@ func runServe(args []string) error {
 	runDir := filepath.Join(c.dataDir, "run")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return fmt.Errorf("create runtime directory: %w", err)
+	}
+	// Refuse early to run next to an agent that already uses this data
+	// directory (ADR-0047 §3). A hot upgrade's new process passes: the old
+	// image's control socket closed at exec.
+	if sock := filepath.Join(runDir, "agent.sock"); agent.ControlInUse(sock) {
+		return fmt.Errorf("%w (%s); a second instance needs its own --data-dir", agent.ErrAgentRunning, sock)
 	}
 	// Older versions left temporary rcfiles here for shell integration, which
 	// ADR-0026 §6 removed. Clean them up after a handoff too: bash reads its
@@ -169,30 +193,24 @@ func runServe(args []string) error {
 	go a.PurgeLoop(stopPurge)
 	defer close(stopPurge)
 
+	// argv for exec: "serve" plus this run's arguments, minus the previous
+	// --handoff-fd. args starts after the subcommand, so "serve" is added back.
+	// A reexec request can replace it (ADR-0047 §1).
+	serveArgs := append([]string{"serve"}, handoff.StripFlag(args)...)
+
 	// Hot-upgrade control plane (ADR-0016): probe, busy check, trigger reexec.
-	// SIGUSR2 does the same as reexec.
-	reexecReq := make(chan struct{}, 1)
-	var lastErr sync.Mutex
-	lastHandoffErr := ""
+	// SIGUSR2 does the same as reexec. A request carries the new command line,
+	// or nil to keep the current one.
+	up := newUpgrades()
 	ctl, err := agent.ServeControl(filepath.Join(runDir, "agent.sock"), agent.ControlDeps{
 		Status: func() agent.ControlStatus {
-			lastErr.Lock()
-			le := lastHandoffErr
-			lastErr.Unlock()
 			return agent.ControlStatus{
 				Version: version, PID: os.Getpid(), Generation: sessions.Generation(),
 				InstanceID: sessions.InstanceID(), Sessions: len(sessions.List()), Busy: sessions.Busy(),
-				Handoff: true, LastError: le,
+				Handoff: true, LastError: up.lastError(), Args: serveArgs, ExecArgs: true,
 			}
 		},
-		Reexec: func() error {
-			select {
-			case reexecReq <- struct{}{}:
-				return nil
-			default:
-				return errors.New("a hot upgrade is already in progress")
-			}
-		},
+		Reexec: up.request,
 	}, log)
 	if err != nil {
 		return err
@@ -200,15 +218,21 @@ func runServe(args []string) error {
 	defer ctl.Close()
 
 	// On first start with no authorized devices, print a pairing code and QR
-	// code (AC-1.3).
+	// code (AC-1.3), but only to a terminal. Under systemd stdout goes to the
+	// journal, which keeps it and shows it to more people than the owner
+	// (AC-8.5); the installer runs `webterm pair` itself.
 	if has, err := st.HasAnyDevice(); err == nil && !has {
-		codes, err := a.Auth().NewPairingCodes(time.Now())
-		if err != nil {
-			return err
+		if isTerminal(os.Stdout) {
+			codes, err := a.Auth().NewPairingCodes(time.Now())
+			if err != nil {
+				return err
+			}
+			fmt.Println()
+			fmt.Println("No authorized devices yet. This pairing code is valid for 5 minutes:")
+			printPairing(c.baseURL(o.httpPort, o.httpsPort), codes)
+		} else {
+			log.Info("no devices paired yet; run 'webterm pair' on the server for a pairing code")
 		}
-		fmt.Println()
-		fmt.Println("No authorized devices yet. This pairing code is valid for 5 minutes:")
-		printPairing(c.baseURL(o.httpPort, o.httpsPort), codes)
 	}
 
 	sig := make(chan os.Signal, 1)
@@ -216,11 +240,9 @@ func runServe(args []string) error {
 	usr2 := make(chan os.Signal, 1)
 	signal.Notify(usr2, syscall.SIGUSR2)
 	exe := currentExe()
-	// argv for exec: "serve" plus this run's arguments, minus the previous
-	// --handoff-fd. args starts after the subcommand, so "serve" is added back.
-	serveArgs := append([]string{"serve"}, handoff.StripFlag(args)...)
 loop:
 	for {
+		argv := serveArgs
 		select {
 		case err := <-errCh:
 			return err
@@ -228,14 +250,15 @@ loop:
 			log.Info("received signal, shutting down", "signal", s.String())
 			break loop
 		case <-usr2:
-		case <-reexecReq:
+		case req := <-up.requests:
+			if req != nil {
+				argv = append([]string{"serve"}, handoff.StripFlag(req[1:])...)
+			}
 		}
 		// Hot upgrade: on success exec never returns. On failure, thaw, keep
 		// serving and record the reason.
-		if err := hotReexec(exe, serveArgs, a, sessions, servers, log); err != nil {
-			lastErr.Lock()
-			lastHandoffErr = err.Error()
-			lastErr.Unlock()
+		if err := hotReexec(exe, argv, a, sessions, servers, log); err != nil {
+			up.failed(err)
 			log.Error("hot upgrade aborted, still serving", "err", err)
 			a.Hub().NoticeAll("warn", "Hot upgrade aborted: "+err.Error()+". Sessions are intact and the service was not restarted.")
 		}
@@ -252,6 +275,45 @@ loop:
 	servers.Shutdown(ctx)
 	sessions.Shutdown()
 	return nil
+}
+
+// upgrades queues hot-upgrade requests from the control socket for serve's
+// main loop and remembers why the last one failed.
+type upgrades struct {
+	requests chan []string // a new command line, or nil to keep the current one
+	mu       sync.Mutex
+	lastErr  string
+}
+
+func newUpgrades() *upgrades { return &upgrades{requests: make(chan []string, 1)} }
+
+// request queues a hot upgrade. It clears the previous failure: it no longer
+// applies, and webterm reload would report it as this attempt's at once.
+func (u *upgrades) request(args []string) error {
+	if len(args) > 0 && args[0] != "serve" {
+		return fmt.Errorf("the new command line must start with serve, got %q", args[0])
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	select {
+	case u.requests <- args:
+		u.lastErr = ""
+		return nil
+	default:
+		return errors.New("a hot upgrade is already in progress")
+	}
+}
+
+func (u *upgrades) failed(err error) {
+	u.mu.Lock()
+	u.lastErr = err.Error()
+	u.mu.Unlock()
+}
+
+func (u *upgrades) lastError() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.lastErr
 }
 
 func isFlagSet(fs *flag.FlagSet, name string) bool {
@@ -340,7 +402,7 @@ func hotReexec(exe string, serveArgs []string, a *agent.Agent, sessions *session
 	// 1. Preflight: can the new binary read this snapshot schema? There is no
 	// way back after exec, so ask first.
 	probe := &handoff.Snapshot{Schema: handoff.Schema, InstanceID: sessions.InstanceID(), FromVersion: version}
-	if err := handoff.Check(exe, probe, 15*time.Second); err != nil {
+	if err := handoff.Check(exe, serveArgs, probe, 15*time.Second); err != nil {
 		return err
 	}
 	// 2. Freeze: both loops stop at a safe point.

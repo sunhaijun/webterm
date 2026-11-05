@@ -145,6 +145,19 @@ func TestInstallScriptDefaultAddress(t *testing.T) {
 		}
 	})
 
+	// Host names are case-insensitive; browsers send the Origin host in
+	// lowercase, so the unit must carry it that way (ADR-0047 §1).
+	t.Run("domain is lowercased", func(t *testing.T) {
+		sb := newSandbox(t)
+		out, err := sb.run(t, nil, "--print-unit", "--domain", "Term.Example.COM.")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got := execStart(t, out); got != "ExecStart=/usr/local/bin/webterm serve --domain term.example.com" {
+			t.Errorf("ExecStart = %q", got)
+		}
+	})
+
 	t.Run("IPv6 is rejected", func(t *testing.T) {
 		sb := newSandbox(t)
 		out, err := sb.run(t, nil, "--print-unit", "--domain", "2001:db8::1")

@@ -227,6 +227,19 @@ describe('input exit', () => {
     expect(ctl.sticky.state('ctrl')).toBe('locked')
   })
 
+  // UT-input-size-1: a paste the connection refuses is not followed by Enter, and the text
+  // page is told so it keeps the draft (the user would otherwise lose the text and run
+  // whatever was already on the line).
+  it('text page: refused text sends no Enter and reports failure; accepted text reports success', () => {
+    let ok = true
+    inside('keydown', () => (ok = ctl.sendText({ kind: 'submit', text: 'x'.repeat(256 * 1024 + 1) })))
+    expect(ok).toBe(false)
+    expect(sock.inputs()).toEqual([])
+    inside('keydown', () => (ok = ctl.sendText({ kind: 'submit', text: 'ls' })))
+    expect(ok).toBe(true)
+    expect(sock.inputs()).toEqual(['ls', '\r'])
+  })
+
   it('exited session: Enter closes it without confirmation, other input is dropped', () => {
     sock.text({ t: 'session.updated', sid: 1, status: 'exited', exit_code: 1 })
     inside('keydown', () => xterm(1).input('ls', true))

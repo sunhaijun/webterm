@@ -26,7 +26,7 @@ import {
 } from '../protocol/messages'
 import { inputTrace } from '../keys/inputstats'
 import { Backoff } from './backoff'
-import { PendingFullError, ResendQueue } from './resend'
+import { PENDING_LIMIT, PendingFullError, ResendQueue } from './resend'
 
 /** Heartbeat and dead-connection detection (protocol §5.5 / AC-2.8). */
 export const PING_INTERVAL = 30_000
@@ -201,22 +201,31 @@ export class Connection {
 
   // ---------- Sending ----------
 
-  /** Sends input: assigns in_seq, queues it for resend, writes it to the wire. */
-  sendInput(sid: number, bytes: Uint8Array): void {
+  /**
+   * Sends input: assigns in_seq, queues it for resend, writes it to the wire. Returns false
+   * when the input was refused (too large, or the resend queue is full); the user has been
+   * told, and the caller must not act as if it was sent (protocol §5.4).
+   */
+  sendInput(sid: number, bytes: Uint8Array): boolean {
     const st = this.ensure(sid)
     let item
     try {
       item = st.resend.push(bytes)
     } catch (e) {
       if (e instanceof PendingFullError) {
-        this.opts.handlers.onError?.('Offline input buffer full; wait for reconnect')
-        return
+        this.opts.handlers.onError?.(
+          bytes.length > PENDING_LIMIT
+            ? `Input too large (over ${PENDING_LIMIT >> 10} KiB); send it in smaller pieces`
+            : 'Input buffer full; wait for the connection to catch up',
+        )
+        return false
       }
       throw e
     }
     // The "sent to agent" stage of the input-path probe (AC-3.17)
     inputTrace.bump('sent')
     this.writeFrame(sid, item.seq, item.bytes)
+    return true
   }
 
   /** Bytes sent but not yet acked by the agent (for debugging, AC-3.17); growing and never shrinking means they aren't arriving. */
@@ -271,6 +280,9 @@ export class Connection {
 
   private open(): void {
     this.clearTimers()
+    // A socket still connecting (retryNow while reconnecting) must not live on next to the
+    // new one: it would complete its own hello and become an orphan connection.
+    if (this.ws) abandon(this.ws, 'superseded')
     this.setState(this.backoff.attempts === 0 && !this.welcomed ? 'connecting' : 'reconnecting')
 
     const make = this.opts.socketFactory ?? ((u: string) => new WebSocket(u) as unknown as WebSocketLike)
@@ -303,19 +315,29 @@ export class Connection {
       /* onclose follows; everything is handled there */
     }
     ws.onclose = () => {
-      if (this.ws !== ws) return
-      this.ws = null
-      this.clearTimers()
-      // A partial snapshot is useless; after reconnecting the agent decides again from out_seq
-      this.snapshots.clear()
-      this.recovery = null
-      if (this.stopped) {
-        this.setState('closed')
-        return
-      }
-      this.scheduleRetry()
-      this.opts.handlers.onClosed?.(this.socketWelcomed)
+      if (this.ws === ws) this.lost()
     }
+  }
+
+  /**
+   * The current socket is finished: closed by the browser, or given up on by us (no pong,
+   * protocol error). Giving up doesn't wait for `onclose`: on a dead link the browser fires
+   * it only when its closing handshake times out, which can take a minute, and until then
+   * the page would sit "online" on a zombie (protocol §5.5).
+   */
+  private lost(reason = 'closed'): void {
+    if (this.ws) abandon(this.ws, reason)
+    this.ws = null
+    this.clearTimers()
+    // A partial snapshot is useless; after reconnecting the agent decides again from out_seq
+    this.snapshots.clear()
+    this.recovery = null
+    if (this.stopped) {
+      this.setState('closed')
+      return
+    }
+    this.scheduleRetry()
+    this.opts.handlers.onClosed?.(this.socketWelcomed)
   }
 
   private scheduleRetry(): void {
@@ -484,7 +506,9 @@ export class Connection {
     }
 
     const targets = new Map<number, number>()
+    const resumed = new Set<number>()
     for (const r of w.resumed) {
+      resumed.add(r.sid)
       const st = this.ensure(r.sid)
       if (r.status === 'gone') {
         // The agent restarted or the session is gone
@@ -496,6 +520,18 @@ export class Connection {
       // Trim the resend queue at in_ack, then resend everything after it in ascending seq order (§5.4)
       for (const item of st.resend.resumeFrom(r.in_ack)) {
         this.writeFrame(r.sid, item.seq, item.bytes)
+      }
+    }
+    // Input typed into a session we then switched away from is still pending, but that
+    // session isn't in resume, so there's no in_ack to trim by. Resend it as is: it starts
+    // at or before what the agent accepted, and the agent drops the duplicate prefix (§3).
+    // Waiting until the user switches back would hold it indefinitely.
+    if (!restarted) {
+      for (const s of w.sessions) {
+        if (resumed.has(s.sid) || s.status !== 'running') continue
+        for (const item of this.sessions.get(s.sid)?.resend.pending ?? []) {
+          this.writeFrame(s.sid, item.seq, item.bytes)
+        }
       }
     }
 
@@ -552,7 +588,7 @@ export class Connection {
     this.lastPingAt = this.now()
     this.send({ t: T.ping, ts: this.lastPingAt })
     if (this.pongTimer) clearTimeout(this.pongTimer)
-    this.pongTimer = setTimeout(() => this.ws?.close(4000, 'pong timeout'), timeout)
+    this.pongTimer = setTimeout(() => this.lost('pong timeout'), timeout)
   }
 
   // ---------- Misc ----------
@@ -568,7 +604,8 @@ export class Connection {
 
   private fail(reason: string): void {
     this.opts.handlers.onError?.(reason)
-    this.ws?.close(4001, 'protocol error')
+    // Stop reading this socket now: frames still in flight would land on broken accounting
+    if (this.ws) this.lost('protocol error')
   }
 
   private setState(s: ConnState, info: StateInfo = {}): void {
@@ -582,6 +619,16 @@ export class Connection {
     if (this.retryTimer) clearTimeout(this.retryTimer)
     if (this.countdownTimer) clearInterval(this.countdownTimer)
     this.pingTimer = this.pongTimer = this.retryTimer = this.countdownTimer = undefined
+  }
+}
+
+/** Detaches a socket we no longer use and closes it without waiting for its events. */
+function abandon(ws: WebSocketLike, reason: string): void {
+  ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null
+  try {
+    ws.close(4000, reason)
+  } catch {
+    /* already closed */
   }
 }
 

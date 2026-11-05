@@ -194,6 +194,22 @@ type Manager struct {
 	// reload uses it to tell that the new process has taken over.
 	generation int
 	frozen     bool // Create is refused while frozen
+	// handoffMu keeps changes out of a hot-upgrade snapshot's way: Freeze
+	// takes it for writing and holds it until Thaw (or exec); Close, Rename
+	// and Move hold it for reading. A change made after Export would be lost
+	// with the old process, so they wait instead. If the upgrade goes ahead,
+	// the request goes down with its connection and the client sees the real
+	// state in the next welcome.
+	handoffMu sync.RWMutex
+
+	// inputOwner is each client_id's newest connection (set on hello). A page
+	// holds one socket at a time, so an older connection with the same
+	// client_id is one the page has abandoned; when it finally ends it must
+	// not discard input the newer connection queued (see Detach). ownerMu
+	// guards it and makes Resume's and Detach's drops atomic with the
+	// ownership check, so they can't interleave.
+	ownerMu    sync.Mutex
+	inputOwner map[string]Subscriber
 
 	shutdownOnce sync.Once
 }
@@ -208,6 +224,7 @@ func NewManager(cfg Config) *Manager {
 		instanceID: hex.EncodeToString(b[:]),
 		sessions:   make(map[uint16]*Session),
 		observers:  make(map[Subscriber]struct{}),
+		inputOwner: make(map[string]Subscriber),
 		nextSID:    1, // 0 is reserved as invalid
 	}
 }
@@ -478,6 +495,8 @@ func (m *Manager) Order() []uint16 {
 // on an order the agent no longer has. publish must not block or call Move
 // (the connection's Event only enqueues and closes the connection when full).
 func (m *Manager) Move(sid uint16, before *uint16, publish func(order []uint16)) error {
+	m.handoffMu.RLock()
+	defer m.handoffMu.RUnlock()
 	m.orderMu.Lock()
 	defer m.orderMu.Unlock()
 
@@ -539,6 +558,8 @@ func (m *Manager) Infos() []protocol.SessionInfo {
 // A running session gets SIGHUP, then SIGKILL after 2 seconds; an exited one is
 // released immediately.
 func (m *Manager) Close(sid uint16) (*int, error) {
+	m.handoffMu.RLock()
+	defer m.handoffMu.RUnlock()
 	m.mu.Lock()
 	s, ok := m.sessions[sid]
 	if !ok || s == nil {
@@ -569,6 +590,18 @@ func (m *Manager) Close(sid uint16) (*int, error) {
 func (m *Manager) Resume(sub Subscriber, instanceID string, reqs []protocol.ResumeReq) []protocol.ResumeResult {
 	out := make([]protocol.ResumeResult, 0, len(reqs))
 	clientID := sub.ClientID()
+	// sub is now this client's connection. Drop the client's
+	// queued-but-unwritten input in every session, as if its previous
+	// connection had ended now: the client resends it, from in_ack for the
+	// sessions below and as is for the others (protocol §5.4). Dropping it
+	// before reporting in_ack matters too: otherwise in_ack is too low and the
+	// resend duplicates bytes still waiting to be written.
+	m.ownerMu.Lock()
+	m.inputOwner[clientID] = sub
+	for _, s := range m.List() {
+		s.DetachClient(clientID)
+	}
+	m.ownerMu.Unlock()
 	// A different instance_id means the agent restarted and every sid is void.
 	restarted := instanceID != "" && instanceID != m.instanceID
 	for _, r := range reqs {
@@ -579,15 +612,48 @@ func (m *Manager) Resume(sub Subscriber, instanceID string, reqs []protocol.Resu
 			out = append(out, res)
 			continue
 		}
-		// Drop the client's queued-but-unwritten input before reporting
-		// in_ack. Otherwise in_ack is too low and the client resends bytes
-		// that are still waiting to be written, duplicating them.
-		s.DetachClient(clientID)
 		res.InAck = s.InAck(clientID)
 		res.Status, res.FromSeq = s.Subscribe(sub, r.OutSeq, 0, 0)
 		out = append(out, res)
 	}
 	return out
+}
+
+// Detach is called when a connection ends: it leaves every session's
+// subscriber set and, if it is still its client's newest connection, discards
+// the client's queued-but-unwritten input (protocol §5.4).
+//
+// An abandoned connection can end long after its page reconnected (the
+// browser gave up on it without a close reaching us, so it lingers until the
+// idle timeout). By then the input queue holds what the new connection sent;
+// discarding it would leave the client's next bytes looking like a gap.
+func (m *Manager) Detach(sub Subscriber) {
+	for _, s := range m.List() {
+		s.Unsubscribe(sub)
+	}
+	clientID := sub.ClientID()
+	m.ownerMu.Lock()
+	defer m.ownerMu.Unlock()
+	if clientID == "" || m.inputOwner[clientID] != sub {
+		return
+	}
+	delete(m.inputOwner, clientID)
+	for _, s := range m.List() {
+		s.DetachClient(clientID)
+	}
+}
+
+// Rename renames a session (protocol §4.1 session.rename); see handoffMu for
+// why it goes through the manager.
+func (m *Manager) Rename(sid uint16, name *string) error {
+	m.handoffMu.RLock()
+	defer m.handoffMu.RUnlock()
+	s, ok := m.Get(sid)
+	if !ok {
+		return ErrUnknownSession
+	}
+	s.Rename(name)
+	return nil
 }
 
 // Busy returns how many sessions are running a command, meaning the PTY's

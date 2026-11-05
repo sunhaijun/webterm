@@ -225,6 +225,75 @@ func TestFreezeThawResumes(t *testing.T) {
 	}
 }
 
+// Close, Rename and Move wait while a handoff is in progress (ADR-0047 §4): a
+// change made after Export would be lost with the old process. If the upgrade
+// is abandoned, they go ahead after Thaw.
+func TestChangesWaitForHandoff(t *testing.T) {
+	m := newManager(t, cfg())
+	a, b := create(t, m), create(t, m)
+	waitFor(t, "shell ready", func() bool { return a.HeadSeq() > 0 && b.HeadSeq() > 0 })
+
+	if err := m.Freeze(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan string, 3)
+	name := "renamed"
+	go func() { _ = m.Rename(a.SID(), &name); done <- "rename" }()
+	go func() { _ = m.Move(b.SID(), nil, nil); done <- "move" }()
+	go func() { _, _ = m.Close(b.SID()); done <- "close" }()
+
+	select {
+	case what := <-done:
+		t.Fatalf("%s went ahead during the handoff", what)
+	case <-time.After(300 * time.Millisecond):
+	}
+	snap, err := m.Export("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snap.CloseFDs()
+	if len(snap.Sessions) != 2 || snap.Sessions[0].Name == name {
+		t.Fatalf("snapshot changed under the handoff: %+v", snap.Sessions)
+	}
+
+	m.Thaw() // the upgrade was abandoned
+	for range 3 {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("a change is still blocked after Thaw")
+		}
+	}
+	if got := a.Info().Name; got != name {
+		t.Fatalf("name = %q after thaw, want %q", got, name)
+	}
+	if _, ok := m.Get(b.SID()); ok {
+		t.Fatal("close did not happen after thaw")
+	}
+}
+
+// A session closed while frozen is thawed by close itself: it is no longer
+// listed, so Thaw would never release its parked loops.
+func TestCloseWhileFrozenReleasesLoops(t *testing.T) {
+	m := newManager(t, cfg())
+	s := create(t, m)
+	waitFor(t, "shell ready", func() bool { return s.HeadSeq() > 0 })
+	if err := m.Freeze(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// Shutdown doesn't wait for the handoff (SIGTERM during an upgrade).
+	done := make(chan struct{})
+	go func() { m.Shutdown(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("closing a frozen session hung")
+	}
+	if !session.LoopsStoppedForTest(s, 2*time.Second) {
+		t.Fatal("the closed session's loops stayed parked")
+	}
+}
+
 // Exited sessions are handed over too: ring and emulator are kept for
 // scrollback (AC-4.5), with no fd or process.
 func TestHandoffKeepsExitedSession(t *testing.T) {

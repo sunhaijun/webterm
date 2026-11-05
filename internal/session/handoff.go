@@ -30,7 +30,11 @@ func (m *Manager) Generation() int {
 // Freeze parks every session's read and write loops and refuses new sessions.
 // If any session fails to park within timeout, everything is thawed and an
 // error is returned: the handoff happens in full or not at all.
+//
+// It waits for Close, Rename and Move in progress to finish and holds them
+// off until Thaw (see Manager.handoffMu).
 func (m *Manager) Freeze(timeout time.Duration) error {
+	m.handoffMu.Lock()
 	m.mu.Lock()
 	m.frozen = true
 	m.mu.Unlock()
@@ -49,8 +53,12 @@ func (m *Manager) Thaw() {
 		s.thaw()
 	}
 	m.mu.Lock()
+	was := m.frozen
 	m.frozen = false
 	m.mu.Unlock()
+	if was {
+		m.handoffMu.Unlock()
+	}
 }
 
 // Export captures the full snapshot. It must be called after a successful

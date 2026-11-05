@@ -74,7 +74,8 @@ type Session struct {
 
 - `inQueued` validates INPUT frame seq continuity. Validating against `inAck` instead would flag the second of two back-to-back frames as a gap (the PTY hasn't consumed the first one yet).
 - `inAck` feeds `ack` messages and `welcome.resumed[].in_ack`.
-- On disconnect, `DetachClient` drops that client's queued input that hasn't reached the PTY yet and rewinds `inQueued` to `inAck`, so the client's resend after reconnecting lines up exactly (protocol §5.4).
+- On a new connection's `hello`, and when a connection that is still its `client_id`'s newest ends, `DetachClient` drops that client's queued input that hasn't reached the PTY yet and subtracts it from `inQueued`, so the client's resend lines up exactly (protocol §5.4). An abandoned connection that ends later leaves the queue alone: it now holds the new connection's input (`Manager.Detach`, [ADR-0047](../20-architecture/adr/0047-review-fixes.md) §2).
+- `Write` validates, enqueues and counts under `s.mu` in one step, and `DetachClient` drops and subtracts the same way, so `export` never sees a count without its bytes.
 - Both are keyed by `client_id`, **survive reconnects**, and are freed with the session.
 
 ### Locking rules
@@ -198,6 +199,8 @@ Resize(cols, rows):
   after unlocking: TIOCSWINSZ (skipped for exited sessions)
 ```
 
+`winMu`, taken before `s.mu` in `Resize` and `Subscribe`, serializes the whole sequence, so concurrent resizes reach the emulator and the PTY in the same order (ADR-0047 §4).
+
 A column change resends the snapshot: the two sides would reflow differently, and the agent's result wins ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §4). A row-only change doesn't: phones change the row count every time the on-screen keyboard opens, and resending hundreds of KiB and resetting the browser's scrollback position each time costs too much.
 
 ## Lifecycle
@@ -262,9 +265,11 @@ Two mechanisms do the real work:
 | Graceful (almost always) | SIGHUP reaches the shell, and **bash forwards SIGHUP to all of its jobs** |
 | Fallback | Sweep by **session**: `pty.Start` already called `setsid`, so the shell's session id equals its pid, and every descendant inherits it. Scan `/proc` for processes with the same session id and SIGKILL each one |
 
-The fallback can't be skipped: if things haven't exited within the grace period, bash no longer gets the chance to forward, and its jobs become orphans that keep running. Jobs that ignore SIGHUP (`trap "" HUP`) can only be cleaned up this way.
+The fallback can't be skipped: if things haven't exited within the grace period, bash no longer gets the chance to forward, and its jobs become orphans that keep running. Jobs that catch SIGHUP and carry on can only be cleaned up this way.
 
-Processes that deliberately detach (`nohup` / `setsid` / `systemd-run`) escape. That's the user's explicit intent, and expected.
+The sweep skips processes that **ignore** SIGHUP (bit 0 of `SigIgn` in `/proc/<pid>/status`): `nohup` stays in the session and only sets `SIG_IGN` (ADR-0047 §5). Processes that leave the session (`setsid` / `systemd-run`) aren't in it to begin with. Both are the user's explicit intent.
+
+A session closed while the manager is frozen for a hot upgrade thaws its own loops (`Thaw` only reaches listed sessions), and `Manager.Close` waits for the handoff first (see below).
 
 ## Auto naming (AC-4.4)
 
@@ -318,8 +323,9 @@ Step 2 matters: the sessions will be lost ([ADR-0003](../20-architecture/adr/000
 An upgrade **doesn't** go through the shutdown above. The agent `exec`s the new binary in place, and the sessions live on with the process:
 
 ```
-1. Preflight: run the new binary as a child, `webterm handoff-check`, and feed it a metadata snapshot;
-   if it can't read it → abort, the service carries on
+1. Preflight: run the new binary as a child, `webterm handoff-check serve …`, and feed it a metadata snapshot;
+   it parses the new process's command line and the config file as serve would; if it can't read the
+   snapshot or rejects the command line → abort, the service carries on
 2. Freeze: refuse new connections; set an already-expired read/write deadline on every session's ptmx to
    interrupt readLoop / writeLoop blocked in Read / Write; both loops stop at a safe point (after feeding a
    chunk, before pop). Partially written input goes back to the head of the queue; cwdLoop stops
@@ -327,7 +333,8 @@ An upgrade **doesn't** go through the shutdown above. The agent `exec`s the new 
    full state (with all 2000 lines of history), the input queue exports its unwritten entries
 4. Broadcast notice{level:"info"} "Upgrading webterm. Sessions are kept and will reconnect shortly.",
    close every WebSocket
-5. Clear CLOEXEC; syscall.Exec(new binary, serve …original args… --handoff-fd N)
+5. Clear CLOEXEC; syscall.Exec(new binary, serve …args… --handoff-fd N), where args are the running
+   process's, or the ones `reload -- serve …` sent (ADR-0047 §1)
 6. New process: Manager.Restore — os.NewFile adopts the ptmx (O_NONBLOCK is set on the fd, so it's pollable
    as is), os.FindProcess adopts the shell, ringbuf.Restore, the emulator imports its state, the input
    queue is refilled, the four goroutines start again
@@ -343,7 +350,11 @@ At the manager level: `instance_id` (**unchanged**, so clients can `resume` with
 
 **Invariant while frozen**: readLoop stops after fully feeding a chunk, so the ring, emulator, and `out_seq` agree; writeLoop stops before `pop`, so `inAck` matches what was actually written to the PTY. Nothing moves, so `Export` captures a consistent cut. When you add a session field, first ask whether it belongs in the snapshot.
 
-Control socket: `<data-dir>/run/agent.sock` (0600), one JSON request line, one response line. `{"op":"status"}` → version, pid, generation, session count, busy session count (the PTY's foreground process group isn't the shell itself, i.e. a command is running), `handoff: true`; `{"op":"reexec"}` → triggers the flow above. `SIGUSR2` is equivalent.
+**Changes wait for the handoff.** `Freeze` takes `handoffMu` for writing and holds it until `Thaw` or exec; `Close`, `Rename` and `Move` take it for reading. Made after `Export`, they'd be lost with the old process. If the upgrade goes ahead, the waiting request dies with its connection and the next `welcome` shows the real state (ADR-0047 §4).
+
+**Listeners.** The new process reuses an inherited listener only if it's on the configured address (the command line may have changed the port), and closes inherited fds nothing adopted, which would otherwise leak into every shell started later. The old process exports listener fds without `File.Fd()`, which would switch the still-serving socket to blocking mode.
+
+Control socket: `<data-dir>/run/agent.sock` (0600), one JSON request line, one response line. `{"op":"status"}` → version, pid, generation, `instance_id`, session count, busy session count (the PTY's foreground process group isn't the shell itself, i.e. a command is running), `handoff: true`, `args` (the command line) and `exec_args: true`; `{"op":"reexec", "args": [...]}` → triggers the flow above, with `args` as the new command line if given, and clears the previous `last_error`. `SIGUSR2` is equivalent to a reexec without args. A live socket belongs to the running agent: another agent with the same data directory refuses to start, and an agent removes the socket file on exit only if it's still its own (ADR-0047 §3).
 
 ## Crash cleanup
 

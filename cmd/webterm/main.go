@@ -60,7 +60,7 @@ func main() {
 	case "reload":
 		err = runReload(os.Args[2:])
 	case "handoff-check":
-		err = runHandoffCheck()
+		err = runHandoffCheck(os.Args[2:])
 	case "version":
 		fmt.Printf("webterm %s\n", version)
 	case "-h", "--help", "help":

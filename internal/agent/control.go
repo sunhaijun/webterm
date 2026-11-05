@@ -29,14 +29,24 @@ type ControlStatus struct {
 	Busy       int    `json:"busy"`
 	Handoff    bool   `json:"handoff"` // supports hot upgrade handoff
 	// LastError is why the last hot upgrade was aborted (empty in a new
-	// process that took over successfully). webterm reload uses it to fail
-	// immediately instead of waiting for a timeout.
+	// process that took over successfully, and cleared when another is
+	// requested). webterm reload uses it to fail immediately instead of
+	// waiting for a timeout.
 	LastError string `json:"last_error,omitempty"`
+	// Args is the command line the agent runs (and re-execs with), starting
+	// with "serve". ExecArgs reports that reexec accepts a new one; agents
+	// that predate it omit both (ADR-0047 §1).
+	Args     []string `json:"args,omitempty"`
+	ExecArgs bool     `json:"exec_args,omitempty"`
 }
 
 // ControlRequest and ControlResponse are the wire format.
 type ControlRequest struct {
 	Op string `json:"op"` // "status" | "reexec"
+	// Args, for reexec, replaces the command line the new process starts
+	// with ("serve", flags...). Empty keeps the current one. Older agents
+	// ignore it; check ControlStatus.ExecArgs first.
+	Args []string `json:"args,omitempty"`
 }
 
 type ControlResponse struct {
@@ -48,35 +58,67 @@ type ControlResponse struct {
 // ControlDeps holds the two callbacks the control socket needs. Reexec only
 // triggers the upgrade (hands the request to serve's main loop) and does not
 // wait for it; completion shows up as status.generation + 1 once the new
-// process takes over.
+// process takes over. args is the request's command line, nil to keep the
+// current one.
 type ControlDeps struct {
 	Status func() ControlStatus
-	Reexec func() error
+	Reexec func(args []string) error
 }
 
 // ControlServer is a listening control socket.
 type ControlServer struct {
 	ln   net.Listener
 	path string
+	fi   os.FileInfo // the socket file we created, so Close removes only that
 	log  *slog.Logger
 }
 
+// ErrAgentRunning means another agent answers on the control socket: it is
+// already running with this data directory.
+var ErrAgentRunning = errors.New("another webterm agent is already running with this data directory")
+
+// ControlInUse reports whether an agent answers on the control socket.
+func ControlInUse(path string) bool {
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 // ServeControl opens the control socket at path. A stale socket file (left by
-// a crash, or by the old process that just exec'd) is removed first.
+// a crash, or by the old process that just exec'd) is removed first. A live
+// one belongs to a running agent and is left alone (ErrAgentRunning): taking
+// it over would cut that agent off from reload, and removing it on exit would
+// leave it unreachable for good.
 func ServeControl(path string, deps ControlDeps, log *slog.Logger) (*ControlServer, error) {
 	if log == nil {
 		log = slog.Default()
+	}
+	if ControlInUse(path) {
+		return nil, fmt.Errorf("%w (%s)", ErrAgentRunning, path)
 	}
 	_ = os.Remove(path)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, fmt.Errorf("control socket %s: %w", path, err)
 	}
+	// Don't unlink on Close: Close removes the file itself, and only if it is
+	// still ours.
+	if ul, ok := ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		ln.Close()
 		return nil, fmt.Errorf("chmod control socket: %w", err)
 	}
-	cs := &ControlServer{ln: ln, path: path, log: log}
+	fi, err := os.Stat(path)
+	if err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("control socket %s: %w", path, err)
+	}
+	cs := &ControlServer{ln: ln, path: path, fi: fi, log: log}
 	go cs.accept(deps)
 	return cs, nil
 }
@@ -84,10 +126,13 @@ func ServeControl(path string, deps ControlDeps, log *slog.Logger) (*ControlServ
 // Path returns the socket path.
 func (c *ControlServer) Path() string { return c.path }
 
-// Close stops listening and removes the socket file.
+// Close stops listening and removes the socket file if it is still the one
+// this server created.
 func (c *ControlServer) Close() error {
 	err := c.ln.Close()
-	_ = os.Remove(c.path)
+	if fi, serr := os.Stat(c.path); serr == nil && os.SameFile(fi, c.fi) {
+		_ = os.Remove(c.path)
+	}
 	return err
 }
 
@@ -122,7 +167,7 @@ func (c *ControlServer) handle(conn net.Conn, deps ControlDeps) {
 			c.reply(conn, ControlResponse{Error: "this process does not support hot upgrade"})
 			return
 		}
-		if err := deps.Reexec(); err != nil {
+		if err := deps.Reexec(req.Args); err != nil {
 			c.reply(conn, ControlResponse{Error: err.Error()})
 			return
 		}

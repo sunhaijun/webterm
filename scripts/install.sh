@@ -137,6 +137,10 @@ STATE_FILE="$CONFIG_DIR/install-state"
 # finish_args validates the final arguments and derives values from them. It runs
 # again after resolve_address, which may change the address and ports.
 finish_args() {
+    # Hostnames are case-insensitive, but the Origin check compares strings and
+    # browsers send lowercase.
+    DOMAIN="$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')"
+    DOMAIN="${DOMAIN%.}"
     check_port --https-port "$HTTPS_PORT"
     check_port --http-port "$HTTP_PORT"
     [ "$HTTPS_PORT" != "$HTTP_PORT" ] || die "--https-port and --http-port must differ (both are $HTTPS_PORT)"
@@ -507,7 +511,14 @@ if [ "$IF_NEWER" = 1 ] && [ "$DRY_RUN" != 1 ] && [ -x "$PREFIX/webterm" ]; then
     chmod +x "$TMP/$BIN"
     NEW_VER="$("$TMP/$BIN" version 2>/dev/null || echo unknown-new)"
     OLD_VER="$("$PREFIX/webterm" version 2>/dev/null || echo unknown-old)"
-    if [ "$NEW_VER" = "$OLD_VER" ] && [ "$NEW_VER" != unknown-new ]; then
+    # The binary on disk can be current while the agent still runs an older one
+    # (a hot upgrade that failed): that isn't up to date.
+    RUN_VER="$OLD_VER"
+    if [ "$SETUP_SERVICE" = 1 ] && service_active; then
+        RUN_VER="$("$PREFIX/webterm" reload --probe 2>/dev/null | sed -n 's/^ok version=\([^ ]*\).*/webterm \1/p')"
+        [ -n "$RUN_VER" ] || RUN_VER="$OLD_VER"
+    fi
+    if [ "$NEW_VER" = "$OLD_VER" ] && [ "$NEW_VER" = "$RUN_VER" ] && [ "$NEW_VER" != unknown-new ]; then
         if [ "$SETUP_SERVICE" = 1 ] && [ -f "$USER_UNIT" ] && [ "$FORCE_RESTART" = 1 ]; then
             step "Already up to date; migrating to a system service (--force-restart)"
             info "$OLD_VER"
@@ -520,6 +531,7 @@ if [ "$IF_NEWER" = 1 ] && [ "$DRY_RUN" != 1 ] && [ -x "$PREFIX/webterm" ]; then
     else
         step "Update available"
         info "Installed  $OLD_VER"
+        [ "$RUN_VER" = "$OLD_VER" ] || info "Running    $RUN_VER"
         info "New        $NEW_VER"
     fi
 fi
@@ -536,9 +548,19 @@ else
     chmod +x "$PROBE_BIN"
 fi
 SWITCH=restart
-if [ "$SETUP_SERVICE" = 1 ] && [ "$FORCE_RESTART" != 1 ] && service_active \
-    && [ -x "$PROBE_BIN" ] && "$PROBE_BIN" reload --probe >/dev/null 2>&1; then
-    SWITCH=reload
+if [ "$SETUP_SERVICE" = 1 ] && [ "$FORCE_RESTART" != 1 ] && service_active; then
+    if [ -x "$PROBE_BIN" ] && "$PROBE_BIN" reload --probe >/dev/null 2>&1; then
+        SWITCH=reload
+    else
+        # Never fall back to a restart silently (ADR-0016 §3): it closes every
+        # session, and an agent that can hot-upgrade may just be slow to answer.
+        MSG="The running agent didn't answer the hot-upgrade check, so upgrading in place
+      isn't possible. A restart would close every session.
+      Check:              webterm reload --probe
+      Restart anyway:     add --force-restart"
+        [ "$DRY_RUN" = 1 ] || die "$MSG"
+        info "Note (a real run would stop here): $MSG"
+    fi
 fi
 
 # ---------- User service → system service (ADR-0034) ----------
@@ -571,10 +593,14 @@ fi
 if [ "$WHEN_IDLE" = 1 ] && [ "$DRY_RUN" != 1 ] && service_active; then
     if [ "$SWITCH" = reload ]; then
         : # handled by webterm reload --when-idle below
-    elif "$TMP/$BIN" reload --wait-idle >/dev/null 2>&1; then
+    elif "$TMP/$BIN" reload --probe >/dev/null 2>&1; then
+        # Show the wait, and if it runs out, don't restart anyway: that is
+        # exactly what --when-idle asked to avoid.
+        "$TMP/$BIN" reload --wait-idle \
+            || die "Not restarting: sessions are still running commands (--when-idle). Try again later, or drop --when-idle."
         info "All sessions are idle (--when-idle)"
     else
-        info "The running agent is too old to report idleness; --when-idle has no effect"
+        info "The running agent can't report idleness; --when-idle has no effect"
     fi
 fi
 
@@ -731,7 +757,9 @@ else
         [ "$PREFIX" = /usr/local/bin ] || printf -- '--prefix\n%s\n' "$PREFIX"
         [ "$CHANNEL" = latest ] || printf -- '--channel\n%s\n' "$CHANNEL"
         [ "$SETUP_SERVICE" = 1 ] || echo "--no-service"
-        [ "$DO_SETCAP" = 1 ] || echo "--no-setcap"
+        # Only with --no-service (as --dev expands): replayed on a service
+        # install, it would leave every updated binary unable to bind 80/443.
+        [ "$DO_SETCAP" = 1 ] || [ "$SETUP_SERVICE" = 1 ] || echo "--no-setcap"
         true
     } > "$STATE_FILE"
 fi
@@ -816,10 +844,14 @@ if [ "$SWITCH" = reload ]; then
     # that "kept" sessions are gone is worse than a clear failure.
     IDLE_ARG=""
     [ "$WHEN_IDLE" = 1 ] && IDLE_ARG="--when-idle"
-    if do_reload $IDLE_ARG; then
+    # Pass the unit's command line: the running agent would otherwise re-exec
+    # with its own, and a new address or port wouldn't take effect until the
+    # next restart (ADR-0047 §1).
+    # shellcheck disable=SC2086 # PORT_ARGS is a list of flags
+    if do_reload $IDLE_ARG -- serve --domain "$DOMAIN" $PORT_ARGS; then
         done_msg "Upgraded in place, sessions kept: $("$PREFIX/webterm" version)"
     else
-        die "The hot upgrade didn't complete; the old version is still running and sessions are fine.
+        die "The hot upgrade didn't complete. If it says sessions are intact, the old version is still running.
       Why:                      $JCTL -n 50 --no-pager
       Restart and lose sessions: webterm update --force-restart"
     fi
@@ -831,13 +863,15 @@ else
 run $SVC_SUDO systemctl restart webterm
 
 # Make sure it actually came up (e.g. a lost capability means a crash loop on port 80).
+# is-active alone proves nothing: a simple service is "active" from the moment it is
+# forked. The agent opens its control socket once it is listening, so wait for that.
 if [ "$DRY_RUN" != 1 ]; then
     ok=0
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        if system_unit_active; then ok=1; break; fi
+    for _ in $(seq 1 40); do
+        if "$PREFIX/webterm" reload --probe >/dev/null 2>&1; then ok=1; break; fi
         sleep 0.5
     done
-    [ "$ok" = 1 ] || die "The service didn't become active within 5 seconds. Logs:
+    [ "$ok" = 1 ] || die "The service didn't come up within 20 seconds. Logs:
       sudo journalctl -u webterm -n 30 --no-pager"
     done_msg "Service running: $("$PREFIX/webterm" version)"
 fi
