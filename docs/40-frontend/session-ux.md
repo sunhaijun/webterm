@@ -288,15 +288,21 @@ Without an exit code: `[Exited · Enter to close]`.
 
 ## Connection status (AC-2.10)
 
-| State | compact | wide |
-|---|---|---|
-| Online | Nothing shown | Green dot at the right of the tab bar; `title` adds `320ms` when RTT > 300ms |
-| Reconnecting | Banner at the top of the terminal: `Reconnecting · retry in 3s` (live countdown) | Pulsing orange dot + the same banner |
-| Resumed | Toast: `Resumed · caught up 48 KB`, gone after 3 seconds | Same; the dot turns green |
-| Session gone | Toast: `Session ended (agent may have restarted)` | Same |
+Every connection message is in **one place: the banner at the top of the terminal** ([ADR-0049](../20-architecture/adr/0049-connection-status-in-one-place.md)).
 
-- The banner and toast **float over the terminal** ([layout.md](layout.md#floating-over-the-terminal)); showing or hiding them never changes terminal geometry, so network blips don't send the PTY a SIGWINCH.
-- The status text lives in `data-testid="conn-text"`, which is **always in the DOM**: visually hidden while online, still announced through `aria-live="polite"`.
+| State | Banner | `wide` also |
+|---|---|---|
+| Page loading (gate checks pairing) | `Connecting…`, over a skeleton of the app (empty tab bar on `wide`), so it's already in its final position | — |
+| Agent unreachable at startup | `Can't reach the agent · retrying` (error color); re-checks every 3 seconds and on `online` | — |
+| Connecting / reconnecting | `Connecting…` / `Reconnecting · retry in 3s` (live countdown), warning color | Pulsing orange dot |
+| Online | Hidden | Green dot; `title` adds `320ms` when RTT > 300ms |
+| Resumed | `Resumed · caught up 48 KB`, ok color, gone after 3 seconds | Dot turns green |
+| Agent restarted | `Session ended (agent may have restarted)`, warning color, 3 seconds | — |
+| Action refused offline | The state plus a note, e.g. `Reconnecting · retry in 3s · Can't create a session until reconnected`, 3 seconds | — |
+
+- The banner **floats over the terminal** ([layout.md](layout.md#floating-over-the-terminal)); showing or hiding it never changes terminal geometry, so network blips don't send the PTY a SIGWINCH.
+- The state text lives in `data-testid="conn-text"`, which is **always in the DOM**: visually hidden while online, still announced through `aria-live="polite"`. The note is `data-testid="conn-note"`.
+- Toasts are only for messages that aren't about the connection (session limit, input too large, agent notices).
 - "Caught up N KB" may look redundant, but it **assures the user nothing was lost** — visible evidence for the "never disconnects" promise.
 
 ## Scrollback after refresh (AC-5.14)

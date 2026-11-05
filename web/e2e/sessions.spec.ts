@@ -295,7 +295,7 @@ test.describe('E2E-18 no session mix-up after an agent restart', () => {
     const w = (await lastWelcome(pageB))!
     expect(w.instance_id, 'the agent did restart').not.toBe(oldInstance)
     expect(w.resumed.find((r) => r.sid === 1)?.status, `resumed=${JSON.stringify(w.resumed)}`).toBe('gone')
-    await expect(pageB.getByTestId('toast')).toContainText('Session ended')
+    await expect(pageB.getByTestId('conn-note')).toContainText('Session ended')
 
     // A's new session is not appended to B's old content: the old content is gone; if B shows sid 1,
     // it is the new session rebuilt from a snapshot.

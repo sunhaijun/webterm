@@ -54,8 +54,8 @@ All absolutely positioned or `position: fixed`, outside the grid; showing or hid
 
 | Element | Position | When |
 |---|---|---|
-| Connection banner (`conn-text`) | Top of the terminal, one line tall | When not online ([session-ux.md](session-ux.md)) |
-| Toast | Top center of the terminal | Resumed, errors |
+| Connection banner (`conn-text`, `conn-note`) | Top of the terminal, one line tall | When not online, and for 3 seconds with a connection note ([session-ux.md](session-ux.md), [ADR-0049](../20-architecture/adr/0049-connection-status-in-one-place.md)) |
+| Toast | Top center of the terminal | Messages unrelated to the connection (session limit, input too large, agent notices) |
 | Composition preview (`ime-preview`) | At the terminal cursor | During IME composition in direct input |
 | Session drawer (phone), settings, session menu | See [Sheets](#sheets) | When open |
 

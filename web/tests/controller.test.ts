@@ -186,7 +186,8 @@ describe('session creation and subscription', () => {
       }),
     )
     expect(ctl.get().sessions.map((x) => `${x.sid}:${x.name}`)).toEqual(['1:brand-new'])
-    expect(ctl.get().toast?.text).toBe('Session ended (agent may have restarted)')
+    expect(ctl.get().connNote?.text, 'a connection message: in the banner (ADR-0049)').toBe('Session ended (agent may have restarted)')
+    expect(ctl.get().toast).toBeNull()
     expect(term().sid(), 'the new sid 1 is a different session, subscribed from 0').toBe(1)
     expect(s2.msgs('subscribe')).toMatchObject([{ sid: 1, out_seq: 0 }])
   })
@@ -522,7 +523,7 @@ describe('UT-signout-1 sign out this device', () => {
     sock.close()
     ctl.requestSignOut()
     expect(ctl.get().signingOut).toBe(false)
-    expect(ctl.get().toast?.text).toMatch(/can't sign out/)
+    expect(ctl.get().connNote?.text).toMatch(/Can't sign out until reconnected/)
     expect(signOuts).toBe(0)
   })
 
@@ -720,7 +721,7 @@ describe('UT-close-1 close that never landed', () => {
     sock.close()
     ctl.requestClose(1)
     ctl.confirmClose()
-    expect(ctl.get().toast?.text).toBe("Not connected; can't close the session yet")
+    expect(ctl.get().connNote?.text).toBe("Can't close the session until reconnected")
     await new Promise((r) => setTimeout(r, 900))
     const s2 = sockets[sockets.length - 1]!
     s2.open()

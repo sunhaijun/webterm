@@ -154,8 +154,9 @@ Run once on Pixel 5 (`compact`) and once at 1440×900 (`wide`).
 1. Online: on `compact` no banner is visible; `conn-text` is in the DOM, reads "Online", and is visually hidden; on `wide` the `conn-dot` at the right of the tab bar has the online color
 2. Cut → the banner shows "Reconnecting · retry in Ns", counting down; on `wide` the status dot changes color
 3. **The banner doesn't change geometry**: the `.term` rect is identical field by field before and after the banner appears, and `__webterm.size()` and `__webterm.resizes()` don't change
-4. Restore → the banner disappears and the toast "Resumed · caught up N KB" shows, gone after 3 seconds
-5. The byte count in the toast matches the actual replay size (order of magnitude is enough)
+4. Restore → the banner shows "Resumed · caught up N KB" (`conn-note`) and hides after 3 seconds; no toast
+5. The byte count matches the actual replay size (order of magnitude is enough)
+6. Page load ([ADR-0049](../20-architecture/adr/0049-connection-status-in-one-place.md)): with `/api/devices` held, the gate shows the banner "Connecting…"; once the app mounts, the banner is at the same position, pixel for pixel
 
 ---
 
@@ -313,7 +314,7 @@ In direct input, dispatch on the helper textarea what an on-screen keyboard does
 
 1. `manifest.json` is reachable with all fields
 2. The service worker registers
-3. Reload while offline → a clear "Can't reach the agent" status page (not the browser's default error page, and not pretending to work)
+3. Reload while offline → the connection banner says "Can't reach the agent · retrying" (not the browser's default error page, and not pretending to work); back online, it gets through without a reload
 4. Assert the service worker **cached no `/api/*` or `/ws` responses**
 
 ---

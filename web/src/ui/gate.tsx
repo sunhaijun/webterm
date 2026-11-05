@@ -12,6 +12,12 @@
 import type { ComponentChildren } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 
+import { readForm } from '../app/form'
+import { isCoarsePointer } from './viewport'
+
+/** How often an unreachable agent is checked again at startup (ADR-0049 §3). */
+export const GATE_RETRY_MS = 3000
+
 type GateState = 'checking' | 'authed' | 'unpaired' | 'revoked' | 'signedOut' | 'offline'
 
 export interface GateProps {
@@ -22,16 +28,34 @@ export function Gate({ children }: GateProps) {
   const [gate, setGate] = useState<GateState>('checking')
 
   useEffect(() => {
-    fetch('/api/devices', { credentials: 'same-origin' })
-      .then(async (r) => {
-        // A revoked device's cookie gets code "revoked" (AC-1.11): say so, as when revoked mid-use
-        const next: GateState = r.status !== 401 ? 'authed' : (await errorCode(r)) === 'revoked' ? 'revoked' : 'unpaired'
-        setGate((g) => (g !== 'checking' ? g : next))
-      })
-      .catch(() => setGate((g) => (g !== 'checking' ? g : 'offline')))
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let stopped = false
+    const check = () => {
+      if (timer) clearTimeout(timer)
+      timer = undefined
+      fetch('/api/devices', { credentials: 'same-origin' })
+        .then(async (r) => {
+          // A revoked device's cookie gets code "revoked" (AC-1.11): say so, as when revoked mid-use
+          const next: GateState = r.status !== 401 ? 'authed' : (await errorCode(r)) === 'revoked' ? 'revoked' : 'unpaired'
+          setGate((g) => (g === 'checking' || g === 'offline' ? next : g))
+        })
+        .catch(() => {
+          setGate((g) => (g === 'checking' || g === 'offline' ? 'offline' : g))
+          // Unreachable at startup: keep trying, like a reconnect would (ADR-0049 §3)
+          if (!stopped) timer = setTimeout(check, GATE_RETRY_MS)
+        })
+    }
+    check()
+    addEventListener('online', check)
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      removeEventListener('online', check)
+    }
   }, [])
 
-  if (gate === 'checking') return <main class="gate">Checking pairing…</main>
+  if (gate === 'checking') return <Skeleton offline={false} />
+  if (gate === 'offline') return <Skeleton offline />
   if (gate === 'authed')
     return (
       <>
@@ -41,16 +65,33 @@ export function Gate({ children }: GateProps) {
         )}
       </>
     )
-  if (gate === 'offline') {
-    // Offline: say so plainly instead of pretending to work
-    return (
-      <main class="gate" data-testid="offline">
-        <h1>Can't reach the agent</h1>
-        <p>Check your network and make sure webterm is still running.</p>
-      </main>
-    )
-  }
   return <Unpaired revoked={gate === 'revoked'} signedOut={gate === 'signedOut'} />
+}
+
+/**
+ * The app's frame while the gate checks pairing (ADR-0049 §2): same form, same tab bar
+ * height, and the connection banner where the app will show it. Startup messages are
+ * then in the same place as every later connection message, instead of jumping.
+ */
+function Skeleton({ offline }: { offline: boolean }) {
+  const form = readForm()
+  return (
+    <div
+      class="app"
+      data-form={form}
+      data-coarse={isCoarsePointer() ? 'true' : 'false'}
+      data-testid={offline ? 'offline' : 'gate-checking'}
+    >
+      {form === 'wide' && <div class="topbar" />}
+      <div class="stage">
+        <div class="conn-banner" data-state={offline ? 'fatal' : 'connecting'} data-testid="conn-banner">
+          <span data-testid="conn-text" role="status" aria-live="polite">
+            {offline ? "Can't reach the agent · retrying" : 'Connecting…'}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 async function errorCode(r: Response): Promise<string | undefined> {

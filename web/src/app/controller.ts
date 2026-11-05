@@ -19,7 +19,14 @@ import { readForm, type Form } from './form'
 
 export interface Toast {
   id: number
-  kind: 'recovered' | 'info' | 'warn' | 'error'
+  kind: 'info' | 'warn' | 'error'
+  text: string
+}
+
+/** A connection note in the banner (ADR-0049): shown for NOTE_MS next to the state. */
+export interface ConnNote {
+  id: number
+  kind: 'ok' | 'warn'
   text: string
 }
 
@@ -50,6 +57,8 @@ export interface AppState {
   active: number | null
   maxSessions: number
   toast: Toast | null
+  /** Connection note in the banner (ADR-0049): resumed, session ended, refused offline. */
+  connNote: ConnNote | null
   preview: ImePreviewState | null
   /** The session drawer (compact). */
   sessionsOpen: boolean
@@ -65,6 +74,8 @@ export interface AppState {
 }
 
 const TOAST_MS = 3000
+/** How long a connection note stays in the banner (ADR-0049). */
+export const NOTE_MS = 3000
 
 export class AppController {
   readonly sticky = new Sticky()
@@ -89,6 +100,8 @@ export class AppController {
   private reqSeq = 0
   private toastSeq = 0
   private toastTimer: ReturnType<typeof setTimeout> | undefined
+  private noteSeq = 0
+  private noteTimer: ReturnType<typeof setTimeout> | undefined
   /** session.create requests we sent → whether to focus the session once it exists. */
   private readonly pendingCreate = new Map<string, boolean>()
   /**
@@ -148,6 +161,7 @@ export class AppController {
       active: null,
       maxSessions: 20,
       toast: null,
+      connNote: null,
       preview: null,
       sessionsOpen: false,
       settingsOpen: false,
@@ -165,11 +179,11 @@ export class AppController {
         onSnapshot: (sid, data) => this.store.snapshot(sid, data),
         onMessage: (msg) => this.onMessage(msg),
         onState: (conn, connInfo) => this.set({ conn, connInfo }),
-        onRecovered: (bytes) => this.toast('recovered', `Resumed · caught up ${formatBytes(bytes)}`),
+        onRecovered: (bytes) => this.note('ok', `Resumed · caught up ${formatBytes(bytes)}`),
         onRestart: () => {
           const had = this.store.list().length > 0
           this.store.clear()
-          if (had) this.toast('warn', 'Session ended (agent may have restarted)')
+          if (had) this.note('warn', 'Session ended (agent may have restarted)')
         },
         onFatal: (reason) => this.set({ fatal: reason }),
         onUnauthorized: () => this.revoke(),
@@ -218,6 +232,16 @@ export class AppController {
     if (this.toastTimer) clearTimeout(this.toastTimer)
     this.set({ toast: { id: ++this.toastSeq, kind, text } })
     this.toastTimer = setTimeout(() => this.set({ toast: null }), TOAST_MS)
+  }
+
+  /**
+   * A connection message goes in the banner, not a toast (ADR-0049): every connection
+   * message is in one place. It stays for NOTE_MS next to the state, or alone once online.
+   */
+  private note(kind: ConnNote['kind'], text: string): void {
+    if (this.noteTimer) clearTimeout(this.noteTimer)
+    this.set({ connNote: { id: ++this.noteSeq, kind, text } })
+    this.noteTimer = setTimeout(() => this.set({ connNote: null }), NOTE_MS)
   }
 
   /**
@@ -317,6 +341,7 @@ export class AppController {
       this.conn.close()
       this.store.dispose()
       if (this.toastTimer) clearTimeout(this.toastTimer)
+      if (this.noteTimer) clearTimeout(this.noteTimer)
       this.area = null
     }
   }
@@ -382,7 +407,7 @@ export class AppController {
       return
     }
     if (this.state.conn !== 'online') {
-      this.toast('warn', "Not connected; can't create a session yet")
+      this.note('warn', "Can't create a session until reconnected")
       return
     }
     const reqID = `new-${++this.reqSeq}`
@@ -440,7 +465,7 @@ export class AppController {
     if (this.closeSent.has(sid)) return
     // Offline sends are dropped silently; don't mark it as closing, or after reconnecting it would be alive but ignore input
     if (this.state.conn !== 'online') {
-      this.toast('warn', "Not connected; can't close the session yet")
+      this.note('warn', "Can't close the session until reconnected")
       return
     }
     this.closeSent.add(sid)
@@ -519,7 +544,7 @@ export class AppController {
    */
   requestSignOut(): void {
     if (this.state.conn !== 'online') {
-      this.toast('warn', "Not connected; can't sign out yet")
+      this.note('warn', "Can't sign out until reconnected")
       return
     }
     this.set({ signingOut: true, settingsOpen: false })
@@ -842,7 +867,7 @@ export class AppController {
     this.closeSent.clear()
     // welcome.sessions[] is in display order (ADR-0040)
     this.store.setOrder(w.sessions.map((s) => s.sid))
-    if (gone) this.toast('warn', 'Session ended (agent may have restarted)')
+    if (gone) this.note('warn', 'Session ended (agent may have restarted)')
     this.set({ welcomed: true, maxSessions: w.limits.max_sessions, fatal: null, home: w.home || null })
 
     const active = this.store.active

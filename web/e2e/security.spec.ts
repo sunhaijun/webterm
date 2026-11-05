@@ -146,8 +146,12 @@ test('E2E-17 PWA: complete manifest, service worker registers, offline reload sh
   // default error page, and not pretending to work).
   await context.setOffline(true)
   await page.reload()
-  await expect(page.getByTestId('offline')).toContainText("Can't reach the agent")
+  await expect(page.getByTestId('offline')).toContainText("Can't reach the agent · retrying")
   await expect(page.getByTestId('terminal')).toHaveCount(0)
+  // Back online, it gets through without a reload (ADR-0049 §3).
+  await context.setOffline(false)
+  await expect(page.getByTestId('terminal')).toBeAttached({ timeout: 15_000 })
+  await waitOnline(page)
   await context.setOffline(false)
 })
 
@@ -204,7 +208,7 @@ test('E2E-46 offline: signing out only says it can\'t yet; the device stays sign
 
   await page.getByTestId('open-settings').click()
   await page.getByTestId('sign-out').click()
-  await expect(page.getByTestId('toast')).toContainText("can't sign out")
+  await expect(page.getByTestId('conn-note')).toContainText("Can't sign out until reconnected")
   await expect(page.getByTestId('sign-out-confirm')).toHaveCount(0)
 
   net.goOnline()
