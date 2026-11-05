@@ -212,3 +212,4 @@ In the `exited` state a session keeps its ring buffer and emulator: it can be vi
 | [0045](adr/0045-install-from-the-binary.md) | The install script ships inside the binary (`webterm install`) |
 | [0046](adr/0046-guided-install.md) | Guided install: the installer walks you through the manual steps and re-checks them |
 | [0047](adr/0047-review-fixes.md) | Edge cases from the full review: hot upgrades follow the installed command line, a page's newest connection owns its input, changes wait for a handoff, `nohup` survives closing |
+| [0048](adr/0048-sign-out.md) | Sign out this device: revoke it on the server and clear everything it holds |

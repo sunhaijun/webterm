@@ -612,6 +612,20 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 5. **Horizontal drag of 120px** → no INPUT frames
 6. Quit, run `printf '\033[?1049h\033[?1000h\033[?1006h'; sleep 60`, then `Ctrl+C` and `printf '\033[?1000l'` to turn off mouse tracking (still on the alternate screen) → drag down → no INPUT frames (no arrow keys sent, ADR-0024 §4)
 
+## E2E-46 Sign out this device (AC-1.22)
+
+> [ADR-0048](../20-architecture/adr/0048-sign-out.md)
+
+1. Pair, open a second tab in the same context, store a theme preference
+2. Settings → "Sign out this device" → the confirmation sheet; Cancel closes it and nothing changes
+3. Sign out again and confirm → the pairing page says "Signed out"; `webterm.*` keys are gone from `localStorage`; the service worker is unregistered
+4. The second tab is cut off within 5 seconds and goes to the pairing page
+5. A request carrying the old cookie (captured before signing out) gets `401` on `/api/devices` and on the `/ws` upgrade
+6. Reload → still the pairing page
+7. Offline variant: with the WebSocket cut, the button only shows a toast; the device stays signed in
+
+---
+
 ## Out of E2E scope (in the manual checklist)
 
 - How a real CJK IME's candidate window behaves on a real device

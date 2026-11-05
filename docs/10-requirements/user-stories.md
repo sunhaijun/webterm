@@ -23,6 +23,8 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 
 **US-1.7** (m12) I run one command on a fresh server and the installer walks me through whatever it can't do itself: it tells me which DNS record or cloud firewall rule to add, waits while I do it, checks that it worked, and continues to the QR code — no restarting from scratch ([ADR-0046](../20-architecture/adr/0046-guided-install.md)).
 
+**US-1.8** (m13) When I stop using a device, I sign it out from the device itself: the server no longer accepts it, and nothing left on it can get back in ([ADR-0048](../20-architecture/adr/0048-sign-out.md)).
+
 ---
 
 ## US-2 Never lose the connection

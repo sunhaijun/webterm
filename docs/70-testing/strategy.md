@@ -163,6 +163,7 @@ Real PTY + real SQLite + in-process HTTP server.
 | `IT-queue-2` | Connection write queue full → that connection is closed instead of blocking the Session (m2, needs the connection layer) |
 | `IT-sub-1` | Unsubscribed sessions keep buffering and feeding the emulator; `subscribe{out_seq}` catches up incrementally or with a snapshot |
 | `IT-handoff-1` | Across a hot upgrade: the incremental path is byte-continuous and a session's snapshot is byte-identical (`TestHandoffByteLevelContinuity`) |
+| `IT-auth-5` | `POST /auth/logout` (AC-1.22): unauthenticated → 401; a foreign `Origin` → 403 and the device stays valid; success → 204, `Set-Cookie` clears the cookie, `Clear-Site-Data` is sent, the old token gets 401 on `/api/devices` and on `/ws`, and the device's open WebSocket is closed within 5 seconds |
 | `IT-handoff-wait` | While frozen, close / rename / move wait and the exported snapshot doesn't show them; after `Thaw` they go through. A session closed while frozen stops its loops (ADR-0047 §4) |
 | `IT-handoff-listen` | An inherited listener on another address isn't reused and its fd is closed, as is an inherited fd nothing adopts; one on the configured address is reused; exporting leaves the serving listener non-blocking (ADR-0047 §1) |
 | `IT-stale-detach` | An abandoned connection that ends after its page's new one queued input doesn't discard it: the PTY receives every byte. A connection that is still the newest discards its queued input and the resend lines up (ADR-0047 §2) |
@@ -214,6 +215,7 @@ They do **not** prove protocol compatibility with Let's Encrypt — that's `gola
 | `UT-reconnect-1` | Exponential backoff sequence, jitter range, immediate retry on the `online` event |
 | `UT-hb-1` | Heartbeat interval, pong timeout declares the connection dead |
 | `UT-hb-2` | Immediate liveness probe while believing it's online: `online` / page becomes visible → send `ping`; no `pong` within 2 seconds → close the connection; a `pong` keeps it open (AC-2.20) |
+| `UT-signout-1` | Sign out (AC-1.22): the settings button opens the confirmation; cancel sends nothing; confirm calls the logout request, then closes the connection, removes `webterm.*` keys from `localStorage` (and nothing else), and sets `signedOut`; a 401 counts as success; a network error or another status keeps the device signed in and shows an error toast; offline only shows a toast |
 | `UT-hb-3` | A socket that never fires `onclose` after `close()` (a dead link) is still given up on at the pong timeout, and the page reconnects; after a protocol error, frames still arriving on that socket are ignored (ADR-0047 §2) |
 | `UT-reconnect-2` | Input typed into a session that was then switched away from while offline is resent right after `welcome`, untrimmed, though the session isn't in `resume`; nothing is resent to a gone or exited session (AC-2.4) |
 | `UT-reconnect-3` | `retryNow` while a socket is connecting abandons it: it never sends a `hello` (ADR-0047 §2) |

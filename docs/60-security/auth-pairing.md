@@ -111,6 +111,10 @@ Can't scan it? Open  https://term.example.com/pair  in your phone's browser and 
 
 Updates to `last_seen_at` / `last_ip` are throttled (at most one write per device per 60 seconds) so not every request hits the DB.
 
+### Signing out (AC-1.22, [ADR-0048](../20-architecture/adr/0048-sign-out.md))
+
+`POST /auth/logout` revokes the requesting device, exactly like revoking it from elsewhere, and on the same response clears the cookie and sends `Clear-Site-Data: "cookies", "storage", "cache"`. The cookie is `HttpOnly`, so this response is the only way the page can get rid of it; and revoking matters more than deleting: a copied token stops working too. The page then removes its own `localStorage` keys, service worker and caches, for browsers that ignore `Clear-Site-Data`. Offline it refuses: a local-only sign-out would leave a token the server still accepts.
+
 ### Revocation takes effect immediately (AC-1.11)
 
 Checking only at the handshake isn't enough — a WebSocket can stay open for days.
@@ -157,6 +161,7 @@ Rate-limit state lives in memory (cleared on restart) and is never written to th
 | `GET /` `GET /assets/*` `GET /manifest.json` `GET /sw.js` | ✗ |
 | `GET /pair` | ✗ (the page itself; the code is in the fragment) |
 | `POST /auth/pair` | ✗ (this is the pairing entry point, protected by rate limiting) |
+| `POST /auth/logout` | ✓ (plus the `Origin` check; signs out the requesting device) |
 | `GET /healthz` | ✗ (returns only `ok`, discloses nothing) |
 | `GET /.well-known/acme-challenge/*` | ✗ (ACME, :80 only) |
 | **`GET /ws`** | **✓** (plus the `Origin` check) |

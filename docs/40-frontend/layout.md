@@ -107,7 +107,7 @@ keyboard up := visualViewport.height < documentElement.clientHeight − 80
 
 ## Sheets
 
-There are four: the session drawer (phone), settings, close confirmation ([ADR-0038](../20-architecture/adr/0038-close-confirm-sheet.md)), and rename (phone, [ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md)). They share the `Drawer` primitive (`web/src/ui/drawer.tsx`, [ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)), and **their shape follows the form** (`compact` / `wide`), not `pointer` ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §4):
+There are five: the session drawer (phone), settings, close confirmation ([ADR-0038](../20-architecture/adr/0038-close-confirm-sheet.md)), sign-out confirmation ([ADR-0048](../20-architecture/adr/0048-sign-out.md)), and rename (phone, [ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md)). They share the `Drawer` primitive (`web/src/ui/drawer.tsx`, [ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)), and **their shape follows the form** (`compact` / `wide`), not `pointer` ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §4):
 
 | | `compact` (phone) | `wide` (PC / tablet) |
 |---|---|---|
@@ -116,7 +116,7 @@ There are four: the session drawer (phone), settings, close confirmation ([ADR-0
 | Enter animation | `sheet-up`, ~170ms (none with `prefers-reduced-motion`) | None |
 | Grab handle | Yes (36×4) | No |
 | Swipe down to close | Yes (once the body is scrolled to the top; release after > 90px) | — |
-| Used by | Session drawer, settings, close confirmation, rename | Settings, close confirmation |
+| Used by | Session drawer, settings, close and sign-out confirmation, rename | Settings, close and sign-out confirmation |
 
 ```
 ┌─────────────── ═══ ───────────────┐  grab handle (bottom sheet only)
@@ -133,7 +133,7 @@ There are four: the session drawer (phone), settings, close confirmation ([ADR-0
 ```
 
 - **Track the visible area** ([ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md) §3): `.app` has `contain: layout`, which makes it the containing block for `position: fixed` descendants. `.app` already tracks `visualViewport` (height, plus `translateY` while the keyboard is up), so the backdrop covers exactly the visible area and the sheet's bottom edge is the keyboard's top edge. Without this, Android shrinks only the visual viewport for the keyboard, and a sheet pinned to the bottom of the layout viewport ends up entirely behind the keyboard.
-- **Height**: a percentage of the backdrop (the visible area), not `vh`: at most 80%, growing with content. **The session drawer is at least 50%** (the iOS "medium" sheet detent), so a short list doesn't leave a sliver; extra height goes to the list, and the bottom row stays at the bottom of the sheet. Settings has only two rows and no minimum height.
+- **Height**: a percentage of the backdrop (the visible area), not `vh`: at most 80%, growing with content. **The session drawer is at least 50%** (the iOS "medium" sheet detent), so a short list doesn't leave a sliver; extra height goes to the list, and the bottom row stays at the bottom of the sheet. Settings has only a few rows and no minimum height.
 - **Breathing room at the bottom**: the bottom row is padded 12px top, 16px on the sides, and `max(16px, var(--sa-bottom))` at the bottom; sheets without a bottom row leave the same `max(16px, var(--sa-bottom))` under the body. `--sa-bottom` is `.app`'s safe-area variable, set to 0 while the keyboard is up (the keyboard covers the home indicator, so no extra gap is needed). Buttons don't stretch edge to edge; they're blocks with a `--surface` background, a thin `--line` border, and a 12px radius.
 - **Closing**: tap the backdrop, `Esc`, ✕, or (bottom sheets) swipe down. The session drawer also closes when you pick a session and on the system back button ([session-ux.md](session-ux.md)). Settings doesn't handle the back button (ADR-0037 §4).
 - **Focus moves into the sheet when it opens** (modal), so keyboard and screen reader users aren't left on the layer behind it, and `Esc` has a definite target.
@@ -143,7 +143,7 @@ There are four: the session drawer (phone), settings, close confirmation ([ADR-0
 
 ## Settings (AC-5.3)
 
-Just two items ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)). Changes apply immediately; no Save button, no explanatory text.
+Just two items ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)), plus one action at the bottom: sign out ([ADR-0048](../20-architecture/adr/0048-sign-out.md)). Changes apply immediately; no Save button, no explanatory text.
 
 ```
 ┌─────────────── ═══ ───────────────┐
@@ -153,6 +153,8 @@ Just two items ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-s
 │         │ System │ Light │ Dark │ │
 │         └────────┴───────┴──────┘ │
 │ Font size        ( − )  14  ( + ) │  10–24; the button at the limit is grayed out
+├───────────────────────────────────┤
+│ Sign out this device              │  danger color; asks for confirmation first
 │                                   │  bottom max(16px, safe area)
 └───────────────────────────────────┘
 ```
@@ -162,6 +164,7 @@ Just two items ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-s
 | Sheet | `settings` | Bottom sheet on `compact`, centered dialog on `wide` |
 | Theme | `theme-system` / `theme-light` / `theme-dark` | `role="radio"`; the selected one has `aria-checked="true"` |
 | Font size | `font-dec` / `font-size` / `font-inc` | `font-size` shows the current value; at 10 / 24 the corresponding button is `disabled` |
+| Sign out | `sign-out` | Closes settings and opens the confirmation sheet `sign-out-confirm` (`sign-out-cancel` / `sign-out-ok`, focus on Sign out, `Esc` cancels). Offline: a toast instead, nothing sent |
 
 - Entry point: on `wide` the ⚙ at the far right of the tab bar; on `compact` the ⚙ at the bottom of the session drawer. Both have testid `open-settings`. No shortcut (`Ctrl+Shift+,` goes to the terminal).
 - Font size has no number input: on phones that would pop up a numeric keyboard.
