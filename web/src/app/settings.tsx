@@ -1,6 +1,7 @@
 /**
  * Settings (layout.md, ADR-0037): just two items, a three-way theme choice and the
  * terminal font size `−` / `+`. Changes apply immediately; no Save button, no help text.
+ * Below them, one action: sign out this device (ADR-0048), which asks first.
  *
  * Font size is not a number input: on phones that pops up the numeric keyboard.
  */
@@ -13,6 +14,7 @@ export interface SettingsProps {
   fontSize: number
   onTheme(t: Theme): void
   onFontSize(px: number): void
+  onSignOut(): void
   onClose(): void
 }
 
@@ -71,6 +73,11 @@ export function Settings(p: SettingsProps) {
             <PlusIcon />
           </button>
         </div>
+      </div>
+      <div class="settings-row">
+        <button type="button" class="drawer-btn danger" data-testid="sign-out" onClick={p.onSignOut}>
+          Sign out this device
+        </button>
       </div>
     </Drawer>
   )

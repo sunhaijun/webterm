@@ -2,10 +2,11 @@
  * E2E-15 Device management (AC-1.3 / AC-1.11)
  * E2E-16 Unauthenticated access (AC-1.7 / AC-1.8, plus AC-1.6 pairing rate limits)
  * E2E-17 PWA (AC-1.14)
+ * E2E-46 Sign out this device (AC-1.22)
  */
 import { expect, test } from '@playwright/test'
 
-import { Agent, waitFor, waitOnline } from './harness'
+import { Agent, installWSControl, waitFor, waitOnline } from './harness'
 
 let agent: Agent
 test.beforeEach(async () => {
@@ -144,4 +145,65 @@ test('E2E-17 PWA: complete manifest, service worker registers, offline reload sh
   await expect(page.getByTestId('offline')).toContainText("Can't reach the agent")
   await expect(page.getByTestId('terminal')).toHaveCount(0)
   await context.setOffline(false)
+})
+
+test('E2E-46 sign out this device: asks first; revokes on the agent, clears local data, other tabs follow, the old cookie is dead', async ({ page, context, request }) => {
+  await agent.open(page)
+  await waitFor(async () => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length > 0), 'service worker registered', 20_000)
+
+  // (1) A second tab of this device, and a stored preference.
+  const tab2 = await context.newPage()
+  await tab2.goto(agent.baseURL)
+  await waitOnline(tab2)
+  await page.getByTestId('open-settings').click()
+  await page.getByTestId('theme-dark').click()
+  expect(await page.evaluate(() => localStorage.getItem('webterm.theme'))).toBe('dark')
+  const cookieHeader = (await context.cookies()).map((c) => `${c.name}=${c.value}`).join('; ')
+
+  // (2) It asks first; Cancel changes nothing.
+  await page.getByTestId('sign-out').click()
+  await expect(page.getByTestId('settings')).toHaveCount(0)
+  await expect(page.getByTestId('sign-out-confirm')).toBeVisible()
+  await page.getByTestId('sign-out-cancel').click()
+  await expect(page.getByTestId('sign-out-confirm')).toHaveCount(0)
+  await waitOnline(page)
+
+  // (3) Confirm: the pairing page says "Signed out", and nothing is left locally.
+  await page.getByTestId('open-settings').click()
+  await page.getByTestId('sign-out').click()
+  const start = Date.now()
+  await page.getByTestId('sign-out-ok').click()
+  await expect(page.getByTestId('signed-out')).toBeVisible()
+  await expect(page.getByTestId('terminal')).toHaveCount(0)
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('webterm.')))).toEqual([])
+  await waitFor(async () => page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length === 0), 'service worker unregistered')
+  expect(await page.evaluate(async () => (await caches.keys()).length)).toBe(0)
+
+  // (4) The device's other tab is cut off within 5 seconds.
+  await expect(tab2.getByTestId('unpaired')).toBeVisible({ timeout: 15_000 })
+  expect(Date.now() - start, 'other tab cut off within 5s (plus 1s measurement slack)').toBeLessThan(6000)
+
+  // (5) The old cookie, copied before signing out, no longer works.
+  expect((await request.get(`${agent.baseURL}/api/devices`, { headers: { Cookie: cookieHeader } })).status()).toBe(401)
+  expect((await request.get(`${agent.baseURL}/ws`, { headers: { ...wsUpgrade, Cookie: cookieHeader } })).status()).toBe(401)
+
+  // (6) Reloading stays on the pairing page.
+  await page.reload()
+  await expect(page.getByTestId('unpaired')).toBeVisible()
+})
+
+test('E2E-46 offline: signing out only says it can\'t yet; the device stays signed in', async ({ page }) => {
+  const net = await installWSControl(page)
+  await agent.open(page)
+  await net.goOffline()
+  await expect(page.getByTestId('conn-text')).toContainText('Reconnecting', { timeout: 20_000 })
+
+  await page.getByTestId('open-settings').click()
+  await page.getByTestId('sign-out').click()
+  await expect(page.getByTestId('toast')).toContainText("can't sign out")
+  await expect(page.getByTestId('sign-out-confirm')).toHaveCount(0)
+
+  net.goOnline()
+  await waitOnline(page, 40_000)
+  expect(await page.evaluate(async () => (await fetch('/api/devices', { credentials: 'same-origin' })).status)).toBe(200)
 })
