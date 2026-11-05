@@ -26,19 +26,18 @@
 | m7 | `feat/40-commands` | Command history and quick commands, all later removed ([ADR-0022](../20-architecture/adr/0022-drop-command-palette.md), ADR-0025, ADR-0026). **v0.1.0 released** once the manual checklist passed on real devices | [manual-checklist.md](../70-testing/manual-checklist.md) |
 | m8 | `feat/40-termux-shell` | Termux-style UI and agent-held terminal state, in one PR: two forms, static extra keys, text page, session drawer / tab bar, connection banner; `internal/vterm` snapshots, protocol v2 (`SNAPSHOT`), 256 KiB ring buffer, native browser output path; old UI, shell integration, and command history removed | [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md), [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md), [layout.md](../40-frontend/layout.md#form-ac-518), [input.md](../40-frontend/input.md#extra-keys-ac-318), [session-ux.md](../40-frontend/session-ux.md#switching-sessions-ac-410) |
 | m11 | `feat/80-ops-install-simplify` | A new server takes "open the firewall + one command + scan": IP certificates (`--domain` accepts a public IPv4), `--acme-staging` removed, `doctor --acme`, `webterm install` with the embedded install.sh | [ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md), [ADR-0045](../20-architecture/adr/0045-install-from-the-binary.md), [install.md](../80-ops/install.md) |
+| m12 | `feat/00-open-source` | Ready for open source: English docs, comments and UI strings, Apache-2.0, guided install that waits for DNS and the cloud firewall, releases ship `install.sh` | [ADR-0046](../20-architecture/adr/0046-guided-install.md), [install.md](../80-ops/install.md) |
 
 ## In progress
 
-### m12 · `feat/00-open-source`
+### m13 · `feat/60-sign-out`
 
-Prepare the repository for open source.
+Sign out a device from the device itself.
 
 | Deliverable | Docs |
 |---|---|
-| English docs, code comments, UI strings, and test names | all of `docs/` |
-| Apache-2.0 license | `LICENSE` |
-| Guided install: prompts for the address, waits for DNS and the cloud firewall instead of exiting | [ADR-0046](../20-architecture/adr/0046-guided-install.md) |
-| Releases ship `install.sh` alongside the binaries | ADR-0046, [install.md](../80-ops/install.md) |
+| `POST /auth/logout`: revoke this device, clear the cookie, `Clear-Site-Data` | [ADR-0048](../20-architecture/adr/0048-sign-out.md), [auth-pairing.md](../60-security/auth-pairing.md) |
+| "Sign out this device" in Settings, with confirmation; the page clears its storage, service worker and caches | ADR-0048, [layout.md](../40-frontend/layout.md#settings-ac-53) |
 
 ## Planned
 

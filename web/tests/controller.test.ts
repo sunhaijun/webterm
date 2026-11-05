@@ -83,6 +83,9 @@ let sock: FakeSocket
 let sockets: FakeSocket[]
 let probeStatus = 200
 let probes = 0
+/** What the sign-out request resolves to; an Error rejects it (network down). */
+let signOutResult: number | Error = 204
+let signOuts = 0
 let unmount: () => void
 let area: HTMLElement
 
@@ -99,6 +102,10 @@ function setup() {
     authProbe: () => {
       probes++
       return Promise.resolve(probeStatus)
+    },
+    signOut: () => {
+      signOuts++
+      return signOutResult instanceof Error ? Promise.reject(signOutResult) : Promise.resolve(signOutResult)
     },
   })
   const root = document.createElement('div')
@@ -131,6 +138,8 @@ beforeEach(() => {
   sessionStorage.clear()
   probeStatus = 200
   probes = 0
+  signOutResult = 204
+  signOuts = 0
   setup()
 })
 afterEach(() => {
@@ -454,6 +463,77 @@ describe('device revoked (AC-1.11 / E2E-15)', () => {
     sock.close()
     await new Promise((r) => setTimeout(r, 10))
     expect(probes).toBe(0)
+  })
+})
+
+// UT-signout-1: sign out this device (AC-1.22, ADR-0048).
+describe('UT-signout-1 sign out this device', () => {
+  beforeEach(() => {
+    sock.text(welcome([info(1)]))
+  })
+
+  it('asks first, from settings; cancel sends nothing', () => {
+    ctl.openSettings()
+    ctl.requestSignOut()
+    expect(ctl.get().signingOut).toBe(true)
+    expect(ctl.get().settingsOpen).toBe(false)
+    ctl.cancelSignOut()
+    expect(ctl.get().signingOut).toBe(false)
+    expect(signOuts).toBe(0)
+  })
+
+  it('confirming revokes on the server, stops the connection, clears webterm.* storage and ends signed out', async () => {
+    localStorage.setItem('webterm.theme', 'dark')
+    localStorage.setItem('webterm.fontSize', '16')
+    localStorage.setItem('unrelated', 'keep')
+    ctl.requestSignOut()
+    await ctl.confirmSignOut()
+    expect(signOuts).toBe(1)
+    expect(ctl.get().signedOut).toBe(true)
+    expect(ctl.get().conn).toBe('closed')
+    expect(localStorage.getItem('webterm.theme')).toBeNull()
+    expect(localStorage.getItem('webterm.fontSize')).toBeNull()
+    expect(localStorage.getItem('unrelated'), 'only our own keys are removed').toBe('keep')
+    const n = sockets.length
+    await new Promise((r) => setTimeout(r, 50))
+    expect(sockets.length, 'no reconnect after signing out').toBe(n)
+  })
+
+  it('a 401 counts as signed out: the device is not authorized either way', async () => {
+    signOutResult = 401
+    ctl.requestSignOut()
+    await ctl.confirmSignOut()
+    expect(ctl.get().signedOut).toBe(true)
+  })
+
+  it('a failed request keeps the device signed in and says so', async () => {
+    for (const result of [500, new Error('network down')]) {
+      signOutResult = result
+      ctl.requestSignOut()
+      await ctl.confirmSignOut()
+      expect(ctl.get().signedOut).toBe(false)
+      expect(ctl.get().conn).toBe('online')
+      expect(ctl.get().toast?.kind).toBe('error')
+      expect(ctl.get().toast?.text).toMatch(/still signed in/)
+    }
+  })
+
+  it('offline: only a notice, nothing sent (a local-only sign-out would leave a valid token)', () => {
+    sock.close()
+    ctl.requestSignOut()
+    expect(ctl.get().signingOut).toBe(false)
+    expect(ctl.get().toast?.text).toMatch(/can't sign out/)
+    expect(signOuts).toBe(0)
+  })
+
+  it('the revocation that follows its own sign-out does not show "revoked"', async () => {
+    ctl.requestSignOut()
+    const done = ctl.confirmSignOut()
+    // The revocation scan can reach this tab before the logout response does
+    sock.text({ t: 'error', code: 'unauthorized', message: 'device revoked' })
+    await done
+    expect(ctl.get().revoked).toBe(false)
+    expect(ctl.get().signedOut).toBe(true)
   })
 })
 

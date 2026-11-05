@@ -95,6 +95,23 @@ func (a *Agent) handlePair(w http.ResponseWriter, r *http.Request) {
 	a.writeJSON(w, http.StatusOK, map[string]any{"device": dev})
 }
 
+// handleLogout signs out the requesting device (AC-1.22, ADR-0048). It revokes
+// the device rather than only clearing the cookie, so a copied token stops
+// working too, and asks the browser to drop everything it holds for this
+// origin. The device's other tabs lose their WebSocket through the revocation
+// scan (AC-1.11).
+func (a *Agent) handleLogout(w http.ResponseWriter, r *http.Request) {
+	dev := deviceFrom(r)
+	if err := a.store.RevokeDevice(dev.ID, time.Now()); err != nil {
+		a.writeError(w, http.StatusInternalServerError, "internal", "Sign-out failed")
+		return
+	}
+	a.auth.ClearSessionCookie(w)
+	w.Header().Set("Clear-Site-Data", `"cookies", "storage", "cache"`)
+	a.log.Info("device signed out", "device", dev.ID, "name", dev.Name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ---------- WebSocket ----------
 
 func (a *Agent) handleWS(w http.ResponseWriter, r *http.Request) {

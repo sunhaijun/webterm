@@ -7,6 +7,7 @@ import { inputTrace, viewOf } from '../keys/inputstats'
 import { Sticky, appAction, extraKeyBytes, type ExtraKeyId } from '../keys/keymap'
 import { RawIme, cursorPosition } from '../keys/raw'
 import { TextPages, type KeyPage, type TextPageEls, type TextSend } from '../keys/textpage'
+import { clearLocalData } from './localdata'
 import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, routeInput, type SessionView } from '../sessions/store'
 import { installDragWheel, installTapToggle } from '../term/gestures'
@@ -37,6 +38,10 @@ export interface AppState {
   fatal: string | null
   /** Device revoked (AC-1.11): the connection is stopped and the UI switches to the pairing page. */
   revoked: boolean
+  /** The sign-out confirmation is open (AC-1.22, ADR-0048). */
+  signingOut: boolean
+  /** This device signed itself out: the UI switches to the pairing page. */
+  signedOut: boolean
   /** The agent user's home directory (welcome.home), shown as `~` in CWDs; null means no abbreviation. */
   home: string | null
   /** A welcome has arrived. Before that the session list is unknown, so no empty state is shown. */
@@ -111,6 +116,10 @@ export class AppController {
   /** Asks whether this device is still authorized; resolves to the HTTP status. */
   private readonly authProbe: () => Promise<number>
   private probing = false
+  /** Signs this device out on the agent (`POST /auth/logout`); resolves to the HTTP status. */
+  private readonly signOutRequest: () => Promise<number>
+  /** A sign-out request is in flight: the revocation it causes isn't a "revoked" event. */
+  private leaving = false
 
   constructor(
     opts: {
@@ -118,9 +127,12 @@ export class AppController {
       clientID?: string
       socketFactory?: (url: string) => WebSocketLike
       authProbe?: () => Promise<number>
+      signOut?: () => Promise<number>
     } = {},
   ) {
     this.authProbe = opts.authProbe ?? (() => fetch('/api/devices', { credentials: 'same-origin' }).then((r) => r.status))
+    this.signOutRequest =
+      opts.signOut ?? (() => fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' }).then((r) => r.status))
     this.state = {
       form: readForm(),
       coarse: isCoarsePointer(),
@@ -128,6 +140,8 @@ export class AppController {
       connInfo: {},
       fatal: null,
       revoked: false,
+      signingOut: false,
+      signedOut: false,
       home: null,
       welcomed: false,
       sessions: [],
@@ -211,7 +225,7 @@ export class AppController {
    * Retrying would just collect 401s and look like a network problem.
    */
   private revoke(): void {
-    if (this.state.revoked) return
+    if (this.state.revoked || this.leaving || this.state.signedOut) return
     this.conn.close()
     this.set({ revoked: true, fatal: 'This device has been revoked' })
   }
@@ -494,6 +508,54 @@ export class AppController {
     if (!this.state.settingsOpen) return
     this.set({ settingsOpen: false })
     if (this.settingsRefocus) this.focusInput()
+  }
+
+  // ---------- Sign out (AC-1.22, ADR-0048) ----------
+
+  /**
+   * "Sign out this device" in settings: closes settings and asks first. Offline it
+   * refuses: the token can only be revoked on the agent, and clearing just the local
+   * copy would leave one the agent still accepts.
+   */
+  requestSignOut(): void {
+    if (this.state.conn !== 'online') {
+      this.toast('warn', "Not connected; can't sign out yet")
+      return
+    }
+    this.set({ signingOut: true, settingsOpen: false })
+  }
+
+  cancelSignOut(): void {
+    if (!this.state.signingOut) return
+    this.set({ signingOut: false })
+    if (this.settingsRefocus) this.focusInput()
+  }
+
+  /**
+   * Revokes this device on the agent, then stops the connection and clears local data.
+   * A 401 means the device is already not authorized, which is the same outcome. Any
+   * other failure leaves everything as it was.
+   */
+  async confirmSignOut(): Promise<void> {
+    if (!this.state.signingOut) return
+    this.set({ signingOut: false })
+    this.leaving = true
+    let status: number
+    try {
+      status = await this.signOutRequest()
+    } catch {
+      this.leaving = false
+      this.toast('error', "Couldn't reach the agent; still signed in")
+      return
+    }
+    if (status !== 204 && status !== 401) {
+      this.leaving = false
+      this.toast('error', `Sign-out failed (HTTP ${status}); still signed in`)
+      return
+    }
+    this.conn.close()
+    await clearLocalData()
+    this.set({ signedOut: true })
   }
 
   // ---------- Preferences (AC-5.3, ADR-0037) ----------

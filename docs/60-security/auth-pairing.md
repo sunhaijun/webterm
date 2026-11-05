@@ -111,11 +111,17 @@ Can't scan it? Open  https://term.example.com/pair  in your phone's browser and 
 
 Updates to `last_seen_at` / `last_ip` are throttled (at most one write per device per 60 seconds) so not every request hits the DB.
 
+### Signing out (AC-1.22, [ADR-0048](../20-architecture/adr/0048-sign-out.md))
+
+`POST /auth/logout` revokes the requesting device, exactly like revoking it from elsewhere, and on the same response clears the cookie and sends `Clear-Site-Data: "cookies", "storage", "cache"`. The cookie is `HttpOnly`, so this response is the only way the page can get rid of it; and revoking matters more than deleting: a copied token stops working too. The page then removes its own `localStorage` keys, service worker and caches, for browsers that ignore `Clear-Site-Data`. Offline it refuses: a local-only sign-out would leave a token the server still accepts.
+
 ### Revocation takes effect immediately (AC-1.11)
 
 Checking only at the handshake isn't enough — a WebSocket can stay open for days.
 
 Every **2 seconds** the agent scans its active connections. For each one whose device has been revoked, it sends `notice{level:"error", message:"This device has been revoked"}`, then `error{code:"unauthorized"}`, then closes the connection.
+
+A request that carries a revoked device's cookie gets `401 {"code": "revoked"}` rather than the plain `unauthorized`, and the cookie is cleared as for any rejected one. A page opened after the revocation (the PWA from the home screen, a reload) can then say why it shows the pairing page; without it, the device would look as if it had never been paired. Only the holder of that token learns this.
 
 The scan runs every 2 seconds rather than every 5 to leave headroom for AC-1.11's 5-second SLA — with the period equal to the SLA, the worst case would always overrun slightly.
 
@@ -157,6 +163,7 @@ Rate-limit state lives in memory (cleared on restart) and is never written to th
 | `GET /` `GET /assets/*` `GET /manifest.json` `GET /sw.js` | ✗ |
 | `GET /pair` | ✗ (the page itself; the code is in the fragment) |
 | `POST /auth/pair` | ✗ (this is the pairing entry point, protected by rate limiting) |
+| `POST /auth/logout` | ✓ (plus the `Origin` check; signs out the requesting device) |
 | `GET /healthz` | ✗ (returns only `ok`, discloses nothing) |
 | `GET /.well-known/acme-challenge/*` | ✗ (ACME, :80 only) |
 | **`GET /ws`** | **✓** (plus the `Origin` check) |

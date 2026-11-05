@@ -13,7 +13,7 @@ import { GearIcon, PlusIcon } from '../ui/icons'
 import { AppController } from './controller'
 import { showsExtraKeys } from './form'
 import { ConnBanner, ImePreview, ToastView } from './notices'
-import { CloseConfirm } from './confirm'
+import { CloseConfirm, SignOutConfirm } from './confirm'
 import { RenameSheet, SessionList, SessionMenu } from './sessions'
 import { Settings } from './settings'
 import { TopBar } from './tabs'
@@ -27,9 +27,11 @@ interface MenuAt {
 export interface AppProps {
   /** Called when the device is revoked; the gate swaps in the pairing page (AC-1.11). */
   onRevoked?(): void
+  /** Called when this device signed itself out (AC-1.22); the gate swaps in the pairing page. */
+  onSignedOut?(): void
 }
 
-export function App({ onRevoked }: AppProps = {}) {
+export function App({ onRevoked, onSignedOut }: AppProps = {}) {
   const ctl = useMemo(() => new AppController(), [])
   const [, setTick] = useState(0)
   const rerender = () => setTick((n) => n + 1)
@@ -49,6 +51,9 @@ export function App({ onRevoked }: AppProps = {}) {
   useEffect(() => {
     if (s.revoked) onRevoked?.()
   }, [s.revoked])
+  useEffect(() => {
+    if (s.signedOut) onSignedOut?.()
+  }, [s.signedOut])
   const keys = showsExtraKeys(s.form, s.coarse)
   const atLimit = s.sessions.length >= s.maxSessions
   const menuSession = menu ? s.sessions.find((x) => x.sid === menu.sid) : undefined
@@ -178,6 +183,7 @@ export function App({ onRevoked }: AppProps = {}) {
           fontSize={s.fontSize}
           onTheme={(t) => ctl.setTheme(t)}
           onFontSize={(px) => ctl.setFontSize(px)}
+          onSignOut={() => ctl.requestSignOut()}
           onClose={() => ctl.closeSettings()}
         />
       )}
@@ -208,6 +214,8 @@ export function App({ onRevoked }: AppProps = {}) {
       )}
 
       {closing && <CloseConfirm name={closing.name} onOk={() => ctl.confirmClose()} onCancel={() => ctl.cancelClose()} />}
+
+      {s.signingOut && <SignOutConfirm onOk={() => void ctl.confirmSignOut()} onCancel={() => ctl.cancelSignOut()} />}
     </div>
   )
 }

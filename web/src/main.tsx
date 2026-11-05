@@ -15,7 +15,7 @@ render(
   location.pathname === '/pair' ? (
     <PairPage />
   ) : (
-    <Gate>{(revoke) => <App onRevoked={revoke} />}</Gate>
+    <Gate>{(revoke, signedOut) => <App onRevoked={revoke} onSignedOut={signedOut} />}</Gate>
   ),
   root,
 )

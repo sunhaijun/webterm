@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,6 +95,7 @@ func TestITAuth1_RouteMatrix(t *testing.T) {
 			{"GET", "/api/fs?cwd=/"},
 			{"GET", "/api/anything-else"},
 			{"POST", "/api/devices/revoke-all"},
+			{"POST", "/auth/logout"},
 			{"DELETE", "/api/commands?pinned=false"},
 		} {
 			resp := h.do(anon, tc.method, tc.path, nil)
@@ -290,6 +292,108 @@ func TestITAuth4_RevocationClosesLiveWebSocket(t *testing.T) {
 	}
 	if !told {
 		t.Error("no reason given before disconnecting; the user only sees an unexplained reconnect failure")
+	}
+
+	// Opened again later, the revoked cookie gets code "revoked", not the
+	// plain "pairing required", so the page can say why (AC-1.11).
+	code := func(c *http.Client) string {
+		resp := h.do(c, http.MethodGet, "/api/devices", nil)
+		defer resp.Body.Close()
+		var body struct{ Code string }
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status %d, want 401", resp.StatusCode)
+		}
+		return body.Code
+	}
+	if got := code(c); got != "revoked" {
+		t.Errorf("revoked cookie: code %q, want revoked", got)
+	}
+	if got := code(h.client()); got != "unauthorized" {
+		t.Errorf("no cookie: code %q, want unauthorized", got)
+	}
+}
+
+// IT-auth-5: signing out this device (AC-1.22, ADR-0048). The server revokes
+// it, so even a copy of the token stops working, and the response clears what
+// the browser holds.
+func TestITAuth5_SignOut(t *testing.T) {
+	h := newHarness(t)
+	c := h.client()
+	resp := h.pair(c)
+	resp.Body.Close()
+	var token string
+	for _, ck := range resp.Cookies() {
+		if ck.Name == auth.CookieName {
+			token = ck.Value
+		}
+	}
+	if token == "" {
+		t.Fatal("no token received")
+	}
+	// withToken sends a request carrying the old token, as a copied cookie would.
+	withToken := func(method, path, origin string) int {
+		req, _ := http.NewRequest(method, h.srv.URL+path, nil)
+		req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := withToken(http.MethodPost, "/auth/logout", "https://evil.example.com"); got != http.StatusForbidden {
+		t.Fatalf("cross-origin sign-out: status %d, want 403", got)
+	}
+	if got := withToken(http.MethodGet, "/api/devices", ""); got != http.StatusOK {
+		t.Fatalf("device lost after a refused sign-out: %d", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	other := h.connect(ctx, h.reuse(c), "tab-2", nil, "") // another tab of this device
+	other.welcome()
+
+	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/auth/logout", nil)
+	req.Header.Set("Origin", h.srv.URL)
+	start := time.Now()
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("sign-out: status %d, want 204", resp.StatusCode)
+	}
+	cleared := false
+	for _, ck := range resp.Cookies() {
+		if ck.Name == auth.CookieName && ck.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("the response doesn't clear the cookie")
+	}
+	if got := resp.Header.Get("Clear-Site-Data"); !strings.Contains(got, `"cookies"`) || !strings.Contains(got, `"storage"`) || !strings.Contains(got, `"cache"`) {
+		t.Errorf("Clear-Site-Data = %q, want cookies, storage and cache", got)
+	}
+
+	if got := withToken(http.MethodGet, "/api/devices", ""); got != http.StatusUnauthorized {
+		t.Errorf("old token on /api/devices: %d, want 401", got)
+	}
+	jar := h.client()
+	u, _ := url.Parse(h.srv.URL)
+	jar.Jar.SetCookies(u, []*http.Cookie{{Name: auth.CookieName, Value: token}})
+	if _, resp, err := h.dial(ctx, jar, h.srv.URL); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("old token on /ws: err=%v resp=%v, want 401", err, resp)
+	}
+	waitFor(t, "the device's other tab is cut off", func() bool { return other.isClosed() })
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("other tab closed %v after sign-out; AC-1.11 allows 5 seconds", d)
 	}
 }
 

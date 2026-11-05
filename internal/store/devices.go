@@ -61,6 +61,14 @@ func (s *Store) DeviceByToken(token string) (*Device, error) {
 	return &d, nil
 }
 
+// TokenRevoked reports whether token belongs to a device that has been
+// revoked.
+func (s *Store) TokenRevoked(token string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE token_hash = ? AND revoked_at IS NOT NULL`, TokenHash(token)).Scan(&n)
+	return n > 0, err
+}
+
 // ListDevices returns all non-revoked devices, most recently paired first.
 func (s *Store) ListDevices() ([]Device, error) {
 	rows, err := s.db.Query(`

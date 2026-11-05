@@ -14,7 +14,7 @@
 
 ## Pairing and devices
 
-See [`../60-security/auth-pairing.md`](../60-security/auth-pairing.md): `POST /auth/pair`, `GET /api/devices`, `PATCH /api/devices/:id`, `DELETE /api/devices/:id`, `POST /api/devices/revoke-all`.
+See [`../60-security/auth-pairing.md`](../60-security/auth-pairing.md): `POST /auth/pair`, `POST /auth/logout`, `GET /api/devices`, `PATCH /api/devices/:id`, `DELETE /api/devices/:id`, `POST /api/devices/revoke-all`.
 
 ## Health check
 

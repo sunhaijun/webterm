@@ -94,6 +94,7 @@ func (a *Agent) routes() {
 	a.mux.Handle("GET /sw.js", a.staticHandler())
 	a.mux.Handle("GET /manifest.json", a.staticHandler())
 	a.mux.HandleFunc("POST /auth/pair", a.handlePair)
+	a.mux.Handle("POST /auth/logout", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleLogout))))
 	a.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok")) // reveals nothing, not even the version

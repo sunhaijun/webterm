@@ -275,7 +275,7 @@ In direct input, dispatch on the helper textarea what an on-screen keyboard does
 
 1. `GET /api/devices` returns the current device with `current: true`
 2. Pair a second time from a second browser context → two devices
-3. Revoke device two from device one → **device two's WebSocket closes within 5 seconds**, and its UI says "This device has been revoked" and goes to the pairing page
+3. Revoke device two from device one → **device two's WebSocket closes within 5 seconds**, and its UI says "This device has been revoked" and goes to the pairing page. Opening the page again on device two (a new tab) says it was revoked too
 4. Revoke all at once (`POST /api/devices/revoke-all`) → this device is logged out too and goes to the pairing page
 
 > The frontend has no device management UI (listing and revoking go through the API and `webterm devices`), so this calls the API directly.
@@ -611,6 +611,20 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 4. Quit, switch to `scroller.py 1`, and drag down 10 row heights → the top line's number drops by 10 ± 2 (with step 1, it follows the finger line by line)
 5. **Horizontal drag of 120px** → no INPUT frames
 6. Quit, run `printf '\033[?1049h\033[?1000h\033[?1006h'; sleep 60`, then `Ctrl+C` and `printf '\033[?1000l'` to turn off mouse tracking (still on the alternate screen) → drag down → no INPUT frames (no arrow keys sent, ADR-0024 §4)
+
+## E2E-46 Sign out this device (AC-1.22)
+
+> [ADR-0048](../20-architecture/adr/0048-sign-out.md)
+
+1. Pair, open a second tab in the same context, store a theme preference
+2. Settings → "Sign out this device" → the confirmation sheet; Cancel closes it and nothing changes
+3. Sign out again and confirm → the pairing page says "Signed out"; `webterm.*` keys are gone from `localStorage`; the service worker is unregistered
+4. The second tab is cut off within 5 seconds and goes to the pairing page
+5. A request carrying the old cookie (captured before signing out) gets `401` on `/api/devices` and on the `/ws` upgrade
+6. Reload → still the pairing page
+7. Offline variant: with the WebSocket cut, the button only shows a toast; the device stays signed in
+
+---
 
 ## Out of E2E scope (in the manual checklist)
 
