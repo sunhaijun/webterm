@@ -275,7 +275,7 @@ In direct input, dispatch on the helper textarea what an on-screen keyboard does
 
 1. `GET /api/devices` returns the current device with `current: true`
 2. Pair a second time from a second browser context → two devices
-3. Revoke device two from device one → **device two's WebSocket closes within 5 seconds**, and its UI says "This device has been revoked" and goes to the pairing page
+3. Revoke device two from device one → **device two's WebSocket closes within 5 seconds**, and its UI says "This device has been revoked" and goes to the pairing page. Opening the page again on device two (a new tab) says it was revoked too
 4. Revoke all at once (`POST /api/devices/revoke-all`) → this device is logged out too and goes to the pairing page
 
 > The frontend has no device management UI (listing and revoking go through the API and `webterm devices`), so this calls the API directly.

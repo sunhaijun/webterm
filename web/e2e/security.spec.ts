@@ -44,6 +44,10 @@ test('E2E-15 device management: two devices; revoking device two disconnects it 
   expect(Date.now() - start, 'disconnects within 5s of revocation (plus 1s measurement slack)').toBeLessThan(6000)
   await expect(page2.getByTestId('unpaired'), 'shows the pairing page').toBeVisible()
   await expect(page2.getByTestId('terminal')).toHaveCount(0)
+  // Opened again later (a new tab, the PWA from the home screen), it still says why (AC-1.11).
+  const again = await ctx2.newPage()
+  await again.goto(agent.baseURL)
+  await expect(again.getByTestId('revoked')).toContainText('This device has been revoked')
 
   // This device is unaffected.
   await waitOnline(page)

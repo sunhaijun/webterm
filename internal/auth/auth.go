@@ -202,6 +202,17 @@ func (a *Auth) Authenticate(r *http.Request) (*store.Device, error) {
 	return dev, nil
 }
 
+// Revoked reports whether the request carries the cookie of a revoked device
+// (AC-1.11), so the rejection can say why.
+func (a *Auth) Revoked(r *http.Request) bool {
+	c, err := r.Cookie(CookieName)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	revoked, err := a.store.TokenRevoked(c.Value)
+	return err == nil && revoked
+}
+
 // touch updates last_seen_at / last_ip, throttled so that not every request
 // writes to the store.
 func (a *Auth) touch(dev *store.Device, ip string, now time.Time) {

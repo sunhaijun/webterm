@@ -32,6 +32,12 @@ func (a *Agent) requireAuth(next http.Handler) http.Handler {
 		}
 		if dev == nil {
 			a.auth.ClearSessionCookie(w)
+			// A revoked device's cookie says so: a page opened after the
+			// revocation can then tell the user why it shows the pairing page.
+			if a.auth.Revoked(r) {
+				a.writeError(w, http.StatusUnauthorized, "revoked", "This device has been revoked")
+				return
+			}
 			a.writeError(w, http.StatusUnauthorized, "unauthorized", "Pairing required")
 			return
 		}

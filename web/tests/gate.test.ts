@@ -5,24 +5,26 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Gate } from '../src/ui/gate'
 
-async function mount(status: number) {
-  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ status })))
+async function mount(status: number, body: unknown = {}) {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ status, json: () => Promise.resolve(body) })))
   const el = document.createElement('div')
   document.body.appendChild(el)
   let revoke: () => void = () => {}
+  let signedOut: () => void = () => {}
   // act flushes the useEffect (which issues the fetch)
   await act(() => {
     render(
       h(Gate, {
-        children: (r: () => void) => {
+        children: (r: () => void, s: () => void) => {
           revoke = r
+          signedOut = s
           return h('div', { 'data-testid': 'app' }, 'app')
         },
       }),
       el,
     )
   })
-  return { el, revoke: () => revoke() }
+  return { el, revoke: () => revoke(), signedOut: () => signedOut() }
 }
 
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)))
@@ -43,6 +45,23 @@ describe('Gate', () => {
     const { el } = await mount(401)
     await settle()
     expect(el.querySelector('[data-testid="unpaired"]')).not.toBeNull()
+    expect(el.querySelector('[data-testid="revoked"]')).toBeNull()
+  })
+
+  // A page opened after the revocation gets code "revoked" with its 401 (AC-1.11)
+  it('says the device was revoked when the 401 carries code "revoked"', async () => {
+    const { el } = await mount(401, { code: 'revoked', message: 'This device has been revoked' })
+    await settle()
+    expect(el.querySelector('[data-testid="unpaired"]')).not.toBeNull()
+    expect(el.querySelector('[data-testid="revoked"]')?.textContent).toContain('This device has been revoked')
+  })
+
+  it('signing out shows the pairing page with "Signed out" (AC-1.22)', async () => {
+    const { el, signedOut } = await mount(200)
+    await settle()
+    await act(() => signedOut())
+    expect(el.querySelector('[data-testid="app"]')).toBeNull()
+    expect(el.querySelector('[data-testid="signed-out"]')).not.toBeNull()
     expect(el.querySelector('[data-testid="revoked"]')).toBeNull()
   })
 

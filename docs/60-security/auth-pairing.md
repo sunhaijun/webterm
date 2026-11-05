@@ -121,6 +121,8 @@ Checking only at the handshake isn't enough — a WebSocket can stay open for da
 
 Every **2 seconds** the agent scans its active connections. For each one whose device has been revoked, it sends `notice{level:"error", message:"This device has been revoked"}`, then `error{code:"unauthorized"}`, then closes the connection.
 
+A request that carries a revoked device's cookie gets `401 {"code": "revoked"}` rather than the plain `unauthorized`, and the cookie is cleared as for any rejected one. A page opened after the revocation (the PWA from the home screen, a reload) can then say why it shows the pairing page; without it, the device would look as if it had never been paired. Only the holder of that token learns this.
+
 The scan runs every 2 seconds rather than every 5 to leave headroom for AC-1.11's 5-second SLA — with the period equal to the SLA, the worst case would always overrun slightly.
 
 ## Session cookie

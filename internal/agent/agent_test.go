@@ -293,6 +293,25 @@ func TestITAuth4_RevocationClosesLiveWebSocket(t *testing.T) {
 	if !told {
 		t.Error("no reason given before disconnecting; the user only sees an unexplained reconnect failure")
 	}
+
+	// Opened again later, the revoked cookie gets code "revoked", not the
+	// plain "pairing required", so the page can say why (AC-1.11).
+	code := func(c *http.Client) string {
+		resp := h.do(c, http.MethodGet, "/api/devices", nil)
+		defer resp.Body.Close()
+		var body struct{ Code string }
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status %d, want 401", resp.StatusCode)
+		}
+		return body.Code
+	}
+	if got := code(c); got != "revoked" {
+		t.Errorf("revoked cookie: code %q, want revoked", got)
+	}
+	if got := code(h.client()); got != "unauthorized" {
+		t.Errorf("no cookie: code %q, want unauthorized", got)
+	}
 }
 
 // IT-auth-5: signing out this device (AC-1.22, ADR-0048). The server revokes

@@ -23,7 +23,11 @@ export function Gate({ children }: GateProps) {
 
   useEffect(() => {
     fetch('/api/devices', { credentials: 'same-origin' })
-      .then((r) => setGate((g) => (g !== 'checking' ? g : r.status === 401 ? 'unpaired' : 'authed')))
+      .then(async (r) => {
+        // A revoked device's cookie gets code "revoked" (AC-1.11): say so, as when revoked mid-use
+        const next: GateState = r.status !== 401 ? 'authed' : (await errorCode(r)) === 'revoked' ? 'revoked' : 'unpaired'
+        setGate((g) => (g !== 'checking' ? g : next))
+      })
       .catch(() => setGate((g) => (g !== 'checking' ? g : 'offline')))
   }, [])
 
@@ -47,6 +51,14 @@ export function Gate({ children }: GateProps) {
     )
   }
   return <Unpaired revoked={gate === 'revoked'} signedOut={gate === 'signedOut'} />
+}
+
+async function errorCode(r: Response): Promise<string | undefined> {
+  try {
+    return ((await r.json()) as { code?: string }).code
+  } catch {
+    return undefined
+  }
 }
 
 /** Pairing instructions. When revoked or signed out, adds a line saying so. */
