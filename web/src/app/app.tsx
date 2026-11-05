@@ -105,7 +105,7 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
 
       <div class="stage">
         <div class="term" data-testid="terminal" ref={areaRef} />
-        <ConnBanner state={s.conn} info={s.connInfo} fatal={s.fatal} />
+        <ConnBanner state={s.conn} info={s.connInfo} fatal={s.fatal} note={s.connNote} />
         <ToastView toast={s.toast} />
         <ImePreview preview={s.preview} fontSize={s.fontSize} />
         {empty && (

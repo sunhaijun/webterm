@@ -75,3 +75,45 @@ describe('Gate', () => {
     expect(el.querySelector('a[href="/pair"]')).not.toBeNull()
   })
 })
+
+// UT-connbanner-1: the gate draws the app's frame with the connection banner while it
+// checks pairing, and keeps retrying an unreachable agent (ADR-0049 §2, §3).
+describe('Gate startup banner', () => {
+  it('shows "Connecting…" in the banner while checking, not page text', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    await act(() => {
+      render(h(Gate, { children: () => h('div', { 'data-testid': 'app' }) }), el)
+    })
+    expect(el.querySelector('.app .stage [data-testid="conn-banner"]')?.textContent).toBe('Connecting…')
+    expect(el.textContent).not.toContain('Checking pairing')
+  })
+
+  it('says it can\'t reach the agent in the banner, retries, and gets through without a reload', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => (++calls < 3 ? Promise.reject(new Error('offline')) : Promise.resolve({ status: 200, json: () => Promise.resolve({}) }))),
+    )
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    await act(() => {
+      render(h(Gate, { children: () => h('div', { 'data-testid': 'app' }) }), el)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(el.querySelector('[data-testid="offline"] [data-testid="conn-text"]')?.textContent).toBe("Can't reach the agent · retrying")
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(calls).toBe(2)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(el.querySelector('[data-testid="app"]'), 'got through on the third try').not.toBeNull()
+    vi.useRealTimers()
+  })
+})

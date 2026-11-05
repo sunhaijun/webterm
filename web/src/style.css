@@ -649,3 +649,10 @@ button { font: inherit; color: inherit; }
 }
 .pair-form button:disabled { opacity: 0.4; cursor: default; }
 .error { color: var(--err); }
+
+/* Connection notes (ADR-0049): resumed is the ok color; the others keep the banner's warning color */
+.conn-banner[data-state='online'][data-note='ok'] {
+  background: color-mix(in srgb, var(--ok) 22%, var(--bg));
+  border-bottom-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.conn-banner:not([data-state='online']) .conn-note::before { content: '·'; margin-right: 10px; color: var(--muted); }

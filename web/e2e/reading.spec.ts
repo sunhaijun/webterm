@@ -77,14 +77,18 @@ async function connFlow(page: Page, form: 'compact' | 'wide') {
   // (3) The banner does not change geometry.
   expect(await geo(page), 'terminal rect, rows/cols and resize count unchanged by the banner').toEqual(g0)
 
-  // (4) Restore -> banner hides; a "restored, caught up N KB" toast appears and disappears after 3s.
+  // (4) Restore -> the banner itself says "Resumed · caught up N KB" (ADR-0049), no toast, and
+  // hides after 3s.
+  const bannerBox = (await banner.boundingBox())!
   net.goOnline()
   await waitOnline(page)
-  const toast = page.getByTestId('toast')
-  await expect(toast).toContainText('Resumed · caught up')
-  expect((await banner.boundingBox())!.width, 'banner is visually hidden after restore').toBeLessThanOrEqual(1)
+  const note = page.getByTestId('conn-note')
+  await expect(note).toContainText('Resumed · caught up')
+  await expect(page.getByTestId('toast')).toHaveCount(0)
+  expect(await banner.boundingBox(), 'the resumed note is in the same banner, same place').toEqual(bannerBox)
+  await expect(banner).toHaveAttribute('data-note', 'ok')
   if (form === 'wide') await expect(page.getByTestId('conn-dot')).toHaveAttribute('data-state', 'online')
-  const got = parseBytes((await toast.textContent()) ?? '')
+  const got = parseBytes((await note.textContent()) ?? '')
   // (5) Matches the amount actually caught up (same order of magnitude): the agent's head_seq at
   // reconnect minus out_seq at disconnect.
   const head = (await lastWelcome(page))!.sessions.find((s) => s.sid === sid)!.head_seq
@@ -92,21 +96,61 @@ async function connFlow(page: Page, form: 'compact' | 'wide') {
   expect(want, 'there was output during the outage').toBeGreaterThan(1024)
   expect(got / want, `toast reports ${got} B, actually caught up ${want} B`).toBeGreaterThan(0.8)
   expect(got / want, `toast reports ${got} B, actually caught up ${want} B`).toBeLessThan(1.25)
-  expect(await geo(page), 'the toast does not change geometry either').toEqual(g0)
-  await expect(toast, 'gone after 3s').toHaveCount(0, { timeout: 5_000 })
+  expect(await geo(page), 'the note does not change geometry either').toEqual(g0)
+  await expect(note, 'gone after 3s').toHaveCount(0, { timeout: 5_000 })
+  await expect.poll(async () => (await banner.boundingBox())!.width, { message: 'banner hidden again' }).toBeLessThanOrEqual(1)
+}
+
+/**
+ * (6) Page load (ADR-0049): with /api/devices held, the gate shows the banner "Connecting…"
+ * over a skeleton of the app; once the app mounts, the banner is in the same place.
+ */
+async function startupFlow(page: Page) {
+  await agent.pair(page)
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => (release = r))
+  await page.route('**/api/devices', async (route) => {
+    await held
+    await route.continue()
+  })
+  // Hold the WebSocket too, so the app's own "Connecting…" stays up long enough to measure.
+  let open: () => void = () => {}
+  const wsHeld = new Promise<void>((r) => (open = r))
+  await page.routeWebSocket('**/ws', async (ws) => {
+    await wsHeld
+    ws.connectToServer()
+  })
+  await page.goto(agent.baseURL)
+  const banner = page.getByTestId('conn-banner')
+  await expect(page.getByTestId('gate-checking')).toBeVisible()
+  await expect(page.getByTestId('conn-text')).toHaveText('Connecting…')
+  await expect(page.getByText('Checking pairing')).toHaveCount(0)
+  const before = await banner.boundingBox()
+  release()
+  await expect(page.getByTestId('terminal')).toBeAttached()
+  await expect(page.getByTestId('conn-text')).toHaveText('Connecting…')
+  expect(await banner.boundingBox(), 'banner did not move when the app mounted').toEqual(before)
+  open()
+  await waitOnline(page)
 }
 
 test.describe('E2E-5 connection status indicator', () => {
   test.describe('Pixel 5', () => {
     test.use(PIXEL)
-    test('compact: nothing shown while online; banner countdown when disconnected; banner keeps geometry; restore toast reports caught-up bytes', async ({ page }) => {
+    test('compact: nothing shown while online; banner countdown when disconnected; banner keeps geometry; the banner reports caught-up bytes', async ({ page }) => {
       await connFlow(page, 'compact')
+    })
+    test('compact: startup shows "Connecting…" in the banner from the first frame, in its final position', async ({ page }) => {
+      await startupFlow(page)
     })
   })
   test.describe('1440×900', () => {
     test.use(WIDE)
-    test('wide: status dot goes from online color to reconnecting color; same banner and toast', async ({ page }) => {
+    test('wide: status dot goes from online color to reconnecting color; same banner', async ({ page }) => {
       await connFlow(page, 'wide')
+    })
+    test('wide: startup shows "Connecting…" in the banner from the first frame, below an empty tab bar, in its final position', async ({ page }) => {
+      await startupFlow(page)
     })
   })
 })

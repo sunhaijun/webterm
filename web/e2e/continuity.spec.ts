@@ -138,7 +138,7 @@ test.describe('E2E-2 byte-level continuity (default 256 KiB ring, incremental pa
       await waitText(page, 'line 01000', 'output past halfway')
       await cut(page, net)
       // The restore toast reports how much was caught up (AC-2.10).
-      await expect(page.getByTestId('toast')).toContainText('Resumed')
+      await expect(page.getByTestId('conn-note')).toContainText('Resumed')
       expect((await lastWelcome(page))!.resumed.every((r) => r.status === 'ok'), 'no overflow, so incremental').toBe(true)
       assertSame(await finish(page), baseline, 'E2E-2a byte-level continuity broken after one disconnect')
     }
