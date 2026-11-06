@@ -125,6 +125,27 @@ export class Agent {
     await waitFor(() => this.healthy(), 'new agent is up')
   }
 
+  /**
+   * attach runs `webterm attach <args>` on a PTY of cols×rows (`e2e/fixtures/ptyrun.py`), as
+   * `ssh -t` would (E2E-47). Never with the developer's own `WEBTERM_SESSION` or config.
+   */
+  attach(cols: number, rows: number, ...args: string[]): AttachProc {
+    const proc = spawn('python3', [join(FIXTURES, 'ptyrun.py'), String(cols), String(rows), '--', BINARY, 'attach', '--data-dir', this.dataDir, ...args], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: attachEnv(this.dataDir),
+    })
+    return new AttachProc(proc)
+  }
+
+  /** attachList runs `webterm attach --list` without a terminal. */
+  attachList(): Promise<{ code: number; out: string }> {
+    const proc = spawn(BINARY, ['attach', '--data-dir', this.dataDir, '--list'], { stdio: ['ignore', 'pipe', 'pipe'], env: attachEnv(this.dataDir) })
+    let out = ''
+    proc.stdout?.on('data', (c: Buffer) => (out += c.toString()))
+    proc.stderr?.on('data', (c: Buffer) => (out += c.toString()))
+    return new Promise((res) => proc.once('exit', (code) => res({ code: code ?? -1, out })))
+  }
+
   /** pairLink returns the pairing URL; the one-time pairing code is in the fragment. */
   pairLink(): string {
     return this.pairURL
@@ -237,6 +258,43 @@ export class Agent {
   }
 }
 
+function attachEnv(dataDir: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env, XDG_CONFIG_HOME: join(dataDir, 'no-config') }
+  delete env.WEBTERM_SESSION // the runner may itself be inside a webterm session
+  return env
+}
+
+/** AttachProc is a running `webterm attach` (see Agent.attach). */
+export class AttachProc {
+  private out = Buffer.alloc(0)
+  readonly exited: Promise<number>
+
+  constructor(private readonly proc: ChildProcess) {
+    proc.stdout?.on('data', (c: Buffer) => (this.out = Buffer.concat([this.out, c])))
+    proc.stderr?.on('data', (c: Buffer) => (this.out = Buffer.concat([this.out, c])))
+    this.exited = new Promise((res) => proc.once('exit', (code) => res(code ?? -1)))
+  }
+
+  /** Everything the client wrote to its terminal, decoded as UTF-8. */
+  output(): string {
+    return this.out.toString('utf8')
+  }
+
+  /** write types into the client's terminal. */
+  write(s: string): void {
+    this.proc.stdin?.write(s)
+  }
+
+  /** hangUp closes the terminal, as ssh going away does (the wrapper sends SIGHUP). */
+  hangUp(): void {
+    this.proc.stdin?.end()
+  }
+
+  kill(): void {
+    this.proc.kill('SIGKILL')
+  }
+}
+
 export async function waitFor(
   cond: () => Promise<boolean> | boolean,
   what: string,
@@ -345,6 +403,7 @@ interface WebtermWindow {
     serialize(): string
     outSeq(): number
     size(): { cols: number; rows: number }
+    sessionSize(): { cols: number; rows: number }
     welcome(): Welcome | null
     resizes(): number
     sid(): number | null
@@ -367,6 +426,7 @@ export const hooks = {
   fontSize: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.fontSize()),
   resizes: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.resizes()),
   size: (p: Page) => termSize(p),
+  sessionSize: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.sessionSize()),
   altScreen: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.altScreen()),
   unread: (p: Page, sid: number) => p.evaluate((s) => (window as unknown as WebtermWindow).__webterm.unread(s), sid),
   frames: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.frames()),

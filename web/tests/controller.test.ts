@@ -86,6 +86,8 @@ let probes = 0
 /** What the sign-out request resolves to; an Error rejects it (network down). */
 let signOutResult: number | Error = 204
 let signOuts = 0
+/** What the controller sees as document.hasFocus(). */
+let focused = true
 let unmount: () => void
 let area: HTMLElement
 
@@ -107,6 +109,7 @@ function setup() {
       signOuts++
       return signOutResult instanceof Error ? Promise.reject(signOutResult) : Promise.resolve(signOutResult)
     },
+    hasFocus: () => focused,
   })
   const root = document.createElement('div')
   const stage = document.createElement('div')
@@ -140,6 +143,7 @@ beforeEach(() => {
   probes = 0
   signOutResult = 204
   signOuts = 0
+  focused = true
   setup()
 })
 afterEach(() => {
@@ -742,5 +746,101 @@ describe('UT-close-1 close that never landed', () => {
     s2.text(welcome([info(1), info(2)], { resumed: [{ sid: 1, status: 'ok', from_seq: 0, in_ack: 0 }] }))
     inside('keydown', () => xterm(1).input('y', true))
     expect(s2.inputs()).toContain('y')
+  })
+})
+
+// UT-claim-1: the size follows the client in use (AC-4.14, ADR-0050 §5)
+describe('UT-claim-1 size claims', () => {
+  const sessionSize = (sid: number) => {
+    const i = (ctl as unknown as { store: { info(sid: number): { cols: number; rows: number } | undefined } }).store.info(sid)!
+    return [i.cols, i.rows]
+  }
+  /** The kinds of what went out, in order: 'resize' for resize messages, 'input' for INPUT frames. */
+  const order = (s: FakeSocket) =>
+    s.sent
+      .map((x) => (typeof x === 'string' ? JSON.parse(x).t : 'input'))
+      .filter((t: string) => t === 'resize' || t === 'input')
+
+  beforeEach(() => {
+    sock.text(welcome([info(1)]))
+    sock.sent = []
+  })
+
+  it('session.updated{cols, rows} updates the session size', () => {
+    sock.text({ t: 'session.updated', sid: 1, cols: 120, rows: 40 })
+    expect(sessionSize(1)).toEqual([120, 40])
+  })
+
+  it('user input to a session with another size sends resize before the input, once', () => {
+    inside('keydown', () => xterm(1).input('a', true))
+    expect(order(sock), 'same size: no resize').toEqual(['input'])
+
+    sock.text({ t: 'session.updated', sid: 1, cols: 120, rows: 40 }) // another client took it
+    sock.sent = []
+    inside('keydown', () => xterm(1).input('b', true))
+    inside('keydown', () => xterm(1).input('c', true))
+    expect(order(sock)).toEqual(['resize', 'input', 'input'])
+    expect(sock.msgs('resize')[0]).toMatchObject({ sid: 1, cols: 80, rows: 24 })
+    expect(sessionSize(1)).toEqual([80, 24])
+  })
+
+  it('extra keys and the text page claim too', () => {
+    sock.text({ t: 'session.updated', sid: 1, cols: 120, rows: 40 })
+    sock.sent = []
+    inside('pointerup', () => ctl.pressKey('ArrowUp'))
+    expect(order(sock)).toEqual(['resize', 'input'])
+    sock.text({ t: 'session.updated', sid: 1, cols: 120, rows: 40 })
+    sock.sent = []
+    inside('keydown', () => ctl.sendText({ kind: 'submit', text: 'ls' }))
+    expect(order(sock)).toEqual(['resize', 'input', 'input'])
+  })
+
+  it('automatic terminal replies never claim', () => {
+    sock.text({ t: 'session.updated', sid: 1, cols: 120, rows: 40 })
+    sock.sent = []
+    xterm(1).input('\x1b[I', false) // not inside a user input event: xterm answering or reporting
+    expect(order(sock)).toEqual(['input'])
+  })
+
+  it('gaining focus or coming back into view claims', () => {
+    sock.text({ t: 'session.updated', sid: 1, cols: 120, rows: 40 })
+    window.dispatchEvent(new Event('focus'))
+    expect(sock.msgs('resize')).toMatchObject([{ sid: 1, cols: 80, rows: 24 }])
+    window.dispatchEvent(new Event('focus'))
+    expect(sock.msgs('resize'), 'already holds the size').toHaveLength(1)
+
+    sock.text({ t: 'session.updated', sid: 1, cols: 100, rows: 30 })
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(sock.msgs('resize')).toHaveLength(2)
+  })
+
+  it('an exited session is never claimed', () => {
+    sock.text({ t: 'session.updated', sid: 1, cols: 120, rows: 40, status: 'exited', exit_code: 0 })
+    window.dispatchEvent(new Event('focus'))
+    expect(sock.msgs('resize')).toHaveLength(0)
+  })
+
+  it('a size change sends resize only while focused', async () => {
+    focused = false
+    ctl.setFontSize(16)
+    await new Promise((r) => setTimeout(r, 250))
+    expect(sock.msgs('resize'), 'unfocused: keeps its layout to itself').toHaveLength(0)
+    focused = true
+    ctl.setFontSize(18)
+    await new Promise((r) => setTimeout(r, 250))
+    expect(sock.msgs('resize')).toHaveLength(1)
+  })
+
+  it('after a reconnect, claims only while focused', async () => {
+    for (const hasFocus of [false, true]) {
+      focused = hasFocus
+      const s = sockets[sockets.length - 1]!
+      s.close()
+      await new Promise((r) => setTimeout(r, 900)) // backoff 0.5s ±20%
+      const s2 = sockets[sockets.length - 1]!
+      s2.open()
+      s2.text(welcome([info(1, { cols: 120, rows: 40 })], { resumed: [{ sid: 1, status: 'ok', from_seq: 0, in_ack: 0 }] }))
+      expect(s2.msgs('resize'), `focused=${hasFocus}`).toHaveLength(hasFocus ? 1 : 0)
+    }
   })
 })

@@ -657,7 +657,7 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 3. In A, type `stty size` and Enter → A sends `resize` **before** the INPUT frame; the output is A's rows and cols
 4. Start `webterm attach 1` under a 100×30 PTY → its output shows the session's prompt and history; A's view of the session size becomes 100×30
 5. Type `stty size` and Enter into attach → `30 100` appears in attach's output and in A
-6. Write a CPR reply (`ESC [5;1R`) to attach's stdin → no `session.updated` with a new size reaches A
-7. In A, type `echo from-browser` and Enter → A claims its size back; attach's output shows `from-browser`
-8. Close attach's PTY (the wrapper exits, like ssh closing) → the attach process exits; the session is still in A's list and still takes input
+6. In A, type `echo from-browser` and Enter → A claims its size back; attach's output shows `from-browser`
+7. Write a CPR reply (`ESC [5;1R`) to attach's stdin → the session keeps A's size; then a keystroke (`Ctrl+U`) in attach → the size becomes 100×30 again
+8. Close attach's stdin (the wrapper hangs it up, like ssh closing) → attach exits 0; the session is still in A's list and still takes input
 9. `webterm attach --list` (no PTY) prints `1  <name>  ~` and exits 0
