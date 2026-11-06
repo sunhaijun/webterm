@@ -157,6 +157,18 @@ A second `webterm serve` (say `--dev` on a server that runs the service) would s
 
 Close sessions you don't use, or raise `--max-sessions`.
 
+## SSH attach
+
+What `ssh -t server webterm attach` prints when it can't attach ([install.md](install.md#from-a-terminal-over-ssh)):
+
+| Message | Cause | Fix |
+|---|---|---|
+| `attach needs a terminal` | ssh ran the command without a terminal | Add `-t`; in `~/.ssh/config`, `RequestTTY yes`. Only `--list` works without one |
+| `webterm isn't running for this user` | Logged in as a different user than the service's; or the service is down; or the agent uses another data directory | Log in as the user who installed webterm. `webterm` shows whether the service runs. For an agent started with `--data-dir`, pass the same `--data-dir` to attach |
+| `the running agent is too old for attach` | The agent is v0.4.0 or older | `webterm update`; sessions survive. Before a release has it, reinstall with `--channel dev` |
+| `webterm: command not found` | Installed with `--prefix` outside the `PATH` of ssh's non-login shell | Give the full path: `ssh -t server ~/.local/bin/webterm attach` |
+| `that is the session this command runs in` | Ran attach inside a webterm session and picked that same session | Pick another one; a session can't show itself |
+
 ## Mobile
 
 - **The keyboard hides the input on iPhone:** prefer the home-screen app (PWA) over a browser tab; report the iOS version and model ([layout.md](../40-frontend/layout.md) explains the viewport handling).

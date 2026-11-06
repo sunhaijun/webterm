@@ -82,6 +82,11 @@ ssh server webterm attach --list       # just the list
 
 `-t` is required: attach needs a terminal. To detach, close the window or use ssh's escape, `Enter ~ .`; the session keeps running. Typing in a client gives the session that client's size, so the window you're typing in is the one with the right layout.
 
+There is nothing to set up on the server: the agent serves attach on a socket in its data directory, and the server's sshd does the authentication. Two things must hold:
+
+- **Same user.** Log in as the user the service runs as, the one who installed it. Any other user gets `webterm isn't running for this user`.
+- **A new enough agent.** Agents up to v0.4.0 don't serve attach and answer `the running agent is too old for attach`. Upgrade with `webterm update`; sessions survive. Until a release after v0.4.0 is out, move to the rolling build of `main` instead: `curl -fsSL …/install.sh | bash -s -- --channel dev`. That is a hot upgrade too, and later `webterm update`s stay on that channel.
+
 Attaching replaces the local terminal's scrollback with the session's history. To make `ssh server-term` land in the session list, add to `~/.ssh/config` on your laptop:
 
 ```
@@ -91,7 +96,7 @@ Host server-term
   RemoteCommand webterm attach
 ```
 
-The installer puts `webterm` in `/usr/local/bin`, which ssh commands find; with `--prefix` elsewhere, give the full path.
+The installer puts `webterm` in `/usr/local/bin`, which ssh commands find. With `--prefix` elsewhere, give the full path (`ssh -t server ~/.local/bin/webterm attach`): ssh runs commands in a non-login shell, which usually doesn't have `~/.local/bin` on its `PATH`. Errors: [troubleshooting](troubleshooting.md#ssh-attach).
 
 ## IP or domain
 
