@@ -124,13 +124,26 @@ func (a *Agent) handleWS(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, http.StatusForbidden, "forbidden", "Origin does not match the configured domain")
 		return
 	}
+	a.serveConn(w, r, func() bool {
+		// Checking only at handshake is not enough; a WebSocket can stay
+		// open for days (AC-1.11).
+		d, err := a.store.DeviceByToken(sessionTokenOf(r))
+		return err == nil && d == nil
+	})
+}
+
+// serveConn upgrades an already authenticated request and runs the
+// connection until it ends. The network endpoint and the local attach socket
+// (ADR-0050) share it, so both speak exactly the same protocol. revoked is nil
+// for connections that no device stands behind.
+func (a *Agent) serveConn(w http.ResponseWriter, r *http.Request, revoked func() bool) {
 	if a.hub.Full() {
 		a.writeError(w, http.StatusServiceUnavailable, "too_many_conns", "Too many concurrent connections")
 		return
 	}
 
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// Origin was already checked strictly against the configured domain.
+		// The caller has checked Origin (network) or the peer uid (local).
 		InsecureSkipVerify: true,
 		CompressionMode:    websocket.CompressionDisabled, // no compression (ADR-0009)
 	})
@@ -146,12 +159,7 @@ func (a *Agent) handleWS(w http.ResponseWriter, r *http.Request) {
 		Logger:          a.log,
 		IdleTimeout:     a.cfg.WSIdleTimeout,
 		WriteQueueBytes: a.cfg.WSWriteQueueMax,
-		Revoked: func() bool {
-			// Checking only at handshake is not enough; a WebSocket can stay
-			// open for days (AC-1.11).
-			d, err := a.store.DeviceByToken(sessionTokenOf(r))
-			return err == nil && d == nil
-		},
+		Revoked:         revoked,
 	})
 	if err := a.hub.Add(c); err != nil {
 		_ = ws.Close(websocket.StatusTryAgainLater, "too many concurrent connections")

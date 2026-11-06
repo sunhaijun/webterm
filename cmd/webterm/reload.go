@@ -96,6 +96,9 @@ func runReload(args []string) error {
 
 func controlSocketPath(dataDir string) string { return filepath.Join(dataDir, "run", "agent.sock") }
 
+// attachSocketPath is where webterm attach reaches the agent (ADR-0050).
+func attachSocketPath(dataDir string) string { return filepath.Join(dataDir, "run", "attach.sock") }
+
 func controlStatus(sock string) (*agent.ControlStatus, error) {
 	resp, err := agent.ControlCall(sock, agent.ControlRequest{Op: "status"}, 3*time.Second)
 	if err != nil {

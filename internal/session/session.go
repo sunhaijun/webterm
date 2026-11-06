@@ -221,12 +221,27 @@ func (s *Session) Resize(cols, rows uint16) error {
 	changed := s.applySizeLocked(cols, rows, nil)
 	running := s.status == protocol.StatusRunning
 	s.mu.Unlock()
-	if changed && running {
+	if !changed {
+		return nil
+	}
+	var err error
+	if running {
 		// Outside the lock and after enqueueing, so bytes redrawn on SIGWINCH
 		// always follow the snapshot.
-		return setWinsize(s.ptmx, cols, rows)
+		err = setWinsize(s.ptmx, cols, rows)
 	}
-	return nil
+	s.announceSize(cols, rows)
+	return err
+}
+
+// announceSize tells every connection the session's new size (ADR-0050 §5):
+// clients compare it with their own to decide whether to claim the size.
+//
+// The caller holds winMu, so announcements go out in the order the sizes were
+// applied and the last one a client sees is the current size. s.mu is
+// released, as for Rename, so it follows the snapshot the change queued.
+func (s *Session) announceSize(cols, rows uint16) {
+	s.emit(&protocol.SessionUpdated{SID: s.sid, Cols: &cols, Rows: &rows})
 }
 
 // applySizeLocked applies the size to the emulator and reports whether it
@@ -311,8 +326,11 @@ func (s *Session) Subscribe(sub Subscriber, outSeq uint64, cols, rows uint16) (s
 	running := s.status == protocol.StatusRunning
 	s.mu.Unlock()
 
-	if resized && running {
-		_ = setWinsize(s.ptmx, cols, rows)
+	if resized {
+		if running {
+			_ = setWinsize(s.ptmx, cols, rows)
+		}
+		s.announceSize(cols, rows)
 	}
 	return status, fromSeq
 }
