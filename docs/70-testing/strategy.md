@@ -86,6 +86,12 @@ Only what's visible is compared: the foreground color of blank cells is normaliz
 
 `UT-ring-1, 2, 5–10`. `UT-ring-8` (fuzzing random Append/Slice sequences against the invariants) is the most valuable test in this module: ring buffer bugs live almost entirely at the edges.
 
+### `internal/attach` ([ADR-0050](../20-architecture/adr/0050-ssh-attach.md))
+
+- `UT-attach-pick`: choosing a session (AC-1.23). No argument with zero / one / several sessions; a number picks by position, out of range is an error; an exact name wins over substrings; a case-insensitive substring (`claude` → `✳ Claude Code`); several matches narrow the list; no match lists everything; the session the command runs in (`WEBTERM_SESSION`) is never picked. List lines: `N  name  cwd`, cwd shortened to `~`, `exited` appended
+- `UT-attach-report`: classifying stdin (AC-4.14). CPR, DA1/DA2, DECRPM, focus in/out, kitty flags, window reports, OSC and DCS replies (BEL- or ST-terminated) are reports, alone or several in one read; printable text, control characters, Alt-prefixed keys, cursor and function keys, kitty key events, mouse reports and bracketed paste are user input; a read that mixes the two counts as user input
+- Exit reset: the sequence turns off every mode listed in ADR-0050 §3, and pops the title pushed on start
+
 ### `internal/vterm`
 
 - The same bytes fed in any chunking produce byte-identical snapshots (chunking-independent)
@@ -172,6 +178,14 @@ Real PTY + real SQLite + in-process HTTP server.
 | `IT-resize-order` | 64 concurrent resizes leave `stty size` equal to the session's size (ADR-0047 §4) |
 | `IT-control-1` | A second `ServeControl` on a live socket fails with `ErrAgentRunning` and the first keeps answering; closing an old server doesn't remove a newer socket at the same path (ADR-0047 §3) |
 | `IT-order-1` | Session order (AC-4.13): new sessions go last, closed ones are removed; `session.move` moves before `before` / to the end for `null`, an unknown `before` means last, an unknown `sid` returns `unknown_session`; on success `session.order` is broadcast to every connection (`req_id` only to the requester); `welcome.sessions[]` is in order; order survives a hot upgrade |
+| `IT-attach-1` | The attach socket (AC-1.23): created `0600` on start and removed on exit; `GET /ws` over it speaks the protocol (`hello` → `welcome`); a connection from another uid is refused (the uid check is a function of the peer credentials, tested with a different uid); a second agent on the same data directory doesn't take it over |
+| `IT-attach-2` | Picking through a PTY: `--list` in display order with no terminal; with several sessions the prompt accepts a number and `n`; a name argument attaches to the match; `--new` creates a session that a browser connection sees as `session.created`; without a terminal, attach exits 1 naming `ssh -t` |
+| `IT-attach-3` | Screen: what the client writes to its PTY, fed to a fresh emulator of the client's size, renders the same screen as the session's emulator, after output and again after a column change (the client-side counterpart of AC-2.21) |
+| `IT-attach-4` | Input and size: keystrokes reach the session; `SIGWINCH` with a new size changes the session's size (`stty size`); a CPR reply on stdin doesn't change the size, a keystroke after another client changed it changes it back (AC-4.14) |
+| `IT-attach-5` | Reconnect: the agent closes the connection mid-typing → the client reconnects, redraws from a snapshot, and every byte typed arrives exactly once |
+| `IT-attach-6` | Exit: the shell exits → the exit line appears; `Enter` closes the session; a second run with another key leaves it `exited`. On exit the client writes the reset sequence and restores the terminal settings; `SIGHUP` ends the client and the session keeps running |
+| `IT-attach-7` | Attaching to the session the command runs in (`WEBTERM_SESSION`) is refused, by name and by number |
+| `IT-size-1` | `session.updated{cols, rows}` goes to every connection, subscribed or not, after a `resize` and after a `subscribe` that changes the size; none for a resize to the same size; concurrent resizes arrive in the order applied, and the last one equals `stty size` (AC-4.14) |
 | `IT-oom-1` | Real `/proc`, real PTY, no root: set the child target to "self + 100" (raising needs no privilege, and writing self back doesn't go below the floor) and start several sessions concurrently; every shell's `oom_score_adj` is the target, and the agent ends up back at self (ADR-0034 §3) |
 
 ### Why not pebble
@@ -223,6 +237,7 @@ They do **not** prove protocol compatibility with Let's Encrypt — that's `gola
 | `UT-input-size-1` | The pending cap is 256 KiB; refused input returns false with "too large" / "buffer full"; on the text page a refused paste sends no Enter and keeps the draft (AC-2.4) |
 | `UT-replay-2` | Replay gate: `onData` during the dispatch of a user input event passes; `onData` from `message` / timers during replay (incremental catch-up, snapshot) is dropped (AC-2.15) |
 | `UT-raw-2` | Fallback composition reset: `blur` and a `keydown` with `isComposing === false` both set `composing` back to false (AC-3.3) |
+| `UT-claim-1` | Size claims (AC-4.14, ADR-0050 §5): user input to a session whose size differs sends `resize` before the INPUT frame, and nothing when the sizes match; automatic replies never send one; gaining focus / becoming visible sends one; a container change sends one only while focused; after `welcome`, only while focused; `session.updated{cols, rows}` updates the session's size |
 | `UT-resize-1` | resize debounce |
 | `UT-fit-1` | Rows/cols = available size ÷ stable cell size, rounded down, minimum 2 columns × 1 row; measured numbers at 900px wide (cell width 8.4287px, 877px available) give 104 columns regardless of the current column count (AC-3.11) |
 | `UT-name-1` | Session auto naming rules (home → `~`, `/` → `/`, manual name wins) |

@@ -181,7 +181,7 @@ subscribe(sub, out_seq, cols, rows):
          rows changed → vt.Resize(cols, rows)
     add to the subscriber set
   after unlocking:
-    size changed → TIOCSWINSZ
+    size changed → TIOCSWINSZ → broadcast session.updated{cols, rows}
 ```
 
 `hello.resume` uses the same decision (without a size). A snapshot contains the current screen, up to 2000 lines of history, modes, pen, scroll region, character sets, tab stops, cursor, and any partially parsed sequence ([protocol §5.2](../30-protocol/websocket-protocol.md)).
@@ -197,9 +197,12 @@ Resize(cols, rows):
     only rows changed → vt.Resize
     record cols / rows
   after unlocking: TIOCSWINSZ (skipped for exited sessions)
+                   size changed → broadcast session.updated{cols, rows} to every connection
 ```
 
-`winMu`, taken before `s.mu` in `Resize` and `Subscribe`, serializes the whole sequence, so concurrent resizes reach the emulator and the PTY in the same order (ADR-0047 §4).
+`winMu`, taken before `s.mu` in `Resize` and `Subscribe`, serializes the whole sequence, so concurrent resizes reach the emulator and the PTY in the same order (ADR-0047 §4). The broadcast happens while `winMu` is still held, so connections receive the sizes in the order they were applied and the last one is the current size. It goes out after `s.mu` is released, as `Rename`'s does, so it follows the snapshot that change queued.
+
+**Who sends the size** is up to the clients ([protocol §4.1](../30-protocol/websocket-protocol.md#who-sets-the-size), [ADR-0050](../20-architecture/adr/0050-ssh-attach.md) §5): the agent keeps the latest, and tells everyone what it is.
 
 A column change resends the snapshot: the two sides would reflow differently, and the agent's result wins ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §4). A row-only change doesn't: phones change the row count every time the on-screen keyboard opens, and resending hundreds of KiB and resetting the browser's scrollback position each time costs too much.
 

@@ -647,3 +647,17 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 4. **compact drag handle** (Pixel 5): on the same agent, open the drawer → each row has `session-<sid>-grip` at its right end; touch-press the last row's handle, drag it above the first row, and release → it becomes the first row, index `[1]`; press a row's body and drag vertically → the list scrolls and the order doesn't change
 5. **Touch tablet** (iPad Mini): long-press a tab for 500ms, then without releasing move it past the adjacent tab and release → the order changed and `session-menu` doesn't appear; long-press and release in place → `session-menu` appears
 6. **Keyboard switching follows the new order**: with order C B A and C current → `Ctrl+Shift+↓` goes to B
+
+## E2E-47 One session, a browser and `webterm attach` (AC-1.23, AC-4.14)
+
+> `web/e2e/attach.spec.ts`. [ADR-0050](../20-architecture/adr/0050-ssh-attach.md). `webterm attach` runs under `e2e/fixtures/ptyrun.py COLS ROWS -- cmd…`, which gives it a PTY of a set size and relays stdin and stdout, as `ssh -t` would. Focus can't be taken away from a page under Playwright, so the focus rules are covered by UT-claim-1.
+
+1. Context A (1280×800) has the only session; run `stty size` → A's rows and cols
+2. Context B (a second device, 900×600) opens the same session → its `subscribe` sets the size: A's view of the session size (`__webterm.sessionSize()`) becomes B's within 2 seconds, and A sends no `resize` in response
+3. In A, type `stty size` and Enter → A sends `resize` **before** the INPUT frame; the output is A's rows and cols
+4. Start `webterm attach 1` under a 100×30 PTY → its output shows the session's prompt and history; A's view of the session size becomes 100×30
+5. Type `stty size` and Enter into attach → `30 100` appears in attach's output and in A
+6. Write a CPR reply (`ESC [5;1R`) to attach's stdin → no `session.updated` with a new size reaches A
+7. In A, type `echo from-browser` and Enter → A claims its size back; attach's output shows `from-browser`
+8. Close attach's PTY (the wrapper exits, like ssh closing) → the attach process exits; the session is still in A's list and still takes input
+9. `webterm attach --list` (no PTY) prints `1  <name>  ~` and exits 0

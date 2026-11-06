@@ -14,6 +14,7 @@ SSH from a phone, or over a flaky connection, is painful: sessions drop, IME inp
 - **Scrollback by dragging.** AI CLIs like Claude Code stay on the main screen so their output scrolls.
 - **Simple and self-contained.** One static binary with the frontend embedded. Automatic Let's Encrypt certificates, for a domain or just the server's IP. Devices pair with a one-time QR code; no passwords.
 - **Upgrades without losing sessions.** The agent re-execs in place and hands its sessions to the new version.
+- **Also from a real terminal.** `ssh -t server webterm attach` joins the same sessions from any terminal, through the server's own sshd.
 
 ## Install
 

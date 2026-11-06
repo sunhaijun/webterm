@@ -18,6 +18,8 @@ There is no SSH in the path. You install the agent on the target machine, the br
 Cost: **every machine you want to reach needs the binary.** Accepted.
 Later: the agent could gain outbound SSH to hop to machines without an agent ([ADR-0001](../20-architecture/adr/0001-agent-first-no-ssh.md)). Not in v0.1.
 
+Inbound SSH is a different thing and is supported: the server's own sshd can carry a terminal into a session with `webterm attach` ([ADR-0050](../20-architecture/adr/0050-ssh-attach.md)). The agent itself still speaks no SSH.
+
 ### No tmux
 
 The agent owns the PTYs and manages sessions itself.
