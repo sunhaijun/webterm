@@ -217,6 +217,13 @@ func runServe(args []string) error {
 	}
 	defer ctl.Close()
 
+	// webterm attach comes in here, usually through sshd (ADR-0050).
+	att, err := a.ServeAttach(attachSocketPath(c.dataDir))
+	if err != nil {
+		return err
+	}
+	defer att.Close()
+
 	// On first start with no authorized devices, print a pairing code and QR
 	// code (AC-1.3), but only to a terminal. Under systemd stdout goes to the
 	// journal, which keeps it and shows it to more people than the owner

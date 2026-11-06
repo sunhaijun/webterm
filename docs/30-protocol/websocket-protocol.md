@@ -45,6 +45,21 @@ Origin: https://<configured domain>
 
 **No version negotiation in the handshake** — the handshake carries no client version (`Sec-WebSocket-Protocol` isn't used). The version is negotiated in `hello`/`welcome`, and a mismatch returns `error{code:"protocol_unsupported"}`, which gives a readable error instead of a bare handshake failure.
 
+### Local attach endpoint
+
+`webterm attach` ([ADR-0050](../20-architecture/adr/0050-ssh-attach.md)) reaches the agent through a Unix socket instead of the network:
+
+```
+<data-dir>/run/attach.sock     mode 0600, in the 0700 run directory
+GET /ws                        upgrades to this same protocol
+```
+
+| Check | On failure |
+|---|---|
+| The peer's uid (`SO_PEERCRED`) equals the agent's | `403` |
+
+There is no cookie and no `Origin`. File permissions and the peer uid are the authentication, as for the control socket ([ADR-0016](../20-architecture/adr/0016-hot-reexec.md)). Everything after the upgrade is identical to `/ws` on the network: the same messages, accounting, limits and timeouts. Each agent process creates the socket on start and removes it on exit; a hot upgrade's new process creates it again, and clients reconnect.
+
 ### One connection for everything
 
 - One WebSocket carries all sessions; the frame header carries `sid`
@@ -228,6 +243,22 @@ The client debounces by 100ms. The agent:
 - **Columns changed**: under the lock, `emulator.Resize` → generate a snapshot (`seq` = `head_seq`) → send it to **every subscriber of the session**; `TIOCSWINSZ` outside the lock. The two sides reflow differently ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md) §4), and the agent's result wins
 - **Only rows changed**: `emulator.Resize` + `TIOCSWINSZ`, no snapshot
 
+Either way, once the size has changed the agent sends `session.updated{sid, cols, rows}` to **every connection** (§4.2).
+
+#### Who sets the size
+
+A session has one size, and every client draws at its own. The agent applies whichever `subscribe` with a size or `resize` arrives last. **Clients send them only when they are in use** ([ADR-0050](../20-architecture/adr/0050-ssh-attach.md) §5), so the size follows the client the user is using:
+
+| Client sends its size when | Browser | `webterm attach` |
+|---|---|---|
+| It opens or switches to the session | `subscribe` with size | `subscribe` with size |
+| The user types, pastes, or uses the mouse in it (automatic terminal replies never count) | yes | yes: stdin that isn't a terminal report |
+| It gains focus or becomes visible | yes | — (can't see focus) |
+| Its own size changes | only while focused | yes (`SIGWINCH`) |
+| After a reconnect, if its size differs | only while focused | no |
+
+A client compares its size with the session's (`welcome.sessions[]`, `session.updated{cols, rows}`) and sends nothing when they're equal.
+
 #### `ping`
 
 ```json
@@ -290,6 +321,7 @@ Sent every 30 seconds. **A protocol-level ping rather than WebSocket control fra
 
 - All three are **broadcast to every connection of the device** (otherwise tab B wouldn't see a session tab A created). `req_id` appears only on the copy sent to the connection that made the request
 - `session.updated` contains only **the fields that changed** + `sid`. The client merges it in
+- `cols` / `rows` are sent together whenever the session's size changes, whichever connection's `subscribe` or `resize` changed it. They arrive after any snapshot that change produced and in the order the changes were applied, so the last pair a client receives is the current size (§4.1, "Who sets the size")
 - `cwd` comes from the agent reading `/proc/<foreground process group>/cwd` once a second and is sent only on change; when `name_is_manual == false`, `name` follows (AC-4.4)
 - Source of the automatic name ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)): the terminal title (OSC 0 / 2, sanitized, at most 64 characters) set by the **foreground program** (not the shell itself) wins; otherwise the CWD basename. Title and CWD are read in the same once-a-second poll and a message is sent only when the name changes, so there is at most one per session per second
 - **Session exit**: `session.updated{status:"exited", exit_code, head_seq}` always comes **after the session's last OUTPUT** (the agent waits for EOF on the PTY, for at most 500 ms — EOF never comes while a background process holds the PTY open). `head_seq` is the final output total: only when the client's `out_seq` reaches it has all output arrived

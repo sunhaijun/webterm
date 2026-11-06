@@ -68,6 +68,31 @@ journalctl -u webterm -f     # logs
 
 Problems: [troubleshooting.md](troubleshooting.md).
 
+## From a terminal over SSH
+
+The same sessions are reachable from any terminal through the server's own sshd ([ADR-0050](../20-architecture/adr/0050-ssh-attach.md)):
+
+```bash
+ssh -t server webterm attach           # one session: attach; several: pick from a list
+ssh -t server webterm attach claude    # by name (exact, else a case-insensitive substring)
+ssh -t server webterm attach 2         # by position, the [n] on the tab bar
+ssh -t server webterm attach --new     # a new session; the browser shows it too
+ssh server webterm attach --list       # just the list
+```
+
+`-t` is required: attach needs a terminal. To detach, close the window or use ssh's escape, `Enter ~ .`; the session keeps running. Typing in a client gives the session that client's size, so the window you're typing in is the one with the right layout.
+
+Attaching replaces the local terminal's scrollback with the session's history. To make `ssh server-term` land in the session list, add to `~/.ssh/config` on your laptop:
+
+```
+Host server-term
+  HostName server.example.com
+  RequestTTY yes
+  RemoteCommand webterm attach
+```
+
+The installer puts `webterm` in `/usr/local/bin`, which ssh commands find; with `--prefix` elsewhere, give the full path.
+
 ## IP or domain
 
 | | IP | Domain |
@@ -181,6 +206,7 @@ Command-line flags override the file; unknown keys are an error with the line nu
 | `webterm pair [--wait]` | Print a pairing code and QR code |
 | `webterm devices [list \| revoke <id> \| revoke-all]` | Manage devices |
 | `webterm doctor [--acme] [--guide]` | Check prerequisites; `--acme` obtains the certificate, `--guide` waits for you to fix things |
+| `webterm attach [name \| n] [--new] [--list]` | Attach this terminal to a session ([From a terminal over SSH](#from-a-terminal-over-ssh)) |
 | `webterm reload [--when-idle] [-- serve …]` | Hot-upgrade to the binary on disk; after `--`, the command line the new process starts with |
 | `webterm version` | Version |
 
@@ -190,7 +216,7 @@ Command-line flags override the file; unknown keys are an error with the line nu
 ~/.local/share/webterm/
 ├── webterm.db    devices — back this up
 ├── certs/        certificates — worth backing up (re-issuing is rate-limited)
-└── run/          control socket
+└── run/          control and attach sockets
 ```
 
 ```bash

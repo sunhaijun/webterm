@@ -133,6 +133,8 @@ export class AppController {
   private readonly signOutRequest: () => Promise<number>
   /** A sign-out request is in flight: the revocation it causes isn't a "revoked" event. */
   private leaving = false
+  /** Whether this page has focus: only a page in use claims the session's size (ADR-0050 §5). */
+  private readonly hasFocus: () => boolean
 
   constructor(
     opts: {
@@ -141,8 +143,10 @@ export class AppController {
       socketFactory?: (url: string) => WebSocketLike
       authProbe?: () => Promise<number>
       signOut?: () => Promise<number>
+      hasFocus?: () => boolean
     } = {},
   ) {
+    this.hasFocus = opts.hasFocus ?? (() => document.hasFocus())
     this.authProbe = opts.authProbe ?? (() => fetch('/api/devices', { credentials: 'same-origin' }).then((r) => r.status))
     this.signOutRequest =
       opts.signOut ?? (() => fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' }).then((r) => r.status))
@@ -288,10 +292,14 @@ export class AppController {
     // Network back / page visible again → retry or probe immediately (AC-2.9 / AC-2.20)
     const kick = () => this.conn.retryNow()
     const onVisible = () => {
-      if (document.visibilityState === 'visible') kick()
+      if (document.visibilityState !== 'visible') return
+      kick()
+      this.claimSize() // back in front: this page is the one in use (ADR-0050 §5)
     }
+    const onFocus = () => this.claimSize()
     window.addEventListener('online', kick)
     document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onFocus)
 
     // First two stages of the input-path probe (AC-3.17). Must be capture phase: keys xterm
     // handles get preventDefault + stopPropagation and never bubble.
@@ -327,6 +335,7 @@ export class AppController {
     return () => {
       window.removeEventListener('online', kick)
       document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onFocus)
       window.removeEventListener('keydown', onKeyTrace, true)
       window.removeEventListener('keydown', onKey)
       mq?.removeEventListener('change', onScheme)
@@ -704,6 +713,8 @@ export class AppController {
     if (!info) return
     switch (routeInput(info.status, out)) {
       case 'send':
+        // The user typing here makes this the client in use; automatic replies don't (ADR-0050 §5)
+        if (inUserInputEvent() || this.keyBypass) this.claimSize(sid)
         if (!this.conn.sendInput(sid, this.enc.encode(out))) this.inputRefused = true
         break
       case 'close':
@@ -716,6 +727,7 @@ export class AppController {
 
   private onTermBinary(sid: number, data: string): void {
     if (this.closeSent.has(sid) || this.store.info(sid)?.status !== 'running') return
+    if (inUserInputEvent()) this.claimSize(sid) // X10 mouse reports: the user's mouse
     this.conn.sendInput(sid, Uint8Array.from(data, (c) => c.charCodeAt(0) & 0xff))
   }
 
@@ -795,7 +807,25 @@ export class AppController {
     const t = this.activeTerm()
     if (!t) return
     t.fit()
-    this.sendResize()
+    // A page nobody is using keeps its layout to itself; it claims when used (ADR-0050 §5)
+    if (this.hasFocus()) this.sendResize()
+  }
+
+  /**
+   * Sends this page's size if the session has another one (ADR-0050 §5): on user input, on
+   * gaining focus or coming back into view. The agent applies the latest size it gets, so
+   * the session follows the client in use; it reports every change as session.updated.
+   */
+  private claimSize(sid = this.store.active): void {
+    if (sid === null || sid !== this.store.active || this.closeSent.has(sid)) return
+    const t = this.activeTerm()?.term
+    const info = this.store.info(sid)
+    if (!t || !info || info.status !== 'running') return
+    if (t.cols === info.cols && t.rows === info.rows) return
+    this.sendResize.cancel()
+    this.sendResizeNow()
+    // Until session.updated confirms it, don't claim again on every keystroke
+    this.store.patch(sid, { cols: t.cols, rows: t.rows })
   }
 
   private sendResizeNow(): void {
@@ -877,10 +907,11 @@ export class AppController {
       else if (first) this.newSession()
       return
     }
-    // Reconnect: the terminal may have resized while offline (keyboard, rotation) and those resizes were never sent
+    // Reconnect: the terminal may have resized while offline (keyboard, rotation) and those resizes
+    // were never sent. Only a page in use claims; another client may hold the size (ADR-0050 §5).
     const t = this.activeTerm()?.term
     const info = this.store.info(active)
-    if (t && info && (t.cols !== info.cols || t.rows !== info.rows)) this.sendResizeNow()
+    if (t && info && (t.cols !== info.cols || t.rows !== info.rows) && this.hasFocus()) this.sendResizeNow()
   }
 
   private closeLocal(sid: number): void {
@@ -929,6 +960,11 @@ export class AppController {
       serialize: () => this.activeTerm()?.serialize.serialize() ?? '',
       outSeq: () => (this.store.active === null ? 0 : this.conn.outSeqOf(this.store.active)),
       size: () => ({ cols: term()?.cols ?? 0, rows: term()?.rows ?? 0 }),
+      /** The active session's size on the agent, as the last welcome / session.updated said (ADR-0050 §5). */
+      sessionSize: () => {
+        const i = this.store.active === null ? undefined : this.store.info(this.store.active)
+        return { cols: i?.cols ?? 0, rows: i?.rows ?? 0 }
+      },
       welcome: () => this.lastWelcome,
       resizes: () => this.resizeCount,
       sid: () => this.store.active,

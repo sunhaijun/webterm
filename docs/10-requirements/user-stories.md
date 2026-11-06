@@ -25,6 +25,8 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 
 **US-1.8** (m13) When I stop using a device, I sign it out from the device itself: the server no longer accepts it, and nothing left on it can get back in ([ADR-0048](../20-architecture/adr/0048-sign-out.md)).
 
+**US-1.9** (m14) At a laptop with a real terminal, I `ssh` into the server and attach to any running session — the same sessions, names and order the browser shows — and pick it by name or number. Closing ssh leaves the session running ([ADR-0050](../20-architecture/adr/0050-ssh-attach.md)).
+
 ---
 
 ## US-2 Never lose the connection
@@ -68,6 +70,8 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 **US-4.4** (m6) A session is automatically named after its current directory (e.g. `webterm`), not `Session 1/2/3`. I can also rename it by hand.
 
 **US-4.5** (m6) When a session's shell exits, I can still see its last output; the tab doesn't just vanish.
+
+**US-4.6** (m14) When one session is open on two devices of different sizes, the one I'm typing on has the right layout. Leaving the other one open doesn't take the size away from me ([ADR-0050](../20-architecture/adr/0050-ssh-attach.md) §5).
 
 ---
 

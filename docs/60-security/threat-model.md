@@ -34,7 +34,7 @@ This is the project's biggest risk, so the security design comes before the feat
 ```
 
 **Explicitly outside the trust boundary**:
-- Other local users on the same machine → hence the db is `0600`, the control socket is `0600`, nothing goes in `/tmp`, and a port bound to localhost rather than `0.0.0.0` is not assumed to be protected
+- Other local users on the same machine → hence the db is `0600`, the control and attach sockets are `0600` (the attach socket also checks the peer's uid), nothing goes in `/tmp`, and a port bound to localhost rather than `0.0.0.0` is not assumed to be protected
 - Browser extensions → can't be defended against; out of scope
 
 **Explicitly inside the trust boundary**:
@@ -55,6 +55,7 @@ This is the project's biggest risk, so the security design comes before the feat
 | Rate limiting and backoff | 5 per minute per IP, then exponential backoff returning 429 (AC-1.6) |
 | Constant-time comparison | `subtle.ConstantTimeCompare`, against timing side channels |
 | Minimal attack surface | The only routes reachable without authentication: static assets, `POST /auth/pair`, `GET /healthz`. No other dynamic entry point |
+| SSH attach adds no network surface | `webterm attach` ([ADR-0050](../20-architecture/adr/0050-ssh-attach.md)) reaches the agent through `run/attach.sock`, a Unix socket that only the agent's uid can open and that checks the peer's uid again (`SO_PEERCRED`). Getting to it already takes a login as that user, through sshd's own authentication. No port, no credential |
 | Optional local-only binding | `--bind 127.0.0.1` lets the user reach it only through an SSH tunnel |
 
 **Residual risk**: port 443 itself is exposed. That's the price of dropping Cloudflare Tunnel ([ADR-0002](../20-architecture/adr/0002-self-contained-binary.md)). Accepted; mitigated by the measures above, and users can put their own tunnel in front.
