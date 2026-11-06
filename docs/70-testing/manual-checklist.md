@@ -93,6 +93,13 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Upgrade from v0.3.0 with a new `--https-port`: `reload` does two hot upgrades (the old agent can't take a command line), sessions survive, and the new port answers
 - [ ] Install from the web (`gh api … | bash -s -- --channel dev`): the log shows "Handing over to webterm …" (the binary's bundled install script), and the installed version is the dev build
 
+## SSH attach (every time attach or the size rules change, since m14)
+
+- [ ] From a laptop terminal (iTerm2 / Windows Terminal / GNOME Terminal), `ssh -t server webterm attach` with several sessions lists them in the tab order; picking one draws its screen and history, and the laptop's scrollback holds that history once (no copy after resizing the window)
+- [ ] The phone has the same session open: typing on the laptop gives the session the laptop's size; tapping and typing on the phone gives it back; the window you type in always has the right layout
+- [ ] Run claude in the session from the laptop, then close the ssh window: the session keeps running, and the laptop terminal's title and modes (mouse, bracketed paste) are back to normal in the next ssh login
+- [ ] `webterm update` on the server while attached: the attach redraws within seconds and keeps working
+
 ## Terminal compatibility (every time rendering changes)
 
 - [x] `vim` / `nvim`: editing, `:wq`, visual mode, arrow keys

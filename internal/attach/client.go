@@ -172,7 +172,7 @@ func dialLink(ctx context.Context, path string) (*link, error) {
 			}
 		}
 	}()
-	go func() { // keep the connection alive while the user reads a prompt, too
+	go func() { // the heartbeat (protocol §5.5), from the prompt on
 		t := time.NewTicker(pingEvery)
 		defer t.Stop()
 		for {
@@ -347,8 +347,6 @@ func (c *client) attach(ctx context.Context, choice Choice) (err error) {
 	c.subscribe()
 
 	stdin := c.readStdin()
-	ping := time.NewTicker(pingEvery)
-	defer ping.Stop()
 	var resize <-chan time.Time
 	for {
 		in := stdin
@@ -393,8 +391,6 @@ func (c *client) attach(ctx context.Context, choice Choice) (err error) {
 			resize = nil
 			c.myCols, c.myRows = termSize(c.o.Out)
 			c.claim()
-		case <-ping.C:
-			c.send(&protocol.Ping{TS: time.Now().UnixMilli()})
 		}
 	}
 }
