@@ -55,11 +55,18 @@ Links you can open and text you can copy on a phone. Stacked on m16.
 
 Exit criteria, beyond the usual: UT-links-1, UT-osc52-1, E2E-49, E2E-50; the "Links and the clipboard" section of the manual checklist on an iPhone and an Android phone.
 
-## Planned
-
 ### m18 · `feat/40-input-menus`
 
-Two keys at the end of the extra keys: **frequent input** (the ten single-line inputs you send most, from the foreground program's own history: bash, claude or codex) and **combo keys** for the foreground program (claude, codex, shell). The agent tells the page which program is in front.
+Two keys at the end of the extra keys: frequent input and combo keys, both following the program in front. Stacked on m17.
+
+| Deliverable | Docs |
+|---|---|
+| Agent: `program` (`shell` / `claude` / `codex` / `other`) from `/proc/<pgrp>/exe` and `argv`, sent on change; `GET /api/frequent` reading the program's own history file on request | [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [http-api.md](../30-protocol/http-api.md#frequent-input), [session-manager.md](../50-backend/session-manager.md#which-program-is-in-front-ac-324) |
+| Browser: the last key column (⟲ frequent input, ⌘ combo keys) and their two menus | ADR-0054, [input.md](../40-frontend/input.md#frequent-input-and-combo-keys-ac-324) |
+
+Exit criteria, beyond the usual: UT-program-1, UT-frequent-1, IT-program-1, IT-frequent-1, UT-combos-1, E2E-51; the "Frequent input and combo keys" section of the manual checklist, codex's tiles on a real run.
+
+## Planned
 
 ### Web Push and the app badge
 

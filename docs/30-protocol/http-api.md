@@ -2,7 +2,7 @@
 
 > Status: Accepted
 >
-> ★ The second half of the frontend–backend contract (the first is [`websocket-protocol.md`](websocket-protocol.md)). The terminal stream uses the WebSocket; HTTP covers pairing, device management, uploads and the health check.
+> ★ The second half of the frontend–backend contract (the first is [`websocket-protocol.md`](websocket-protocol.md)). The terminal stream uses the WebSocket; HTTP covers pairing, device management, uploads, frequent input and the health check.
 
 ## General rules
 
@@ -38,6 +38,27 @@ Content-Type: image/png            (informational; not used)
 - `name` is optional and only shapes the saved name: `<stem>-<6 hex>.<ext>`. The stem keeps letters (any script), digits, `.` and `_`, turns every other run of characters (including `-` itself) into one `-`, is trimmed of leading and trailing `-._`, cut to 60 bytes, and is `file` if nothing is left. The extension is the original one in lowercase when it is 1–8 letters or digits, otherwise sniffed from the content (`png` `jpg` `gif` `webp` `pdf` `txt`), otherwise none. The saved path never needs quoting in a shell.
 - The body is streamed to disk, not buffered in memory.
 - There is no route to list, read or delete uploads.
+
+## Frequent input
+
+The ten single-line inputs sent most often to a program, from that program's own history file ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md) §3). Authenticated. Read on request; the agent keeps no copy and logs no entry.
+
+```
+GET /api/frequent?program=claude
+
+200 {"items": ["/clear", "继续", "/compact"]}
+```
+
+| `program` | Source |
+|---|---|
+| `claude` | `~/.claude/history.jsonl`, field `display` |
+| `codex` | `~/.codex/history.jsonl`, field `text` |
+| `shell` | the session shell's history: `~/.bash_history` (bash; `#<digits>` timestamp lines skipped) or `~/.zsh_history` (zsh; `: <time>:<n>;` prefix removed) |
+| anything else | `{"items": []}` |
+
+- At most the last 1 MiB of the file and its last 1000 entries are read. Entries are trimmed; only single-line ones of 1–80 characters are kept; claude's placeholders (`[Pasted text #N …]`, `[Image #N]`) are dropped; for `shell`, so are entries shorter than 3 characters.
+- Ranked by count, ties by the most recent; at most 10.
+- A missing or unreadable file is an empty list, not an error.
 
 ## Health check
 

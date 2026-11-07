@@ -130,6 +130,18 @@ Full-screen programs (vim, less, htop) use the alternate screen, which has no sc
 
 Session names prefer the title set by the foreground program ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)). Titles set by the shell at the prompt are ignored on purpose; at the prompt the name is the directory. A program that runs others inside itself (a multiplexer, `ssh` to a host whose shell sets no title) shows only what it sets itself.
 
+### Frequent input is empty or old
+
+The list comes from the program's own history file ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md)): `~/.claude/history.jsonl` for claude, `~/.codex/history.jsonl` for codex, `~/.bash_history` or `~/.zsh_history` for the shell. Only single-line entries of up to 80 characters count.
+
+bash writes its history file when the shell exits, so a shell that has been open for days adds nothing until then. To write each command as it runs, add to `~/.bashrc`:
+
+```
+PROMPT_COMMAND="history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+```
+
+webterm doesn't change your shell config.
+
 ### The waiting-for-you dot doesn't light
 
 The dot lights when the program signals it's your turn ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)): its title goes from a spinner to idle, it rings the bell or sends a desktop notification, or a command of 10 s or more returns to the prompt. Output alone never lights it.

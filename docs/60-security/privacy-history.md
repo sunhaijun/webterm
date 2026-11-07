@@ -4,6 +4,8 @@
 
 webterm keeps no command history (removed entirely by [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)) and stores no terminal output. This page defines the boundary.
 
+The frequent-input menu ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md)) reads the programs' **own** history files (`~/.claude/history.jsonl`, `~/.codex/history.jsonl`, the shell's history) when you open it, and returns at most ten entries to the page. The agent keeps no copy and logs nothing about them; the page keeps the last list in memory only.
+
 ## The rule: terminal output never touches disk
 
 **Terminal output lives only in memory: each session's ring buffer and terminal emulator. It is never written to disk under any circumstances, and the browser doesn't store it either.**

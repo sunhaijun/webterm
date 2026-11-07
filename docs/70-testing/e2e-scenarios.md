@@ -700,3 +700,14 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 3. **Not from replay**: set the clipboard to `before`; run `sleep 3; printf '\e]52;c;%s\a' "$(printf replayed | base64)"` in A and switch to B before it fires; switch back to A after 4 s (catch-up carries the sequence) → the clipboard still holds `before`; reload the page (snapshot path) → still `before`
 4. **Not from a background session**: pin A, switch to B, A writes OSC 52 → the clipboard is unchanged
 5. **Fallback bar**: make `navigator.clipboard.writeText` reject once, then work → OSC 52 shows `clip-bar` with the start of the text; click `clip-copy` → the clipboard holds the text and the bar is gone
+
+## E2E-51 Frequent input and combo keys (AC-3.24, AC-3.25)
+
+> [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md). Pixel 5. The agent runs with a temporary `HOME` holding `.bash_history` and `.claude/history.jsonl`; a fake `claude` (a script named `claude`) stands in for the real one. INPUT frames are recorded.
+
+1. **Geometry**: `key-frequent` sits above `key-combos` in the last column; all eight key columns are the same width (±1px); the extra keys don't scroll horizontally
+2. **Shell**: at the prompt, `key-combos` → `combo-menu` has `combo-ctrl-r`; tapping `combo-ctrl-c` sends `03` and closes the menu; focus didn't move
+3. **Frequent, shell**: `key-frequent` → `frequent-menu` lists the most repeated entry of `.bash_history` first, no entry shorter than 3 characters, no `#<digits>` line; tapping `frequent-0` sends a bracketed paste of it followed by a separate `\r` frame
+4. **Insert**: `frequent-insert-0` sends the bracketed paste and no `\r`
+5. **claude**: run the fake `claude` → within 2 s `combo-menu` shows `combo-shift-tab`; tapping it sends `1b5b5a`; `combo-esc-esc` sends `1b`, then `1b` at least 100 ms later; `frequent-menu` lists claude's most repeated `display` first and none of its `[Pasted text #1 …]` entries
+6. **Closing**: open a menu, press `Esc` → closed, and no `1b` frame was sent; open one, `Ctrl+Shift+↓` → closed

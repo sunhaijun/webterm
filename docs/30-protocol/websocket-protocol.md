@@ -17,6 +17,7 @@
 | `in_ack` | Cumulative input bytes the agent has actually written to the PTY |
 | `base_seq` | The `out_seq` at which the ring buffer's retained content starts |
 | `head_seq` | The `out_seq` at the end of the ring buffer (= total bytes the session has produced) |
+| `program` | What runs in front in the session: `shell`, `claude`, `codex` or `other`, from `/proc` ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md)) |
 | `attention` | "Waiting for you": a session flag the agent sets when the program signals it's your turn and clears on `session.seen` ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)) |
 | snapshot | The agent-side terminal emulator's full state at some `seq`, serialized as bytes any xterm can consume (§5.2) |
 | `client_id` | Identity of one page load. **The key for input accounting**, see §5.4 |
@@ -296,7 +297,7 @@ Sent every 30 seconds. **A protocol-level ping rather than WebSocket control fra
     {
       "sid": 1, "name": "webterm", "name_is_manual": false,
       "cwd": "/home/user/github/webterm",
-      "status": "running", "exit_code": null, "attention": false,
+      "status": "running", "exit_code": null, "attention": false, "program": "shell",
       "cols": 80, "rows": 24,
       "base_seq": 221776, "head_seq": 483920,
       "created_at": 1757116000000
@@ -337,6 +338,7 @@ Sent every 30 seconds. **A protocol-level ping rather than WebSocket control fra
 - `cols` / `rows` are sent together whenever the session's size changes, whichever connection's `subscribe` or `resize` changed it. They arrive after any snapshot that change produced and in the order the changes were applied, so the last pair a client receives is the current size (§4.1, "Who sets the size")
 - `cwd` comes from the agent reading `/proc/<foreground process group>/cwd` once a second and is sent only on change; when `name_is_manual == false`, `name` follows (AC-4.4)
 - Source of the automatic name ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)): the terminal title (OSC 0 / 2, sanitized, at most 64 characters) set by the **foreground program** (not the shell itself) wins; otherwise the CWD basename. Title and CWD are read in the same once-a-second poll and a message is sent only when the name changes, so there is at most one per session per second
+- `program` (`shell` / `claude` / `codex` / `other`) is sent when it changes. The agent checks only when the foreground process group changes, in the same once-a-second poll: the shell itself is `shell`; an executable or `argv[0..1]` named `claude` (or under `claude/versions/` or `@anthropic-ai/claude-code`) is `claude`; likewise `codex`; anything else, and an exited session, is `other` ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md) §2)
 - `attention` is sent whenever it changes, `true` or `false` (ADR-0052). Sets come from the once-a-second poll, so there is at most one per session per second; clears follow `session.seen`
 - **Session exit**: `session.updated{status:"exited", exit_code, head_seq}` always comes **after the session's last OUTPUT** (the agent waits for EOF on the PTY, for at most 500 ms — EOF never comes while a background process holds the PTY open). `head_seq` is the final output total: only when the client's `out_seq` reaches it has all output arrived
 
