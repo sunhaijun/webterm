@@ -124,6 +124,17 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Phone and laptop both open: the dot shows on both; opening the session on one clears it on the other
 - [ ] Leave a session current and lock the phone; when claude finishes, unlock: the dot is cleared as soon as the page is back, not before
 
+## Links and the clipboard (every time links, taps or OSC 52 change, since m17)
+
+[ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md). claude running in a session.
+
+- [ ] iPhone (Safari and the PWA): ask claude for a URL; tap it → the popover shows the URL; Open lands in Safari; Copy, then paste in Notes → the URL
+- [ ] Android (Chrome and the PWA): the same
+- [ ] With claude in its full-screen renderer (mouse tracking on), a tap on a URL still opens the popover; a tap elsewhere still clicks
+- [ ] claude `/copy` on the iPhone → the Copy bar appears; tap Copy, paste in Notes → claude's last answer, Chinese intact
+- [ ] claude `/copy` on Android → "Copied", the answer pastes elsewhere without a bar
+- [ ] Desktop: Ctrl+click (Cmd+click on a Mac) on a URL opens a tab; a plain click and a drag-select don't
+
 ## Terminal compatibility (every time rendering changes)
 
 - [x] `vim` / `nvim`: editing, `:wq`, visual mode, arrow keys

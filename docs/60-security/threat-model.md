@@ -104,7 +104,8 @@ This is the project's biggest risk, so the security design comes before the feat
 | Mitigation | Implementation |
 |---|---|
 | Rendering by xterm.js (default DOM renderer) | Writes `textContent` cell by cell; terminal output is **never parsed as HTML** |
-| No automatic HTML in `linkHandler` | Hyperlinks (OSC 8) allow only `http`/`https`; anything else isn't clickable |
+| No automatic HTML in `linkHandler` | Hyperlinks (OSC 8) and URLs found in text allow only `http`/`https`; anything else isn't a link. They open in a new tab with `noopener`, on Ctrl/Cmd+click or the popover's Open ([ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md)) |
+| OSC 52 is write-only | A program can write the clipboard, never read it (`?` is ignored, not answered); only live output of the current session counts, never replayed bytes or background sessions. A program can still put something misleading on the clipboard; the "Copied" toast or the Copy bar makes every write visible ([ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md) §4) |
 | Metadata such as session name / CWD | Set through `textContent`, never `innerHTML` |
 | Uploaded files ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)) | Write-only: no route lists or serves them, so an uploaded `.html` or `.svg` never becomes a page on webterm's origin |
 | CSP | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://<domain>; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'` |
