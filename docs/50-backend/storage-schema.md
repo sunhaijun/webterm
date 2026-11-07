@@ -17,6 +17,17 @@ $XDG_DATA_HOME/webterm/          (otherwise ~/.local/share/webterm/)
 
 Override with `--data-dir`.
 
+### Files sent to sessions (outside the data directory)
+
+```
+$TMPDIR/webterm-<uid>/   (otherwise /tmp/webterm-<uid>/)   0700, must be owned by the agent's uid
+└── uploads/             0700
+    ├── shot-a1b2c3.png  0600     <stem>-<6 hex>.<ext>
+    └── shot-d4e5f6.png.part      an upload in progress
+```
+
+Written by `POST /api/uploads` and deleted by age (24 hours, at startup and hourly) and by total size (over 256 MiB, oldest first). Not in the database, not in the handoff snapshot, not deleted when a session closes or the agent exits ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md) §5).
+
 **Pre-create the db file with `os.OpenFile(path, O_CREATE, 0600)`**: when SQLite creates it, the umask applies and the file may end up 0644 (AC-1.12).
 
 ## PRAGMA

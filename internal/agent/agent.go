@@ -13,6 +13,7 @@ import (
 	"github.com/sunhaijun/webterm/internal/auth"
 	"github.com/sunhaijun/webterm/internal/session"
 	"github.com/sunhaijun/webterm/internal/store"
+	"github.com/sunhaijun/webterm/internal/uploads"
 	"github.com/sunhaijun/webterm/internal/wsconn"
 )
 
@@ -36,6 +37,9 @@ type Config struct {
 	// production: success goes to stdout, failure to stderr. Tests pass a
 	// buffer so they can assert on both.
 	CertReport io.Writer
+	// UploadRoot replaces <temp>/webterm-<uid> as the directory for files
+	// sent to sessions (ADR-0051).
+	UploadRoot string
 }
 
 // Agent stitches the store, auth, sessions and connection layer into one
@@ -47,6 +51,7 @@ type Agent struct {
 	auth     *auth.Auth
 	sessions *session.Manager
 	hub      *wsconn.Hub
+	uploads  *uploads.Store
 	mux      *http.ServeMux
 }
 
@@ -63,6 +68,7 @@ func New(cfg Config, st *store.Store, sessions *session.Manager) *Agent {
 		auth:     auth.New(st, cfg.Dev, cfg.TrustProxy),
 		sessions: sessions,
 		hub:      wsconn.NewHub(cfg.MaxConns),
+		uploads:  uploads.New(cfg.UploadRoot),
 		mux:      http.NewServeMux(),
 	}
 	a.routes()
@@ -106,6 +112,7 @@ func (a *Agent) routes() {
 	a.mux.Handle("PATCH /api/devices/{id}", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handlePatchDevice))))
 	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeDevice))))
 	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeAll))))
+	a.mux.Handle("POST /api/uploads", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleUpload))))
 
 	// Every other /api/* path authenticates first, then 404s (auth matrix:
 	// /api/* ✓). Without this they would fall through to the SPA fallback on
@@ -122,13 +129,19 @@ func (a *Agent) routes() {
 	}
 }
 
-// PurgeLoop periodically deletes expired pairing codes.
+// PurgeLoop periodically deletes expired pairing codes and uploads older
+// than a day (ADR-0051 §5).
 func (a *Agent) PurgeLoop(stop <-chan struct{}) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	purge := func() {
 		if _, err := a.store.PurgePairings(time.Now()); err != nil {
 			a.log.Warn("purge pairing codes failed", "err", err)
+		}
+		if n, err := a.uploads.Sweep(); err != nil {
+			a.log.Warn("sweeping uploads failed", "err", err)
+		} else if n > 0 {
+			a.log.Debug("swept uploads", "removed", n)
 		}
 	}
 	purge() // once at startup

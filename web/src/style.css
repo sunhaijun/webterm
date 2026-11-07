@@ -164,6 +164,14 @@ button { font: inherit; color: inherit; }
 .stage { position: relative; min-height: 0; overflow: hidden; background: var(--term-bg); }
 /* Touch: vertical drag is xterm's own scrolling (it sets scrollTop in JS); tap is term/gestures.ts.
    touch-action:none keeps the browser out of it (and blocks page-level pinch zoom); taps still work. */
+/* Files dragged over the page (ADR-0051): an accent outline inside the terminal area, over everything in it */
+.stage[data-drop='true']::after {
+  content: ''; position: absolute; inset: 0; z-index: 30; pointer-events: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* The one file input both paperclips open: out of sight but not display:none, which some
+   mobile browsers won't open from a script */
+.upload-input { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .term {
   position: absolute; inset: 0;
   padding: 4px;
@@ -319,6 +327,8 @@ button { font: inherit; color: inherit; }
 .conn-dot[data-state='reconnecting'] { background: var(--warn); animation: pulse 1s infinite; }
 .conn-dot[data-state='closed'] { background: var(--err); }
 @keyframes pulse { 50% { opacity: 0.3; } }
+/* A paperclip while its files upload (ADR-0051 §2): accent and pulsing, like the reconnecting dot */
+:is(.topbar-btn, .ek-upload)[data-busy='true'] { color: var(--accent); animation: pulse 1s infinite; }
 
 /* The pin mark and the unread dot (ADR-0042): unread uses the accent; red only means error */
 .pin-mark { flex: none; display: inline-flex; color: var(--muted); margin-right: 3px; }
@@ -398,7 +408,10 @@ button { font: inherit; color: inherit; }
   touch-action: pan-y;
 }
 .ek-text:focus { border-color: var(--accent); }
-.extrakeys[data-page='keys'] .ek-text { display: none; }
+/* The text page's row: the text box, then the paperclip in a 44px column mirroring the left one (ADR-0051) */
+.ek-textrow { display: grid; grid-template-columns: minmax(0, 1fr) 44px; height: 80px; }
+.ek-upload { height: 80px; border-left: 1px solid var(--line); color: var(--fg); }
+.extrakeys[data-page='keys'] .ek-textrow { display: none; }
 .extrakeys[data-page='text'] .ek-keys { display: none; }
 
 /* ---------- Sheets (ADR-0018 / ADR-0037 §4, layout.md): centered dialog on wide, bottom sheet on compact ---------- */

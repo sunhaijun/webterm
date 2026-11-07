@@ -38,7 +38,7 @@ feat/<docs-number>-<topic>      e.g. feat/30-protocol-core
 
 1. **One binary.** No cgo, no runtime dependencies. `GOOS=linux GOARCH=amd64 go build` produces the release binary.
 2. **Same origin.** The agent serves the frontend via `go:embed`; there is no separate frontend host.
-3. **Output stays in memory.** Terminal output lives only in the ring buffer and emulator. Only devices and authentication data go to disk.
+3. **Output stays in memory.** Terminal output lives only in the ring buffer and emulator. Only devices and authentication data go to the data directory; files the user sends to a session live in the system temp directory until the sweep deletes them a day later ([ADR-0051](docs/20-architecture/adr/0051-send-files-to-a-session.md)).
 4. **Contiguous sequence numbers.** The byte-stream sequence number sent to clients equals the session's cumulative PTY output. The agent never rewrites output; `SNAPSHOT` frames are agent-generated rendering instructions and don't count toward `seq` ([protocol §3](docs/30-protocol/websocket-protocol.md)).
 5. **Authenticate first.** Every route except `/pair`, static assets and the health check — including the WebSocket upgrade — requires a valid device session. The local Unix sockets (`run/agent.sock`, `run/attach.sock`) are authenticated by file permissions and the peer's uid instead ([ADR-0050](docs/20-architecture/adr/0050-ssh-attach.md)).
 

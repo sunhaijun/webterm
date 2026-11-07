@@ -1,9 +1,10 @@
 /**
  * Extra keys (AC-3.18 / AC-3.19, input.md): a fixed 80px slot with two pages, the key
- * page (Termux's default 14 keys) and the text page (a two-row textarea). A fixed 44px
- * column on the left holds the sessions button (top, session count in a box) and ✎
- * (bottom) on compact, only ✎ on wide. Both pages have the same height, so flipping never
- * changes terminal geometry.
+ * page (Termux's default 14 keys) and the text page (a two-row textarea, with the paperclip
+ * that sends files in a 44px column on its right, ADR-0051). A fixed 44px column on the
+ * left holds the sessions button (top, session count in a box) and ✎ (bottom) on compact,
+ * only ✎ on wide. Both pages have the same height, so flipping never changes terminal
+ * geometry.
  *
  * The current page and the text draft are per session (AC-3.22, ADR-0036) and tracked by
  * the controller. This component shows the active session's page, delegates flipping to
@@ -17,7 +18,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { Form } from '../app/form'
-import { EditIcon } from '../ui/icons'
+import { EditIcon, PaperclipLargeIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { EXTRA_KEYS, appAction, isModifierKey, type ExtraKeyId, type Sticky } from './keymap'
@@ -41,6 +42,10 @@ export interface ExtraKeysProps {
   /** Returns false when the text wasn't sent (too large); the box keeps it. */
   onSend(send: TextSend): boolean
   register(els: TextPageEls | null): void
+  /** The paperclip right of the text box: open the file picker (called inside the click, ADR-0051). */
+  onUpload(): void
+  /** Files are uploading: the paperclip pulses. */
+  uploading: boolean
 }
 
 const noFocus = (e: Event) => e.preventDefault()
@@ -177,7 +182,20 @@ export function ExtraKeys(p: ExtraKeysProps) {
             )
           })}
         </div>
-        <textarea ref={taRef} class="ek-text" data-testid="textinput" rows={2} aria-label="Text input" onKeyDown={onTextKey} />
+        <div class="ek-textrow">
+          <textarea ref={taRef} class="ek-text" data-testid="textinput" rows={2} aria-label="Text input" onKeyDown={onTextKey} />
+          <button
+            type="button"
+            class="ek-side-btn ek-upload"
+            data-testid="text-upload-file"
+            data-busy={p.uploading ? 'true' : 'false'}
+            aria-label="Send file"
+            onPointerDown={noFocus}
+            onClick={p.onUpload}
+          >
+            <PaperclipLargeIcon />
+          </button>
+        </div>
       </div>
     </div>
   )

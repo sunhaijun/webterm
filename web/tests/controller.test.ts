@@ -7,6 +7,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import { AppController } from '../src/app/controller'
+import type { UploadOutcome } from '../src/app/uploads'
 import type { WebSocketLike } from '../src/conn/connection'
 import { decodeFrame, encodeFrame, TYPE_OUTPUT, TYPE_SNAPSHOT } from '../src/protocol/frame'
 import { flush, info } from './helpers'
@@ -88,6 +89,8 @@ let signOutResult: number | Error = 204
 let signOuts = 0
 /** What the controller sees as document.hasFocus(). */
 let focused = true
+/** Uploads in flight, oldest first; each resolves when the test says so. */
+let pendingUploads: { file: File; done: (o: UploadOutcome) => void }[] = []
 let unmount: () => void
 let area: HTMLElement
 
@@ -110,6 +113,7 @@ function setup() {
       return signOutResult instanceof Error ? Promise.reject(signOutResult) : Promise.resolve(signOutResult)
     },
     hasFocus: () => focused,
+    upload: (file) => new Promise<UploadOutcome>((done) => pendingUploads.push({ file, done })),
   })
   const root = document.createElement('div')
   const stage = document.createElement('div')
@@ -144,6 +148,7 @@ beforeEach(() => {
   signOutResult = 204
   signOuts = 0
   focused = true
+  pendingUploads = []
   setup()
 })
 afterEach(() => {
@@ -842,5 +847,152 @@ describe('UT-claim-1 size claims', () => {
       s2.text(welcome([info(1, { cols: 120, rows: 40 })], { resumed: [{ sid: 1, status: 'ok', from_seq: 0, in_ack: 0 }] }))
       expect(s2.msgs('resize'), `focused=${hasFocus}`).toHaveLength(hasFocus ? 1 : 0)
     }
+  })
+})
+
+describe('UT-upload-2 sending files (ADR-0051, input.md §Sending files)', () => {
+  const file = (name: string) => new File([new Uint8Array([1, 2, 3])], name, { type: 'image/png' })
+  /** INPUT payloads for one session (sock.inputs() mixes sessions). */
+  const inputsOf = (sid: number) =>
+    sock.sent
+      .filter((s): s is Uint8Array => s instanceof Uint8Array)
+      .map((b) => decodeFrame(b))
+      .filter((f) => f.sid === sid)
+      .map((f) => new TextDecoder().decode(f.payload))
+  /** Lets the controller's promise chain move on. */
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+  const toast = () => ctl.get().toast?.text
+  let input: HTMLInputElement
+  const pick = (...files: File[]) => {
+    ctl.pickFiles()
+    Object.defineProperty(input, 'files', { value: files, configurable: true })
+    ctl.onFilesPicked()
+  }
+
+  beforeEach(() => {
+    sock.text(welcome([info(1), info(2)]))
+    input = document.createElement('input')
+    input.type = 'file'
+    ctl.registerFileInput(input)
+  })
+
+  it('uploads one at a time, in order, and pastes each path alone into the session current at pick time', async () => {
+    ctl.select(1)
+    pick(file('a.png'), file('b.png'))
+    expect(ctl.get().uploading).toBe(true)
+    await tick()
+    expect(pendingUploads.map((u) => u.file.name), 'the second waits for the first').toEqual(['a.png'])
+    ctl.select(2) // switching meanwhile doesn't redirect the upload
+    pendingUploads[0]!.done({ ok: true, path: '/tmp/webterm-1000/uploads/a-111111.png' })
+    await tick()
+    await tick()
+    expect(pendingUploads.map((u) => u.file.name)).toEqual(['a.png', 'b.png'])
+    pendingUploads[1]!.done({ ok: true, path: '/tmp/webterm-1000/uploads/b-222222.png' })
+    await tick()
+    await tick()
+    expect(inputsOf(1), 'one paste per file, no Enter').toEqual(['/tmp/webterm-1000/uploads/a-111111.png', '/tmp/webterm-1000/uploads/b-222222.png'])
+    expect(inputsOf(2)).toEqual([])
+    expect(ctl.get().uploading).toBe(false)
+  })
+
+  it('is bracketed when the program enabled bracketed paste, and leaves sticky modifiers alone', async () => {
+    sock.frame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: new TextEncoder().encode('\x1b[?2004h') })
+    await new Promise((r) => setTimeout(r, 30))
+    ctl.sticky.tap('ctrl')
+    pick(file('a.png'))
+    await tick()
+    pendingUploads[0]!.done({ ok: true, path: '/u/a-1.png' })
+    await tick()
+    await tick()
+    expect(inputsOf(1).join('')).toBe('\x1b[200~/u/a-1.png\x1b[201~')
+    expect(ctl.sticky.state('ctrl'), 'still armed for the next key').toBe('armed')
+  })
+
+  it('a failed upload pastes nothing, says why, and the next file still goes', async () => {
+    pick(file('big.mov'), file('ok.png'))
+    await tick()
+    pendingUploads[0]!.done({ ok: false, status: 413 })
+    await tick()
+    await tick()
+    expect(toast()).toBe('big.mov is too large (max 20 MB)')
+    pendingUploads[1]!.done({ ok: true, path: '/u/ok-1.png' })
+    await tick()
+    await tick()
+    expect(inputsOf(1)).toEqual(['/u/ok-1.png'])
+  })
+
+  it('a network failure says so', async () => {
+    pick(file('a.png'))
+    await tick()
+    pendingUploads[0]!.done({ ok: false, status: 0 })
+    await tick()
+    await tick()
+    expect(toast()).toBe('Upload failed: a.png')
+    expect(ctl.get().uploading).toBe(false)
+  })
+
+  it('the session closed meanwhile: nothing is pasted anywhere, a toast says so', async () => {
+    pick(file('a.png'))
+    await tick()
+    sock.text({ t: 'session.closed', sid: 1 })
+    pendingUploads[0]!.done({ ok: true, path: '/u/a-1.png' })
+    await tick()
+    await tick()
+    expect(sock.inputs()).toEqual([])
+    expect(toast()).toBe('Session ended; a.png not inserted')
+  })
+
+  it('a session with the same sid after an agent restart is not the target', async () => {
+    pick(file('a.png'))
+    await tick()
+    sock.text(welcome([info(1)], { instance_id: 'i2' })) // agent restarted, sid 1 reused
+    pendingUploads[0]!.done({ ok: true, path: '/u/a-1.png' })
+    await tick()
+    await tick()
+    expect(sock.inputs()).toEqual([])
+  })
+
+  it('401 means the device was revoked', async () => {
+    pick(file('a.png'))
+    await tick()
+    pendingUploads[0]!.done({ ok: false, status: 401 })
+    await tick()
+    await tick()
+    expect(ctl.get().revoked).toBe(true)
+  })
+
+  it('a paste of files into the terminal uploads them and stops the event; a text paste is left to xterm', async () => {
+    const helper = area.querySelector('.xterm-helper-textarea')!
+    const paste = (data: object) => {
+      const e = new Event('paste', { bubbles: true, cancelable: true })
+      Object.defineProperty(e, 'clipboardData', { value: data })
+      helper.dispatchEvent(e)
+      return e
+    }
+    const shot = file('image.png')
+    const e1 = paste({ getData: () => '', files: [shot], types: ['Files'] })
+    expect(e1.defaultPrevented).toBe(true)
+    await tick()
+    expect(pendingUploads.map((u) => u.file)).toEqual([shot])
+    const e2 = paste({ getData: (t: string) => (t === 'text/plain' ? 'echo hi' : ''), files: [], types: ['text/plain'] })
+    expect(e2.defaultPrevented, 'xterm handles text pastes itself').toBe(false)
+    expect(pendingUploads.length).toBe(1)
+  })
+
+  it('a drag of files outlines the terminal; the drop uploads them and keeps the page', async () => {
+    const drag = (type: string, files: File[]) => {
+      const e = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(e, 'dataTransfer', { value: { files, types: files.length ? ['Files'] : ['text/plain'], dropEffect: 'none' } })
+      area.dispatchEvent(e)
+      return e
+    }
+    expect(drag('dragover', []).defaultPrevented, 'text drags are left alone').toBe(false)
+    expect(drag('dragover', [file('a.png')]).defaultPrevented).toBe(true)
+    expect(ctl.get().dropping).toBe(true)
+    const drop = drag('drop', [file('a.png')])
+    expect(drop.defaultPrevented, 'otherwise the browser opens the file in place of the page').toBe(true)
+    expect(ctl.get().dropping).toBe(false)
+    await tick()
+    expect(pendingUploads.map((u) => u.file.name)).toEqual(['a.png'])
   })
 })

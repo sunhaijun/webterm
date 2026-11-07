@@ -24,7 +24,7 @@ The full rules are in [CLAUDE.md](CLAUDE.md). In short:
 
 - **Docs first.** `docs/` is the source of truth. Change the relevant document (and acceptance criteria) before the code. Protocol changes start in [websocket-protocol.md](docs/30-protocol/websocket-protocol.md); architectural decisions get a new ADR.
 - **Branch per topic**, named `feat/<docs-number>-<topic>`. Pull requests target `main`.
-- **Invariants:** a single static binary (no cgo), the frontend embedded in it, terminal output never written to disk, authentication on every route except pairing and static assets.
+- **Invariants:** a single static binary (no cgo), the frontend embedded in it, terminal output never written to disk (files sent to a session stay in the temp directory for a day, ADR-0051), authentication on every route except pairing and static assets.
 
 ## Development setup
 

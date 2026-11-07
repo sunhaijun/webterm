@@ -17,6 +17,7 @@ This is the project's biggest risk, so the security design comes before the feat
 | Pairing code (unused, unexpired) | Equivalent to shell access |
 | Terminal output | May contain keys, tokens, sensitive log data (**hence kept only in memory**: ring buffer and terminal emulator) |
 | TLS private key | Man-in-the-middle |
+| Files sent to sessions | Whatever the user sent; a screenshot can show secrets too (hence `0600` in a private directory, deleted after 24 hours, never served back) |
 
 ## Trust boundaries
 
@@ -34,7 +35,7 @@ This is the project's biggest risk, so the security design comes before the feat
 ```
 
 **Explicitly outside the trust boundary**:
-- Other local users on the same machine → hence the db is `0600`, the control and attach sockets are `0600` (the attach socket also checks the peer's uid), nothing goes in `/tmp`, and a port bound to localhost rather than `0.0.0.0` is not assumed to be protected
+- Other local users on the same machine → hence the db is `0600`, the control and attach sockets are `0600` (the attach socket also checks the peer's uid), the only thing in `/tmp` is the private upload directory ([T9](#t9-other-local-users-and-the-shared-temp-directory)), and a port bound to localhost rather than `0.0.0.0` is not assumed to be protected
 - Browser extensions → can't be defended against; out of scope
 
 **Explicitly inside the trust boundary**:
@@ -92,6 +93,7 @@ This is the project's biggest risk, so the security design comes before the feat
 | `SameSite=Strict` cookie | Cross-site requests carry no credentials |
 | WebSocket `Origin` check | Must exactly equal the configured domain; a mismatch returns 403 (AC-1.8) |
 | Every mutation uses a non-GET method | REST writes use only `POST`/`PATCH`/`DELETE` |
+| `Origin` check on REST writes | `POST /auth/logout`, the device routes and `POST /api/uploads` refuse a cross-site `Origin` with 403, in case a browser or proxy gets `SameSite` wrong |
 
 **Why the WebSocket checks `Origin` separately**: the WebSocket handshake **is not protected by CORS**. Modern browsers don't send `SameSite=Strict` cookies on a cross-site WS handshake either, but this behavior has varied historically. The Origin check is a necessary second line of defense.
 
@@ -104,6 +106,7 @@ This is the project's biggest risk, so the security design comes before the feat
 | Rendering by xterm.js (default DOM renderer) | Writes `textContent` cell by cell; terminal output is **never parsed as HTML** |
 | No automatic HTML in `linkHandler` | Hyperlinks (OSC 8) allow only `http`/`https`; anything else isn't clickable |
 | Metadata such as session name / CWD | Set through `textContent`, never `innerHTML` |
+| Uploaded files ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)) | Write-only: no route lists or serves them, so an uploaded `.html` or `.svg` never becomes a page on webterm's origin |
 | CSP | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://<domain>; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'` |
 
 Session name and CWD are the only server data that reaches the DOM (tab bar, session drawer). Always use `textContent`, and check this specifically in review.
@@ -120,6 +123,8 @@ Session name and CWD are the only server data that reaches the DOM (tab bar, ses
 | Memory amplification through huge frames | Frames are capped at 256 KiB; anything larger disconnects |
 | Output flood | The agent-side emulator runs at about 20 MB/s per core and backpressures PTY reads, so nothing piles up without bound; history is fixed at 2000 lines |
 | Input queue growth | The client-side `pending` is capped at 256 KiB, the agent's per-session input queue |
+| Uploads filling memory | The body streams to a file; the agent never holds more than a copy buffer per request |
+| Uploads filling the temp directory | 20 MiB per file (`413`); 256 MiB in total, oldest deleted first; every file deleted after 24 hours. A full `/tmp` would also break other programs (on a tmpfs it is shared memory), so the cap is mandatory ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md) §5) |
 
 **Note**: without Cloudflare there's no DDoS protection ([ADR-0002](../20-architecture/adr/0002-self-contained-binary.md)). Mitigation is limited to the application layer. Network-layer volumetric attacks are out of scope for this project — a user facing them should put a tunnel or CDN in front (the architecture supports that).
 
@@ -140,6 +145,18 @@ Session name and CWD are the only server data that reaches the DOM (tab bar, ses
 | Never log terminal output, under any circumstances |
 | IP and User-Agent are logged on purpose (for the device list and rate limiting) |
 | `IT-privacy-2` verifies this with a canary string |
+| Uploaded file names aren't logged; sizes only at debug level |
+
+### T9 Other local users and the shared temp directory
+
+**Scenario**: another account on the server plants a symlink or a directory at `/tmp/webterm-<uid>` before the agent creates it, to redirect uploads or read them.
+
+| Mitigation | Implementation |
+|---|---|
+| Owned, private directory | `webterm-<uid>` is created `0700`; before every upload the agent checks with `lstat` that it is a directory (not a symlink), owned by its uid, and closed to group and others. If not, uploads fail with `500` and a log line; the agent never uses or repairs it |
+| No following links | Files are created with `O_CREAT \| O_EXCL \| O_NOFOLLOW`, mode `0600`, under names the agent generates |
+
+The same check tmux makes for `/tmp/tmux-<uid>`. Files in the directory are as private as the user's home directory; another local user who is root can read them anyway.
 
 ## Out of scope
 

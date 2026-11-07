@@ -29,6 +29,7 @@
 │  │  GET  /              → go:embed static assets      │  │
 │  │  POST /auth/pair     → pairing                     │  │
 │  │  *    /api/devices*  → device management REST      │  │
+│  │  POST /api/uploads   → files for sessions → /tmp   │  │
 │  │  GET  /ws            → WebSocket upgrade           │  │
 │  │                        (auth + Origin)             │  │
 │  │  TLS: autocert (production) | plain HTTP (--dev)   │  │
@@ -114,6 +115,7 @@ internal/
   protocol/             message types, binary frame codec (Go side of the contract)
   store/                SQLite schema, migrations, queries
   wsconn/               WebSocket connection layer
+  uploads/              files sent to sessions: private temp directory, safe names, cleanup (ADR-0051)
   webui/                go:embed mount point for the frontend build
 web/
   src/
@@ -215,3 +217,4 @@ In the `exited` state a session keeps its ring buffer and emulator: it can be vi
 | [0048](adr/0048-sign-out.md) | Sign out this device: revoke it on the server and clear everything it holds |
 | [0049](adr/0049-connection-status-in-one-place.md) | Connection status in one place: every connection message is in the top banner, from the first frame of a page load |
 | [0050](adr/0050-ssh-attach.md) | Attach over SSH: `webterm attach` joins a session through the agent's local socket, which speaks the same protocol; the size follows the client in use |
+| [0051](adr/0051-send-files-to-a-session.md) | Send files to a session: upload over HTTP to a private temp directory, paste the path (one paste per file), so claude and codex attach images; deleted after 24 hours |

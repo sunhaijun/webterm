@@ -96,6 +96,7 @@ func TestITAuth1_RouteMatrix(t *testing.T) {
 			{"GET", "/api/anything-else"},
 			{"POST", "/api/devices/revoke-all"},
 			{"POST", "/auth/logout"},
+			{"POST", "/api/uploads"},
 			{"DELETE", "/api/commands?pinned=false"},
 		} {
 			resp := h.do(anon, tc.method, tc.path, nil)

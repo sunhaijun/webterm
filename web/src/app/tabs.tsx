@@ -1,8 +1,8 @@
 /**
  * The top tab bar on wide (desktop / tablet; session-ux.md §wide, modeled on Termius).
  *
- * Left to right: the tab strip (tabs only), `+`, spacer, connection status dot, settings
- * (ADR-0037). Tab names are prefixed with `[n]`, like the drawer (ADR-0041). Tabs share
+ * Left to right: the tab strip (tabs only), `+`, spacer, the paperclip that sends files
+ * (ADR-0051), connection status dot, settings (ADR-0037). Tab names are prefixed with `[n]`, like the drawer (ADR-0041). Tabs share
  * the width equally (120–240px, pure CSS, ADR-0031); when they don't fit, the strip
  * scrolls horizontally and the active tab is scrolled into view when it changes (no-op if
  * fully visible, no smooth scrolling). `+` is outside the strip so it stays visible, with
@@ -16,7 +16,7 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { ConnState, StateInfo } from '../conn/connection'
 import type { SessionView } from '../sessions/store'
-import { CloseIcon, GearIcon, PinIcon, PlusIcon } from '../ui/icons'
+import { CloseIcon, GearIcon, PaperclipIcon, PinIcon, PlusIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { DragReorder } from '../ui/reorder'
@@ -39,6 +39,10 @@ export interface TopBarProps {
   onRename(sid: number, name: string): void
   onCancelRename(): void
   onSettings(): void
+  /** The paperclip: open the file picker (called inside the click, ADR-0051). */
+  onUpload(): void
+  /** Files are uploading: the paperclip pulses. */
+  uploading: boolean
   /** Drag-to-reorder drop: move sid in front of `before` (null = to the end). */
   onMove(sid: number, before: number | null): void
 }
@@ -285,6 +289,16 @@ export function TopBar(p: TopBarProps) {
       >
         {/* An icon, not a `+` glyph: glyph position depends on font metrics and won't line up with the status dot (ADR-0035 §3) */}
         <PlusIcon />
+      </button>
+      <button
+        class="topbar-btn"
+        data-testid="upload-file"
+        data-busy={p.uploading ? 'true' : 'false'}
+        aria-label="Send file"
+        title="Send file"
+        onClick={p.onUpload}
+      >
+        <PaperclipIcon />
       </button>
       <span class="conn-dot" data-testid="conn-dot" data-state={p.conn} title={dotTitle} aria-hidden="true" />
       <button class="topbar-btn" data-testid="open-settings" aria-label="Settings" title="Settings" onClick={p.onSettings}>

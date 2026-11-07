@@ -101,18 +101,18 @@ The top cell of the extra keys' left column is the **session button** (`data-tes
 ### wide (PC / tablet): tab bar
 
 ```
-┌ ▎[1] webterm ✕ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │   + ──────── ● ⚙ ┐   equal width, 120–240px
-┌ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │ ▎[1] webterm ✕ │   + ● ⚙ ┐        overflow: the strip scrolls, + stays put
+┌ ▎[1] webterm ✕ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │   + ────── ⌇ ● ⚙ ┐   equal width, 120–240px
+┌ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │ ▎[1] webterm ✕ │   + ⌇ ● ⚙ ┐      overflow: the strip scrolls, + stays put
 ```
 
-- The top bar `.topbar` is 36px tall (40px with `pointer: coarse`) and always visible. Left to right: the horizontally scrollable tab strip `data-testid="tabbar"` (**tabs only**), `+`, a spacer, the connection dot (`conn-dot`), and settings (`open-settings`). `+`, the dot, and settings are outside the tab strip and don't scroll with it ([ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)).
+- The top bar `.topbar` is 36px tall (40px with `pointer: coarse`) and always visible. Left to right: the horizontally scrollable tab strip `data-testid="tabbar"` (**tabs only**), `+`, a spacer, the paperclip that sends files (`upload-file`, [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)), the connection dot (`conn-dot`), and settings (`open-settings`). `+`, the paperclip, the dot, and settings are outside the tab strip and don't scroll with it ([ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)).
 - A tab (`tab-<sid>`) = index + session name + unread dot; pinned sessions show a pin icon before the name (drawn as `⇵` in the diagram); exited sessions are grayed out. Long names are truncated with an ellipsis (the index never is); `title` holds the full name and CWD.
 - The **index** (`tab-<sid>-idx`) is the same `[n]` as in the drawer (current order, starting at 1), so tabs with the same name can be told apart. **Every tab has one**, renamed tabs included, matching the drawer ([ADR-0041](../20-architecture/adr/0041-tab-index-and-edit-icon.md)). Monospace, `--muted`, accent on the current tab.
 - **Width** ([ADR-0031](../20-architecture/adr/0031-tabs-equal-width.md)): all tabs are equal width, sharing the strip's available width, between 120px and 240px.
 - **`+`** (`new-session`) sits right of the tab strip. When the tabs fit, the strip is exactly as wide as the tabs and `+` follows the last tab; when they don't, the strip shrinks to the remaining width and scrolls, and `+` stays to its right, **always visible**.
 - A **12px (16px on touch) gap that isn't clickable** separates `+` from the tab strip, so aiming for New doesn't hit the current tab's ✕.
 - `+` is an SVG icon, not a text character: it and the status dot are both vertically centered by their geometric centers, on the same horizontal line.
-- Far right: the connection dot (`conn-dot`) and settings (`open-settings`, ⚙, the same size and line-icon style as `+`, vertically centered with the dot).
+- Far right: the paperclip (`upload-file`), the connection dot (`conn-dot`) and settings (`open-settings`, ⚙). The paperclip and ⚙ have the same size and line-icon style as `+`, vertically centered with the dot.
 - **Click a tab** = switch. **Middle-click a tab** = close.
 - **✕** (`tab-<sid>-close`): with a mouse, shown on hover and on the current tab; on touch, only on the current tab, to avoid accidental taps.
 - **Right-click (mouse) / long-press (touch) a tab** = session menu (on touch it opens when you **release in place** after the long press; moving after the long press drags to reorder, see [Ordering](#ordering-ac-413)). **Double-click a tab** = rename it directly.

@@ -100,6 +100,20 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Run claude in the session from the laptop, then close the ssh window: the session keeps running, and the laptop terminal's title and modes (mouse, bracketed paste) are back to normal in the next ssh login
 - [ ] `webterm update` on the server while attached: the attach redraws within seconds and keeps working
 
+## Sending files (every time uploads or the text page change, since m15)
+
+[ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md). Run claude (and codex if installed) in a session, some of it inside tmux.
+
+- [ ] iPhone (Safari and the installed PWA): text page → paperclip → Photo Library → a photo → claude shows `[Image #1]`. Note whether the saved file is `.jpg` or `.heic`; a `.heic` path stays plain text in claude, and then the browser has to convert (ADR-0051 §2)
+- [ ] iPhone: paperclip → Take Photo → `[Image #1]`; a full-resolution photo submitted with a question gets an answer about the photo (no size error from claude)
+- [ ] iPhone: copy a screenshot (screenshot → Copy and Delete), long-press the text box → Paste → `[Image #1]`, nothing pasted into the box
+- [ ] Android (Chrome and the PWA): paperclip → camera and gallery both give `[Image #1]`; pasting an image from the keyboard's clipboard into the text box does too
+- [ ] Desktop: a screenshot on the clipboard, `Ctrl+Shift+V` / `Cmd+V` on the terminal → `[Image #1]`; dropping a PNG from the file manager onto the terminal → `[Image #1]`, the outline shows while dragging and the page stays put
+- [ ] A PDF or a log file → its path at the prompt; asking claude about it works
+- [ ] Inside tmux the same file still becomes `[Image #1]`
+- [ ] On a slow connection the paperclip pulses until the path appears
+- [ ] `ls -la /tmp/webterm-$(id -u)/uploads/` → files `0600`, directory `0700`; a day later they're gone
+
 ## Terminal compatibility (every time rendering changes)
 
 - [x] `vim` / `nvim`: editing, `:wq`, visual mode, arrow keys
@@ -110,6 +124,7 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [x] `Ctrl+C` interrupts `sleep 100`
 - [ ] `Ctrl+D` exits the shell → an "[Exited · Enter to close]" line appears at the end, content is kept; `Enter` closes the session
 - [ ] Run Claude Code / another TUI agent in a session: sending a long Chinese prompt from the text page works
+- [ ] Same, with an image sent first from the paperclip: Enter on the text page submits `[Image #1] <prompt>`
 - [x] Print a binary file (`head -c 4096 /dev/urandom`) → no crash, later output is fine
 - [x] 256 colors and true color display correctly
 - [x] A very long line (100KB, no newline) → doesn't hang

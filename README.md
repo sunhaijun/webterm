@@ -12,6 +12,7 @@ SSH from a phone, or over a flaky connection, is painful: sessions drop, IME inp
 - **Made for touch.** A full-screen terminal with two fixed rows of extra keys (Esc, Ctrl, arrows, …), a session drawer on phones and tabs on larger screens. Installable as a PWA.
 - **Input you can trust.** IME composition goes straight to the terminal, a native text page handles long passages, and input typed while offline is queued, not dropped.
 - **Scrollback by dragging.** AI CLIs like Claude Code stay on the main screen so their output scrolls.
+- **Screenshots for your AI CLI.** The paperclip (or a paste, or a drop) sends a photo or file to the session; Claude Code and Codex attach it as `[Image #1]`.
 - **Simple and self-contained.** One static binary with the frontend embedded. Automatic Let's Encrypt certificates, for a domain or just the server's IP. Devices pair with a one-time QR code; no passwords.
 - **Upgrades without losing sessions.** The agent re-execs in place and hands its sessions to the new version.
 - **Also from a real terminal.** `ssh -t server webterm attach` joins the same sessions from any terminal, through the server's own sshd.

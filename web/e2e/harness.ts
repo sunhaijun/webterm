@@ -5,7 +5,7 @@
  * ADR-0025: no input modes, no composer. To run a command, focus the terminal and type.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -78,10 +78,21 @@ export class Agent {
     return args
   }
 
+  /** The agent's environment: its own TMPDIR, so uploads (ADR-0051) land in `uploadDir()`. */
+  private static env(dataDir: string): NodeJS.ProcessEnv {
+    return { ...process.env, TMPDIR: join(dataDir, 'tmp') }
+  }
+
+  /** Where `POST /api/uploads` saves files: `$TMPDIR/webterm-<uid>/uploads`. */
+  uploadDir(): string {
+    return join(this.dataDir, 'tmp', `webterm-${process.getuid?.() ?? 0}`, 'uploads')
+  }
+
   static async start(opts: AgentOptions = {}): Promise<Agent> {
     const port = await freePort()
     const dataDir = mkdtempSync(join(tmpdir(), 'webterm-e2e-'))
-    const proc = spawn(BINARY, Agent.args(port, dataDir, opts), { stdio: ['ignore', 'pipe', 'pipe'] })
+    mkdirSync(join(dataDir, 'tmp'), { mode: 0o700 })
+    const proc = spawn(BINARY, Agent.args(port, dataDir, opts), { stdio: ['ignore', 'pipe', 'pipe'], env: Agent.env(dataDir) })
     const agent = new Agent(proc, port, dataDir, opts)
     agent.collect(proc)
     await waitFor(() => agent.healthy(), 'agent started')
@@ -120,7 +131,7 @@ export class Agent {
     old.kill('SIGKILL')
     await exited
     await waitFor(async () => !(await this.healthy()), 'old agent stopped serving', 10_000)
-    this.proc = spawn(BINARY, Agent.args(this.port, this.dataDir, this.opts), { stdio: ['ignore', 'pipe', 'pipe'] })
+    this.proc = spawn(BINARY, Agent.args(this.port, this.dataDir, this.opts), { stdio: ['ignore', 'pipe', 'pipe'], env: Agent.env(this.dataDir) })
     this.collect(this.proc)
     await waitFor(() => this.healthy(), 'new agent is up')
   }
@@ -482,6 +493,8 @@ export interface SentRecorder {
   input(): Promise<string[]>
   /** inputHex is like input, but hex-encoded. */
   inputHex(): Promise<string[]>
+  /** inputOf is like input, but only the frames for one session. */
+  inputOf(sid: number): Promise<string[]>
   /** clear resets the recording. */
   clear(): Promise<void>
 }
@@ -489,10 +502,11 @@ export interface SentRecorder {
 /** recordSent hooks `WebSocket.prototype.send` to record control messages and INPUT frames. Install it before the page loads. */
 export async function recordSent(page: Page): Promise<SentRecorder> {
   await page.addInitScript(() => {
-    const w = window as unknown as { __ctl: unknown[]; __in: string[]; __inHex: string[] }
+    const w = window as unknown as { __ctl: unknown[]; __in: string[]; __inHex: string[]; __inSid: number[] }
     w.__ctl = []
     w.__in = []
     w.__inHex = []
+    w.__inSid = []
     const orig = WebSocket.prototype.send
     WebSocket.prototype.send = function (data: unknown) {
       if (typeof data === 'string') {
@@ -507,22 +521,29 @@ export async function recordSent(page: Page): Promise<SentRecorder> {
           const p = b.subarray(12)
           w.__in.push(new TextDecoder().decode(p))
           w.__inHex.push([...p].map((x) => x.toString(16).padStart(2, '0')).join(''))
+          w.__inSid.push((b[2]! << 8) | b[3]!)
         }
       }
       return orig.call(this, data as never)
     }
   })
-  type W = { __ctl: { t: string }[]; __in: string[]; __inHex: string[] }
+  type W = { __ctl: { t: string }[]; __in: string[]; __inHex: string[]; __inSid: number[] }
   return {
     ctl: () => page.evaluate(() => (window as unknown as W).__ctl),
     input: () => page.evaluate(() => (window as unknown as W).__in),
     inputHex: () => page.evaluate(() => (window as unknown as W).__inHex),
+    inputOf: (sid: number) =>
+      page.evaluate((s) => {
+        const w = window as unknown as W
+        return w.__in.filter((_, i) => w.__inSid[i] === s)
+      }, sid),
     clear: () =>
       page.evaluate(() => {
         const w = window as unknown as W
         w.__ctl = []
         w.__in = []
         w.__inHex = []
+        w.__inSid = []
       }),
   }
 }
