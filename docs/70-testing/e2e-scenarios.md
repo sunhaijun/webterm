@@ -709,5 +709,5 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 2. **Shell**: at the prompt, `key-combos` → `combo-menu` has `combo-ctrl-r`; tapping `combo-ctrl-c` sends `03` and closes the menu; focus didn't move
 3. **Frequent, shell**: `key-frequent` → `frequent-menu` lists the most repeated entry of `.bash_history` first, no entry shorter than 3 characters, no `#<digits>` line; tapping `frequent-0` sends a bracketed paste of it followed by a separate `\r` frame
 4. **Insert**: `frequent-insert-0` sends the bracketed paste and no `\r`
-5. **claude**: run the fake `claude` → within 2 s `combo-menu` shows `combo-shift-tab`; tapping it sends `1b5b5a`; `combo-esc-esc` sends `1b`, then `1b` at least 100 ms later; `frequent-menu` lists claude's most repeated `display` first and none of its `[Pasted text #1 …]` entries
+5. **claude**: run the fake `claude` → within 2 s `combo-menu` shows `combo-shift-tab`; tapping it sends `1b5b5a`; `combo-esc-esc` sends `1b` and `1b` as two separate frames (120 ms apart); `frequent-menu` lists claude's most repeated `display` first and none of its `[Pasted text #1 …]` entries
 6. **Closing**: open a menu, press `Esc` → closed, and no `1b` frame was sent; open one, `Ctrl+Shift+↓` → closed

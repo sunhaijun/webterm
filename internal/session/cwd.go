@@ -113,8 +113,15 @@ func (s *Session) poll() {
 		upd.Name = strPtr(name)
 	}
 	attn := s.attentionSignalsLocked(pgrp, shell, time.Now())
+	if pgrp != s.progPgrp {
+		s.progPgrp = pgrp
+		if p := readProgram(pgrp, shell); p != s.programLocked() || s.program == "" {
+			s.program = p
+			upd.Program = strPtr(p)
+		}
+	}
 	s.mu.Unlock()
-	if upd.CWD != nil || upd.Name != nil {
+	if upd.CWD != nil || upd.Name != nil || upd.Program != nil {
 		s.emit(upd)
 	}
 	if attn {

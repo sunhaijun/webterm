@@ -191,3 +191,37 @@ func TestITAttention4_ExitedKeepsUntilSeen(t *testing.T) {
 		t.Fatal("Seen didn't clear attention on an exited session")
 	}
 }
+
+// IT-program-1 (AC-3.24, ADR-0054 §2): session.updated{program} follows the
+// foreground program: shell at the prompt, claude for a program named claude,
+// back to shell when it exits.
+func TestITProgram1_FollowsTheForeground(t *testing.T) {
+	m := newManager(t, cfg())
+	s := create(t, m)
+	conn := newConn(t, m, "tab")
+	waitFor(t, "shell ready", func() bool { return s.HeadSeq() > 0 })
+	waitFor(t, "program is shell", func() bool { return s.Info().Program == session.ProgramShell })
+
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "claude")
+	// No exec: bash running the script stays the group leader, with argv[1] = the script.
+	if err := os.WriteFile(fake, []byte("#!/bin/bash\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	send(t, conn, s, fake)
+	waitFor(t, "program is claude", func() bool { return s.Info().Program == session.ProgramClaude })
+	waitFor(t, "session.updated{program:claude}", func() bool {
+		for _, e := range conn.Events() {
+			if u, ok := e.(*protocol.SessionUpdated); ok && u.Program != nil && *u.Program == session.ProgramClaude {
+				return true
+			}
+		}
+		return false
+	})
+	send(t, conn, s, "\x03")
+	waitFor(t, "back to shell", func() bool { return s.Info().Program == session.ProgramShell })
+
+	send(t, conn, s, "exit")
+	waitFor(t, "exited", func() bool { return s.Status() == protocol.StatusExited })
+	waitFor(t, "an exited session is other", func() bool { return s.Info().Program == session.ProgramOther })
+}

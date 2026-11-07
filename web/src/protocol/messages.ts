@@ -39,6 +39,8 @@ export const Code = {
 } as const
 
 export type SessionStatus = 'running' | 'exited'
+/** What runs in front of a session (ADR-0054 §2). */
+export type Program = 'shell' | 'claude' | 'codex' | 'other'
 /** `resumed[].status` (§4.2): delta / snapshot / session no longer exists. */
 export type ResumeStatus = 'ok' | 'snapshot' | 'gone'
 
@@ -64,6 +66,8 @@ export interface SessionInfo {
   exit_code: number | null
   /** "Waiting for you", held by the agent (ADR-0052). */
   attention?: boolean
+  /** What runs in front (ADR-0054). */
+  program?: Program
   cols: number
   rows: number
   base_seq: number
@@ -117,6 +121,8 @@ export interface SessionUpdated {
   head_seq?: number
   /** Sent whenever it changes, true or false (ADR-0052). */
   attention?: boolean
+  /** Sent when it changes (ADR-0054). */
+  program?: Program
 }
 
 /** The full display order, broadcast after session.move (§4.2, ADR-0040). */

@@ -6,11 +6,13 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/sunhaijun/webterm/internal/auth"
+	"github.com/sunhaijun/webterm/internal/frequent"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/uploads"
 	"github.com/sunhaijun/webterm/internal/webui"
@@ -254,6 +256,22 @@ func (a *Agent) writeJSON(w http.ResponseWriter, code int, v any) {
 
 func (a *Agent) writeError(w http.ResponseWriter, status int, code, message string) {
 	a.writeJSON(w, status, map[string]string{"code": code, "message": message})
+}
+
+// ---------- Frequent input ----------
+
+// handleFrequent returns the program's most frequent single-line inputs, read
+// now from its own history file (ADR-0054 §3). Nothing is kept or logged.
+func (a *Agent) handleFrequent(w http.ResponseWriter, r *http.Request) {
+	home := a.cfg.Home
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	items := []string{}
+	if home != "" {
+		items = append(items, frequent.Items(r.URL.Query().Get("program"), home, a.sessions.Shell())...)
+	}
+	a.writeJSON(w, http.StatusOK, map[string][]string{"items": items})
 }
 
 // ---------- Uploads ----------

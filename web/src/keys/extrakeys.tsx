@@ -18,7 +18,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { Form } from '../app/form'
-import { EditIcon, PaperclipLargeIcon } from '../ui/icons'
+import { CombosIcon, EditIcon, HistoryIcon, PaperclipLargeIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { EXTRA_KEYS, appAction, isModifierKey, type ExtraKeyId, type Sticky } from './keymap'
@@ -38,6 +38,10 @@ export interface ExtraKeysProps {
   onTogglePage(): void
   /** A non-modifier key was pressed (called from the pointerup dispatch). */
   onKey(id: ExtraKeyId): void
+  /** The last column: open the frequent-input or the combo-key menu (ADR-0054). */
+  onMenu(menu: KeyMenu): void
+  /** Which of the two menus is open, if any. */
+  menu: KeyMenu | null
   /** Enter on the text page (called from the keydown dispatch). */
   /** Returns false when the text wasn't sent (too large); the box keeps it. */
   onSend(send: TextSend): boolean
@@ -50,12 +54,19 @@ export interface ExtraKeysProps {
 
 const noFocus = (e: Event) => e.preventDefault()
 
+/** The two keys at the end of the rows (ADR-0054 §1). */
+export type KeyMenu = 'frequent' | 'combos'
+const MENU_KEYS: { menu: KeyMenu; label: string; icon: () => preact.JSX.Element }[] = [
+  { menu: 'frequent', label: 'Frequent input', icon: HistoryIcon },
+  { menu: 'combos', label: 'Combo keys', icon: CombosIcon },
+]
+
 export function ExtraKeys(p: ExtraKeysProps) {
   const page = p.page
   const slotRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const press = useRef(new PressTracker()).current
-  const gesture = useRef<{ x: number; y: number; key: ExtraKeyId | null } | null>(null)
+  const gesture = useRef<{ x: number; y: number; key: ExtraKeyId | null; menu: KeyMenu | null } | null>(null)
   const [, setTick] = useState(0)
   const rerender = () => setTick((n) => n + 1)
 
@@ -80,11 +91,13 @@ export function ExtraKeys(p: ExtraKeysProps) {
   const onDown = (e: PointerEvent) => {
     const keyEl = (e.target as Element).closest<HTMLElement>('[data-key]')
     const key = (keyEl?.dataset.key as ExtraKeyId | undefined) ?? null
+    const menuEl = (e.target as Element).closest<HTMLElement>('[data-menu]')
+    const menu = page === 'keys' ? ((menuEl?.dataset.menu as KeyMenu | undefined) ?? null) : null
     if (page === 'keys') {
       e.preventDefault() // Don't take focus
       capturePointer(e.currentTarget as Element, e.pointerId)
     }
-    gesture.current = { x: e.clientX, y: e.clientY, key: page === 'keys' ? key : null }
+    gesture.current = { x: e.clientX, y: e.clientY, key: page === 'keys' ? key : null, menu }
     if (key && isModifierKey(key) && page === 'keys') {
       const mod = key === 'Ctrl' ? 'ctrl' : 'alt'
       press.down(e.clientX, e.clientY, () => p.sticky.hold(mod))
@@ -98,6 +111,10 @@ export function ExtraKeys(p: ExtraKeysProps) {
     if (isPageSwipe(e.clientX - g.x, e.clientY - g.y)) {
       press.cancel()
       p.onTogglePage()
+      return
+    }
+    if (g.menu) {
+      p.onMenu(g.menu)
       return
     }
     if (!g.key) {
@@ -163,24 +180,41 @@ export function ExtraKeys(p: ExtraKeysProps) {
         }}
       >
         <div class="ek-keys" role="group" aria-label="Extra keys">
-          {EXTRA_KEYS.flat().map((k) => {
-            const mod = k.id === 'Ctrl' ? 'ctrl' : k.id === 'Alt' ? 'alt' : null
-            const sticky = mod ? p.sticky.state(mod) : undefined
-            return (
+          {EXTRA_KEYS.map((row, r) => [
+            ...row.map((k) => {
+              const mod = k.id === 'Ctrl' ? 'ctrl' : k.id === 'Alt' ? 'alt' : null
+              const sticky = mod ? p.sticky.state(mod) : undefined
+              return (
+                <button
+                  type="button"
+                  key={k.id}
+                  tabIndex={-1}
+                  class="ek-key"
+                  data-key={k.id}
+                  data-testid={`key-${k.id}`}
+                  data-sticky={sticky}
+                  aria-pressed={sticky === undefined ? undefined : sticky === 'off' ? 'false' : 'true'}
+                >
+                  {k.label}
+                </button>
+              )
+            }),
+            // The last column (ADR-0054 §1): fixed in place; only their menus follow the program
+            ...MENU_KEYS.slice(r, r + 1).map(({ menu, label, icon: MenuIcon }) => (
               <button
                 type="button"
-                key={k.id}
+                key={menu}
                 tabIndex={-1}
-                class="ek-key"
-                data-key={k.id}
-                data-testid={`key-${k.id}`}
-                data-sticky={sticky}
-                aria-pressed={sticky === undefined ? undefined : sticky === 'off' ? 'false' : 'true'}
+                class="ek-key ek-menu-key"
+                data-menu={menu}
+                data-testid={`key-${menu}`}
+                aria-label={label}
+                aria-expanded={p.menu === menu ? 'true' : 'false'}
               >
-                {k.label}
+                <MenuIcon />
               </button>
-            )
-          })}
+            )),
+          ])}
         </div>
         <div class="ek-textrow">
           <textarea ref={taRef} class="ek-text" data-testid="textinput" rows={2} aria-label="Text input" onKeyDown={onTextKey} />

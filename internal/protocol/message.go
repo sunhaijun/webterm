@@ -174,7 +174,9 @@ type SessionInfo struct {
 	ExitCode     *int   `json:"exit_code"`
 	// Attention is "waiting for you" (ADR-0052): set when the program signals
 	// it's your turn, cleared by session.seen.
-	Attention bool   `json:"attention"`
+	Attention bool `json:"attention"`
+	// Program is what runs in front: shell, claude, codex or other (ADR-0054).
+	Program   string `json:"program"`
 	Cols      uint16 `json:"cols"`
 	Rows      uint16 `json:"rows"`
 	BaseSeq   uint64 `json:"base_seq"`
@@ -233,6 +235,7 @@ type SessionUpdated struct {
 	Rows         *uint16 `json:"rows,omitempty"`
 	HeadSeq      *uint64 `json:"head_seq,omitempty"`
 	Attention    *bool   `json:"attention,omitempty"` // a pointer so false is sent (ADR-0052)
+	Program      *string `json:"program,omitempty"`   // shell / claude / codex / other (ADR-0054)
 }
 
 // SessionOrder is the full display order after a session.move; clients replace

@@ -374,10 +374,10 @@ button { font: inherit; color: inherit; }
   box-shadow: 0 0 0 2px var(--surface);
 }
 .ek-main { position: relative; min-width: 0; }
-/* 7 columns × 2 rows, equal widths, never scrolls horizontally at any width */
+/* 8 columns × 2 rows (the last holds the two menu keys, ADR-0054), equal widths, never scrolls horizontally at any width */
 .ek-keys {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   grid-template-rows: repeat(2, 40px);
   height: 80px;
   overflow: hidden;
@@ -720,3 +720,37 @@ button { font: inherit; color: inherit; }
   background: var(--accent); color: #fff; font: inherit; font-weight: 600;
 }
 .clip-close { flex: none; width: 36px; height: 36px; border: none; background: none; color: inherit; display: grid; place-items: center; }
+
+/* The menu keys (ADR-0054): icons in the key font's color; accent while their menu is open */
+.ek-menu-key { display: grid; place-items: center; }
+.ek-menu-key[aria-expanded='true'] { color: var(--accent); }
+
+/* Frequent-input and combo-key menus (ADR-0054 §4): a popover just above the extra keys */
+.km-backdrop { position: fixed; inset: 0; z-index: 20; }
+.km-menu {
+  position: fixed; z-index: 21; left: 8px; right: 8px;
+  max-height: 50vh; overflow-y: auto;
+  padding: 6px; border-radius: 10px;
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+.km-row { display: flex; align-items: stretch; border-radius: 8px; }
+.km-row + .km-row { margin-top: 2px; }
+.km-send {
+  flex: 1; min-width: 0; min-height: 40px; padding: 0 10px; text-align: left;
+  border: none; background: none; color: inherit; font: inherit; font-size: 14px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.km-insert { flex: none; width: 44px; border: none; background: none; color: var(--muted); display: grid; place-items: center; }
+.km-send:active, .km-insert:active, .km-tile:active { background: var(--hover); }
+.km-empty { padding: 10px; color: var(--muted); font-size: 13px; }
+.km-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.km-tile {
+  min-width: 0; min-height: 52px; padding: 4px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: inherit; font: inherit;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+}
+.km-key { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
+.km-label { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }

@@ -18,6 +18,9 @@ import { asUserInput, inUserInputEvent } from '../term/userinput'
 import { applyTheme, readFontSize, readTheme, validFontSize, writeFontSize, writeTheme, type Theme } from '../ui/prefs'
 import { debounce, installAppFit, isCoarsePointer, watchCoarse } from '../ui/viewport'
 import { readForm, type Form } from './form'
+import { COMBO_GAP_MS, combosFor, type Combo } from '../keys/combos'
+import type { KeyMenu } from '../keys/extrakeys'
+import type { Program } from '../protocol/messages'
 import type { ClipOffer, LinkPop } from './linkpop'
 import { dragHasFiles, pastedFiles, sessionGoneError, uploadError, uploadFile, type Upload } from './uploads'
 
@@ -83,6 +86,10 @@ export interface AppState {
   linkPop: LinkPop | null
   /** OSC 52 text the browser wouldn't copy without a tap: the Copy bar (ADR-0053 §4). */
   clip: ClipOffer | null
+  /** The open menu of the last key column (ADR-0054 §4). */
+  keyMenu: KeyMenu | null
+  /** Frequent input for the program in front; null while the first list loads. */
+  frequent: string[] | null
 }
 
 const TOAST_MS = 3000
@@ -206,6 +213,8 @@ export class AppController {
       dropping: false,
       linkPop: null,
       clip: null,
+      keyMenu: null,
+      frequent: null,
     }
     this.conn = new Connection({
       url: opts.url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
@@ -264,6 +273,86 @@ export class AppController {
     // The session behind an open close-confirm is gone (closed elsewhere, agent restart): close it too, sids are reused (ADR-0038 §4)
     const closing = this.state.closing !== null && this.store.has(this.state.closing) ? this.state.closing : null
     this.set({ sessions: this.store.list(), active: this.store.active, page: this.pages.page(this.store.active), closing })
+  }
+
+  // ---------- frequent input and combo keys (ADR-0054) ----------
+
+  /** The last list per program, in memory only, shown while a fresh one loads. */
+  private readonly frequentCache = new Map<Program, string[]>()
+
+  /** What runs in front of the current session, as the agent last said. */
+  program(): Program {
+    const sid = this.store.active
+    return (sid === null ? undefined : this.store.info(sid)?.program) ?? 'shell'
+  }
+
+  combos(): Combo[] {
+    return combosFor(this.program())
+  }
+
+  /** A key of the last column: open its menu, or close it if it's the one open. */
+  openMenu(menu: KeyMenu): void {
+    if (this.state.keyMenu === menu) return this.closeMenu()
+    this.set({ keyMenu: menu })
+    if (menu !== 'frequent') return
+    const program = this.program()
+    this.set({ frequent: this.frequentCache.get(program) ?? null })
+    fetch(`/api/frequent?program=${encodeURIComponent(program)}`, { credentials: 'same-origin' })
+      .then((r) => (r.ok ? (r.json() as Promise<{ items?: unknown }>) : { items: [] }))
+      .catch(() => ({ items: [] }))
+      .then((b) => {
+        const items = Array.isArray(b.items) ? b.items.filter((x): x is string => typeof x === 'string') : []
+        this.frequentCache.set(program, items)
+        if (this.state.keyMenu === 'frequent' && this.program() === program) this.set({ frequent: items })
+      })
+  }
+
+  readonly closeMenu = (): void => {
+    if (this.state.keyMenu) this.set({ keyMenu: null })
+  }
+
+  /** A frequent-input row: send it and Enter, the way the text page sends (ADR-0027). */
+  sendFrequent(i: number): void {
+    const text = this.state.frequent?.[i]
+    this.closeMenu()
+    if (text !== undefined) this.sendText({ kind: 'submit', text })
+  }
+
+  /** A row's ✎: paste it without Enter. */
+  insertFrequent(i: number): void {
+    const text = this.state.frequent?.[i]
+    this.closeMenu()
+    const t = this.activeTerm()
+    if (text === undefined || !t) return
+    this.keyBypass = true
+    try {
+      t.term.paste(text)
+    } finally {
+      this.keyBypass = false
+    }
+  }
+
+  /** A combo tile: its writes on the extra keys' path, past sticky modifiers; Esc Esc spaced out. */
+  pickCombo(id: string): void {
+    const combo = this.combos().find((c) => c.id === id)
+    this.closeMenu()
+    const sid = this.store.active
+    if (!combo || sid === null) return
+    combo.send.forEach((bytes, i) => {
+      const write = () => {
+        if (this.store.active !== sid) return // switched away meanwhile
+        const t = this.activeTerm()
+        if (!t) return
+        this.keyBypass = true
+        try {
+          t.term.input(bytes, true)
+        } finally {
+          this.keyBypass = false
+        }
+      }
+      if (i === 0) write()
+      else setTimeout(write, i * COMBO_GAP_MS)
+    })
   }
 
   // ---------- links and the clipboard (ADR-0053) ----------
@@ -549,6 +638,7 @@ export class AppController {
     const same = sid === this.store.active
     this.store.activate(sid, area)
     this.closeLinkPop()
+    this.closeMenu()
     this.attachIme()
     this.syncTextPage()
     if ((focus ?? this.refocus(typing)) && !(same && typing)) this.focusInput()
@@ -1244,6 +1334,8 @@ export class AppController {
       altScreen: () => this.activeTerm()?.altScreen() ?? false,
       /** The agent's "waiting for you" flag for a session (ADR-0052). */
       attention: (sid: number) => this.store.info(sid)?.attention === true,
+      /** What runs in front of the current session, per the agent (ADR-0054). */
+      program: () => this.program(),
       /** Recently received binary frames `{type, kind, sid, seq, flags, bytes, replay}`. */
       frames: () => this.conn.frames(),
       scrollLines: (n: number) => term()?.scrollLines(n),

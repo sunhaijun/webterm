@@ -79,7 +79,12 @@ type Session struct {
 	// signalSeen is the emulator's bell + notification count already turned
 	// into attention; fgSince is when a non-shell foreground group took over
 	// (zero at the prompt). attention is handed over; the others restart.
-	attention  bool
+	attention bool
+	// program is what runs in front (ADR-0054 §2), recomputed when the
+	// foreground group differs from progPgrp. Not handed over: progPgrp
+	// starts at 0, so the first poll after an upgrade sets it.
+	program    string
+	progPgrp   int
 	titleBusy  bool
 	signalSeen uint64
 	fgSince    time.Time
@@ -132,6 +137,7 @@ func (s *Session) Info() protocol.SessionInfo {
 		Status:       s.status,
 		ExitCode:     s.exitCode,
 		Attention:    s.attention,
+		Program:      s.programLocked(),
 		Cols:         s.cols,
 		Rows:         s.rows,
 		BaseSeq:      s.ring.BaseSeq(),
@@ -212,6 +218,18 @@ func (s *Session) Rename(name *string) {
 	}
 	s.mu.Unlock()
 	s.emit(msg)
+}
+
+// programLocked is the program in front; before the first poll it's the shell
+// for a running session.
+func (s *Session) programLocked() string {
+	switch {
+	case s.program != "":
+		return s.program
+	case s.status == protocol.StatusRunning:
+		return ProgramShell
+	}
+	return ProgramOther
 }
 
 // Seen clears attention (session.seen, ADR-0052 §2) and tells every
@@ -611,6 +629,7 @@ func (s *Session) waitLoop() {
 	s.status = protocol.StatusExited
 	s.exitCode = &code
 	head := s.ring.HeadSeq()
+	s.program = ProgramOther // nothing runs in an exited session
 	s.mu.Unlock()
 
 	s.inputQ.close() // stop accepting input
@@ -621,6 +640,7 @@ func (s *Session) waitLoop() {
 		Status:   strPtr(protocol.StatusExited),
 		ExitCode: &code,
 		HeadSeq:  &head,
+		Program:  strPtr(ProgramOther),
 	})
 	// Keep the ring and emulator: after a failed build the user must be able to
 	// scroll back to the error (AC-4.5), and switching back or reloading still

@@ -40,6 +40,9 @@ type Config struct {
 	// UploadRoot replaces <temp>/webterm-<uid> as the directory for files
 	// sent to sessions (ADR-0051).
 	UploadRoot string
+	// Home replaces the user's home directory as where GET /api/frequent finds
+	// the programs' history files (ADR-0054 §3). Tests set it.
+	Home string
 }
 
 // Agent stitches the store, auth, sessions and connection layer into one
@@ -113,6 +116,7 @@ func (a *Agent) routes() {
 	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeDevice))))
 	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeAll))))
 	a.mux.Handle("POST /api/uploads", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleUpload))))
+	a.mux.Handle("GET /api/frequent", a.requireAuth(http.HandlerFunc(a.handleFrequent)))
 
 	// Every other /api/* path authenticates first, then 404s (auth matrix:
 	// /api/* ✓). Without this they would fall through to the SPA fallback on
