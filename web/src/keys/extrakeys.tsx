@@ -1,7 +1,7 @@
 /**
  * Extra keys (AC-3.18 / AC-3.19, input.md): a fixed 80px slot with two pages, the key
  * page (Termux's default 14 keys) and the text page (a two-row textarea, with the paperclip
- * that sends files in a 44px column on its right, ADR-0051). A fixed 44px column on the
+ * that sends files floating over its bottom-right corner, ADR-0051). A fixed 44px column on the
  * left holds the sessions button (top, session count in a box) and ✎ (bottom) on compact,
  * only ✎ on wide. Both pages have the same height, so flipping never changes terminal
  * geometry.
@@ -42,7 +42,7 @@ export interface ExtraKeysProps {
   /** Returns false when the text wasn't sent (too large); the box keeps it. */
   onSend(send: TextSend): boolean
   register(els: TextPageEls | null): void
-  /** The paperclip right of the text box: open the file picker (called inside the click, ADR-0051). */
+  /** The paperclip in the text box's corner: open the file picker (called inside the click, ADR-0051). */
   onUpload(): void
   /** Files are uploading: the paperclip pulses. */
   uploading: boolean
@@ -186,7 +186,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
           <textarea ref={taRef} class="ek-text" data-testid="textinput" rows={2} aria-label="Text input" onKeyDown={onTextKey} />
           <button
             type="button"
-            class="ek-side-btn ek-upload"
+            class="ek-upload"
             data-testid="text-upload-file"
             data-busy={p.uploading ? 'true' : 'false'}
             aria-label="Send file"

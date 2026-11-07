@@ -94,7 +94,7 @@ Each session remembers two things ([ADR-0036](../20-architecture/adr/0036-text-p
 <textarea data-testid="textinput" rows="2" enterkeyhint="send"></textarea>
 ```
 
-To its right, in a 44px column like the left one, is the paperclip (`text-upload-file`, [Sending files](#sending-files-ac-323)). The column has a 1px divider on its left, like the left column's on its right.
+The paperclip (`text-upload-file`, [Sending files](#sending-files-ac-323)) floats over the box's bottom-right corner: no background and no column of its own, in `--muted`, so the box keeps its full width. Its touch target is 36px square, anchored to the corner of the slot; the icon sits 2px inside the box's border. Text that reaches that corner runs under the icon.
 
 - Two rows tall, a **box bordered on all four sides**: 6px inset from the extra-keys slot, 1px border, rounded corners, accent-colored border on focus. The whole box fits inside the 80px slot, so the viewport or on-screen keyboard never cuts off its bottom border. Overflow scrolls inside the box.
 - Font size ≥ 16px (so iOS doesn't zoom the page on focus).
@@ -249,7 +249,7 @@ User-input events: `keydown` `keypress` `beforeinput` `input` `paste` `compositi
 
 | Entry | Where | What happens |
 |---|---|---|
-| Paperclip `text-upload-file` | Text page, right of the text box (so on `compact`, and on `wide` with touch) | Opens the system file picker |
+| Paperclip `text-upload-file` | Text page, over the text box's bottom-right corner (so on `compact`, and on `wide` with touch) | Opens the system file picker |
 | Paperclip `upload-file` | `wide` tab bar, left of the connection dot | Same |
 | Paste | Into the terminal or the text box, when the clipboard holds files and its `text/plain` is empty | The files are sent; the event is stopped (capture phase), so xterm and the text box get nothing |
 | Drop | Anywhere on the page, when the drag carries files | The files are sent; the page never navigates to the dropped file. While files are dragged over the page, `.stage` has `data-drop="true"` (an accent outline) |
