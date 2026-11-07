@@ -10,6 +10,7 @@ import { TextPages, type KeyPage, type TextPageEls, type TextSend } from '../key
 import { clearLocalData } from './localdata'
 import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, routeInput, type SessionView } from '../sessions/store'
+import { shouldSendSeen } from '../sessions/attention'
 import { installDragWheel, installTapToggle } from '../term/gestures'
 import { themeFromCss, type TermHandle } from '../term/terminal'
 import { asUserInput, inUserInputEvent } from '../term/userinput'
@@ -317,8 +318,12 @@ export class AppController {
       if (document.visibilityState !== 'visible') return
       kick()
       this.claimSize() // back in front: this page is the one in use (ADR-0050 §5)
+      this.markSeen()
     }
-    const onFocus = () => this.claimSize()
+    const onFocus = () => {
+      this.claimSize()
+      this.markSeen()
+    }
     window.addEventListener('online', kick)
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onFocus)
@@ -465,7 +470,26 @@ export class AppController {
     this.attachIme()
     this.syncTextPage()
     if ((focus ?? this.refocus(typing)) && !(same && typing)) this.focusInput()
+    this.markSeen()
     this.refresh()
+  }
+
+  /**
+   * Clears the current session's "waiting for you" if the user can see it: the page is
+   * visible and focused (ADR-0052 §2). Called on switching, on becoming visible or focused,
+   * after welcome, and when the agent sets attention on the current session.
+   */
+  private markSeen(): void {
+    const sid = this.store.active
+    if (sid === null) return
+    const seen = shouldSendSeen({
+      active: sid,
+      sid,
+      attention: this.store.info(sid)?.attention === true,
+      visible: document.visibilityState === 'visible',
+      focused: this.hasFocus(),
+    })
+    if (seen) this.conn.send({ t: T.sessionSeen, sid })
   }
 
   step(delta: number): void {
@@ -1026,6 +1050,7 @@ export class AppController {
       case T.sessionUpdated: {
         const { t: _t, sid, head_seq: _head, ...patch } = msg
         this.store.patch(sid, patch)
+        if (msg.attention === true && sid === this.store.active) this.markSeen()
         break
       }
       case T.error:
@@ -1075,6 +1100,7 @@ export class AppController {
     const t = this.activeTerm()?.term
     const info = this.store.info(active)
     if (t && info && (t.cols !== info.cols || t.rows !== info.rows) && this.hasFocus()) this.sendResizeNow()
+    this.markSeen()
   }
 
   private closeLocal(sid: number): void {
@@ -1134,7 +1160,8 @@ export class AppController {
       form: () => this.state.form,
       fontSize: () => term()?.options.fontSize ?? 0,
       altScreen: () => this.activeTerm()?.altScreen() ?? false,
-      unread: (sid: number) => this.conn.isUnread(sid),
+      /** The agent's "waiting for you" flag for a session (ADR-0052). */
+      attention: (sid: number) => this.store.info(sid)?.attention === true,
       /** Recently received binary frames `{type, kind, sid, seq, flags, bytes, replay}`. */
       frames: () => this.conn.frames(),
       scrollLines: (n: number) => term()?.scrollLines(n),

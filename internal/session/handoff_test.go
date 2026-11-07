@@ -508,3 +508,53 @@ func TestHandoffFromSchema1RebuildsTerminalFromRing(t *testing.T) {
 	}
 	waitScreen(t, fresh, "NEW-42")
 }
+
+// IT-handoff-1 (ADR-0052 §5): attention survives a handoff, including a bell
+// the poll hadn't turned into attention yet (folded in at export).
+func TestHandoffKeepsAttention(t *testing.T) {
+	c := cfg()
+	c.CWDPollInterval = time.Hour // the poll never runs: the bell stays pending
+	m := session.NewManager(c)
+	s := create(t, m)
+	conn := newConn(t, m, "tab")
+	s.Subscribe(conn, 0, 0, 0)
+	waitFor(t, "shell ready", func() bool { return s.HeadSeq() > 0 })
+	if err := conn.Send(s, `printf '\a'; echo rang`+"\r"); err != nil {
+		t.Fatal(err)
+	}
+	// "rang" shows twice: once in the echoed command line, once as output.
+	waitFor(t, "bell output arrived", func() bool { return strings.Count(render(conn, 80, 24), "rang") >= 2 })
+	if s.Info().Attention {
+		t.Fatal("attention set without a poll")
+	}
+
+	conn.Detach()
+	s.Unsubscribe(conn)
+	if err := m.Freeze(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := m.Export("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.RemoveObserver(conn)
+
+	m2 := session.NewManager(c)
+	if err := m2.Restore(snap); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m2.Shutdown)
+	s2, ok := m2.Get(s.SID())
+	if !ok {
+		t.Fatal("session missing after handoff")
+	}
+	if !s2.Info().Attention {
+		t.Fatal("pending bell lost in the handoff")
+	}
+	if err := m2.Seen(s2.SID()); err != nil {
+		t.Fatal(err)
+	}
+	if s2.Info().Attention {
+		t.Fatal("Seen didn't clear attention after the handoff")
+	}
+}

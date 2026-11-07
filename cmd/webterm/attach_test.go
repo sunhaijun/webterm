@@ -555,3 +555,56 @@ func TestAttachOldAgent(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 }
+
+// attnWatch observes a manager and records the attention values announced
+// for one session.
+type attnWatch struct {
+	sid uint16
+	mu  sync.Mutex
+	got []bool
+}
+
+func (w *attnWatch) ClientID() string                { return "watch" }
+func (w *attnWatch) Push(uint16, uint64, []byte)     {}
+func (w *attnWatch) Snapshot(uint16, uint64, []byte) {}
+func (w *attnWatch) Event(msg any) {
+	if u, ok := msg.(*protocol.SessionUpdated); ok && u.SID == w.sid && u.Attention != nil {
+		w.mu.Lock()
+		w.got = append(w.got, *u.Attention)
+		w.mu.Unlock()
+	}
+}
+
+func (w *attnWatch) values() []bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]bool(nil), w.got...)
+}
+
+// IT-attach-8 (ADR-0052 §2): being attached is looking. A session waiting for
+// you before the attach is cleared when you attach; a bell while attached is
+// cleared as soon as it's announced.
+func TestITAttach8_AttachedIsSeen(t *testing.T) {
+	g := newAttachAgent(t)
+	s := g.create("attn")
+	w := &attnWatch{sid: s.SID()}
+	g.m.AddObserver(w)
+	t.Cleanup(func() { g.m.RemoveObserver(w) })
+
+	if err := s.Write("other", 0, []byte(`printf '\a'`+"\r")); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "waiting before the attach", func() bool { return s.Info().Attention })
+
+	p := g.attach(100, 30, "", "attn")
+	waitUntil(t, "attaching clears it", func() bool { return !s.Info().Attention })
+
+	p.typeIn(`printf '\a'; echo rang-2` + "\r")
+	waitUntil(t, "set and cleared while attached", func() bool {
+		v := w.values()
+		return len(v) >= 4 && v[2] && !v[3]
+	})
+	if s.Info().Attention {
+		t.Fatal("attention left set on the attached session")
+	}
+}

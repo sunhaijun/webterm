@@ -171,7 +171,7 @@ export function TopBar(p: TopBarProps) {
             data-testid={`tab-${s.sid}`}
             data-sid={s.sid}
             data-exited={s.status === 'exited' ? 'true' : 'false'}
-            data-unread={s.unread ? 'true' : 'false'}
+            data-attention={s.attention ? 'true' : 'false'}
             aria-selected={s.active ? 'true' : 'false'}
             aria-current={s.active ? 'true' : undefined}
             title={s.cwd ? `${s.name}\n${s.cwd}` : s.name}
@@ -259,7 +259,7 @@ export function TopBar(p: TopBarProps) {
             ) : (
               <span class="tab-name">{s.name}</span>
             )}
-            {s.unread && <span class="unread-dot" data-testid={`tab-${s.sid}-unread`} aria-label="New output" />}
+            {s.attention && <span class="attention-dot" data-testid={`tab-${s.sid}-attention`} aria-label="Waiting for you" />}
             <button
               class="tab-close"
               data-testid={`tab-${s.sid}-close`}

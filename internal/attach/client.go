@@ -442,10 +442,19 @@ func (c *client) create(ctx context.Context) error {
 }
 
 func (c *client) noteSession(s protocol.SessionInfo) {
+	if s.Attention {
+		c.seen() // attached is looking (ADR-0052 §2)
+	}
 	c.sessCols, c.sessRows = s.Cols, s.Rows
 	if s.Status == protocol.StatusExited {
 		c.exited, c.exitCode, c.exitHead = true, s.ExitCode, s.HeadSeq
 	}
+}
+
+// seen clears the attached session's attention: being attached is looking at
+// it (ADR-0052 §2).
+func (c *client) seen() {
+	c.send(&protocol.SessionSeen{SID: c.sid})
 }
 
 // subscribe asks for a snapshot (never incremental: replayed bytes would make
@@ -540,6 +549,9 @@ func (c *client) handle(f inFrame) (done bool, err error) {
 		}
 		if m.Cols != nil && m.Rows != nil {
 			c.sessCols, c.sessRows = *m.Cols, *m.Rows
+		}
+		if m.Attention != nil && *m.Attention {
+			c.seen()
 		}
 		if m.Status != nil && *m.Status == protocol.StatusExited {
 			c.exited, c.exitCode = true, m.ExitCode

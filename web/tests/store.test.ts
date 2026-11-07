@@ -1,5 +1,5 @@
 /**
- * Session store (session-ux.md): list and indices, unread, subscriptions, neighbors, the
+ * Session store (session-ux.md): list and indices, waiting for you, subscriptions, neighbors, the
  * process-exited line, and input routing in exited sessions.
  */
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -48,9 +48,6 @@ class FakeConn implements ConnLike {
   }
   headSeqOf(sid: number) {
     return this.head.get(sid) ?? 0
-  }
-  isUnread(sid: number) {
-    return this.headSeqOf(sid) > this.outSeqOf(sid)
   }
 }
 
@@ -102,17 +99,22 @@ describe('list', () => {
     expect(store.step(1), 'no active session: start from the beginning').toBe(3)
   })
 
-  it('marks unread when not active and head > out; the active session is never unread', () => {
+  it('shows attention from the agent on other sessions; output alone shows nothing; the active session never shows it (ADR-0052)', () => {
     const { store, conn, area } = make()
     store.upsert(info(1))
     store.upsert(info(2))
-    conn.head.set(1, 10)
-    conn.head.set(2, 10)
+    store.upsert(info(3))
+    conn.head.set(3, 10) // output the page hasn't received: no longer marks anything
     store.activate(1, area)
+    store.patch(1, { attention: true })
+    store.patch(2, { attention: true })
     const v = store.list()
-    expect(v.find((s) => s.sid === 1)!.unread).toBe(false)
-    expect(v.find((s) => s.sid === 2)!.unread).toBe(true)
+    expect(v.find((s) => s.sid === 1)!.attention, 'active session').toBe(false)
+    expect(v.find((s) => s.sid === 2)!.attention).toBe(true)
+    expect(v.find((s) => s.sid === 3)!.attention, 'output alone').toBe(false)
     expect(v.find((s) => s.sid === 1)!.active).toBe(true)
+    store.patch(2, { attention: false })
+    expect(store.list().find((s) => s.sid === 2)!.attention).toBe(false)
   })
 
   it('upsert merges into an existing session without recreating its terminal', () => {

@@ -178,8 +178,9 @@ func (c *Conn) flushPendingAcks() {
 //
 // This is required: output from an unsubscribed session often comes in short
 // bursts. If a burst ends within the throttle window and nothing follows, the
-// client's head_seq would stay before the burst forever and the unread dot
-// would never light up (AC-4.3).
+// client's head_seq would stay before the burst forever, its catchup_to would
+// fall short, and query replies in the tail of the next catch-up would reach
+// the PTY (protocol §5.3, §6.2).
 func (c *Conn) flushPendingHeads() {
 	c.mu.Lock()
 	if len(c.pendHead) == 0 {

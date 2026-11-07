@@ -20,7 +20,7 @@ test.afterEach(() => agent.stop())
 const geo = async (p: Page) => ({ rect: await rectOf(p, '[data-testid=terminal]'), size: await hooks.size(p) })
 const closeVisible = (p: Page, sid: number) =>
   p.getByTestId(`tab-${sid}-close`).evaluate((el) => getComputedStyle(el).visibility === 'visible')
-/** tabName returns the name shown on a tab, without the number, pin and unread dot. */
+/** tabName returns the name shown on a tab, without the number, pin and waiting-for-you dot. */
 const tabName = (p: Page, sid: number) => p.getByTestId(`tab-${sid}`).locator('.tab-name').textContent()
 /** plusGap returns the gap from the tab strip's right edge to the left edge of `+` (ADR-0035 §2). */
 const plusGap = async (p: Page) => {
@@ -189,7 +189,7 @@ test.describe('1440×900 mouse', () => {
     await expect(page.getByTestId(`tab-${a}`).locator('.pin-mark svg'), 'a pin appears before the name (SVG, ADR-0042)').toBeVisible()
 
     // A produces continuous output; switch to another session. A's frames keep arriving (outSeq
-    // grows), so there is no unread.
+    // grows), and output alone never marks a session (ADR-0052).
     await switchTo(page, a)
     await submit(page, `${EMIT} 60 50`)
     await waitText(page, 'line 00003')
@@ -201,26 +201,26 @@ test.describe('1440×900 mouse', () => {
     expect(fs.length, "keep receiving: A's OUTPUT still arrives after switching away").toBeGreaterThan(3)
     const seqs = fs.map((f) => f.seq)
     expect(seqs[seqs.length - 1]!, "A's outSeq grows").toBeGreaterThan(seqs[0]!)
-    expect(await hooks.unread(page, a)).toBe(false)
+    expect(await hooks.attention(page, a)).toBe(false)
   })
 
-  test("E2E-41 (6) unread: A produces output, switch to B -> A's tab has an accent-colored unread dot; it clears on return", async ({ page }) => {
+  test("E2E-41 (6) waiting for you: A rings the bell while B is current -> A's tab has an accent-colored dot; it clears on return", async ({ page }) => {
     await agent.open(page)
     const a = (await hooks.sid(page))!
     const b = await newSession(page)
     await switchTo(page, a)
-    await submit(page, `${EMIT} 80 50`)
-    await waitText(page, 'line 00003')
+    await submit(page, `sleep 2; printf '\\a'`)
     await switchTo(page, b)
-    await expect(page.getByTestId(`tab-${a}-unread`)).toBeVisible({ timeout: 20_000 })
-    await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'true')
-    // The unread dot uses the accent color (= current tab's text color), not red (ADR-0042 §1).
-    const dot = await page.getByTestId(`tab-${a}-unread`).evaluate((e) => getComputedStyle(e).backgroundColor)
+    await expect(page.getByTestId(`tab-${a}-attention`)).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-attention', 'true')
+    // The dot uses the accent color (= current tab's text color), not red (ADR-0042 §1).
+    const dot = await page.getByTestId(`tab-${a}-attention`).evaluate((e) => getComputedStyle(e).backgroundColor)
     const accent = await page.getByTestId(`tab-${b}`).evaluate((e) => getComputedStyle(e).color)
     expect(dot).toBe(accent)
     await switchTo(page, a)
-    await expect(page.getByTestId(`tab-${a}-unread`)).toHaveCount(0)
-    await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'false')
+    await expect(page.getByTestId(`tab-${a}-attention`)).toHaveCount(0)
+    await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-attention', 'false')
+    await waitFor(async () => !(await hooks.attention(page, a)), 'the agent cleared it (session.seen)')
   })
 
   test('E2E-41 (8) equal widths and scrolling: equal split capped at 240px; in a narrow window tabs stop at 120px and scroll horizontally, also with the wheel; widening restores', async ({ page }) => {

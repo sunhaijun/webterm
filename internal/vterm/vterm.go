@@ -33,6 +33,11 @@ type Terminal struct {
 	// a title (ADR-0043 §2). Incremented only under Write, so it shares the
 	// emulator's lock.
 	titleWrites uint64
+	// signals counts bells and desktop notifications (BEL, OSC 9 / 777 / 99;
+	// not OSC 9;4 progress or 9;9 working directory). The session turns a
+	// change into "waiting for you" (ADR-0052 §1). Like titleWrites, it only
+	// changes under Write.
+	signals uint64
 }
 
 // New returns a cols x rows emulator with HistoryLines of scrollback.
@@ -43,9 +48,23 @@ func New(cols, rows int) *Terminal {
 	// also stops the emulator from opening server files for f / t media.
 	e.SetKittyUploadAnswers(false)
 	t := &Terminal{t: e}
-	e.SetCallbacks(vt.Callbacks{Title: func(string) { t.titleWrites++ }})
+	t.setCallbacks()
 	return t
 }
+
+// setCallbacks installs the counters. The callbacks only count: they run
+// inside the emulator's parser, under the session lock.
+func (t *Terminal) setCallbacks() {
+	t.t.SetCallbacks(vt.Callbacks{
+		Title:  func(string) { t.titleWrites++ },
+		Bell:   func() { t.signals++ },
+		Notify: func(string, string) { t.signals++ },
+	})
+}
+
+// Signals returns how many bells and desktop notifications the output has had
+// since this emulator was created or imported.
+func (t *Terminal) Signals() uint64 { return t.signals }
 
 // Title returns the window title (as set by OSC 0 / 2, unsanitized) and how many
 // times it has been set. An imported emulator keeps the exported title, with
@@ -152,5 +171,6 @@ func Import(data []byte) (*Terminal, error) {
 	}
 	_ = t.t.TakeResponses()
 	t.titleWrites = 0 // a restored title was not set by the program
+	t.signals = 0     // and restoring rang no bells
 	return t, nil
 }

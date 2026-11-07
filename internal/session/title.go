@@ -50,6 +50,17 @@ func cleanTitle(raw string) string {
 	return b.String()
 }
 
+// busyTitle reports whether a title says the program is working: its first
+// rune is a spinner frame, braille U+2801–U+28FF or ◐ ◓ ◑ ◒ (ADR-0052 §1).
+// claude shows ◐ / ◑ while it works and ✳ when idle; codex's spinner is
+// braille. U+2800 is a blank cell, not a frame.
+func busyTitle(title string) bool {
+	for _, r := range title {
+		return (r >= 0x2801 && r <= 0x28FF) || r == '◐' || r == '◓' || r == '◑' || r == '◒'
+	}
+	return false
+}
+
 // pickTitle decides which title to use ("" = none, the name falls back to the
 // directory). fg is the current foreground process group, owner is the
 // title's owning group, and shell is the shell's pid (an interactive shell

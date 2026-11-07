@@ -52,3 +52,30 @@ func TestPickTitle(t *testing.T) {
 		}
 	}
 }
+
+// UT-attn-spinner (ADR-0052 §1): a title is busy when its first rune is a
+// spinner glyph, braille U+2801–U+28FF or ◐ ◓ ◑ ◒. claude shows ◐ / ◑ while it
+// works and ✳ when idle; codex's spinner is braille.
+func TestBusyTitle(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"◐ Claude Code", true},
+		{"◑ Fix login bug", true},
+		{"◒", true},
+		{"◓ x", true},
+		{"⠋ codex", true},
+		{"⣿ working", true},
+		{"✳ Claude Code", false},
+		{"⠀ blank braille", false}, // U+2800 is a blank, not a spinner frame
+		{"codex", false},
+		{"build ◐", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := busyTitle(c.in); got != c.want {
+			t.Errorf("busyTitle(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}

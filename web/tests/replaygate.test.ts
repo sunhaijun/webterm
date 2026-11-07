@@ -27,7 +27,6 @@ const fakeConn: ConnLike = {
   forget() {},
   outSeqOf: () => 0,
   headSeqOf: () => 0,
-  isUnread: () => false,
 }
 
 function makeStore() {

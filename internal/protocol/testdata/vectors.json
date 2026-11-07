@@ -182,6 +182,7 @@
             "cwd": "/home/user/github/webterm",
             "status": "running",
             "exit_code": null,
+            "attention": false,
             "cols": 80,
             "rows": 24,
             "base_seq": 221776,
@@ -220,6 +221,7 @@
             "cwd": "/home/user/github/webterm",
             "status": "running",
             "exit_code": null,
+            "attention": false,
             "cols": 80,
             "rows": 24,
             "base_seq": 221776,
@@ -310,6 +312,14 @@
       "note": "before null = move to the end"
     },
     {
+      "name": "session_seen",
+      "json": {
+        "t": "session.seen",
+        "sid": 3
+      },
+      "note": "The client that has session 3 in front of the user clears its attention (ADR-0052). No reply; the agent broadcasts session.updated{attention:false} if it was set"
+    },
+    {
       "name": "session_closed",
       "json": {
         "t": "session.closed",
@@ -334,6 +344,24 @@
         "cwd": "/srv/api"
       },
       "note": "cwd comes from /proc/<foreground process group>/cwd, polled once a second and sent only on change; name follows it when name_is_manual is false"
+    },
+    {
+      "name": "session_updated_attention",
+      "json": {
+        "t": "session.updated",
+        "sid": 2,
+        "attention": true
+      },
+      "note": "The program signalled it's your turn: title spinner → idle, a bell or notification, or a long command finished (ADR-0052)"
+    },
+    {
+      "name": "session_updated_attention_cleared",
+      "json": {
+        "t": "session.updated",
+        "sid": 2,
+        "attention": false
+      },
+      "note": "attention:false must survive encoding: false is a value, not an omitted field"
     },
     {
       "name": "session_order",

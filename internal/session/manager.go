@@ -64,6 +64,11 @@ type Config struct {
 	// CWDPollInterval is how often /proc/<foreground process group>/cwd is
 	// read; default 1s (ADR-0026 §6).
 	CWDPollInterval time.Duration
+
+	// LongCommand is how long a command must hold the foreground for its
+	// return to the shell to count as "waiting for you"; default 10s
+	// (ADR-0052 §1).
+	LongCommand time.Duration
 }
 
 // altScreenCompat is the built-in list that brings full-screen AI CLIs back to
@@ -165,6 +170,9 @@ func (c *Config) withDefaults() {
 	if c.CWDPollInterval <= 0 {
 		c.CWDPollInterval = time.Second
 	}
+	if c.LongCommand <= 0 {
+		c.LongCommand = 10 * time.Second
+	}
 }
 
 // Manager owns sid allocation, the session table, limits, and lifecycle.
@@ -236,9 +244,9 @@ func (m *Manager) InstanceID() string { return m.instanceID }
 //
 // Subscribing and observing are separate. Subscribing (Session.Subscribe)
 // controls OUTPUT / SNAPSHOT frames; observing controls control messages.
-// Unsubscribed connections still need session.updated, since unread state is
-// derived from its head_seq; sending it only to subscribers would make unread
-// impossible to compute.
+// Unsubscribed connections still need session.updated: names, directories,
+// attention (ADR-0052), and head_seq for the replay gate's catchup_to
+// (protocol §5.3).
 func (m *Manager) AddObserver(sub Subscriber) {
 	m.mu.Lock()
 	m.observers[sub] = struct{}{}
@@ -645,6 +653,20 @@ func (m *Manager) Detach(sub Subscriber) {
 
 // Rename renames a session (protocol §4.1 session.rename); see handoffMu for
 // why it goes through the manager.
+// Seen clears a session's attention (session.seen, ADR-0052 §2). Like Rename,
+// it waits for a handoff in progress, so the cleared flag isn't lost with the
+// old process.
+func (m *Manager) Seen(sid uint16) error {
+	m.handoffMu.RLock()
+	defer m.handoffMu.RUnlock()
+	s, ok := m.Get(sid)
+	if !ok {
+		return ErrUnknownSession
+	}
+	s.Seen()
+	return nil
+}
+
 func (m *Manager) Rename(sid uint16, name *string) error {
 	m.handoffMu.RLock()
 	defer m.handoffMu.RUnlock()

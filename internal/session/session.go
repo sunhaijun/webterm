@@ -71,9 +71,18 @@ type Session struct {
 	// it was last written, and titleSeen is the write count seen by the last
 	// poll. title and titlePgrp are handed over; titleSeen restarts with the
 	// imported emulator.
-	title      string
-	titlePgrp  int
-	titleSeen  uint64
+	title     string
+	titlePgrp int
+	titleSeen uint64
+	// "Waiting for you" (ADR-0052). attention is the flag; titleBusy is
+	// whether the title in use started with a spinner at the last poll;
+	// signalSeen is the emulator's bell + notification count already turned
+	// into attention; fgSince is when a non-shell foreground group took over
+	// (zero at the prompt). attention is handed over; the others restart.
+	attention  bool
+	titleBusy  bool
+	signalSeen uint64
+	fgSince    time.Time
 	cwd        string
 	status     string
 	exitCode   *int
@@ -96,6 +105,12 @@ type Session struct {
 	readDone  chan struct{} // closed when readLoop exits (EOF / EIO)
 	closeOnce sync.Once
 
+	// attnMu orders attention changes with their session.updated: Seen and the
+	// poll each change the flag and emit under it, so clients receive true /
+	// false in the order the flag took them. Taken before mu, never while
+	// holding it.
+	attnMu sync.Mutex
+
 	// Hot-upgrade freeze (ADR-0016); see freeze.go.
 	fz         freezer
 	readAlive  atomic.Bool
@@ -116,6 +131,7 @@ func (s *Session) Info() protocol.SessionInfo {
 		CWD:          s.cwd,
 		Status:       s.status,
 		ExitCode:     s.exitCode,
+		Attention:    s.attention,
 		Cols:         s.cols,
 		Rows:         s.rows,
 		BaseSeq:      s.ring.BaseSeq(),
@@ -196,6 +212,34 @@ func (s *Session) Rename(name *string) {
 	}
 	s.mu.Unlock()
 	s.emit(msg)
+}
+
+// Seen clears attention (session.seen, ADR-0052 §2) and tells every
+// connection, if it was set.
+func (s *Session) Seen() {
+	s.attnMu.Lock()
+	defer s.attnMu.Unlock()
+	s.mu.Lock()
+	was := s.attention
+	s.attention = false
+	s.mu.Unlock()
+	if was {
+		s.emit(&protocol.SessionUpdated{SID: s.sid, Attention: boolPtr(false)})
+	}
+}
+
+// setAttention sets attention and tells every connection, unless it was
+// already set.
+func (s *Session) setAttention() {
+	s.attnMu.Lock()
+	defer s.attnMu.Unlock()
+	s.mu.Lock()
+	was := s.attention
+	s.attention = true
+	s.mu.Unlock()
+	if !was {
+		s.emit(&protocol.SessionUpdated{SID: s.sid, Attention: boolPtr(true)})
+	}
 }
 
 func validSize(cols, rows uint16) bool {
@@ -446,8 +490,9 @@ func (s *Session) consume(chunk []byte) {
 	}
 	s.mu.Unlock()
 
-	// Unsubscribed connections derive unread state from head_seq. The
-	// connection layer throttles this to 1s and drops it for subscribers.
+	// Unsubscribed connections keep their head_seq (the replay gate's
+	// catchup_to, protocol §5.3) current with this. The connection layer
+	// throttles it to 1s and drops it for subscribers.
 	head := seq + uint64(len(data))
 	s.emit(&protocol.SessionUpdated{SID: s.sid, HeadSeq: &head})
 }
@@ -585,7 +630,7 @@ func (s *Session) waitLoop() {
 // emit sends a control message to every connection, not just subscribers.
 //
 // Unsubscribed connections need session.updated too, for session names and
-// unread dots. Subscribing only controls OUTPUT / SNAPSHOT frames.
+// the waiting-for-you dot. Subscribing only controls OUTPUT / SNAPSHOT frames.
 func (s *Session) emit(msg any) {
 	if s.mgr != nil {
 		s.mgr.fanout(msg)
@@ -665,7 +710,10 @@ func (s *Session) export() (handoff.Session, error) {
 	h := handoff.Session{
 		SID: s.sid, PtmxFD: -1, CreatedAt: s.createdAt,
 		Name: s.name, NameManual: s.nameManual, Title: s.title, TitlePgrp: s.titlePgrp,
-		CWD: s.cwd, Status: s.status, ExitCode: s.exitCode,
+		// A bell the poll hasn't seen yet would be lost with this process
+		// (ADR-0052 §5).
+		Attention: s.attention || (s.status == protocol.StatusRunning && s.term.Signals() != s.signalSeen),
+		CWD:       s.cwd, Status: s.status, ExitCode: s.exitCode,
 		Cols: s.cols, Rows: s.rows,
 		RingBase: base, RingData: data,
 		VTerm:    vt,
