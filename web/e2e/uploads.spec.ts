@@ -57,27 +57,30 @@ test.describe('phone', () => {
     const size = await hooks.size(page)
     const resizes = await hooks.resizes(page)
 
-    // (1) The paperclip sits right of the text box, inside the slot; the box keeps its border and gaps.
+    // (1) The paperclip floats over the text box's bottom-right corner; the box keeps its full width, border and gaps.
     await page.getByTestId('toggle-text').tap()
     const clip = page.getByTestId('text-upload-file')
     await expect(clip).toBeVisible()
     const geo = await page.evaluate(() => {
-      const r = (id: string) => document.querySelector(`[data-testid=${id}]`)!.getBoundingClientRect()
+      const r = (sel: string) => document.querySelector(sel)!.getBoundingClientRect().toJSON() as DOMRect
       const ta = document.querySelector('[data-testid=textinput]')!
       const cs = getComputedStyle(ta)
       return {
-        ta: r('textinput').toJSON(),
-        clip: r('text-upload-file').toJSON(),
-        slot: r('extrakeys').toJSON(),
+        ta: r('[data-testid=textinput]'),
+        icon: r('[data-testid=text-upload-file] svg'),
+        slot: r('[data-testid=extrakeys]'),
         widths: [cs.borderTopWidth, cs.borderRightWidth, cs.borderBottomWidth, cs.borderLeftWidth].map(parseFloat),
       }
     })
-    expect(geo.clip.left, 'paperclip right of the text box').toBeGreaterThanOrEqual(geo.ta.right)
-    expect(geo.clip.right).toBeLessThanOrEqual(geo.slot.right + 0.5)
-    expect(geo.clip.top).toBeGreaterThanOrEqual(geo.slot.top - 0.5)
-    expect(geo.clip.bottom).toBeLessThanOrEqual(geo.slot.bottom + 0.5)
+    expect(geo.icon.left, 'icon inside the box').toBeGreaterThan(geo.ta.left)
+    expect(geo.icon.top).toBeGreaterThan(geo.ta.top)
+    expect(geo.icon.right).toBeLessThan(geo.ta.right)
+    expect(geo.icon.bottom).toBeLessThan(geo.ta.bottom)
+    expect(geo.ta.right - geo.icon.right, 'in the right edge').toBeLessThanOrEqual(4)
+    expect(geo.ta.bottom - geo.icon.bottom, 'at the bottom edge').toBeLessThanOrEqual(4)
+    expect(geo.slot.right - geo.ta.right, 'no column beside the box: only the 6px gap').toBeCloseTo(6, 0)
     for (const w of geo.widths) expect(w, 'text box border on all four sides').toBeGreaterThanOrEqual(1)
-    for (const g of [geo.ta.top - geo.slot.top, geo.clip.left - geo.ta.right, geo.slot.bottom - geo.ta.bottom, geo.ta.left - geo.slot.left]) {
+    for (const g of [geo.ta.top - geo.slot.top, geo.slot.right - geo.ta.right, geo.slot.bottom - geo.ta.bottom, geo.ta.left - geo.slot.left]) {
       expect(g, 'text box inside the slot with a gap on every side').toBeGreaterThan(0)
     }
     await page.waitForTimeout(300)
@@ -88,6 +91,7 @@ test.describe('phone', () => {
     await page.getByTestId('textinput').fill('DRAFT')
     await rec.clear()
     await pick(page, 'text-upload-file', [{ name: 'shot 1.png', mimeType: 'image/png', buffer: PNG }], true)
+    await expect(page.getByTestId('textinput'), 'tapping the paperclip keeps focus in the box').toBeFocused()
     const [path] = await waitPasted(rec, 1)
     expect((await rec.input()).join(''), 'exactly one bracketed path, nothing else (no Enter)').toBe(`\x1b[200~${path}\x1b[201~`)
     expect(path!.startsWith(agent.uploadDir() + '/'), path).toBe(true)

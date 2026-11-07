@@ -1,6 +1,6 @@
 # ADR-0051 Send files to a session
 
-Status: Accepted (2026-11-06). Adds `POST /api/uploads` to the [HTTP API](../../30-protocol/http-api.md#uploads) and amends invariant 3: files the user sends go to the system temp directory and are deleted after a day. The WebSocket protocol is unchanged.
+Status: Accepted (2026-11-06). Adds `POST /api/uploads` to the [HTTP API](../../30-protocol/http-api.md#uploads) and amends invariant 3: files the user sends go to the system temp directory and are deleted after a day. The WebSocket protocol is unchanged. Revised 2026-11-07: the text page's paperclip moved from a column of its own into the text box's bottom-right corner, so it takes no width (§2).
 
 ## Context
 
@@ -37,7 +37,7 @@ The path doesn't go into the text page's draft. A path inside a sentence stays p
 | Paste a clipboard that holds files and no text | text box | text box, terminal | terminal (`Ctrl+Shift+V` / `Cmd+V`) |
 | Drop files anywhere on the page | — | yes | yes |
 
-- **The paperclip button** sits on the text page, right of the text box, in a 44px column like the left one ([layout.md](../../40-frontend/layout.md#geometry)), and on the `wide` tab bar, left of the connection dot. It is a line icon in the same style as the others ([ADR-0037](0037-settings-theme-and-font-size.md) §3). It is 22×22 with a 2px stroke on the text page, like ✎, and 14×14 with a 1.75px stroke on the tab bar, like `+` and ⚙. It is not a `+`, because `+` on the tab bar already means New session. The keys page doesn't change: its 14 keys stay as they are.
+- **The paperclip button** sits on the text page in the text box's bottom-right corner, over the box: no background, no column of its own, in `--muted`, so the box keeps its full width ([layout.md](../../40-frontend/layout.md#geometry)). Text that reaches that corner runs under it. On the `wide` tab bar it sits left of the connection dot. It is a line icon in the same style as the others ([ADR-0037](0037-settings-theme-and-font-size.md) §3). It is 22×22 with a 2px stroke on the text page, like ✎, and 14×14 with a 1.75px stroke on the tab bar, like `+` and ⚙. It is not a `+`, because `+` on the tab bar already means New session. The keys page doesn't change: its 14 keys stay as they are.
 - **One file input** (`<input type="file" multiple>`, no `accept` filter) serves both buttons. Clicking a button opens it from inside the click, which iOS requires.
 - **Paste**: a capture-phase listener over the terminal and the text box. A clipboard with files and an empty `text/plain` is sent as files; the event is stopped so xterm doesn't also paste nothing. Anything with text is an ordinary paste, as before. That includes "Copy image" from a web page that also put text on the clipboard.
 - **Drop**: `dragover` and `drop` on the window, only when the drag carries files. Without this a file dropped on the page makes the browser open the file in place of webterm. While files are dragged over the page, the terminal area gets an accent outline.
@@ -85,13 +85,14 @@ It isn't produced inside a DOM input event, though: the upload finishes later. I
 - **A persistent directory** (`~/webterm-uploads`, the data directory). These are attachments for a conversation, not files to keep. Copying a file somewhere permanent is one `cp` away, and a permanent directory needs its own cleanup policy or grows forever.
 - **The agent types the path into the PTY itself** (`POST /api/sessions/:sid/paste`). It would bypass the client's input accounting (resend, `inputStats`, the size claim), and the agent would have to know whether bracketed paste is on.
 - **The path in the text page's draft.** It reaches the program as part of a sentence, which neither claude nor codex turns into an attachment (§Context).
+- **A column of its own beside the text box** (the first version). It took 44px from a two-row box whether or not you ever sent a file.
 - **Resize images in the browser.** The model sees a downscaled image anyway, but it is extra code for a problem not yet seen. It stays the fallback (§2).
 - **Android's share sheet** (Web Share Target). It is useful, but Android-only and needs service-worker code of its own. It's a separate step.
 
 ## Consequences
 
 - On any device, a screenshot or photo reaches claude or codex as an attachment, in the session you pick it from. The phone can feed a session you drive from a laptop, including over `webterm attach` ([ADR-0050](0050-ssh-attach.md)).
-- The text page and the `wide` tab bar each gain one button. The keys page is unchanged.
+- The `wide` tab bar gains one button, and the text page one inside its text box, which keeps its width. The keys page is unchanged.
 - A new HTTP route with a non-JSON body. The WebSocket protocol and the handoff snapshot don't change.
 - Uploaded files can sit on disk for up to a day, readable only by the agent's user. On a disk-backed `/tmp` that is the one exception to "only devices and auth data on disk".
 - Tests: UT-upload-name, UT-upload-dir, UT-upload-sweep and IT-upload-1 on the agent; UT-upload-1..3 in the frontend; E2E-48 for the picker, paste and drop.

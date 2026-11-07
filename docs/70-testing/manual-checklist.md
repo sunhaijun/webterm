@@ -112,6 +112,7 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] A PDF or a log file → its path at the prompt; asking claude about it works
 - [ ] Inside tmux the same file still becomes `[Image #1]`
 - [ ] On a slow connection the paperclip pulses until the path appears
+- [ ] Write a long passage on the text page: the text running under the paperclip in the box's corner stays readable, and tapping the paperclip still opens the picker rather than moving the caret
 - [ ] `ls -la /tmp/webterm-$(id -u)/uploads/` → files `0600`, directory `0700`; a day later they're gone
 
 ## Terminal compatibility (every time rendering changes)

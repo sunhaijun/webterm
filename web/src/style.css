@@ -408,9 +408,20 @@ button { font: inherit; color: inherit; }
   touch-action: pan-y;
 }
 .ek-text:focus { border-color: var(--accent); }
-/* The text page's row: the text box, then the paperclip in a 44px column mirroring the left one (ADR-0051) */
-.ek-textrow { display: grid; grid-template-columns: minmax(0, 1fr) 44px; height: 80px; }
-.ek-upload { height: 80px; border-left: 1px solid var(--line); color: var(--fg); }
+/* The text page: the text box at full width, the paperclip floating over its bottom-right corner
+   (ADR-0051 §2). No background, no column: text that reaches the corner runs under the icon. The
+   36px touch target is anchored to the slot's corner; the icon sits 2px inside the box's border
+   (6px gap + 1px border + 2px) */
+/* flow-root: without it the text box's 6px top margin collapses through the row, pushing the row
+   (and the paperclip anchored to its corner) 6px below the slot */
+.ek-textrow { display: flow-root; position: relative; height: 80px; }
+.ek-upload {
+  position: absolute; right: 0; bottom: 0; width: 36px; height: 36px;
+  display: flex; align-items: flex-end; justify-content: flex-end;
+  padding: 0 9px 9px 0; border: 0; background: transparent;
+  color: var(--muted); cursor: pointer; touch-action: manipulation;
+}
+.ek-upload:active { color: var(--fg); }
 .extrakeys[data-page='keys'] .ek-textrow { display: none; }
 .extrakeys[data-page='text'] .ek-keys { display: none; }
 
