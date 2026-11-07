@@ -35,7 +35,7 @@ Content-Type: image/png            (informational; not used)
 | Body over 20 MiB | `413 too_large`; nothing is kept |
 | The upload directory isn't usable (not a directory, a symlink, another owner, open to group or others), or the write failed | `500 internal`; the reason goes to the log |
 
-- `name` is optional and only shapes the saved name: `<stem>-<6 hex>.<ext>`. The stem keeps letters (any script), digits, `.`, `_` and `-`, turns every other run into one `-`, is trimmed of leading and trailing `-._`, cut to 60 bytes, and is `file` if nothing is left. The extension is the original one in lowercase when it is 1–8 letters or digits, otherwise sniffed from the content (`png` `jpg` `gif` `webp` `pdf` `txt`), otherwise none. The saved path never needs quoting in a shell.
+- `name` is optional and only shapes the saved name: `<stem>-<6 hex>.<ext>`. The stem keeps letters (any script), digits, `.` and `_`, turns every other run of characters (including `-` itself) into one `-`, is trimmed of leading and trailing `-._`, cut to 60 bytes, and is `file` if nothing is left. The extension is the original one in lowercase when it is 1–8 letters or digits, otherwise sniffed from the content (`png` `jpg` `gif` `webp` `pdf` `txt`), otherwise none. The saved path never needs quoting in a shell.
 - The body is streamed to disk, not buffered in memory.
 - There is no route to list, read or delete uploads.
 

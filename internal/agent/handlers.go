@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/sunhaijun/webterm/internal/auth"
 	"github.com/sunhaijun/webterm/internal/protocol"
+	"github.com/sunhaijun/webterm/internal/uploads"
 	"github.com/sunhaijun/webterm/internal/webui"
 	"github.com/sunhaijun/webterm/internal/wsconn"
 )
@@ -253,4 +254,35 @@ func (a *Agent) writeJSON(w http.ResponseWriter, code int, v any) {
 
 func (a *Agent) writeError(w http.ResponseWriter, status int, code, message string) {
 	a.writeJSON(w, status, map[string]string{"code": code, "message": message})
+}
+
+// ---------- Uploads ----------
+
+const tooLargeMessage = "File too large (max 20 MB)"
+
+// handleUpload saves a file sent to a session and returns its absolute path,
+// which the frontend pastes into the session (ADR-0051, http-api.md#uploads).
+// The body is the file itself and streams to disk. File names stay out of the
+// log.
+func (a *Agent) handleUpload(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength > uploads.MaxFileBytes {
+		a.writeError(w, http.StatusRequestEntityTooLarge, "too_large", tooLargeMessage)
+		return
+	}
+	path, size, err := a.uploads.Save(r.Body, r.URL.Query().Get("name"))
+	switch {
+	case err == nil:
+		a.log.Debug("upload saved", "bytes", size)
+		a.writeJSON(w, http.StatusCreated, map[string]any{"path": path, "size": size})
+	case errors.Is(err, uploads.ErrEmpty):
+		a.writeError(w, http.StatusBadRequest, "bad_request", "Empty file")
+	case errors.Is(err, uploads.ErrTooLarge):
+		a.writeError(w, http.StatusRequestEntityTooLarge, "too_large", tooLargeMessage)
+	case errors.Is(err, uploads.ErrRead):
+		a.log.Debug("upload interrupted", "err", err)
+		a.writeError(w, http.StatusBadRequest, "bad_request", "Upload interrupted")
+	default:
+		a.log.Warn("saving an upload failed", "err", err)
+		a.writeError(w, http.StatusInternalServerError, "internal", "Couldn't save the file")
+	}
 }

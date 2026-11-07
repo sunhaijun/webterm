@@ -64,7 +64,7 @@ It isn't produced inside a DOM input event, though: the upload finishes later. I
 - **Directory**: `<temp>/webterm-<uid>/uploads/`, where `<temp>` is `$TMPDIR`, or `/tmp` when it isn't set. This follows tmux's `/tmp/tmux-<uid>`. `webterm-<uid>` is created `0700`. Before every upload the agent checks that it is a real directory (not a symlink), owned by the agent's uid, and closed to group and others. If not, another local user got there first, and uploads are refused with `500 internal` and a log line. The agent never uses or repairs a directory it doesn't own.
 - **Files** are created with `O_EXCL | O_NOFOLLOW`, mode `0600`.
 - **Names**: `<stem>-<6 hex>.<ext>`.
-  - The stem is the original name without its extension. Letters (any script), digits, `.`, `_` and `-` are kept, and every other run of characters becomes one `-`. Leading and trailing `-` `.` `_` are trimmed, the stem is cut to 60 bytes, and an empty result becomes `file`.
+  - The stem is the original name without its extension. Letters (any script), digits, `.` and `_` are kept, and every other run of characters, `-` included, becomes one `-`. Leading and trailing `-` `.` `_` are trimmed, the stem is cut to 60 bytes, and an empty result becomes `file`.
   - The extension is the original one, lowercased, if it is 1–8 letters or digits. Otherwise it comes from the content (`png`, `jpg`, `gif`, `webp`, `pdf`, `txt`), or there is none.
   - So a path never needs quoting in a shell, and a screenshot without a name still gets the extension claude needs.
 - **Cleanup**:
