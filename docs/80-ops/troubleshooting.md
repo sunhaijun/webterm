@@ -128,14 +128,7 @@ Full-screen programs (vim, less, htop) use the alternate screen, which has no sc
 
 ### Tab name doesn't follow claude's title
 
-Session names prefer the title set by the foreground program ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)). Inside tmux, forward pane titles:
-
-```
-set -g set-titles on
-set -g set-titles-string '#T'
-```
-
-Titles set by the shell at the prompt are ignored on purpose; at the prompt the name is the directory.
+Session names prefer the title set by the foreground program ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)). Titles set by the shell at the prompt are ignored on purpose; at the prompt the name is the directory. A program that runs others inside itself (a multiplexer, `ssh` to a host whose shell sets no title) shows only what it sets itself.
 
 ### The waiting-for-you dot doesn't light
 
@@ -154,13 +147,9 @@ The dot lights when the program signals it's your turn ([ADR-0052](../20-archite
 
 The current session never shows the dot: looking at it clears it, on every device. `__webterm.attention(<sid>)` in the browser console shows the flag.
 
-### Stuck after scrolling inside tmux
-
-With `mouse on`, one wheel event over a pane whose program doesn't track the mouse puts tmux in copy-mode, and keys go to copy-mode, not the program. Look for `[12/340]` in the pane's corner. Press `q` or `Esc`. To avoid it: `tmux set -g mouse off`, or `--no-altscreen-compat`.
-
 ### Typing does nothing
 
-While it's stuck, run `__webterm.inputStats()` in the browser console. Its `verdict` says where input stops: not reaching the page, not focused on the terminal, stuck in xterm, not sent (check the connection banner), or not acknowledged (switching the tab away and back re-checks the connection). If every stage works, the program itself isn't reading input — often tmux copy-mode (above).
+While it's stuck, run `__webterm.inputStats()` in the browser console. Its `verdict` says where input stops: not reaching the page, not focused on the terminal, stuck in xterm, not sent (check the connection banner), or not acknowledged (switching the tab away and back re-checks the connection). If every stage works, the program itself isn't reading input, or it's in a mode of its own; that's outside webterm.
 
 ### Programs keep running after closing a session
 

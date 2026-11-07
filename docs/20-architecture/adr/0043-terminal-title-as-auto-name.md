@@ -1,6 +1,6 @@
 # ADR-0043 Use the terminal title set by the foreground program as the session's automatic name
 
-Status: Accepted (2026-10-31). Extends AC-4.4's automatic naming rule. The protocol wire format is unchanged; `name` just has one more source.
+Status: Accepted (2026-10-31). Extends AC-4.4's automatic naming rule. The protocol wire format is unchanged; `name` just has one more source. 2026-11-07: §5's tmux setup note was removed from troubleshooting.md; webterm no longer documents running programs inside tmux. The busy / idle prefix kept by §3 now also drives "waiting for you" ([ADR-0052](0052-waiting-for-you-replaces-unread.md)).
 
 ## Context
 
@@ -61,7 +61,7 @@ set -g set-titles on
 set -g set-titles-string '#T'   # the current pane's title
 ```
 
-Documented in [troubleshooting.md](../../80-ops/troubleshooting.md#tab-name-doesnt-follow-claudes-title). webterm doesn't change the user's tmux config.
+Was documented in troubleshooting.md until 2026-11-07. webterm doesn't change the user's tmux config.
 
 ### Rejected alternatives
 

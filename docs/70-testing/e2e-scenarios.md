@@ -608,7 +608,7 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 
 > `web/e2e/touchwheel.spec.ts`, Pixel 5, real touch events via CDP (30ms per step, like a human hand). Hook `WebSocket.send` to record INPUT frames. Fixture `e2e/fixtures/scroller.py N`: alternate screen + mouse tracking (SGR), showing one screen of `L001`…`L300`, scrolling N lines per wheel event.
 
-1. Run `scroller.py 5` (tmux copy-mode's step), wait for `L300` at the bottom
+1. Run `scroller.py 5` (a program that scrolls 5 lines per step), wait for `L300` at the bottom
 2. **One per row height**: drag the finger down 10 row heights → 10 ± 1 wheel events are sent, and the top line's number drops by about 50 (10 × 5, ±5); all are SGR wheel-up (`ESC[<64;col;rowM`) with row numbers within 1…`rows`; focus is unchanged (not a tap)
 3. Drag the finger up 6 row heights → 6 ± 1 wheel events, all wheel-down (`ESC[<65;…M`), and the top line's number rises by about 30 (±5)
 4. Quit, switch to `scroller.py 1`, and drag down 10 row heights → the top line's number drops by 10 ± 2 (with step 1, it follows the finger line by line)

@@ -1,7 +1,7 @@
 """E2E-44 fixture: a fake full-screen program on the alternate screen with SGR mouse tracking.
 
 Shows one screen of L001…L300 (starting at the bottom) and scrolls N lines per wheel
-event (argv[1], default 5, tmux copy-mode's step). q or Ctrl-C quits.
+event (argv[1], default 5). q or Ctrl-C quits.
 """
 import os
 import re

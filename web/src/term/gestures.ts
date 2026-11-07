@@ -131,7 +131,7 @@ export interface WheelTarget {
 /**
  * Installs "vertical drag = wheel while mouse tracking" on the terminal container: one
  * wheel step per row height of finger movement (ADR-0032). How far each step scrolls is
- * up to the program (tmux: 5 lines); no calibration, no round trips. It becomes a drag
+ * up to the program (some scroll several lines); no calibration, no round trips. It becomes a drag
  * once it moves 10px (the tap threshold) mostly vertically, counting from the start point;
  * while converting, preventDefault stops the browser from scrolling natively too. Without
  * mouse tracking it does nothing and xterm's touch scrolling applies.

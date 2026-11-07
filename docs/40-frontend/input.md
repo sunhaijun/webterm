@@ -149,7 +149,7 @@ Sending from the text page **ignores sticky CTRL / ALT**: text and Enter go out 
 | Not enabled, main screen | xterm's own touch scrolling through scrollback |
 | Not enabled, alternate screen | Nothing; **no** arrow keys are sent ([ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §4) |
 
-- The program decides how many lines one wheel step scrolls: tmux copy-mode scrolls 5, so one row of finger travel moves the content 5 lines. For line-by-line scrolling, change copy-mode's wheel binding to `-N 1` ([ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md) §3).
+- The program decides how many lines one wheel step scrolls: a program that scrolls 5 lines per step moves the content 5 lines per row of finger travel ([ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md) §3).
 - At most 3 wheel events per `touchmove`; the excess is dropped, not carried over to the next frame (a fast flick must not flood the PTY, ADR-0029).
 - Full-screen programs move at best one line per step, and the content trails the finger by one network round trip.
 - A drag starts once travel reaches 10px (the tap threshold) and is mostly vertical. Travel accumulates from the start point, so the first 10px aren't lost. Horizontal drags do nothing.
@@ -307,7 +307,7 @@ __webterm.inputStats()
 | `toTerm` rising, `data` not | Stuck in xterm | Composition state never reset (`composing` stuck at true); or an app shortcut caught the key |
 | `data` rising, `sent` not | Never sent | Replay gate (check `gated`), or disconnected with a full offline queue |
 | `sent` rising, `unackedBytes` never falls | Agent isn't acking | Zombie connection (AC-2.20), or the agent can't write to the PTY |
-| **All four pass, the program still doesn't respond** | **Outside webterm** | The foreground program isn't reading stdin, or it's in another mode — most often **tmux copy-mode** ([ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §4); exit with `q` / `Esc` |
+| **All four pass, the program still doesn't respond** | **Outside webterm** | The foreground program isn't reading stdin, or it's in a mode of its own |
 
 Two rules:
 

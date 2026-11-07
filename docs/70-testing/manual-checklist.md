@@ -30,7 +30,7 @@ Automation can only dispatch composition events; it can't test how a real IME's 
 - [ ] Rotate portrait → landscape → portrait three times: layout and terminal size stay right, and **the form doesn't flip** (landscape phone keeps the session button + drawer; tablet with keyboard up keeps the tab bar)
 - [ ] On devices with a notch / home indicator, nothing is covered (`safe-area-inset`)
 - [ ] Tap the terminal: the keyboard alternately opens and closes; in programs with mouse tracking (`htop`, `vim` with `mouse=a`) a tap is a click and doesn't toggle the keyboard
-- [ ] In tmux (`set -g mouse on`), drag to scroll pane history (enters copy-mode): scrolling starts as soon as the finger moves (tmux default: 1 row of drag = 5 lines); `q` exits. With claude run directly, dragging scrolls its conversation
+- [ ] With claude running, dragging scrolls its conversation; scrolling starts as soon as the finger moves
 - [ ] Pressing extra keys doesn't open or close the keyboard; tap `CTRL` then `c` on the keyboard = `^C`; long-press `CTRL` to lock it
 - [ ] Switch to the text page with ✎ and back; terminal rows and columns don't change; swiping over the keys also switches
 - [ ] Tablet: mid-composition on session A's text page (candidates still open), tap session B's tab → the partial text stays in A's draft, **never lands in B's textarea**, and isn't sent anywhere; switching back to A shows the draft
@@ -38,7 +38,7 @@ Automation can only dispatch composition events; it can't test how a real IME's 
 - [ ] iPhone with home indicator: `+ New session` and ⚙ in the drawer sit fully above the indicator, with a gap; with one session the drawer is about half the screen; the settings sheet also clears the indicator
 - [ ] iOS / Android: ⚙ has the same stroke weight as `+` and ✎ and isn't rendered as a color emoji
 - [ ] iOS / Android: swipe a drawer row left to reveal Pin / Rename / Close; scrolling the list doesn't open rows; the rename sheet sits fully above the keyboard
-- [ ] Close a session running tmux or claude (try both the tab ✕ and swipe-to-close in the drawer) → no "Session not found" error appears
+- [ ] Close a session running claude (try both the tab ✕ and swipe-to-close in the drawer) → no "Session not found" error appears
 - [ ] Tablet / PC: switching tabs, renaming (double-click / long-press), closing, and creating with `+` all work; the terminal doesn't reflow on switch
 - [ ] Tablet: open more tabs than fit; `+` stays visible right of the tab strip; tapping the current tab's ✕ and `+` never hits the other
 - [ ] Tablet with an external keyboard → `Ctrl+Shift+*` shortcuts work
@@ -77,7 +77,7 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [x] `--https-port 8443`: the certificate is issued via HTTP-01 on port 80, the pairing QR code includes `:8443`, and scanning it on a phone opens the page
 - [x] After `loginctl enable-linger`, the service keeps running when SSH exits
 - [ ] System service (ADR-0034): `systemctl cat webterm` shows `User=` as yourself; `cat /proc/$(systemctl show webterm -p MainPID --value)/oom_score_adj` is -900; `cat /proc/self/oom_score_adj` in a session is 0; `systemctl --user status` works in a session
-- [ ] Migrate from a user service: `webterm update --force-restart` run inside a webterm session is refused; run from SSH it succeeds, the user unit is gone, the system unit is active, and sessions inside tmux survive
+- [ ] Migrate from a user service: `webterm update --force-restart` run inside a webterm session is refused; run from SSH it succeeds, the user unit is gone and the system unit is active
 - [ ] Memory pressure (needs root, disturbs the whole machine): run `stress-ng --vm 1 --vm-bytes 90%` in a webterm session → stress-ng is what gets killed; webterm and the other sessions survive
 - [x] The service starts automatically after a server reboot
 - [x] Replace the binary + `setcap` + restart → clients see the "The agent is restarting" notice and reconnect to the new version
@@ -102,7 +102,7 @@ The real test of the "never disconnects" promise; automation can only simulate i
 
 ## Sending files (every time uploads or the text page change, since m15)
 
-[ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md). Run claude (and codex if installed) in a session, some of it inside tmux.
+[ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md). Run claude (and codex if installed) in a session.
 
 - [ ] iPhone (Safari and the installed PWA): text page → paperclip → Photo Library → a photo → claude shows `[Image #1]`. Note whether the saved file is `.jpg` or `.heic`; a `.heic` path stays plain text in claude, and then the browser has to convert (ADR-0051 §2)
 - [ ] iPhone: paperclip → Take Photo → `[Image #1]`; a full-resolution photo submitted with a question gets an answer about the photo (no size error from claude)
@@ -110,14 +110,13 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Android (Chrome and the PWA): paperclip → camera and gallery both give `[Image #1]`; pasting an image from the keyboard's clipboard into the text box does too
 - [ ] Desktop: a screenshot on the clipboard, `Ctrl+Shift+V` / `Cmd+V` on the terminal → `[Image #1]`; dropping a PNG from the file manager onto the terminal → `[Image #1]`, the outline shows while dragging and the page stays put
 - [ ] A PDF or a log file → its path at the prompt; asking claude about it works
-- [ ] Inside tmux the same file still becomes `[Image #1]`
 - [ ] On a slow connection the paperclip pulses until the path appears
 - [ ] Write a long passage on the text page: the text running under the paperclip in the box's corner stays readable, and tapping the paperclip still opens the picker rather than moving the caret
 - [ ] `ls -la /tmp/webterm-$(id -u)/uploads/` → files `0600`, directory `0700`; a day later they're gone
 
 ## Waiting for you (every time the attention rules change, since m16)
 
-[ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md). Two or three sessions, claude in one and codex in another, run directly (not in tmux).
+[ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md). Two or three sessions, claude in one and codex in another.
 
 - [ ] claude: give it a task, switch to another session; when it finishes, its row / tab / the session button gets the dot within about a second, while it was working there was none
 - [ ] claude with `preferredNotifChannel terminal_bell`: a permission prompt in a background session lights the dot

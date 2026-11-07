@@ -67,7 +67,7 @@ test('E2E-44 with mouse tracking, vertical drag sends one wheel event per row he
   const rec = await recordSent(page)
   await agent.open(page)
 
-  // (1) A fake full-screen program with step 5 (tmux copy-mode's step).
+  // (1) A fake full-screen program that scrolls 5 lines per wheel step.
   await submit(page, `python3 -I ${FIXTURES}/scroller.py 5`)
   await waitText(page, /^L300/m, 'fixture is up')
   const screen = (await rectOf(page, '.xterm-screen'))!

@@ -5,7 +5,7 @@
 // into the session. The directory is private to the agent's user; files are
 // deleted after MaxAge, and the oldest go first once the directory passes
 // MaxTotal. Nothing here is tied to a session: closing one deletes nothing,
-// because a program in a tmux pane can outlive it and still need the file.
+// because a program started with nohup can outlive it and still need the file.
 //
 // See docs/30-protocol/http-api.md#uploads and docs/60-security/threat-model.md (T6, T9).
 package uploads

@@ -890,7 +890,7 @@ export class AppController {
   }
 
   private onTermData(sid: number, data: string): void {
-    // Closing: send neither keystrokes nor focus reports (tmux / claude enable mode 1004) (ADR-0038 §5)
+    // Closing: send neither keystrokes nor focus reports (claude and codex enable mode 1004) (ADR-0038 §5)
     if (this.closeSent.has(sid)) return
     // Never send a byte during IME composition; it is committed once on compositionend (AC-3.3)
     if (sid === this.store.active && this.ime?.isComposing) return

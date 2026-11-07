@@ -227,7 +227,7 @@ name = nameIsManual ? manual name
 ```
 
 - The agent computes the name: `~` when `cwd` is the home directory, `/` when the basename is empty (`/`).
-- **Terminal title** ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)): a title the foreground program (claude, vim, ssh…, not the shell itself) sets with OSC 0 / 2 takes priority and is shown as is (claude's `✳` idle / `◐` working). Titles the shell sets at the prompt, like `user@host: dir`, are ignored; when the program exits the name goes back to the directory. tmux doesn't forward inner programs' titles by default ([troubleshooting.md](../80-ops/troubleshooting.md#tab-name-doesnt-follow-claudes-title)).
+- **Terminal title** ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)): a title the foreground program (claude, vim, ssh…, not the shell itself) sets with OSC 0 / 2 takes priority and is shown as is (claude's `✳` idle / `◐` working). Titles the shell sets at the prompt, like `user@host: dir`, are ignored; when the program exits the name goes back to the directory.
 - The CWD shown in lists is abbreviated by the browser: `~` when it equals or is under `welcome.home`; shown as is when there's no `home`, without guessing `/home/<user>`.
 - **No dedup suffixes** for duplicate names: two sessions in a `webterm` directory should both be called `webterm`; the index / order and the full CWD tell them apart.
 - After a manual rename, `nameIsManual = true` and automatic naming stops (neither the title nor the CWD is followed). Renaming to an empty string turns it back on.
