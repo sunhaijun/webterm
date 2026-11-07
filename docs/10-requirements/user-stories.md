@@ -67,7 +67,7 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 
 **US-4.2** (m8) On a phone, switching sessions is: tap the session button, then tap a session. The button sits under my thumb and shows how many sessions are open. On desktop and tablet it's one tap on the tab bar.
 
-**US-4.3** (m6) Sessions I switch away from keep running in the background. When one produces new output I see an unread marker: an unread dot on the session button on phones, a dot on the tab on desktop and tablet.
+**US-4.3** (m6, m16) Sessions I switch away from keep running in the background. When one of them is waiting for me (claude or codex finished its turn or asks for permission, a long build is done) I see a dot: on the session button on phones, on the tab on desktop and tablet. Output alone, like a spinner, doesn't light it, and looking at the session clears it on every device ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)).
 
 **US-4.4** (m6) A session is automatically named after its current directory (e.g. `webterm`), not `Session 1/2/3`. I can also rename it by hand.
 

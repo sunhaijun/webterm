@@ -17,6 +17,7 @@
 | `in_ack` | Cumulative input bytes the agent has actually written to the PTY |
 | `base_seq` | The `out_seq` at which the ring buffer's retained content starts |
 | `head_seq` | The `out_seq` at the end of the ring buffer (= total bytes the session has produced) |
+| `attention` | "Waiting for you": a session flag the agent sets when the program signals it's your turn and clears on `session.seen` ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)) |
 | snapshot | The agent-side terminal emulator's full state at some `seq`, serialized as bytes any xterm can consume (§5.2) |
 | `client_id` | Identity of one page load. **The key for input accounting**, see §5.4 |
 | `instance_id` | Random id of the current agent process run. Detects "the agent restarted", see §5.3 |
@@ -210,6 +211,18 @@ Moves session `sid` in front of session `before`; `before: null` moves it to the
 - `before` doesn't exist (e.g. it was just closed elsewhere) → treated as `null`, move to the end; `before` equals `sid` → stays put. Neither is an error.
 - On success, broadcast `session.order` (§4.2), **even if the position didn't change**, so the sender gets confirmation.
 
+#### `session.seen`
+
+```json
+{ "t": "session.seen", "sid": 3 }
+```
+
+The user is looking at session `sid`: clear its `attention` ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md) §2). If it was set, broadcast `session.updated{sid, attention: false}`; otherwise nothing is sent.
+
+- `sid` doesn't exist → `error{code:"unknown_session"}`.
+- **Only the client that has the session in front of the user sends it.** Browser: the session is current, the page is visible and has focus, and the session has `attention`; sent when `session.updated{attention: true}` arrives for it, on switching to it, when the page becomes visible or gains focus, and after `welcome`. `webterm attach`: after attaching if the session has `attention`, and whenever `attention: true` arrives for its session.
+- The agent doesn't track who is looking. A session someone is looking at flips to `attention` and back within a round trip; other connections may see both updates.
+
 #### `subscribe` / `unsubscribe`
 
 ```json
@@ -217,7 +230,7 @@ Moves session `sid` in front of session `before`; `before: null` moves it to the
 { "t": "unsubscribe", "sid": 1 }
 ```
 
-**Subscribe only to the currently visible session.** Unsubscribed sessions keep running on the agent and keep feeding the emulator; the agent only sends `session.updated{head_seq}` when they produce output (throttled, see §6.2), and the client derives unread from it.
+**Subscribe only to the currently visible session.** Unsubscribed sessions keep running on the agent and keep feeding the emulator; the agent only sends `session.updated{head_seq}` when they produce output (throttled, see §6.2), which keeps the client's `catchup_to` current for the next incremental subscribe (§5.3).
 
 `subscribe` carries `out_seq` and is decided the same way as `resume` (§5.1): **incremental** or **snapshot**. Both first open and switching back use this message; no reconnect is needed. When the client has none of this session's content (first open, page reload), it reports `out_seq: 0`.
 
@@ -283,7 +296,7 @@ Sent every 30 seconds. **A protocol-level ping rather than WebSocket control fra
     {
       "sid": 1, "name": "webterm", "name_is_manual": false,
       "cwd": "/home/user/github/webterm",
-      "status": "running", "exit_code": null,
+      "status": "running", "exit_code": null, "attention": false,
       "cols": 80, "rows": 24,
       "base_seq": 221776, "head_seq": 483920,
       "created_at": 1757116000000
@@ -309,7 +322,7 @@ Sent every 30 seconds. **A protocol-level ping rather than WebSocket control fra
 
 `resumed[].in_ack` is the cumulative number of bytes the agent has written to the PTY for **this `client_id`** on this session (§5.4). **The client must trim its resend queue by it and resend everything after it.**
 
-**Unread is derived from `head_seq`**, not stored on the server: `unread = head_seq > local out_seq`. Unread is inherently per client; keeping it on the server would let two tabs clear each other's unread state.
+**`attention` is the agent's**: one flag per session, the same for every connection ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)). The agent sets it when the program signals it's your turn (its title goes from a spinner to idle, a bell or desktop notification, or a command of 10 s or more returning to the shell) and clears it on `session.seen`. There is no unread state: output alone marks nothing.
 
 #### `session.created` / `session.closed` / `session.updated`
 
@@ -324,6 +337,7 @@ Sent every 30 seconds. **A protocol-level ping rather than WebSocket control fra
 - `cols` / `rows` are sent together whenever the session's size changes, whichever connection's `subscribe` or `resize` changed it. They arrive after any snapshot that change produced and in the order the changes were applied, so the last pair a client receives is the current size (§4.1, "Who sets the size")
 - `cwd` comes from the agent reading `/proc/<foreground process group>/cwd` once a second and is sent only on change; when `name_is_manual == false`, `name` follows (AC-4.4)
 - Source of the automatic name ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)): the terminal title (OSC 0 / 2, sanitized, at most 64 characters) set by the **foreground program** (not the shell itself) wins; otherwise the CWD basename. Title and CWD are read in the same once-a-second poll and a message is sent only when the name changes, so there is at most one per session per second
+- `attention` is sent whenever it changes, `true` or `false` (ADR-0052). Sets come from the once-a-second poll, so there is at most one per session per second; clears follow `session.seen`
 - **Session exit**: `session.updated{status:"exited", exit_code, head_seq}` always comes **after the session's last OUTPUT** (the agent waits for EOF on the PTY, for at most 500 ms — EOF never comes while a background process holds the PTY open). `head_seq` is the final output total: only when the client's `out_seq` reaches it has all output arrived
 
 #### `session.order`
@@ -516,13 +530,14 @@ Closing the connection is lossless: the client reconnects automatically and resu
 | Message | Throttling |
 |---|---|
 | `ack` | at most one per session per 50ms, carrying the latest cumulative value; **a swallowed value must be sent later** |
-| `session.updated{head_seq}` | at most one per session per 1s (the client only uses it for unread, so intermediate values don't matter); **a swallowed value must be sent later** |
+| `session.updated{head_seq}` | at most one per session per 1s (the client only uses it for the replay gate's `catchup_to`, §5.3, so intermediate values don't matter); **a swallowed value must be sent later** |
+| `session.updated{attention: true}` | set only by the once-a-second poll, so at most one per session per second (ADR-0052 §1) |
 | `session.updated{cwd}` | the agent reads once a second and sends only when the path actually changes |
 | `resize` (client side) | 100ms debounce; **except on subscribe, see `subscribe` in §4.1** |
 
 **"A swallowed value must be sent later" is not optional.** Both values are cumulative, so dropping intermediate ones is harmless — but **dropping the last one is not**:
 output often comes in a burst that finishes within a second, after which nothing triggers another message. Throttling without a trailing send
-leaves the client stuck on the value from before the burst — a stuck `head_seq` means the unread dot never lights up (AC-4.3),
+leaves the client stuck on the value from before the burst — a stuck `head_seq` leaves `catchup_to` short, so the end of the catch-up counts as live output and its query replies reach the PTY (§5.3),
 a stuck `in_ack` means the resend queue never drains. Implementation: when throttling, record the latest value and let the write loop's
 timer send it once the window expires.
 

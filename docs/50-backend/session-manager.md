@@ -55,6 +55,10 @@ type Session struct {
     nameManual bool
     title      string          // terminal title currently in use (ADR-0043); "" = no title
     titlePgrp  int             // foreground process group the title belongs to: the one in front at the last title write
+    titleBusy  bool            // the title in use started with a spinner glyph at the last poll (ADR-0052)
+    attention  bool            // "waiting for you" (ADR-0052); cleared by session.seen
+    signalSeen uint64          // bells + notifications already turned into attention (the emulator counts them)
+    fgSince    time.Time       // when a non-shell foreground group took over; zero at the prompt
     cwd        string
     status     Status          // running | exited
     exitCode   *int
@@ -112,7 +116,7 @@ for {
     for _, s := range subs { s.Push(sid, seq, data) }   // under the lock: non-blocking, enqueue only
     session.mu.Unlock()
 
-    emit(session.updated{head_seq})     // unsubscribed connections use it for unread; the connection layer throttles it to 1s
+    emit(session.updated{head_seq})     // keeps unsubscribed connections' catchup_to current; the connection layer throttles it to 1s
 }
 ```
 
@@ -162,6 +166,7 @@ title, writes := the emulator's title, how many times the title was written
 writes changed → titlePgrp = pgrp            // the title belongs to the group that was in front when it was set
 s.title = (pgrp == titlePgrp && pgrp != the shell's pid) ? clean(title) : ""
 cwd changed, or name changed → broadcast one session.updated{cwd?, name?}
+attention rules (below) → session.updated{attention: true}
 ```
 
 - Title rules are in [ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md): titles the shell sets at the prompt are ignored, and the name goes back to the directory when the program exits. Counting writes detects "was set" even when a new process sets the same title.
@@ -274,6 +279,25 @@ The sweep skips processes that **ignore** SIGHUP (bit 0 of `SigIgn` in `/proc/<p
 
 A session closed while the manager is frozen for a hot upgrade thaws its own loops (`Thaw` only reaches listed sessions), and `Manager.Close` waits for the handoff first (see below).
 
+## Waiting for you (AC-4.3)
+
+[ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md). `attention` means "the program said it's your turn and nobody has looked". Every `cwdLoop` round, for a running session ("set" does nothing if it's already set; the bookkeeping runs either way):
+
+```
+signals := the emulator's bell + notification count     // BEL, OSC 9 (not 9;4 / 9;9), 777, 99; counted while parsing
+signals != signalSeen                     → set          (signalSeen = signals)
+titleBusy && title != "" && !busy(title)  → set          // claude ◐ → ✳
+pgrp == shell && !fgSince.IsZero() && now - fgSince >= LongCommand (10 s) → set
+titleBusy = busy(title); fgSince = (pgrp == shell) ? zero : (fgSince or now)
+set → broadcast session.updated{attention: true}
+```
+
+- `busy(title)`: the first rune is braille `U+2801`–`U+28FF` or one of `◐ ◓ ◑ ◒`.
+- The output path doesn't decide anything: the emulator only counts, under the session lock it already holds. Turning counts into the flag once a second caps sets at one per session per second, whatever a program prints.
+- The counters are compared even when the flag is already set, so bells that arrived while it was set don't fire again after `session.seen`.
+- `Seen()` (from `session.seen`): if `attention`, clear it and broadcast `session.updated{attention: false}`.
+- Exited sessions: `cwdLoop` stops, so nothing new is set; a flag set before the exit stays until seen.
+
 ## Auto naming (AC-4.4)
 
 ```go
@@ -345,7 +369,7 @@ An upgrade **doesn't** go through the shutdown above. The agent `exec`s the new 
 
 If any step fails (preflight, memfd, exec returning) → `Thaw`: clear the deadlines, let the loops run again, accept connections again; log it and send a notice saying why. **Never fall back to a restart on its own.**
 
-The snapshot (`internal/handoff.Session`) holds the parts of `Session` that must not be lost: sid, ptmx fd, shell pid, createdAt, name / nameManual, title / titlePgrp (ADR-0043 §4), cwd, status / exitCode, cols / rows, ring (base + bytes), **emulator state**, inQueued / inAck, unwritten input. **Not** in the snapshot: subscribers (connections are rebuilt) and the `oom_score_adj` of the agent and the shell (the former survives execve; the latter lives on the shell process anyway). Exited sessions (ring and emulator kept for reading) are handed off too, just without an fd or pid.
+The snapshot (`internal/handoff.Session`) holds the parts of `Session` that must not be lost: sid, ptmx fd, shell pid, createdAt, name / nameManual, title / titlePgrp (ADR-0043 §4), attention (with a bell or notification not yet polled folded in, ADR-0052 §5), cwd, status / exitCode, cols / rows, ring (base + bytes), **emulator state**, inQueued / inAck, unwritten input. **Not** in the snapshot: subscribers (connections are rebuilt) and the `oom_score_adj` of the agent and the shell (the former survives execve; the latter lives on the shell process anyway). Exited sessions (ring and emulator kept for reading) are handed off too, just without an fd or pid.
 
 **A session's snapshot must be byte-identical before and after the handoff**, and the incremental path must be byte-continuous (`TestHandoffByteLevelContinuity`).
 

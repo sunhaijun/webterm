@@ -29,21 +29,34 @@
 | m12 | `feat/00-open-source` | Ready for open source: English docs, comments and UI strings, Apache-2.0, guided install that waits for DNS and the cloud firewall, releases ship `install.sh` | [ADR-0046](../20-architecture/adr/0046-guided-install.md), [install.md](../80-ops/install.md) |
 | m13 | `feat/60-sign-out` | Sign out a device from the device itself: `POST /auth/logout` revokes it and clears the cookie; "Sign out this device" in Settings clears the page's storage, service worker and caches | [ADR-0048](../20-architecture/adr/0048-sign-out.md), [auth-pairing.md](../60-security/auth-pairing.md) |
 | m14 | `feat/50-ssh-attach` | `webterm attach` over SSH through `run/attach.sock`, speaking the same protocol; the session size follows the client in use (`session.updated{cols, rows}`, claims only on use) | [ADR-0050](../20-architecture/adr/0050-ssh-attach.md), [install.md](../80-ops/install.md#from-a-terminal-over-ssh) |
+| m15 | `feat/40-uploads` | Send screenshots, photos and other files to a session from any device: `POST /api/uploads` to a private temp directory (deleted after 24 hours), the paperclip, paste and drop; the path is pasted into the session it was sent from | [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md), [http-api.md](../30-protocol/http-api.md#uploads), [input.md](../40-frontend/input.md#sending-files-ac-323) |
 
 ## In progress
 
-### m15 · `feat/40-uploads`
+### m16 · `feat/40-attention`
 
-Send screenshots, photos and other files to a session from any device; claude and codex attach images.
+"Waiting for you" replaces the unread dot: tell at a glance which claude / codex session finished its turn or wants something.
 
 | Deliverable | Docs |
 |---|---|
-| `POST /api/uploads`: streamed to `<temp>/webterm-<uid>/uploads/` (private directory, generated names), 20 MiB per file, deleted after 24 hours or past 256 MiB | [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md), [http-api.md](../30-protocol/http-api.md#uploads), [threat-model.md](../60-security/threat-model.md) |
-| Paperclip on the text page and the `wide` tab bar; paste of files and drop anywhere; the path pasted alone into the session it was sent from, past the replay gate | ADR-0051, [input.md](../40-frontend/input.md#sending-files-ac-323), [layout.md](../40-frontend/layout.md) |
+| Agent: per-session `attention`, set in the once-a-second poll by a title going from a spinner to idle, a bell or desktop notification (counted by the emulator), or a command of ≥ 10 s returning to the shell; cleared by `session.seen`; handed over on upgrades | [ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md), [websocket-protocol.md](../30-protocol/websocket-protocol.md#sessionseen), [session-manager.md](../50-backend/session-manager.md#waiting-for-you-ac-43) |
+| Browser: the unread dot becomes the attention dot (same places and color); the page sends `session.seen` for the session in front of the user; `webterm attach` does the same for its session | ADR-0052, [session-ux.md](../40-frontend/session-ux.md#waiting-for-you-ac-43) |
 
-Exit criteria, beyond the usual: UT-upload-name, UT-upload-dir, UT-upload-sweep, IT-upload-1, UT-upload-1..3, E2E-48; the "Sending files" section of the manual checklist on an iPhone and an Android phone.
+Exit criteria, beyond the usual: IT-attention-1..4, UT-attn-spinner, UT-vterm-signals, IT-handoff-1 with attention, UT-attention-1, E2E-6; codex's notification settings checked on a real run (manual checklist).
 
 ## Planned
+
+### m17 · `feat/40-links-clipboard`
+
+Links you can open and text you can copy on a phone: URL and OSC 8 links (http/https only) open with Ctrl/Cmd+click on desktop and through an Open · Copy popover when tapped; programs can put text on the clipboard with OSC 52 (write only), so claude's `/copy` works from a phone.
+
+### m18 · `feat/40-input-menus`
+
+Two keys at the end of the extra keys: **frequent input** (the ten single-line inputs you send most, from the foreground program's own history: bash, claude or codex) and **combo keys** for the foreground program (claude, codex, shell). The agent tells the page which program is in front.
+
+### Web Push and the app badge
+
+Builds on m16: a push notification and a badge count when a session starts waiting for you while no page is open.
 
 m9 and m10 build on m8 and are independent of each other.
 

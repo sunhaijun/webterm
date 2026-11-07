@@ -38,7 +38,7 @@ left    key area (7 columns × 2 rows, equal width, no horizontal scroll)
 
 | Position | testid | Action |
 |---|---|---|
-| Session button `[3]` (`compact` only) | `open-sessions` | Rounded box showing the session count; opens the session drawer; shows an unread dot when something is unread ([session-ux.md](session-ux.md)) |
+| Session button `[3]` (`compact` only) | `open-sessions` | Rounded box showing the session count; opens the session drawer; shows a dot when another session is waiting for you ([session-ux.md](session-ux.md#waiting-for-you-ac-43)) |
 | ✎ | `toggle-text` | Keys page ⇄ text page. The icon is a pencil coming out of a rounded box (SVG, [layout.md §Icons](layout.md#icons)) |
 | ESC, /, - | `key-Escape` `key-Slash` `key-Minus` | Send the corresponding bytes |
 | HOME ↑ END PGUP | `key-Home` `key-ArrowUp` `key-End` `key-PageUp` | Same |

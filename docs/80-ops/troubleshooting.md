@@ -137,6 +137,23 @@ set -g set-titles-string '#T'
 
 Titles set by the shell at the prompt are ignored on purpose; at the prompt the name is the directory.
 
+### The waiting-for-you dot doesn't light
+
+The dot lights when the program signals it's your turn ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)): its title goes from a spinner to idle, it rings the bell or sends a desktop notification, or a command of 10 s or more returns to the prompt. Output alone never lights it.
+
+- **claude**: works out of the box (its title goes `◐` → `✳`). To also get a dot for permission prompts: `claude config set --global preferredNotifChannel terminal_bell`.
+- **codex**: turn on its notifications in `~/.codex/config.toml`:
+
+  ```toml
+  [tui]
+  notifications = true
+  notification_condition = "always"
+  ```
+
+- **Anything else**: end the command with a bell, e.g. `make; printf '\a'`.
+
+The current session never shows the dot: looking at it clears it, on every device. `__webterm.attention(<sid>)` in the browser console shows the flag.
+
 ### Stuck after scrolling inside tmux
 
 With `mouse on`, one wheel event over a pane whose program doesn't track the mouse puts tmux in copy-mode, and keys go to copy-mode, not the program. Look for `[12/340]` in the pane's corner. Press `q` or `Esc`. To avoid it: `tmux set -g mouse off`, or `--no-altscreen-compat`.

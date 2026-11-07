@@ -115,6 +115,16 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Write a long passage on the text page: the text running under the paperclip in the box's corner stays readable, and tapping the paperclip still opens the picker rather than moving the caret
 - [ ] `ls -la /tmp/webterm-$(id -u)/uploads/` → files `0600`, directory `0700`; a day later they're gone
 
+## Waiting for you (every time the attention rules change, since m16)
+
+[ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md). Two or three sessions, claude in one and codex in another, run directly (not in tmux).
+
+- [ ] claude: give it a task, switch to another session; when it finishes, its row / tab / the session button gets the dot within about a second, while it was working there was none
+- [ ] claude with `preferredNotifChannel terminal_bell`: a permission prompt in a background session lights the dot
+- [ ] codex with `[tui] notifications = true` and `notification_condition = "always"`: a finished turn in a background session lights the dot. Note whether it came from OSC 9, BEL or the title (`__webterm.attention`, and the name's spinner)
+- [ ] Phone and laptop both open: the dot shows on both; opening the session on one clears it on the other
+- [ ] Leave a session current and lock the phone; when claude finishes, unlock: the dot is cleared as soon as the page is back, not before
+
 ## Terminal compatibility (every time rendering changes)
 
 - [x] `vim` / `nvim`: editing, `:wq`, visual mode, arrow keys

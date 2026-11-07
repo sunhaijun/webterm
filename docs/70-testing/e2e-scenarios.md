@@ -160,17 +160,19 @@ Run once on Pixel 5 (`compact`) and once at 1440×900 (`wide`).
 
 ---
 
-## E2E-6 Multiple sessions and unread
+## E2E-6 Multiple sessions and waiting for you
 
-> AC-2.11, AC-4.3
+> AC-2.11, AC-4.3, [ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)
 
 1. Create sessions A and B
-2. Run `emit.sh 100 50` in A (continuous output)
-3. Switch to B
-4. A gets an unread marker (derived from `session.updated{head_seq}` > local `out_seq`): on Pixel 5, `open-sessions` has an unread dot (`data-unread=true`) and A's row in the drawer has one; at 1440×900, A's tab has one
-5. `echo in-b` in B works normally
-6. Switch back to A: content is **complete** (all the output produced while away is there), and the unread marker clears
-7. A's scroll position is where it was before switching away (unless it was at the bottom, in which case it follows to the bottom)
+2. Run `emit.sh 100 50` in A (continuous output), then switch to B
+3. **Output alone lights nothing**: while A prints, A has no dot (`data-attention=false` on `open-sessions` on Pixel 5, on A's tab at 1440×900), and `__webterm.attention(A)` stays false
+4. `echo in-b` in B works normally
+5. Switch back to A: content is **complete** (all the output produced while away is there); A's scroll position is where it was before switching away (unless it was at the bottom, in which case it follows to the bottom)
+6. **A bell lights it**: in A run `sleep 2; printf '\a'`, switch to B. Within 5 s, A gets the dot: on Pixel 5, `open-sessions` has `data-attention=true` and A's drawer row has one; at 1440×900, A's tab has `tab-<A>-attention`
+7. Switch back to A: the dot clears (the page sent `session.seen`; other connections get `attention:false` too, IT-attention-1)
+8. **A title going from a spinner to idle lights it**: in A run `bash -c "printf '\e]0;◐ work\a'; sleep 2; printf '\e]0;✳ done\a'; sleep 30"`, switch to B → within 5 s A has the dot; its name shows `✳ done`
+9. **Looking at it means it never lights**: stay on A and ring the bell (`printf '\a'`) → after 3 s `__webterm.attention(A)` is false
 
 ---
 
@@ -575,7 +577,7 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 3. **Close**: hovering a non-current tab shows ✕; click it → if the session is running, `close-confirm` appears first (a centered dialog, not a browser dialog), and after clicking `close-ok` the tab disappears; middle-clicking a tab also confirms first; with focus in the terminal, `Ctrl+Shift+W` → the confirmation sheet; `Enter` → closed, and focus goes to the terminal of the new current session (AC-4.11)
 4. **Rename**: the tab has `tab-<sid>-idx` containing `[n]` (its position in the order); double-click the tab → `rename-input` appears; type `RENAMED` and press Enter → the tab text is `RENAMED` and `tab-<sid>-idx` is still `[n]` (renamed tabs keep their index too, ADR-0041); double-click again, clear it, press Enter → automatic naming is restored (the CWD's basename)
 5. **Session menu**: right-click a tab → `session-menu` has `session-rename` `session-pin` `session-close`; click `session-pin` → a pin appears before the tab name (an SVG inside `.pin-mark`); after switching away, OUTPUT frames for that session keep arriving with rising `seq`, and it gets no unread dot (`__webterm.outSeq()` only reports the current session, so check the frames)
-6. **Unread**: A has continuous output; switch to B → A's tab shows an unread dot in the accent color (the same color as the current tab's text, not `--err`, ADR-0042); switch back to A → it's gone
+6. **Waiting for you**: A rings the bell after a delay; switch to B → A's tab shows a dot in the accent color (the same color as the current tab's text, not `--err`, ADR-0042); switch back to A → it's gone
 7. **Touch** (iPad Mini): ✕ only on the current tab; long-press a tab and release in place → `session-menu`; extra keys present, with only `toggle-text` in the left column; `new-session` is 16px from `tabbar`'s right edge
 8. **Equal width and scrolling** (ADR-0031 / ADR-0035): with 3 sessions → the three tabs are equal width (within 1px), all 240px; `tabbar` is exactly as wide as the three tabs and doesn't scroll horizontally (`scrollWidth` = `clientWidth`); `new-session`'s left edge = the last tab's right edge + 12px; resize the window to 600×900 (`screen` unchanged, still `wide`) and create up to 5 → each tab is 120px (within 1px), `tabbar` overflows (`scrollWidth > clientWidth`), and the current (most recently created) tab is fully visible; **`new-session` lies entirely inside the top bar and is clickable (`elementFromPoint` hits it), its left edge = `tabbar`'s right edge + 12px**; scroll `tabbar` all the way left (`scrollLeft = 0`) → `new-session` doesn't move; (with `scrollLeft` at 0) mouse wheel down then up over the strip → `scrollLeft` first grows, then shrinks; resize the window back to 1440 → all 5 are 240px and nothing scrolls horizontally
 9. **The gap isn't clickable** (ADR-0035 §2): two sessions, focus in the terminal; click the midpoint of the 12px between the last tab's right edge and `new-session`'s left edge → the session count doesn't change, the current session doesn't change, and focus stays in the terminal

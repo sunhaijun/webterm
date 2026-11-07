@@ -32,7 +32,7 @@ webterm treats the terminal as a **data source**, not a UI to reproduce, and des
 |---|---|---|
 | Disconnects | Reconnect = new session / full redraw | Short drops **replay only the missing bytes** and the screen keeps growing; long drops and page reloads keep the screen too — the agent holds the terminal state and can produce a full snapshot at any time |
 | Input | Keys go straight to the PTY; IME is left to xterm.js | Keys go straight to the PTY, but **IME composition has fallbacks and input is never silently dropped**; for long CJK text, switch to the **text page**, type in a native text box, send once |
-| Sessions | One connection, one terminal | The agent manages many sessions; they keep running in the background and show unread indicators |
+| Sessions | One connection, one terminal | The agent manages many sessions; they keep running in the background and show which ones are waiting for you |
 | Mobile | Pinch-zoom and cope | **Termux-style UI**: full-screen terminal + two fixed rows of extra keys, on-screen keyboard aware, PWA; session drawer at the bottom on phones, tab bar on top on desktop and tablet |
 
 ## Design principles
