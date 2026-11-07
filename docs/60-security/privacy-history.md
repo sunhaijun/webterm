@@ -31,6 +31,8 @@ Verified by `IT-privacy-1`: a session prints a marker string `WEBTERM_CANARY_<ra
 
 `webterm.db` holds only devices and pairings (tokens and pairing codes stored as hashes only) and settings ([storage-schema.md](../50-backend/storage-schema.md)). No command text, no CWD, no output.
 
+Files the user sends to a session (images for claude, logs, PDFs) are the one other thing on disk, and not in the data directory: they live in `<temp>/webterm-<uid>/uploads/` (`0600`, directory `0700`) and are deleted 24 hours after upload, oldest first once they pass 256 MiB ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md) §5). Where `/tmp` is a tmpfs they stay in memory too. They are never served back, and their names don't appear in logs.
+
 ## Logs (AC-8.5)
 
 Agent logs **must not contain**:

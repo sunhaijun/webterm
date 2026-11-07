@@ -24,7 +24,7 @@ Orthogonal to form is **touch capability**, from `matchMedia('(pointer: coarse)'
 
 ```
 compact (phone)                             wide (PC / tablet)
-┌──────────────────────────────────┐        ┌[1] webterm ✕│[2] api •│[3] logs│ +  ● ⚙ ┐ tab bar 36px (touch: 40px)
+┌──────────────────────────────────┐        ┌[1] webterm ✕│[2] api •│[3] logs│ + ⌇ ● ⚙ ┐ tab bar 36px (touch: 40px)
 │                                  │        │                                          │
 │             terminal             │        │                 terminal                 │
 │                                  │        │                                          │
@@ -34,7 +34,18 @@ compact (phone)                             wide (PC / tablet)
 └────┴─────────────────────────────┘        └────┴─────────────────────────────────────┘
 ```
 
-`[3]` is the session button: a rounded box with the session count in it ([session-ux.md](session-ux.md#compact-phone-session-button-and-bottom-drawer)).
+`[3]` is the session button: a rounded box with the session count in it ([session-ux.md](session-ux.md#compact-phone-session-button-and-bottom-drawer)). `⌇` stands for the paperclip that sends files ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)).
+
+The text page uses the same slot, with a second 44px column on the right for the paperclip:
+
+```
+text page (both forms)
+├────┬──────────────────────────────┬────┤
+│ [3]│ ┌──────────────────────────┐ │    │
+│    │ │ text box (2 rows)        │ │ ⌇  │  text-upload-file
+│ ✎  │ └──────────────────────────┘ │    │
+└────┴──────────────────────────────┴────┘
+```
 
 `.app` is a single-column grid:
 
@@ -57,6 +68,7 @@ All absolutely positioned or `position: fixed`, outside the grid; showing or hid
 | Connection banner (`conn-text`, `conn-note`) | Top of the terminal, one line tall | When not online, and for 3 seconds with a connection note ([session-ux.md](session-ux.md), [ADR-0049](../20-architecture/adr/0049-connection-status-in-one-place.md)) |
 | Toast | Top center of the terminal | Messages unrelated to the connection (session limit, input too large, agent notices) |
 | Composition preview (`ime-preview`) | At the terminal cursor | During IME composition in direct input |
+| Drop outline (`.stage[data-drop="true"]`) | A 2px accent outline inside the terminal area | While files are dragged over the page ([input.md](input.md#sending-files-ac-323)) |
 | Session drawer (phone), settings, session menu | See [Sheets](#sheets) | When open |
 
 ### Safe area
@@ -209,9 +221,9 @@ The terminal uses this `--font-mono` stack (`term/terminal.ts` keeps an identica
 
 ## Icons
 
-All hand-drawn icons in the UI use one style ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §3): **inline SVG, stroke only, no fill, `stroke="currentColor"`, 1.75px stroke, round caps and joins**, colored by the button (normally `--muted`, `--fg` on hover). Used for: `+` and ⚙ (a six-tooth gear with a center hole) in the tab bar and at the bottom of the session drawer; `−` / `+` for font size in settings; the drag handle on drawer rows (three horizontal lines); ✕ on tabs and sheet headers; the pin icon on pinned sessions and the check mark in the session menu ([ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §2); the text page button ✎ (`toggle-text`) in the extra keys' left column.
+All hand-drawn icons in the UI use one style ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §3): **inline SVG, stroke only, no fill, `stroke="currentColor"`, 1.75px stroke, round caps and joins**, colored by the button (normally `--muted`, `--fg` on hover). Used for: `+` and ⚙ (a six-tooth gear with a center hole) in the tab bar and at the bottom of the session drawer; `−` / `+` for font size in settings; the drag handle on drawer rows (three horizontal lines); ✕ on tabs and sheet headers; the pin icon on pinned sessions and the check mark in the session menu ([ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §2); the text page button ✎ (`toggle-text`) in the extra keys' left column; the paperclip that sends files, in the tab bar (`upload-file`) and on the text page (`text-upload-file`) ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)).
 
-Two sizes: in the top bar, drawer, and settings, a **14×14 box with a 1.75px stroke**, scaled per position (12px for the tab ✕ and the pin, 16px for the sheet header ✕); in the extra keys' left column, **22×22 with a 2px stroke**, the same size and weight as the session button's box next to it (22px, 2px border). ✎ is a rounded box with its top-right corner missing and a pencil coming diagonally out of the gap toward the top right ([ADR-0041](../20-architecture/adr/0041-tab-index-and-edit-icon.md) §2). Don't use Unicode symbols as icons: glyphs like `⚙` look different on each platform, some render as color emoji, and their vertical position shifts with font metrics.
+Two sizes: in the top bar, drawer, and settings, a **14×14 box with a 1.75px stroke**, scaled per position (12px for the tab ✕ and the pin, 16px for the sheet header ✕); in the extra keys' side columns, **22×22 with a 2px stroke**, the same size and weight as the session button's box next to it (22px, 2px border). The paperclip comes in both: 14×14 in the tab bar next to `+` and ⚙, 22×22 on the text page across from ✎, drawn separately for each so the stroke is 1.75px and 2px rather than one drawing scaled. ✎ is a rounded box with its top-right corner missing and a pencil coming diagonally out of the gap toward the top right ([ADR-0041](../20-architecture/adr/0041-tab-index-and-edit-icon.md) §2). The paperclip is one stroke: a long loop, a shorter loop nested inside it, leaning 45° like the pencil. Don't use Unicode symbols as icons: glyphs like `⚙` look different on each platform, some render as color emoji, and their vertical position shifts with font metrics.
 
 ## Rendering (ADR-0026 §7)
 

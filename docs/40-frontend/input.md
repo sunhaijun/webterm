@@ -11,6 +11,7 @@
 | **Direct input** | Tap the terminal; every key from the on-screen or physical keyboard goes through xterm to the PTY | Default. Typing commands, driving vim / less / claude |
 | **Extra keys** | Two fixed rows of keys under the terminal, for keys the on-screen keyboard lacks | Phones and touch tablets |
 | **Text page** | The second page of the extra-keys area: a native `textarea` where you write a passage, then send it | Long CJK text, writing prompts for claude |
+| **Sending files** | The paperclip, a paste of files, or a drop: the file is uploaded and its path pasted into the session | Screenshots and photos for claude / codex |
 
 There are no input modes. Direct input always works; the text page is just another page of the extra-keys area, and the two don't exclude each other: with the text page open, tapping the terminal still sends keys to the terminal.
 
@@ -92,6 +93,8 @@ Each session remembers two things ([ADR-0036](../20-architecture/adr/0036-text-p
 ```html
 <textarea data-testid="textinput" rows="2" enterkeyhint="send"></textarea>
 ```
+
+To its right, in a 44px column like the left one, is the paperclip (`text-upload-file`, [Sending files](#sending-files-ac-323)). The column has a 1px divider on its left, like the left column's on its right.
 
 - Two rows tall, a **box bordered on all four sides**: 6px inset from the extra-keys slot, 1px border, rounded corners, accent-colored border on focus. The whole box fits inside the 80px slot, so the viewport or on-screen keyboard never cuts off its bottom border. Overflow scrolls inside the box.
 - Font size ≥ 16px (so iOS doesn't zoom the page on focus).
@@ -204,6 +207,8 @@ Only these two places **arm** the dedup (record the text just sent and when), an
 
 Paste from a physical keyboard (`Ctrl+Shift+V` / `Cmd+V`) goes through xterm's `onPaste`, wrapped in bracketed paste if the other side enabled it. On touch devices, paste will live in the long-press menu (m10, [ADR-0025](../20-architecture/adr/0025-termux-style-ui.md) §5).
 
+A clipboard holding **files and no text** (a screenshot) isn't a text paste: it's sent as files ([Sending files](#sending-files-ac-323)). `Ctrl+V` without Shift still goes to the program as `0x16`, as before.
+
 ### The replay gate (AC-2.15, ADR-0020)
 
 Two kinds of things arrive on `onData`, and they must be kept apart:
@@ -212,6 +217,7 @@ Two kinds of things arrive on `onData`, and they must be kept apart:
 |---|---|---|
 | xterm's **automatic replies** to queries in past output (DSR / DA / `CSI ?u`) | Synchronously while `term.write()` parses | **Not** during replay: it isn't user input |
 | User keystrokes, paste, extra keys, text page | Synchronously during the dispatch of a DOM input event | **Always** |
+| The path of a file that just finished uploading ([Sending files](#sending-files-ac-323)) | Later, when the upload's request completes, inside `asUserInput()` | **Always** |
 
 The test is **who produced it**, not **when**. Gating on "is this session replaying right now" also drops whatever the user is typing.
 
@@ -222,13 +228,55 @@ Implementation (`web/src/term/userinput.ts`): ask the browser **which event is b
 ```
 onData(data):
   window.event?.type ∈ user-input events → pass (even during replay)
+  else if inside asUserInput(fn)         → pass (even during replay)
   else if replayDepth > 0                → drop (automatic reply)
   else                                   → pass
 ```
 
+`asUserInput(fn)` runs `fn` with a flag set, for user actions that complete outside an event dispatch. Today that is only the paste of an uploaded file's path, which happens when the upload finishes, seconds after the tap. Without it, an upload finishing during a reconnect's catch-up would lose its path silently ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md) §3).
+
 User-input events: `keydown` `keypress` `beforeinput` `input` `paste` `compositionend` `compositionupdate` `pointerdown` `pointerup` `mousedown` `mouseup` `mousemove` `wheel`. `pointer*` covers the extra keys, which call `term.input()` synchronously during a pointer event dispatch; `mouse*` / `wheel` cover xterm's mouse reports when the program enabled mouse tracking, which also produce `onData` synchronously during that event's dispatch. Without them, extra keys pressed and terminal clicks made during replay would be dropped as automatic replies. When you add a user interaction that produces `onData` and should pass during replay, add its event type to this list; forgetting just means it's dropped during replay, which is no worse than before.
 
 **No home-made time window**: xterm calls `preventDefault + stopPropagation` on keys it handles, so the bubble phase never sees them, and the window could only be closed by a timer — and timer tasks have no ordering guarantee relative to network tasks. This approach also covers two easy-to-miss cases: right after user input, xterm parses the next `write()` **synchronously** (that write was started by the WebSocket `message` event, whose `type` isn't in the list, so it's still blocked); and `setTimeout`-driven chunked parsing has no event being dispatched, so it's blocked too.
+
+---
+
+## Sending files (AC-3.23)
+
+[ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md). A file goes to the agent with `POST /api/uploads` ([http-api.md](../30-protocol/http-api.md#uploads)), and its absolute path is pasted into the session, the way dragging a file onto a local terminal types its path. claude and codex turn a pasted image path into `[Image #N]`.
+
+### Where files come from
+
+| Entry | Where | What happens |
+|---|---|---|
+| Paperclip `text-upload-file` | Text page, right of the text box (so on `compact`, and on `wide` with touch) | Opens the system file picker |
+| Paperclip `upload-file` | `wide` tab bar, left of the connection dot | Same |
+| Paste | Into the terminal or the text box, when the clipboard holds files and its `text/plain` is empty | The files are sent; the event is stopped (capture phase), so xterm and the text box get nothing |
+| Drop | Anywhere on the page, when the drag carries files | The files are sent; the page never navigates to the dropped file. While files are dragged over the page, `.stage` has `data-drop="true"` (an accent outline) |
+
+- Both buttons open the **same** hidden `<input type="file" multiple data-testid="upload-input">`, with no `accept` filter, from inside the click (iOS opens pickers only from a user gesture). Its value is cleared after each pick, so picking the same file twice works.
+- Both buttons use `preventDefault` on `pointerdown`, like the other buttons in the extra keys and tab bar, so pressing one doesn't move focus. Picking files doesn't move focus either.
+- A paste that holds any text is a text paste, files or not.
+
+### Sending
+
+1. The target is the session that was current when the files were chosen, pasted or dropped. It is recorded then, not when the upload finishes.
+2. Files upload **one at a time, in order**. Each is pasted as soon as its upload succeeds, then the next starts.
+3. The paste: `term.paste(path)` on the target session's terminal, inside `asUserInput()` and with the extra-key bypass set, so the replay gate passes it and sticky CTRL / ALT neither apply nor disarm. It goes through `onData` (bracketed if the program enabled it, counted in `inputStats`, resent after a reconnect, claims the size). **Only the path**, no space, no Enter, and one paste per file: codex treats two paths in one paste as text.
+4. The text page's draft isn't touched; the path goes to the terminal, not the text box. Enter on the text page then submits the draft after the attachments.
+5. While anything is uploading, both paperclips have `data-busy="true"` (accent, pulsing).
+
+### Failures
+
+Nothing is pasted, a toast says why, and the remaining files still go:
+
+| Case | Toast |
+|---|---|
+| `413` | `<name> is too large (max 20 MB)` |
+| Other HTTP error or network failure | `Upload failed: <name>` |
+| The target session closed or exited before the upload finished | `Session ended; <name> not inserted` |
+
+A `401` is a revoked device: the usual revocation handling takes over (AC-1.11).
 
 ---
 

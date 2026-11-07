@@ -28,20 +28,20 @@
 | m11 | `feat/80-ops-install-simplify` | A new server takes "open the firewall + one command + scan": IP certificates (`--domain` accepts a public IPv4), `--acme-staging` removed, `doctor --acme`, `webterm install` with the embedded install.sh | [ADR-0044](../20-architecture/adr/0044-ip-address-certificates.md), [ADR-0045](../20-architecture/adr/0045-install-from-the-binary.md), [install.md](../80-ops/install.md) |
 | m12 | `feat/00-open-source` | Ready for open source: English docs, comments and UI strings, Apache-2.0, guided install that waits for DNS and the cloud firewall, releases ship `install.sh` | [ADR-0046](../20-architecture/adr/0046-guided-install.md), [install.md](../80-ops/install.md) |
 | m13 | `feat/60-sign-out` | Sign out a device from the device itself: `POST /auth/logout` revokes it and clears the cookie; "Sign out this device" in Settings clears the page's storage, service worker and caches | [ADR-0048](../20-architecture/adr/0048-sign-out.md), [auth-pairing.md](../60-security/auth-pairing.md) |
+| m14 | `feat/50-ssh-attach` | `webterm attach` over SSH through `run/attach.sock`, speaking the same protocol; the session size follows the client in use (`session.updated{cols, rows}`, claims only on use) | [ADR-0050](../20-architecture/adr/0050-ssh-attach.md), [install.md](../80-ops/install.md#from-a-terminal-over-ssh) |
 
 ## In progress
 
-### m14 · `feat/50-ssh-attach`
+### m15 · `feat/40-uploads`
 
-Reach the same sessions from a real terminal over SSH, and let the client in use set the size.
+Send screenshots, photos and other files to a session from any device; claude and codex attach images.
 
 | Deliverable | Docs |
 |---|---|
-| `run/attach.sock`: the WebSocket protocol over a Unix socket, authenticated by file permissions and peer uid | [ADR-0050](../20-architecture/adr/0050-ssh-attach.md), [protocol §1](../30-protocol/websocket-protocol.md#local-attach-endpoint), [threat-model.md](../60-security/threat-model.md) |
-| `webterm attach [name \| n] [--new] [--list]`: pick a session, raw mode, snapshot redraws, reconnects, exit reset | ADR-0050, [install.md](../80-ops/install.md#from-a-terminal-over-ssh) |
-| `session.updated{cols, rows}` on every size change; clients claim the size only when in use (browser: input, focus, own resize while focused) | ADR-0050 §5, [protocol §4.1](../30-protocol/websocket-protocol.md#who-sets-the-size), [session-manager.md](../50-backend/session-manager.md#resize) |
+| `POST /api/uploads`: streamed to `<temp>/webterm-<uid>/uploads/` (private directory, generated names), 20 MiB per file, deleted after 24 hours or past 256 MiB | [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md), [http-api.md](../30-protocol/http-api.md#uploads), [threat-model.md](../60-security/threat-model.md) |
+| Paperclip on the text page and the `wide` tab bar; paste of files and drop anywhere; the path pasted alone into the session it was sent from, past the replay gate | ADR-0051, [input.md](../40-frontend/input.md#sending-files-ac-323), [layout.md](../40-frontend/layout.md) |
 
-Exit criteria, beyond the usual: IT-attach-1..7, IT-size-1, UT-claim-1, E2E-47.
+Exit criteria, beyond the usual: UT-upload-name, UT-upload-dir, UT-upload-sweep, IT-upload-1, UT-upload-1..3, E2E-48; the "Sending files" section of the manual checklist on an iPhone and an Android phone.
 
 ## Planned
 
@@ -59,7 +59,7 @@ Gestures (ADR-0025 §5, §6): pinch to change font size (CSS preview while pinch
 
 By value (scrollback is already solved by [ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1 and ADR-0026):
 
-1. **File browser + upload/download**: a separate feature area
+1. **File browser + download**: a separate feature area. Sending a file to a session is m15; uploading into a chosen directory belongs here
 2. **Passkey / WebAuthn**: closes the gap where adding a new device requires access to the server's terminal
 3. **Split panes on desktop**
 

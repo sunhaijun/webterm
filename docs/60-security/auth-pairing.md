@@ -167,6 +167,7 @@ Rate-limit state lives in memory (cleared on restart) and is never written to th
 | `GET /healthz` | ✗ (returns only `ok`, discloses nothing) |
 | `GET /.well-known/acme-challenge/*` | ✗ (ACME, :80 only) |
 | **`GET /ws`** | **✓** (plus the `Origin` check) |
+| `POST /api/uploads` | ✓ (plus the `Origin` check, [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)) |
 | `/api/*` | ✓ |
 
 **`/ws` requires authentication** is the rule most easily missed. The middleware must cover the WebSocket upgrade path, not just the REST routes.

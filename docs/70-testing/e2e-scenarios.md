@@ -661,3 +661,17 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 7. Write a CPR reply (`ESC [5;1R`) to attach's stdin → the session keeps A's size; then a keystroke (`Ctrl+U`) in attach → the size becomes 100×30 again
 8. Close attach's stdin (the wrapper hangs it up, like ssh closing) → attach exits 0; the session is still in A's list and still takes input
 9. `webterm attach --list` (no PTY) prints `1  <name>  ~` and exits 0
+
+## E2E-48 Sending files (AC-3.23, AC-8.7)
+
+> `web/e2e/uploads.spec.ts`. [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md). The harness starts the agent with `TMPDIR` set to a fresh directory, so uploads land in `<that>/webterm-<uid>/uploads/`. Hook `WebSocket.send` to record INPUT frames and concatenate them per step. The E2E bash has bracketed paste enabled, so a pasted path arrives as `ESC[200~<path>ESC[201~` and sits on the command line without running. `Ctrl+U` clears the line between steps.
+
+1. **Text page** (Pixel 5): click `toggle-text` → `text-upload-file` is visible, right of `textinput`, inside the `extrakeys` rect; `textinput` still has a border on all four sides and lies inside `extrakeys` with a gap on every side; `__webterm.size()` and `resizes()` are unchanged
+2. **Pick one file**: fill `textinput` with `DRAFT`; set `upload-input` to one PNG named `shot 1.png` → within 5 seconds the INPUT frames for this step are exactly `ESC[200~` + path + `ESC[201~`, with no `0d`; the path is absolute, matches `<tmp>/webterm-<uid>/uploads/shot-1-[0-9a-f]{6}\.png`, and the file there has the PNG's bytes and mode `0600`; `textinput.value` is still `DRAFT`
+3. **Two files keep their order**: set `upload-input` to `a.png` then `b.txt` (one pick) → two separate bracketed pastes, the first path ending in `.png` and starting with `a-`, the second ending in `.txt`
+4. **Busy**: hold the upload request with `page.route` → while it is held, `text-upload-file` has `data-busy="true"`; release it → the path is pasted and `data-busy` goes back to `false`
+5. **Too large**: set `upload-input` to a 21 MiB file → a toast mentioning `20 MB`; no INPUT frame; nothing new in the upload directory, no `.part` left
+6. **Tab bar** (1440×900, mouse): `upload-file` is in the top bar between `new-session` and `conn-dot`, its SVG the same size as `open-settings`'s, vertical centers within 0.5px; clicking it opens a file chooser (`page.waitForEvent('filechooser')`); choosing a PNG → the path is pasted into the current session
+7. **Paste a screenshot**: on the terminal's helper textarea, dispatch a `paste` event whose `clipboardData` holds one `image/png` file and no text → the path is pasted (bracketed); then dispatch a `paste` with only `text/plain` `echo PASTED` → the INPUT frames are the bracketed text `echo PASTED`, and no upload request was made
+8. **Drop**: dispatch `dragenter` / `dragover` with a `DataTransfer` holding a file over `.term` → `.stage` has `data-drop="true"`; dispatch `drop` → the path is pasted, `data-drop` is gone, and the page URL hasn't changed
+9. **The target is fixed at pick time**: two sessions A and B, A current; hold the upload, pick a file in A, switch to B, release → the bracketed path appears only in A's INPUT frames

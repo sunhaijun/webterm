@@ -57,6 +57,8 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 
 **US-3.6** (m4) Pasting multi-line text doesn't make the shell run each line as a separate command (bracketed paste).
 
+**US-3.7** (m15) I show claude a screenshot or a photo from whatever device I'm on. On the phone I tap the paperclip on the text page and pick from the photo library or take a picture; on a laptop I paste the screenshot or drop the file on the terminal. It shows up in claude's prompt as `[Image #1]`, in the session I sent it from, and I write my question after it. Files other than images arrive as a path the program can read ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)).
+
 ---
 
 ## US-4 Multiple sessions
