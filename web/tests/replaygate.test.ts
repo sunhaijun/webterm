@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 
 import { inputTrace } from '../src/keys/inputstats'
 import { SessionStore, type ConnLike } from '../src/sessions/store'
-import { USER_INPUT_EVENTS, inUserInputEvent } from '../src/term/userinput'
+import { USER_INPUT_EVENTS, asUserInput, inUserInputEvent } from '../src/term/userinput'
 import { info } from './helpers'
 
 const enc = (s: string) => new TextEncoder().encode(s)
@@ -83,6 +83,37 @@ describe('UT-replay-2 replay gate', () => {
     inputInside(store, 'pointerdown', '\t')
     await parsed()
     expect(sent).toEqual(['\x1b[A', '\t'])
+  })
+
+  // UT-upload-3: an uploaded file's path is pasted when the upload finishes, outside any
+  // DOM event. Marked with asUserInput, it passes even mid catch-up (ADR-0051 §3).
+  it('during catch-up, a paste marked with asUserInput still reaches the PTY; unmarked, it would not', async () => {
+    const { store, sent } = makeStore()
+    // paste() needs a terminal opened in the DOM; the app pastes only into one it has shown.
+    // Opening one needs matchMedia, which jsdom lacks.
+    window.matchMedia ??= ((q: string) =>
+      ({ matches: false, media: q, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList)
+    const area = document.createElement('div')
+    document.body.appendChild(area)
+    store.activate(1, area)
+    store.output(1, enc(CPR_QUERY), true)
+    asUserInput(() => store.termOf(1)!.term.paste('/tmp/webterm-1000/uploads/a-abc123.png'))
+    store.termOf(1)!.term.paste('/tmp/unmarked.png')
+    await parsed()
+    expect(sent).toEqual(['/tmp/webterm-1000/uploads/a-abc123.png'])
+    area.remove()
+  })
+
+  it('asUserInput nests, and the mark ends when it returns or throws', () => {
+    expect(inUserInputEvent()).toBe(false)
+    asUserInput(() => asUserInput(() => expect(inUserInputEvent()).toBe(true)))
+    expect(inUserInputEvent()).toBe(false)
+    expect(() =>
+      asUserInput(() => {
+        throw new Error('x')
+      }),
+    ).toThrow()
+    expect(inUserInputEvent()).toBe(false)
   })
 
   it('opens the gate while writing a snapshot too, letting user input through', async () => {

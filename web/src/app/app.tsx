@@ -99,11 +99,13 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
           onRename={rename}
           onCancelRename={endRename}
           onSettings={() => ctl.openSettings()}
+          onUpload={() => ctl.pickFiles()}
+          uploading={s.uploading}
           onMove={(sid, before) => ctl.moveSession(sid, before)}
         />
       )}
 
-      <div class="stage">
+      <div class="stage" data-drop={s.dropping ? 'true' : undefined}>
         <div class="term" data-testid="terminal" ref={areaRef} />
         <ConnBanner state={s.conn} info={s.connInfo} fatal={s.fatal} note={s.connNote} />
         <ToastView toast={s.toast} />
@@ -130,8 +132,22 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
           onKey={(id) => ctl.pressKey(id)}
           onSend={(send) => ctl.sendText(send)}
           register={(els) => ctl.registerTextPage(els)}
+          onUpload={() => ctl.pickFiles()}
+          uploading={s.uploading}
         />
       )}
+
+      {/* Both paperclips open this one input (ADR-0051 §2): any file type, several at once */}
+      <input
+        type="file"
+        multiple
+        class="upload-input"
+        tabIndex={-1}
+        aria-hidden="true"
+        data-testid="upload-input"
+        ref={(el) => ctl.registerFileInput(el)}
+        onChange={() => ctl.onFilesPicked()}
+      />
 
       {s.sessionsOpen && (
         <Drawer

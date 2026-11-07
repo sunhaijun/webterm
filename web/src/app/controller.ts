@@ -11,11 +11,12 @@ import { clearLocalData } from './localdata'
 import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, routeInput, type SessionView } from '../sessions/store'
 import { installDragWheel, installTapToggle } from '../term/gestures'
-import { themeFromCss } from '../term/terminal'
-import { inUserInputEvent } from '../term/userinput'
+import { themeFromCss, type TermHandle } from '../term/terminal'
+import { asUserInput, inUserInputEvent } from '../term/userinput'
 import { applyTheme, readFontSize, readTheme, validFontSize, writeFontSize, writeTheme, type Theme } from '../ui/prefs'
 import { debounce, installAppFit, isCoarsePointer, watchCoarse } from '../ui/viewport'
 import { readForm, type Form } from './form'
+import { dragHasFiles, pastedFiles, sessionGoneError, uploadError, uploadFile, type Upload } from './uploads'
 
 export interface Toast {
   id: number
@@ -71,9 +72,15 @@ export interface AppState {
   fontSize: number
   /** Which page the extra-keys slot shows for the active session (tracked per session, ADR-0036). */
   page: KeyPage
+  /** Files are uploading: both paperclips pulse (ADR-0051 §2). */
+  uploading: boolean
+  /** Files are being dragged over the page: the terminal area shows an outline. */
+  dropping: boolean
 }
 
 const TOAST_MS = 3000
+/** dragover repeats every ~50ms while files hover; without one for this long, the drag left. */
+const DROP_IDLE_MS = 1000
 /** How long a connection note stays in the banner (ADR-0049). */
 export const NOTE_MS = 3000
 
@@ -136,6 +143,17 @@ export class AppController {
   /** Whether this page has focus: only a page in use claims the session's size (ADR-0050 §5). */
   private readonly hasFocus: () => boolean
 
+  /** Sends one file to the agent (`POST /api/uploads`, ADR-0051). */
+  private readonly upload: Upload
+  /** The hidden file input both paperclips open. */
+  private fileInput: HTMLInputElement | null = null
+  /** The session current when a paperclip opened the picker: the picked files go there. */
+  private pickTarget: number | null = null
+  /** Uploads run one at a time, in order, across picks, pastes and drops. */
+  private uploadChain: Promise<void> = Promise.resolve()
+  private uploadsLeft = 0
+  private dropTimer: ReturnType<typeof setTimeout> | undefined
+
   constructor(
     opts: {
       url?: string
@@ -144,9 +162,11 @@ export class AppController {
       authProbe?: () => Promise<number>
       signOut?: () => Promise<number>
       hasFocus?: () => boolean
+      upload?: Upload
     } = {},
   ) {
     this.hasFocus = opts.hasFocus ?? (() => document.hasFocus())
+    this.upload = opts.upload ?? uploadFile
     this.authProbe = opts.authProbe ?? (() => fetch('/api/devices', { credentials: 'same-origin' }).then((r) => r.status))
     this.signOutRequest =
       opts.signOut ?? (() => fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' }).then((r) => r.status))
@@ -173,6 +193,8 @@ export class AppController {
       theme: readTheme(),
       fontSize: readFontSize(),
       page: 'keys',
+      uploading: false,
+      dropping: false,
     }
     this.conn = new Connection({
       url: opts.url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
@@ -329,6 +351,41 @@ export class AppController {
     const onScheme = () => this.store.setTheme(cssTheme())
     mq?.addEventListener('change', onScheme)
 
+    // Files pasted into the terminal or the text box, and files dropped anywhere on the page
+    // (ADR-0051 §2). Capture phase on window, so it runs before xterm's paste handler on its
+    // helper textarea; stopping the event there keeps xterm from pasting an empty string.
+    const onPaste = (e: ClipboardEvent) => {
+      const target = e.target instanceof Node ? e.target : null
+      if (!target || !(area.contains(target) || target === this.textPage?.text)) return
+      const files = pastedFiles(e.clipboardData)
+      if (!files) return
+      e.preventDefault()
+      e.stopPropagation()
+      this.sendFiles(files)
+    }
+    // Without preventDefault on dragover the browser refuses the drop, and a dropped file
+    // then replaces the whole page. Only drags that carry files are touched.
+    const onDragOver = (e: DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      this.showDrop()
+    }
+    const onDragLeave = (e: DragEvent) => {
+      if (e.relatedTarget === null) this.hideDrop() // left the window
+    }
+    const onDrop = (e: DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return
+      e.preventDefault()
+      this.hideDrop()
+      this.sendFiles(Array.from(e.dataTransfer?.files ?? []))
+    }
+    window.addEventListener('paste', onPaste, true)
+    window.addEventListener('dragenter', onDragOver)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+
     ;(window as unknown as { __webterm: unknown }).__webterm = this.hooks()
     this.conn.connect()
 
@@ -339,6 +396,12 @@ export class AppController {
       window.removeEventListener('keydown', onKeyTrace, true)
       window.removeEventListener('keydown', onKey)
       mq?.removeEventListener('change', onScheme)
+      window.removeEventListener('paste', onPaste, true)
+      window.removeEventListener('dragenter', onDragOver)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+      if (this.dropTimer) clearTimeout(this.dropTimer)
       ro.disconnect()
       unfit()
       uncoarse()
@@ -656,6 +719,106 @@ export class AppController {
 
   focusTerm(): void {
     this.activeTerm()?.term.focus()
+  }
+
+  // ---------- Sending files (ADR-0051, input.md §Sending files) ----------
+
+  /** The hidden `<input type="file" multiple>` both paperclips open (app.tsx). */
+  registerFileInput(el: HTMLInputElement | null): void {
+    this.fileInput = el
+  }
+
+  /**
+   * A paperclip was clicked: open the system picker. Runs inside the click, or iOS won't
+   * open it. The files will go to the session current now, whenever the picker returns.
+   */
+  pickFiles(): void {
+    const el = this.fileInput
+    if (!el || this.store.active === null) return
+    this.pickTarget = this.store.active
+    el.value = ''
+    el.click()
+  }
+
+  /** The picker returned (the input's change event). */
+  onFilesPicked(): void {
+    const el = this.fileInput
+    if (!el) return
+    const files = Array.from(el.files ?? [])
+    el.value = '' // so picking the same file again fires change again
+    const sid = this.pickTarget ?? this.store.active
+    this.pickTarget = null
+    this.sendFiles(files, sid)
+  }
+
+  /**
+   * Uploads `files` one at a time, in order, and pastes each saved path alone into `sid`
+   * (the session current when they were chosen, pasted or dropped). Calls queue behind
+   * earlier ones, so paths arrive in the order given. A failure costs only that file.
+   */
+  sendFiles(files: File[], sid: number | null = this.store.active): void {
+    if (sid === null || files.length === 0) return
+    // The terminal, not just the sid: sids are reused after an agent restart (ADR-0038 §4),
+    // and a path must never land in some other session that got the same number.
+    const term = this.store.termOf(sid)
+    if (!term) return
+    this.uploadsLeft += files.length
+    this.set({ uploading: true })
+    for (const file of files) {
+      this.uploadChain = this.uploadChain.then(async () => {
+        try {
+          await this.sendOne(file, sid, term)
+        } catch {
+          this.toast('error', uploadError(0, file.name))
+        } finally {
+          if (--this.uploadsLeft === 0) this.set({ uploading: false })
+        }
+      })
+    }
+  }
+
+  private async sendOne(file: File, sid: number, term: TermHandle): Promise<void> {
+    const res = await this.upload(file)
+    if (!res.ok) {
+      if (res.status === 401) this.revoke()
+      else this.toast('error', uploadError(res.status, file.name))
+      return
+    }
+    // Direct-input IME composition holds back all input to the active session (AC-3.3);
+    // wait it out (up to 10s) rather than have the path dropped.
+    for (let i = 0; i < 100 && sid === this.store.active && this.ime?.isComposing; i++) {
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    if (!this.pastePath(sid, term, res.path)) this.toast('warn', sessionGoneError(file.name))
+  }
+
+  /**
+   * Pastes a saved file's path into a session: alone, no Enter, through onData like any
+   * paste (bracketed if enabled, counted, resent after a reconnect, claims the size).
+   * `asUserInput` gets it past the replay gate (it doesn't run inside a DOM input event);
+   * the key bypass keeps sticky CTRL / ALT out of it, as on the text page.
+   */
+  private pastePath(sid: number, t: TermHandle, path: string): boolean {
+    if (this.store.termOf(sid) !== t || this.store.info(sid)?.status !== 'running' || this.closeSent.has(sid)) return false
+    this.keyBypass = true
+    try {
+      asUserInput(() => t.term.paste(path))
+    } finally {
+      this.keyBypass = false
+    }
+    return true
+  }
+
+  private showDrop(): void {
+    if (this.dropTimer) clearTimeout(this.dropTimer)
+    this.dropTimer = setTimeout(() => this.hideDrop(), DROP_IDLE_MS)
+    if (!this.state.dropping) this.set({ dropping: true })
+  }
+
+  private hideDrop(): void {
+    if (this.dropTimer) clearTimeout(this.dropTimer)
+    this.dropTimer = undefined
+    if (this.state.dropping) this.set({ dropping: false })
   }
 
   /**

@@ -44,8 +44,28 @@ export const USER_INPUT_EVENTS: ReadonlySet<string> = new Set([
   'wheel',
 ])
 
+/** How many asUserInput() calls are running (they can nest). */
+let explicitDepth = 0
+
 /**
- * Whether the event being dispatched is a user input event.
+ * Runs `fn` as user input: onData it produces passes the replay gate. For user actions
+ * that complete outside any event dispatch, so `window.event` can't vouch for them. Today
+ * that is only pasting an uploaded file's path, which happens when the upload finishes,
+ * seconds after the tap (ADR-0051 §3); without this, an upload finishing during a
+ * reconnect's catch-up would lose its path silently.
+ */
+export function asUserInput<T>(fn: () => T): T {
+  explicitDepth++
+  try {
+    return fn()
+  } finally {
+    explicitDepth--
+  }
+}
+
+/**
+ * Whether the event being dispatched is a user input event, or the code running was
+ * marked as user input with asUserInput().
  *
  * Covers two easy-to-miss cases: right after user input, xterm may parse the next
  * `write()` synchronously, but that write comes from a WebSocket `message` event, which is
@@ -53,6 +73,7 @@ export const USER_INPUT_EVENTS: ReadonlySet<string> = new Set([
  * no event being dispatched, so it is blocked too.
  */
 export function inUserInputEvent(): boolean {
+  if (explicitDepth > 0) return true
   const ev = (globalThis as { event?: Event | null }).event
   return !!ev && USER_INPUT_EVENTS.has(ev.type)
 }

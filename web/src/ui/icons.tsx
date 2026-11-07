@@ -73,6 +73,38 @@ export const EDIT_BOX = 'M10 1H6a5 5 0 0 0-5 5v10a5 5 0 0 0 5 5h10a5 5 0 0 0 5-5
 /** The pencil: tip slightly below-left of center, body at 45° toward the top right, rounded end. */
 export const EDIT_PENCIL = 'M8 14l.7-3.4 8.3-8.3a2 2 0 0 1 2.7 2.7l-8.3 8.3z'
 
+/**
+ * Paperclip, for sending files (ADR-0051), in one stroke: a free end, a long loop, a short
+ * loop inside it and the other free end, three wires across, leaning 45° like the pencil.
+ * Drawn twice rather than scaled, so each size keeps its stroke: 14×14 at 1.75px in the
+ * tab bar next to `+` and ⚙, 22×22 at 2px on the text page across from ✎. The wires are
+ * spaced so the inner loop stays open at the small size.
+ */
+export const PaperclipIcon = () => <Icon d={PAPERCLIP_14} />
+
+export const PaperclipLargeIcon = () => (
+  <svg
+    class="icon"
+    viewBox="0 0 22 22"
+    width="22"
+    height="22"
+    aria-hidden="true"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d={PAPERCLIP_22} />
+  </svg>
+)
+
+/** Wires 3 apart, 14 long; loops of radius 3 and 1.5; centered on the box. */
+export const PAPERCLIP_14 = 'M7.04 1.79L1.74 7.09A3 3 0 0 0 5.98 11.33L12.7 4.62A1.5 1.5 0 0 0 10.58 2.49L5.63 7.44'
+
+/** Wires 4.75 apart, 21 long; loops of radius 4.75 and 2.375; centered on the box. */
+export const PAPERCLIP_22 = 'M10.68 3.14L3.08 10.75A4.75 4.75 0 0 0 9.8 17.46L19.61 7.65A2.375 2.375 0 0 0 16.25 4.29L9.09 11.45'
+
 /** Drag handle (ADR-0040): three horizontal lines. */
 export const GripIcon = () => <Icon d="M2 3.5h10M2 7h10M2 10.5h10" />
 
