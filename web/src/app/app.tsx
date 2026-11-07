@@ -12,6 +12,7 @@ import { Drawer } from '../ui/drawer'
 import { GearIcon, PlusIcon } from '../ui/icons'
 import { AppController } from './controller'
 import { showsExtraKeys } from './form'
+import { ClipBar, LinkPopover } from './linkpop'
 import { ConnBanner, ImePreview, ToastView } from './notices'
 import { CloseConfirm, SignOutConfirm } from './confirm'
 import { RenameSheet, SessionList, SessionMenu } from './sessions'
@@ -109,6 +110,7 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
         <div class="term" data-testid="terminal" ref={areaRef} />
         <ConnBanner state={s.conn} info={s.connInfo} fatal={s.fatal} note={s.connNote} />
         <ToastView toast={s.toast} />
+        <ClipBar offer={s.clip} onCopy={() => ctl.copyClip()} onClose={ctl.dismissClip} />
         <ImePreview preview={s.preview} fontSize={s.fontSize} />
         {empty && (
           <div class="empty" data-testid="empty">
@@ -232,6 +234,8 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
       {closing && <CloseConfirm name={closing.name} onOk={() => ctl.confirmClose()} onCancel={() => ctl.cancelClose()} />}
 
       {s.signingOut && <SignOutConfirm onOk={() => void ctl.confirmSignOut()} onCancel={() => ctl.cancelSignOut()} />}
+
+      <LinkPopover pop={s.linkPop} onOpen={() => ctl.openLink()} onCopy={() => ctl.copyLink()} onClose={ctl.closeLinkPop} />
     </div>
   )
 }

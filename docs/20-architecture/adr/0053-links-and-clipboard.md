@@ -40,7 +40,7 @@ claude 2.1 has `/copy` ("Copy Claude's last response to clipboard (or /copy N fo
 - The page handles `OSC 52 ; Pc ; Pd`: `Pd` is base64, decoded as UTF-8 and written to the clipboard (`Pc`, the selection name, doesn't matter: a browser has one clipboard). **`Pd = ?` (a read) is ignored and never answered**: a program must not read the user's clipboard.
 - **Only live output of the current session.** OSC 52 inside replayed bytes (catch-up, snapshot) is ignored, so reconnecting or switching back never overwrites the clipboard with something old; so is OSC 52 from a pinned session in the background.
 - At most 1 MiB of decoded text; anything larger is ignored.
-- `navigator.clipboard.writeText` needs a user gesture in iOS Safari and Firefox. The page tries it: on success a short "Copied" toast; on rejection a bar at the bottom with the start of the text and a **Copy** button, which writes inside the tap. A new copy replaces the bar; it goes away after copying, on `Esc`, or after 30 s.
+- `navigator.clipboard.writeText` needs a user gesture in iOS Safari and Firefox. The page tries it: on success a short "Copied" toast; on rejection a bar at the bottom with the start of the text and a **Copy** button, which writes inside the tap. A new copy replaces the bar; it goes away after copying, with its ✕, or after 30 s. `Esc` doesn't close it: the bar stays up while you keep working, and `Esc` belongs to the program (claude interrupts on it). The popover, which is in the way, does take `Esc`, before the terminal sees it.
 - So in claude, `/copy` puts the answer on the phone's clipboard (one extra tap on iOS).
 
 ### 5. Not in this milestone

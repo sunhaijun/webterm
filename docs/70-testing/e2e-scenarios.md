@@ -684,12 +684,12 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 
 > [ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md) §1–§3. `window.open` is replaced with a recorder; the context has clipboard permissions.
 
-1. **Desktop** (1440×900, mouse): `printf 'see https://example.com/a?b=1.\n'` → hovering the URL underlines it; a plain click on it opens nothing; Ctrl+click opens `https://example.com/a?b=1` (no trailing `.`) exactly once
+1. **Desktop** (1440×900, mouse): `printf 'see https://example.com/a?b=1.\n'` → a plain click on the URL opens nothing; Ctrl+click opens `https://example.com/a?b=1` (no trailing `.`) exactly once
 2. **Not a link**: `printf 'file:///etc/passwd javascript:alert(1)\n'` → Ctrl+click on either opens nothing
 3. **Soft-wrapped**: a URL longer than the terminal width (`https://example.com/` + 150 × `x`) → Ctrl+click on its second row opens the whole URL
 4. **Touch** (Pixel 5): tap the URL from step 1 → `link-popover` is visible, `link-url` shows it, no INPUT frame was sent and the keyboard state didn't change; tap `link-copy` → the clipboard holds the URL and the popover closes; tap the URL again, then `link-open` → the recorder got the URL
-5. **Under mouse tracking**: run `scroller.py 1` (mouse tracking on) after printing a URL on its screen → a tap on the URL opens `link-popover` and sends no mouse report; a tap elsewhere sends a mouse report and the popover closes
-6. **Closing**: open the popover, press `Esc` → closed; open it, switch sessions → closed
+5. **Under mouse tracking**: run `mouselink.py` (SGR mouse tracking, a URL on row 1, a click counter on row 3) → a tap on the URL opens `link-popover` and sends no mouse report; after `Esc`, a tap on the counter is a click (`clicks: 1`)
+6. **Closing**: open the popover, press `Esc` → closed, and no `ESC` reached the PTY; open it, `Ctrl+Shift+↓` to the next session → closed
 
 ## E2E-50 Clipboard from programs (AC-5.20)
 
