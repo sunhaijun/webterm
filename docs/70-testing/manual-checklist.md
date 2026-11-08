@@ -147,6 +147,8 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] A long log → End shows its last lines
 - [ ] Desktop: Download saves with the right name (a Chinese name too); dropping files on the sheet uploads them there, dropping on the terminal still sends them to the session
 - [ ] Rename and delete from a row's swipe and long-press (phone) and right-click (desktop); New folder; New session here opens a shell in that folder
+- [ ] A README and a claude-written plan (`.md`) render on the phone: tables scroll sideways, code blocks too; Source shows the text; a relative link opens the other file
+- [ ] Desktop: maximize, reload, open files again → still maximized; double-click the header restores
 - [ ] Open a raw `.html` URL from the address bar (`/api/fs/raw?path=…`) → it downloads, nothing renders
 
 ## Waiting for you (every time the attention rules change, since m16)

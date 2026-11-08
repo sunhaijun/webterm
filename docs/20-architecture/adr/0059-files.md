@@ -1,6 +1,6 @@
 # ADR-0059 Files: browse, view, download and upload
 
-Status: Accepted (2026-11-08). The first item of v0.2 ([milestones](../../90-roadmap/milestones.md), [non-goals](../../00-overview/non-goals.md) §2). Adds `/api/fs/*` to the [HTTP API](../../30-protocol/http-api.md#files), US-9 and AC-9, and amends invariant 3. The WebSocket protocol, the handoff snapshot and the terminal emulator are unchanged.
+Status: Accepted (2026-11-08); §1 (maximize on `wide`) and §4 (Markdown rendered) amended by [ADR-0060](0060-files-maximize-and-markdown.md). The first item of v0.2 ([milestones](../../90-roadmap/milestones.md), [non-goals](../../00-overview/non-goals.md) §2). Adds `/api/fs/*` to the [HTTP API](../../30-protocol/http-api.md#files), US-9 and AC-9, and amends invariant 3. The WebSocket protocol, the handoff snapshot and the terminal emulator are unchanged.
 
 ## Context
 
@@ -145,7 +145,7 @@ ADR-0051's sending stays as it is: an attachment for a session, in the temp dire
 - **`name (1).ext`.** It needs quoting in a shell.
 - **A trash folder.** Its own location, expiry and restore UI; the confirmation sheet names what goes.
 - **Editing text files.** Wanted on a phone, but it brings saving over someone else's change and turns the browser into an editor. Later, if missed.
-- **Rendering Markdown or HTML.** A sanitizer and an attack surface for something the text view already shows.
+- **Rendering Markdown or HTML.** A sanitizer and an attack surface for something the text view already shows. Markdown was taken up after all in [ADR-0060](0060-files-maximize-and-markdown.md), with raw HTML off; HTML is still never rendered.
 - **Downloading a folder as a zip, and tapping a path in the terminal to open it.** Both build on this. They come next, each with its own amendment.
 
 ## Consequences
