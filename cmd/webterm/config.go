@@ -68,6 +68,16 @@ func defaultConfigPath() string {
 	return filepath.Join(home, ".config", "webterm", "config")
 }
 
+// commandsFilePath is where the command strip's arrangement is kept:
+// commands.json in the default config directory (ADR-0057 §5).
+func commandsFilePath() string {
+	p := defaultConfigPath()
+	if p == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(p), "commands.json")
+}
+
 // configPathFrom extracts --config from args before the real Parse.
 //
 // It is a chicken-and-egg problem: the file named by --config fills in the

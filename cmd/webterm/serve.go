@@ -169,6 +169,8 @@ func runServe(args []string) error {
 		MaxConns:   o.maxConns,
 		Version:    version,
 		Logger:     log,
+		// The command strip's arrangement lives next to the config file (ADR-0057 §5)
+		CommandsFile: commandsFilePath(),
 	}, st, sessions)
 
 	servers, errCh, err := a.Listen(agent.ServeConfig{

@@ -1,10 +1,10 @@
-// Package frequent lists the inputs a program is sent most often, read on
-// request from that program's own history file (ADR-0054 §3,
-// docs/30-protocol/http-api.md#frequent-input).
+// Package history lists what a program was sent recently, newest first, read
+// on request from that program's own history file (ADR-0057 §1,
+// docs/30-protocol/http-api.md#history).
 //
 // Nothing here is stored or logged: the files belong to claude, codex and the
 // shell, and webterm keeps no history of its own (privacy-history.md).
-package frequent
+package history
 
 import (
 	"bufio"
@@ -14,22 +14,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
-	// MaxItems is how many items Items returns at most.
-	MaxItems = 10
+	// MaxItems is how many entries Items returns at most.
+	MaxItems = 30
+	// MaxEntryBytes skips anything longer: a pasted log is not something to resend.
+	MaxEntryBytes = 32 << 10
 	// tailBytes is how much of the end of a history file is read.
 	tailBytes = 1 << 20
-	// window is how many of the most recent entries are counted.
-	window = 1000
-	// maxRunes is the longest entry kept; longer ones aren't "frequent input".
-	maxRunes = 80
-	// minShellRunes drops commands faster typed than picked (ls, cd).
-	minShellRunes = 3
 )
 
 // placeholder matches what claude writes in place of pasted text and images;
@@ -37,19 +31,17 @@ const (
 var placeholder = regexp.MustCompile(`\[(Pasted text|Image) #\d+`)
 
 // Items returns at most MaxItems entries for program ("claude", "codex",
-// "shell"), most frequent first, ties broken by recency. home is the user's
-// home directory and shell the session shell (a path or a name). A missing or
-// unreadable file, or another program, gives none.
+// "shell"), newest first, each distinct entry once at its newest position.
+// home is the user's home directory and shell the session shell (a path or a
+// name). A missing or unreadable file, or another program, gives none.
 func Items(program, home, shell string) []string {
 	var entries []string
-	minRunes := 1
 	switch program {
 	case "claude":
 		entries = jsonField(filepath.Join(home, ".claude", "history.jsonl"), "display")
 	case "codex":
 		entries = jsonField(filepath.Join(home, ".codex", "history.jsonl"), "text")
 	case "shell":
-		minRunes = minShellRunes
 		switch filepath.Base(shell) {
 		case "bash":
 			entries = bashHistory(filepath.Join(home, ".bash_history"))
@@ -57,47 +49,23 @@ func Items(program, home, shell string) []string {
 			entries = zshHistory(filepath.Join(home, ".zsh_history"))
 		}
 	}
-	return rank(entries, minRunes)
+	return newest(entries)
 }
 
-// rank counts the last window entries that are single-line, minRunes to
-// maxRunes long and not placeholders, and returns the most frequent first.
-func rank(entries []string, minRunes int) []string {
-	if len(entries) > window {
-		entries = entries[len(entries)-window:]
-	}
-	type stat struct {
-		n    int
-		last int
-	}
-	stats := map[string]*stat{}
-	var order []string
-	for i, e := range entries {
-		e = strings.TrimSpace(e)
-		n := utf8.RuneCountInString(e)
-		if n < minRunes || n > maxRunes || strings.ContainsAny(e, "\r\n") || placeholder.MatchString(e) {
+// newest walks from the end: blank, oversized and placeholder entries are
+// skipped, repeats keep only their newest position.
+func newest(entries []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for i := len(entries) - 1; i >= 0 && len(out) < MaxItems; i-- {
+		e := strings.TrimSpace(entries[i])
+		if e == "" || len(e) > MaxEntryBytes || placeholder.MatchString(e) || seen[e] {
 			continue
 		}
-		st := stats[e]
-		if st == nil {
-			st = &stat{}
-			stats[e] = st
-			order = append(order, e)
-		}
-		st.n++
-		st.last = i
+		seen[e] = true
+		out = append(out, e)
 	}
-	sort.SliceStable(order, func(i, j int) bool {
-		a, b := stats[order[i]], stats[order[j]]
-		if a.n != b.n {
-			return a.n > b.n
-		}
-		return a.last > b.last
-	})
-	if len(order) > MaxItems {
-		order = order[:MaxItems]
-	}
-	return order
+	return out
 }
 
 // tailLines returns the complete lines in the last tailBytes of path. When the

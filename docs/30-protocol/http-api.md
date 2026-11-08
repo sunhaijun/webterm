@@ -73,6 +73,7 @@ GET /api/commands?sid=3            (&refresh=1 asks the tool again)
        {"id": "/compact", "label": "/compact", "kind": "text", "send": ["/compact"], "enter": true, "origin": "builtin", "hidden": false},
        {"id": "/deep-research", "label": "/deep-research", "kind": "text", "send": ["/deep-research"], "enter": true, "origin": "skill", "hidden": true}
      ],
+     "arrangement": {"order": ["key:shift-tab", "/compact"]},
      "warning": ""}
 ```
 
@@ -93,6 +94,7 @@ DELETE /api/commands?program=claude      → 204, back to the defaults
 
 - `kind: "keys"`: `send` is a list of byte strings written 120 ms apart; `kind: "text"`: `send` has one string, followed by Enter when `enter` is true.
 - `origin`: `key`, `builtin`, `custom`, `skill` (hidden by default), `added`.
+- `arrangement` is the stored arrangement as `PUT` takes it; the editor changes it and sends it back whole.
 - The arrangement is saved to `~/.config/webterm/commands.json` (0600, atomic). Bodies over 256 KiB, more than 1000 entries, or another program than `claude` / `codex` get `400 bad_request`.
 
 ## Health check
