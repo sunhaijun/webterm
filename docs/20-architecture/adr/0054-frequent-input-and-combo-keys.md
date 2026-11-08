@@ -56,7 +56,7 @@ It's in `welcome.sessions[]` / `session.created` and in `session.updated` when i
 - Read at most the last 1 MiB of the file, take the last 1000 entries, keep single-line entries of 1–80 characters after trimming, drop claude's placeholders (`[Pasted text #N …]`, `[Image #N]`), and for the shell drop entries shorter than 3 characters (`ls` is faster typed). Rank by count, ties by the most recent; return the top ten.
 - `other`, a missing file or an unreadable one → an empty list.
 - **webterm stores nothing**: no copy, no log line, no cache in the agent. The browser keeps the last list per program in memory only, to show it while the new one loads.
-- bash writes its history when the shell exits, so commands from a shell that has been open for days show up late; `PROMPT_COMMAND="history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}"` in `~/.bashrc` writes each command as it runs. webterm doesn't change the user's shell config ([troubleshooting.md](../../80-ops/troubleshooting.md#frequent-input-is-empty-or-old)).
+- bash writes its history when the shell exits, so commands from a shell that has been open for days show up late; `PROMPT_COMMAND="history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}"` in `~/.bashrc` writes each command as it runs. webterm doesn't change the user's shell config ([troubleshooting.md](../../80-ops/troubleshooting.md#history-is-empty-or-old)).
 
 ### 4. The menus
 
