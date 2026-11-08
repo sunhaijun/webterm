@@ -28,7 +28,7 @@ ADR-0059 turned Markdown rendering down as "a sanitizer and an attack surface". 
 - **Raw HTML is off** (`html: false`). `<script>`, `<img onerror>` or `<iframe>` in a document come out as visible text, escaped, never as tags.
 - **Links** are allowed to `http:`, `https:` and `mailto:`, to `#anchors`, and to relative paths. Anything else (`javascript:`, `file:`, `data:` and so on) stays plain text. A click:
   - `http(s)` and `mailto` open in a new tab with `noopener noreferrer`;
-  - `#anchor` scrolls the preview to the heading with that id. Headings get GitHub-style ids: lowercased, punctuation dropped, spaces to `-`, and `-1`, `-2` added to repeats;
+  - `#anchor` scrolls the preview to the heading with that id. Headings get GitHub-style ids: lowercased, punctuation dropped, spaces to `-`, and `-1`, `-2` added to repeats. In the page they carry an `md-` prefix (`#next-steps` finds `md-next-steps`), so a heading's id never collides with the page's own elements or shadows a `window` property;
   - **a relative path** is resolved against the file's folder (query and anchor dropped, `%`-escapes decoded) and opened in the browser. A file replaces the one shown; a folder closes the file and shows that folder in the list. Missing → a toast.
 - **Images**: a relative `src` is loaded from the agent (`/api/fs/raw`, resolved like a link), so a README's screenshots show. Anything else isn't loaded: an `http(s)` image becomes a link carrying its alt text, and other schemes become the alt text alone. External images would tell a third party when and from where you read the file, and the page's CSP (`img-src 'self' data:`) would block them anyway.
 - **Inserted once as HTML** markdown-it produced (the only `innerHTML` in the page). One click listener on the container handles every link: there are no inline handlers. The page's CSP (`script-src 'self'`, no `'unsafe-inline'`) is a second, independent barrier: even a tag or handler that slipped through couldn't run.
@@ -46,6 +46,6 @@ ADR-0059 turned Markdown rendering down as "a sanitizer and an attack surface". 
 
 ## Consequences
 
-- One frontend dependency, markdown-it, in its own chunk fetched the first time a Markdown file opens (about 35 KB gzipped). `go:embed` serves it like every other asset.
+- One frontend dependency, markdown-it, in its own chunk fetched the first time a Markdown file opens (about 43 KB gzipped). `go:embed` serves it like every other asset.
 - The threat model gains rendered Markdown (T5). The served-file headers (ADR-0059 §7) don't change: the preview is built from `/api/fs/raw`'s bytes by the page, not opened from it.
 - Tests: UT-md-1 (escaping, links, images, ids, relative paths), UT-files-7 (the remembered state), E2E-54.

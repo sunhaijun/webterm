@@ -10,6 +10,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 
 import { Drawer } from '../ui/drawer'
+import { readFilesMax, writeFilesMax } from '../ui/prefs'
 import { BackIcon, FileIcon, FolderIcon, FolderPlusIcon, TerminalIcon, UploadIcon } from '../ui/icons'
 import { useRowGestures } from '../ui/rowgestures'
 import { ROW_ACT_PX } from '../ui/rowswipe'
@@ -24,6 +25,7 @@ import {
   hasNul,
   joinPath,
   listDir,
+  baseName,
   makeDir,
   matches,
   validName,
@@ -59,6 +61,8 @@ export interface FilesProps {
   start: string
   home: string | null
   coarse: boolean
+  /** The `wide` form: the sheets can be maximized (ADR-0060 §1). */
+  wide: boolean
   /** The session the browser was opened from is running (Send to session). */
   canSend: boolean
   upload: UploadProgress | null
@@ -96,6 +100,16 @@ export function FilesBrowser(p: FilesProps) {
   const [naming, setNaming] = useState<Naming | null>(null)
   const [deleting, setDeleting] = useState<Target | null>(null)
   const rows = useRowGestures<string>(ROW_ACTIONS)
+  const [maxOn, setMaxOn] = useState(readFilesMax)
+  const max = p.wide
+    ? {
+        on: maxOn,
+        toggle: () => {
+          writeFilesMax(!maxOn)
+          setMaxOn(!maxOn)
+        },
+      }
+    : undefined
   const loadSeq = useRef(0)
   const crumbRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -156,6 +170,26 @@ export function FilesBrowser(p: FilesProps) {
     if (rows.click()) open(e)
   }
 
+  /** A relative link in a Markdown file (ADR-0060 §2): a file replaces the one shown, a folder shows in the list. */
+  const openPath = async (path: string) => {
+    if (path === '/') {
+      setFile(null)
+      go('/')
+      return
+    }
+    const r = await listDir(parentOf(path))
+    const e = r.ok ? r.listing.entries.find((x) => x.name === baseName(path)) : undefined
+    if (!e) {
+      if (!r.ok) failed(r)
+      p.notify('error', `Not found: ${baseName(path)}`)
+    } else if (e.type === 'dir') {
+      setFile(null)
+      go(path)
+    } else {
+      setFile({ entry: e, path })
+    }
+  }
+
   const commitName = async (name: string) => {
     const n = naming
     if (!n) return
@@ -200,6 +234,7 @@ export function FilesBrowser(p: FilesProps) {
         backdropTestid="files-backdrop"
         variant="files"
         backButton
+        max={max}
         onClose={() => p.onClose(dirRef.current)}
         head={
           <div class="files-head">
@@ -360,6 +395,8 @@ export function FilesBrowser(p: FilesProps) {
           entry={file.entry}
           coarse={p.coarse}
           canSend={p.canSend}
+          max={max}
+          onOpenPath={(to) => void openPath(to)}
           onClose={() => setFile(null)}
           onSend={p.onSend}
           notify={p.notify}
@@ -387,6 +424,8 @@ interface FileSheetProps {
   entry: Entry
   coarse: boolean
   canSend: boolean
+  max: { on: boolean; toggle(): void } | undefined
+  onOpenPath(path: string): void
   onClose(): void
   onSend(path: string): void
   notify(kind: NotifyKind, text: string): void
@@ -402,20 +441,27 @@ function canShareFile(name: string): boolean {
 }
 
 /** A file (AC-9.5–AC-9.7): its preview, Share or Download, Send to session. */
-function FileSheet({ path, entry, coarse, canSend, onClose, onSend, notify, onUnauthorized }: FileSheetProps) {
+function FileSheet({ path, entry, coarse, canSend, max, onOpenPath, onClose, onSend, notify, onUnauthorized }: FileSheetProps) {
   const regular = entry.type === 'file'
   const kind = regular ? previewKind(entry.name) : 'none'
-  const long = kind === 'text' && entry.size > TEXT_BYTES
+  const textual = kind === 'text' || kind === 'markdown'
+  const long = textual && entry.size > TEXT_BYTES
   const [text, setText] = useState<string | null>(null)
   const [binary, setBinary] = useState(false)
   const [tail, setTail] = useState(false)
+  /** Markdown shows its source (ADR-0060 §2); rendered every time a file opens. */
+  const [source, setSource] = useState(false)
+  const [html, setHtml] = useState<string | null>(null)
+  const mdMod = useRef<typeof import('./markdown') | null>(null)
+  const mdRef = useRef<HTMLDivElement>(null)
+  const rendered = kind === 'markdown' && !source && !binary
   const [zoom, setZoom] = useState(false)
   const [fetching, setFetching] = useState(false)
   const shared = useRef<File | null>(null)
   const share = regular && coarse && entry.size <= SHARE_MAX && canShareFile(entry.name)
 
   useEffect(() => {
-    if (kind !== 'text') return
+    if (!textual) return
     let live = true
     void readChunk(path, tail).then((r) => {
       if (!live) return
@@ -432,6 +478,37 @@ function FileSheet({ path, entry, coarse, canSend, onClose, onSend, notify, onUn
       live = false
     }
   }, [path, tail])
+
+  // markdown-it is its own chunk, fetched the first time a Markdown file opens
+  useEffect(() => {
+    if (kind !== 'markdown' || text === null || tail) return
+    let live = true
+    void import('./markdown').then((m) => {
+      mdMod.current = m
+      if (live) setHtml(m.renderMarkdown(text, parentOf(path)))
+    })
+    return () => {
+      live = false
+    }
+  }, [text, tail])
+
+  /** Links in the preview, all through this one listener (ADR-0060 §2). */
+  const onMdClick = (e: MouseEvent) => {
+    const a = (e.target as Element).closest('a')
+    const m = mdMod.current
+    if (!a || !m) return
+    const href = a.getAttribute('href') ?? ''
+    const k = m.linkKind(href)
+    if (k === 'web' || k === 'mail') return // target=_blank / the mail app
+    e.preventDefault()
+    if (k === 'anchor') {
+      const id = m.anchorId(href)
+      const el = [...(mdRef.current?.querySelectorAll<HTMLElement>('[id]') ?? [])].find((x) => x.id === id)
+      el?.scrollIntoView({ block: 'start' })
+    } else if (k === 'rel') {
+      onOpenPath(m.resolveRel(parentOf(path), href))
+    }
+  }
 
   const doShare = async (f: File) => {
     try {
@@ -489,6 +566,12 @@ function FileSheet({ path, entry, coarse, canSend, onClose, onSend, notify, onUn
         <audio src={src} controls preload="metadata" data-testid="file-audio" />
       </div>
     )
+  } else if (rendered) {
+    view =
+      html === null ? null : (
+        // markdown-it's output with raw HTML off: the one place the page inserts HTML (ADR-0060 §2)
+        <div class="file-markdown" data-testid="file-markdown" ref={mdRef} onClick={onMdClick} dangerouslySetInnerHTML={{ __html: html }} />
+      )
   } else if (kind === 'none' || binary) {
     view = (
       <div class="file-stage file-none" data-testid="file-nopreview">
@@ -510,6 +593,7 @@ function FileSheet({ path, entry, coarse, canSend, onClose, onSend, notify, onUn
       backdropTestid="file-backdrop"
       variant="file"
       backButton
+      max={max}
       onClose={onClose}
       foot={
         <div class="drawer-actions">
@@ -531,7 +615,20 @@ function FileSheet({ path, entry, coarse, canSend, onClose, onSend, notify, onUn
       <div class="file-view" data-kind={binary ? 'none' : kind}>
         <div class="file-meta" data-testid="file-meta">
           <span>{regular ? `${formatSize(entry.size)} · ${formatFullTime(entry.mtime)}` : formatFullTime(entry.mtime)}</span>
-          {long && !binary && (
+          {kind === 'markdown' && !binary && (
+            <button
+              type="button"
+              class="file-end"
+              data-testid="file-source"
+              onClick={() => {
+                setSource(!source)
+                setTail(false)
+              }}
+            >
+              {source ? 'Preview' : 'Source'}
+            </button>
+          )}
+          {long && !binary && !rendered && (
             <button type="button" class="file-end" data-testid="file-end" onClick={() => setTail(!tail)}>
               {tail ? 'Start' : 'End'}
             </button>

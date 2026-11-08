@@ -183,7 +183,7 @@ var contentTypes = map[string]string{
 	"ogg": "audio/ogg", "oga": "audio/ogg", "opus": "audio/ogg",
 	"pdf": "application/pdf",
 	"txt": "text/plain; charset=utf-8", "log": "text/plain; charset=utf-8",
-	"md": "text/plain; charset=utf-8", "csv": "text/plain; charset=utf-8",
+	"md": "text/plain; charset=utf-8", "markdown": "text/plain; charset=utf-8", "csv": "text/plain; charset=utf-8",
 }
 
 // ContentType is webterm's own type for a file name (by its lowercased

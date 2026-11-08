@@ -150,13 +150,14 @@ export function formatFullTime(ms: number): string {
 
 // ---------- Previews (AC-9.5) ----------
 
-export type PreviewKind = 'image' | 'video' | 'audio' | 'none' | 'text'
+export type PreviewKind = 'image' | 'video' | 'audio' | 'none' | 'markdown' | 'text'
 
 const KIND: Record<string, PreviewKind> = {}
 for (const e of 'png jpg jpeg gif webp avif bmp ico svg'.split(' ')) KIND[e] = 'image'
 for (const e of 'mp4 m4v webm mov ogv'.split(' ')) KIND[e] = 'video'
 for (const e of 'mp3 m4a aac wav flac ogg oga opus'.split(' ')) KIND[e] = 'audio'
 KIND.pdf = 'none'
+KIND.md = KIND.markdown = 'markdown'
 
 export function extOf(name: string): string {
   const dot = name.lastIndexOf('.')
@@ -174,7 +175,7 @@ const MIME: Record<string, string> = {
   bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml',
   mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg',
   mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', flac: 'audio/flac', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg',
-  pdf: 'application/pdf', txt: 'text/plain', log: 'text/plain', md: 'text/plain', csv: 'text/plain',
+  pdf: 'application/pdf', txt: 'text/plain', log: 'text/plain', md: 'text/plain', markdown: 'text/plain', csv: 'text/plain',
 }
 
 export function mimeOf(name: string): string {

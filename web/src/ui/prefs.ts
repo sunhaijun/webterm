@@ -12,6 +12,8 @@ export const THEME_KEY = 'webterm.theme'
 export const FONT_SIZE_KEY = 'webterm.fontSize'
 /** The extra keys are collapsed (ADR-0056): a UI state kept per device, not a setting. */
 export const KEYS_COLLAPSED_KEY = 'webterm.keysCollapsed'
+/** The file browser is maximized on wide screens (ADR-0060 §1). */
+export const FILES_MAX_KEY = 'webterm.filesMax'
 
 export const FONT_MIN = 10
 export const FONT_MAX = 24
@@ -56,6 +58,14 @@ export function readKeysCollapsed(): boolean {
 
 export function writeKeysCollapsed(collapsed: boolean): void {
   safeSet(KEYS_COLLAPSED_KEY, collapsed ? '1' : '0')
+}
+
+export function readFilesMax(): boolean {
+  return safeGet(FILES_MAX_KEY) === '1'
+}
+
+export function writeFilesMax(max: boolean): void {
+  safeSet(FILES_MAX_KEY, max ? '1' : '0')
 }
 
 // localStorage throws in private windows or with site data disabled, so wrap every access.
