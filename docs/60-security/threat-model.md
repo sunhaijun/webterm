@@ -17,7 +17,8 @@ This is the project's biggest risk, so the security design comes before the feat
 | Pairing code (unused, unexpired) | Equivalent to shell access |
 | Terminal output | May contain keys, tokens, sensitive log data (**hence kept only in memory**: ring buffer and terminal emulator) |
 | TLS private key | Man-in-the-middle |
-| Files sent to sessions | Whatever the user sent; a screenshot can show secrets too (hence `0600` in a private directory, deleted after 24 hours, never served back) |
+| Files sent to sessions | Whatever the user sent; a screenshot can show secrets too (hence `0600` in a private directory, deleted after 24 hours) |
+| Every file the user can reach | Read, written and deleted by the file browser with the user's rights ([ADR-0059](../20-architecture/adr/0059-files.md)): no more than shell access, which a paired device already has |
 
 ## Trust boundaries
 
@@ -93,7 +94,7 @@ This is the project's biggest risk, so the security design comes before the feat
 | `SameSite=Strict` cookie | Cross-site requests carry no credentials |
 | WebSocket `Origin` check | Must exactly equal the configured domain; a mismatch returns 403 (AC-1.8) |
 | Every mutation uses a non-GET method | REST writes use only `POST`/`PATCH`/`DELETE` |
-| `Origin` check on REST writes | `POST /auth/logout`, the device routes and `POST /api/uploads` refuse a cross-site `Origin` with 403, in case a browser or proxy gets `SameSite` wrong |
+| `Origin` check on REST writes | `POST /auth/logout`, the device routes, `POST /api/uploads` and the file browser's writes (`POST /api/fs/*`, `DELETE /api/fs`) refuse a cross-site `Origin` with 403, in case a browser or proxy gets `SameSite` wrong |
 
 **Why the WebSocket checks `Origin` separately**: the WebSocket handshake **is not protected by CORS**. Modern browsers don't send `SameSite=Strict` cookies on a cross-site WS handshake either, but this behavior has varied historically. The Origin check is a necessary second line of defense.
 
@@ -107,10 +108,11 @@ This is the project's biggest risk, so the security design comes before the feat
 | No automatic HTML in `linkHandler` | Hyperlinks (OSC 8) and URLs found in text allow only `http`/`https`; anything else isn't a link. They open in a new tab with `noopener`, on Ctrl/Cmd+click or the popover's Open ([ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md)) |
 | OSC 52 is write-only | A program can write the clipboard, never read it (`?` is ignored, not answered); only live output of the current session counts, never replayed bytes or background sessions. A program can still put something misleading on the clipboard; the "Copied" toast or the Copy bar makes every write visible ([ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md) §4) |
 | Metadata such as session name / CWD | Set through `textContent`, never `innerHTML` |
-| Uploaded files ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)) | Write-only: no route lists or serves them, so an uploaded `.html` or `.svg` never becomes a page on webterm's origin |
+| Files sent to a session ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)) | Write-only: no route lists or serves the upload directory by its own name; they are ordinary files to the file browser below |
+| Files served by the file browser ([ADR-0059](../20-architecture/adr/0059-files.md) §7) | `GET /api/fs/raw` answers with `Content-Security-Policy: … sandbox` (an opaque origin: no cookie, no scripts, even if the browser renders it), `Content-Disposition: attachment` for everything but non-SVG images, video and audio, `nosniff`, and a `Content-Type` from webterm's own table. The page shows text with `textContent` and SVG only through `<img>`; it renders no Markdown or HTML. A cloned repository's `.html` or `.svg` therefore never runs as a page on webterm's origin |
 | CSP | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://<domain>; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'` |
 
-Session name and CWD are the only server data that reaches the DOM (tab bar, session drawer). Always use `textContent`, and check this specifically in review.
+Session names, CWDs and file names are the server data that reaches the DOM (tab bar, session drawer, file browser). Always use `textContent`, and check this specifically in review.
 
 ### T6 Denial of service
 
@@ -126,6 +128,8 @@ Session name and CWD are the only server data that reaches the DOM (tab bar, ses
 | Input queue growth | The client-side `pending` is capped at 256 KiB, the agent's per-session input queue |
 | Uploads filling memory | The body streams to a file; the agent never holds more than a copy buffer per request |
 | Uploads filling the temp directory | 20 MiB per file (`413`); 256 MiB in total, oldest deleted first; every file deleted after 24 hours. A full `/tmp` would also break other programs (on a tmpfs it is shared memory), so the cap is mandatory ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md) §5) |
+| File browser uploads filling a disk | No cap: they go where the user puts them, which a paired device's shell can fill just as well. Bodies stream to disk; a failed write deletes the part file ([ADR-0059](../20-architecture/adr/0059-files.md) §6) |
+| Huge folders | A listing returns at most 5,000 entries; reads stream with `http.ServeContent`, never buffered |
 
 **Note**: without Cloudflare there's no DDoS protection ([ADR-0002](../20-architecture/adr/0002-self-contained-binary.md)). Mitigation is limited to the application layer. Network-layer volumetric attacks are out of scope for this project — a user facing them should put a tunnel or CDN in front (the architecture supports that).
 
@@ -146,7 +150,7 @@ Session name and CWD are the only server data that reaches the DOM (tab bar, ses
 | Never log terminal output, under any circumstances |
 | IP and User-Agent are logged on purpose (for the device list and rate limiting) |
 | `IT-privacy-2` verifies this with a canary string |
-| Uploaded file names aren't logged; sizes only at debug level |
+| Uploaded file names aren't logged; sizes only at debug level. The file browser logs no paths or names either ([ADR-0059](../20-architecture/adr/0059-files.md) §6) |
 
 ### T9 Other local users and the shared temp directory
 
@@ -164,6 +168,7 @@ The same check tmux makes for `/tmp/tmux-<uid>`. Files in the directory are as p
 | Measure | Why not |
 |---|---|
 | Sandboxing the shell / restricting which commands can run | Self-deception. The user already has shell access on this machine; webterm shouldn't pretend it can restrict that |
+| Fencing the file browser into a directory | The same: a paired device's shell reaches every file the fence would hide ([ADR-0059](../20-architecture/adr/0059-files.md) §6) |
 | Per-command auditing and alerts | A single-user tool; there's nobody to audit |
 | Re-authentication before dangerous commands | Pure annoyance. The real protection is keeping unauthorized people out |
 | Multi-factor authentication (v0.1) | A pairing code + a long-lived cookie is enough for a single user. Passkeys come in v0.2 (a UX improvement that also happens to improve security) |
@@ -179,5 +184,5 @@ If a change touches any of the following, the PR description must state its secu
 - [ ] New fields written to logs
 - [ ] Changes to how sessions are started (shell arguments, injected environment variables)
 - [ ] New code that puts server data into the DOM
-- [ ] Changes to the CSP or TLS configuration
+- [ ] Changes to the CSP or TLS configuration, or to the headers `GET /api/fs/raw` sends (ADR-0059 §7)
 - [ ] A new unbounded buffer / queue / collection

@@ -62,7 +62,7 @@ So TLS has exactly two code paths: `--dev` (plain HTTP on localhost) and product
 
 ### Terminal output never touches disk
 
-The ring buffer and the agent-side terminal emulator live only in memory. Only device and auth data are persisted; there is no command history. Files you send to a session (a screenshot for claude) are input, not output: they sit in the system temp directory and are deleted after 24 hours ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)).
+The ring buffer and the agent-side terminal emulator live only in memory. Only device and auth data are persisted; there is no command history. Files you send to a session (a screenshot for claude) are input, not output: they sit in the system temp directory and are deleted after 24 hours ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)). Files you upload through the file browser go where you put them ([ADR-0059](../20-architecture/adr/0059-files.md)).
 
 Output can contain keys, tokens and sensitive log data. A session recording feature, if ever built, must be an explicit opt-in with clear disclosure. See [`../60-security/privacy-history.md`](../60-security/privacy-history.md).
 
@@ -72,7 +72,7 @@ Output can contain keys, tokens and sensitive log data. A session recording feat
 
 | Feature | Why not in v0.1 |
 |---|---|
-| File browsing, download, and upload into a chosen directory | A separate feature surface; doesn't affect validating the core path. Sending a file to a session as an attachment exists ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)) |
+| ~~File browsing, download, and upload into a chosen directory~~ | Done in m23 ([ADR-0059](../20-architecture/adr/0059-files.md)). Still to come: a folder as a zip, opening a path tapped in the terminal, editing text files |
 | Split panes on desktop | High layout complexity, and the benefit is mostly on desktop — which already has a local terminal |
 | Passkey / WebAuthn login | Pairing codes + long-lived cookies are enough for v0.1; passkeys are a UX improvement |
 

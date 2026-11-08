@@ -2,14 +2,14 @@
 
 > Status: Accepted
 >
-> ★ The second half of the frontend–backend contract (the first is [`websocket-protocol.md`](websocket-protocol.md)). The terminal stream uses the WebSocket; HTTP covers pairing, device management, uploads, history, the command strip and the health check.
+> ★ The second half of the frontend–backend contract (the first is [`websocket-protocol.md`](websocket-protocol.md)). The terminal stream uses the WebSocket; HTTP covers pairing, device management, uploads, files, the command strip and the health check.
 
 ## General rules
 
 - Every `/api/*` route requires a valid device cookie and returns `401` without one ([`../60-security/auth-pairing.md`](../60-security/auth-pairing.md#route-authentication-matrix-ac-17))
-- Requests and responses are JSON (`Content-Type: application/json`). The one exception is the request body of `POST /api/uploads`, which is the file itself
+- Requests and responses are JSON (`Content-Type: application/json`). The exceptions are the request bodies of `POST /api/uploads` and `POST /api/fs/upload`, which are the file itself, and the response of `GET /api/fs/raw`, which is the file
 - Writes use only `POST` / `PATCH` / `DELETE`. **No CSRF token is needed** — the cookie is `SameSite=Strict`, so cross-site requests never carry credentials
-- Errors are always `{"code": "...", "message": "..."}`; `code` reuses the values from [WebSocket protocol §7](websocket-protocol.md#7-error-codes), plus the HTTP-only `not_found` and `too_large`. Unknown or removed `/api/*` paths **authenticate first** (401 if unauthenticated), then return 404 `not_found` — they must not fall through to the frontend's page fallback route
+- Errors are always `{"code": "...", "message": "..."}`; `code` reuses the values from [WebSocket protocol §7](websocket-protocol.md#7-error-codes), plus the HTTP-only `not_found`, `too_large`, `forbidden` (the agent user may not do that) and `exists` (the name is taken). Unknown or removed `/api/*` paths **authenticate first** (401 if unauthenticated), then return 404 `not_found` — they must not fall through to the frontend's page fallback route
 - Timestamps are always integer unix milliseconds
 
 ## Pairing and devices
@@ -38,6 +38,82 @@ Content-Type: image/png            (informational; not used)
 - `name` is optional and only shapes the saved name: `<stem>-<6 hex>.<ext>`. The stem keeps letters (any script), digits, `.` and `_`, turns every other run of characters (including `-` itself) into one `-`, is trimmed of leading and trailing `-._`, cut to 60 bytes, and is `file` if nothing is left. The extension is the original one in lowercase when it is 1–8 letters or digits, otherwise sniffed from the content (`png` `jpg` `gif` `webp` `pdf` `txt`), otherwise none. The saved path never needs quoting in a shell.
 - The body is streamed to disk, not buffered in memory.
 - There is no route to list, read or delete uploads.
+
+## Files
+
+The file browser ([ADR-0059](../20-architecture/adr/0059-files.md)). Every route is authenticated; the writes (`POST`, `DELETE`) also need the `Origin` check. Paths are absolute: a path that doesn't start with `/` or contains a NUL byte is `400 bad_request`. Paths are cleaned (`/a/./b/../c` → `/a/c`) and symbolic links are followed. The agent user's permissions are the only limit.
+
+Errors common to every route:
+
+| Case | Reply |
+|---|---|
+| The path (or the folder, for `upload`) doesn't exist | `404 not_found` |
+| The agent user lacks permission | `403 forbidden` |
+| The name is taken (`mkdir`, `rename`) | `409 exists` |
+| Anything else that fails on disk (full disk, I/O error) | `500 internal`; the reason goes to the log, without the path |
+
+### List a folder
+
+```
+GET /api/fs/list?path=/home/u/proj
+
+200 {"path": "/home/u/proj",
+     "entries": [
+       {"name": "src", "type": "dir", "size": 0, "mtime": 1762581600000},
+       {"name": "README.md", "type": "file", "size": 4213, "mtime": 1762588000000},
+       {"name": "dev-null-link", "type": "other", "size": 0, "mtime": 1762500000000}
+     ],
+     "total": 3}
+```
+
+- `path` is the cleaned path. `entries` are in byte order of their names (the page sorts them for display), at most **5,000**; `total` counts all of them.
+- `type` is that of the link's target for a symbolic link: `dir`, `file` (a regular file) or `other` (a device, FIFO, socket, or a link that points nowhere). `size` is in bytes and `0` except for files; `mtime` is unix milliseconds.
+- `path` not a folder → `400 bad_request`.
+
+### Read a file
+
+```
+GET /api/fs/raw?path=/home/u/proj/shot.png            (&download=1 for a download)
+
+200 / 206 the bytes
+Content-Type: image/png
+Content-Disposition: inline; filename="shot.png"      (attachment unless inline is allowed, below)
+Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox
+Cache-Control: private, no-cache
+ETag: "<size hex>-<mtime ns hex>"
+```
+
+- **Only regular files.** A folder, device, FIFO or socket is `400 bad_request`; opening never blocks.
+- `http.ServeContent` semantics: `Range` (one range or a suffix like `bytes=-524288`) gives `206`, `If-None-Match` / `If-Modified-Since` give `304`, `HEAD` works.
+- `Content-Type` comes from the extension (lowercased): `png` `jpg`/`jpeg` `gif` `webp` `avif` `bmp` `ico` `svg` → the image types; `mp4`/`m4v` `webm` `mov` `ogv` → video; `mp3` `m4a` `aac` `wav` `flac` `ogg`/`oga`/`opus` → audio; `pdf` → `application/pdf`; `txt` `log` `md` `csv` → `text/plain; charset=utf-8`; anything else `application/octet-stream`.
+- `Content-Disposition` is `inline` only for image types other than SVG, video and audio, and only without `download=1`; everything else is `attachment`. The filename uses RFC 5987 encoding (`filename*=utf-8''…`) when it isn't plain ASCII.
+
+### Upload into a folder
+
+```
+POST /api/fs/upload?dir=/home/u/proj&name=shot%201.png
+<the file's bytes>
+
+201 {"path": "/home/u/proj/shot 1-1.png", "name": "shot 1-1.png", "size": 48213}
+```
+
+- `name` is the file's name, kept as is. It must be one path component: not empty, not `.` or `..`, no `/`, no control characters, at most 255 bytes; otherwise `400 bad_request`.
+- **Never overwrites.** If `name` is taken, the file is saved as `<stem>-1<ext>`, then `-2`, … up to `-999` (`<ext>` is the last extension; a name starting with `.` and no other dot has none). The response names the file actually written.
+- The body streams to a hidden `.webterm-upload-<12 hex>.part` in `dir`, created exclusively with mode `0666` minus the umask, then is renamed into place without replacing anything. A read error (the client went away) deletes it and returns `400 bad_request`. There is no size limit; a full disk is `500 internal` and leaves nothing.
+- `dir` not a folder → `400 bad_request`.
+
+### New folder, rename, delete
+
+```
+POST /api/fs/mkdir  {"path": "/home/u/proj/new"}           → 201 {"path": "/home/u/proj/new"}
+POST /api/fs/rename {"path": "/home/u/proj/a.txt", "name": "b.txt"} → 200 {"path": "/home/u/proj/b.txt"}
+DELETE /api/fs?path=/home/u/proj/old                       → 204
+```
+
+- `mkdir` creates one folder (mode `0777` minus the umask); its parent must exist. The last component follows the `name` rules above.
+- `rename` renames within the same folder; `name` follows the rules above. It never replaces: a taken name is `409 exists`. The same name is `200` and changes nothing.
+- `DELETE` removes a file, a symbolic link (not its target) or a folder with everything in it. It refuses `/` and the agent user's home directory with `400 bad_request`.
+- Bodies are JSON, at most 64 KiB.
 
 ## Commands
 

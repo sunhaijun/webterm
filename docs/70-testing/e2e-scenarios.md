@@ -725,3 +725,25 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 7. **Persistence**: reload while collapsed → still collapsed, `keys-restore` visible
 8. **Pages**: collapse from the text page, restore → back on the text page
 9. **Tablet** (iPad Mini, touch): steps 2 and 4 behave the same
+
+## E2E-53 Files (AC-9.1–AC-9.11)
+
+> [ADR-0059](../20-architecture/adr/0059-files.md). `web/e2e/files.spec.ts`. The agent runs with a temporary `HOME`; the test fills `~/proj` with `src/`, `Docs/`, `.git/`, `b.txt` ("hello"), `a 1.txt`, `.env`, `shot.png` (a real PNG), `blob.bin` (NUL bytes), `big.log` (600 KiB, last line `TAIL-LINE`), and the session `cd`s into `~/proj`. `WebSocket.send` is recorded; the E2E bash has bracketed paste enabled.
+
+1. **Entry** (Pixel 5): open the session drawer → `open-files` sits between `new-session` and `open-settings`, the same size as `open-settings`; tap it → the drawer is gone, `files-sheet` is visible, its height is 80% of the viewport (±1px), the last `files-crumb` reads `proj` and the first `~`; `resizes()` is unchanged
+2. **Order**: the row names are `Docs`, `src`, `a 1.txt`, `b.txt`, `big.log`, `blob.bin`, `shot.png`, `.git`, `.env`; `.git` and `.env` have `data-hidden="true"`; `b.txt`'s row shows `5 B`
+3. **Navigate**: tap `src` → the last crumb is `src`; `files-up` → `proj`; tap the `~` crumb → the list holds `proj`; tap `proj`; type `B` in `files-filter` → only `b.txt`, `big.log` and `blob.bin`; tap `Docs` → the filter is empty
+4. **Text**: back in `proj`, tap `b.txt` → `file-sheet` covers `files-sheet` (same rect ±1px), `file-text` reads `hello`, `file-meta` starts with `5 B`; ✕ → `file-sheet` gone, `files-sheet` still open
+5. **Big text**: tap `big.log` → `file-text` doesn't contain `TAIL-LINE`; tap `file-end` → it does, and the button now reads Start
+6. **Image and binary**: `shot.png` → `file-image` has `naturalWidth > 0`; a tap sets `data-zoom`; `blob.bin` → `file-nopreview`
+7. **Send to session**: tap `a 1.txt`, then `file-send` → within 2 s the INPUT frames are exactly `ESC[200~` + `<home>/proj/a\ 1.txt` + `ESC[201~`, no `0d`; no file sheet is left open
+8. **Remember**: open files, go into `src`, close; open again → the last crumb is `src`; close, run `cd /tmp` in the session and wait for `session.updated{cwd}`; open again → the last crumb is `tmp`
+9. **Upload**: in `~/proj`, set `files-upload-input` to `up.txt` ("UP") → within 5 s a row `up.txt` appears and the file on disk reads `UP`; upload `up.txt` again → a toast `Saved as up-1.txt`, a row `up-1.txt`, and `up.txt` still reads `UP`; hold the request with `page.route` → `files-upload` has `data-busy="true"` and reads `Uploading`; no INPUT frame was sent in this step
+10. **New folder**: `files-mkdir` → `name-sheet`; type `made` and press Enter → a row `made`, and `~/proj/made` is a folder; `files-mkdir` again with `made` → a toast, `name-sheet` still open
+11. **Rename**: swipe the `b.txt` row 120px left → `file-row-rename` and `file-row-delete` are visible; tap `file-row-rename` → `name-input` holds `b.txt` with `b` selected; type `c` (replacing the selection) and press Enter → a row `c.txt`, and `~/proj/c.txt` reads `hello`
+12. **Delete**: long-press the `made` row → its actions open; `file-row-delete` → `delete-confirm` titled `Delete "made"?`, focus on `delete-ok`; Enter → the row is gone and so is the folder
+13. **New session here**: in `~/proj/src`, tap `files-terminal` → the session count is one higher, no file sheet is open, and the new current session's `cwd` is `<home>/proj/src`
+14. **Back**: note `history.length`; open files, open `c.txt`; `page.goBack()` → `file-sheet` closed, `files-sheet` open; `page.goBack()` → closed, still on webterm; open and close with ✕ three times → `history.length` is at most 2 above the noted value
+15. **Share** (Pixel 5): stub `navigator.canShare` → true and `navigator.share` → a recorder; open `c.txt`, tap `file-share` → the recorder got one `File` named `c.txt` with the text `hello`
+16. **Desktop** (1440×900, mouse): `open-files` is in the tab bar left of `upload-file`, its SVG the size of `open-settings`'s and vertical centers within 0.5px; click it → a centered `files-sheet` 720px wide; right-click a row → its actions open; open `c.txt`, click `file-download` → a download named `c.txt` with the text `hello`
+17. **Drop**: with `files-sheet` open, dispatch `dragover` + `drop` carrying `dropped.txt` on it → a row `dropped.txt` appears, and no INPUT frame was sent

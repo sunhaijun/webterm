@@ -134,6 +134,21 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Write a long passage on the text page: the text running under the paperclip in the box's corner stays readable, and tapping the paperclip still opens the picker rather than moving the caret
 - [ ] `ls -la /tmp/webterm-$(id -u)/uploads/` → files `0600`, directory `0700`; a day later they're gone
 
+## Files (every time the file browser changes, since m23)
+
+[ADR-0059](../20-architecture/adr/0059-files.md). A session in a project folder; claude running in another.
+
+- [ ] iPhone (Safari and the installed PWA): session button → folder → the list opens in the session's folder as a bottom sheet; swiping it down closes it; the sheet doesn't jump when moving between a big and a small folder
+- [ ] iPhone: open a PNG → Share → Save Image puts it in Photos; a PDF → Share → Save to Files works; in the PWA too (no sign-in page, no blank download)
+- [ ] iPhone: a large video (> 50 MB) plays and seeks without downloading it all first
+- [ ] iPhone: Upload → Photo Library → two photos → both appear under their own names (note `.jpg` vs `.heic`); upload one again → `-1` and the toast
+- [ ] Android (Chrome and the PWA): the same; the Back button closes a file, then the list, and never leaves the app
+- [ ] A screenshot in the folder → Send to session → claude shows `[Image #1]`; a name with spaces too
+- [ ] A long log → End shows its last lines
+- [ ] Desktop: Download saves with the right name (a Chinese name too); dropping files on the sheet uploads them there, dropping on the terminal still sends them to the session
+- [ ] Rename and delete from a row's swipe and long-press (phone) and right-click (desktop); New folder; New session here opens a shell in that folder
+- [ ] Open a raw `.html` URL from the address bar (`/api/fs/raw?path=…`) → it downloads, nothing renders
+
 ## Waiting for you (every time the attention rules change, since m16)
 
 [ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md). Two or three sessions, claude in one and codex in another.

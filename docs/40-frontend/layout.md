@@ -24,7 +24,7 @@ Orthogonal to form is **touch capability**, from `matchMedia('(pointer: coarse)'
 
 ```
 compact (phone)                             wide (PC / tablet)
-┌──────────────────────────────────┐        ┌[1] webterm ✕│[2] api •│[3] logs│ + ⌇ ● ⚙ ┐ tab bar 36px (touch: 40px)
+┌──────────────────────────────────┐        ┌[1] webterm ✕│[2] api •│[3] logs│ + ▢ ⌇ ● ⚙┐ tab bar 36px (touch: 40px)
 │                                  │        │                                          │
 │             terminal             │        │                 terminal                 │
 │                                  │        │                                          │
@@ -34,7 +34,7 @@ compact (phone)                             wide (PC / tablet)
 └────┴─────────────────────────────┘        └────┴─────────────────────────────────────┘
 ```
 
-`[3]` is the session button: a rounded box with the session count in it ([session-ux.md](session-ux.md#compact-phone-session-button-and-bottom-drawer)). `⌇` stands for the paperclip that sends files ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)).
+`[3]` is the session button: a rounded box with the session count in it ([session-ux.md](session-ux.md#compact-phone-session-button-and-bottom-drawer)). `▢` stands for the folder that opens the file browser ([ADR-0059](../20-architecture/adr/0059-files.md)) and `⌇` for the paperclip that sends files ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)).
 
 The text page uses the same slot. The text box takes the whole width right of the left column; the paperclip floats over its bottom-right corner ([input.md](input.md#the-textarea)):
 
@@ -69,8 +69,8 @@ All absolutely positioned or `position: fixed`, outside the grid; showing or hid
 | Connection banner (`conn-text`, `conn-note`) | Top of the terminal, one line tall | When not online, and for 3 seconds with a connection note ([session-ux.md](session-ux.md), [ADR-0049](../20-architecture/adr/0049-connection-status-in-one-place.md)) |
 | Toast | Top center of the terminal | Messages unrelated to the connection (session limit, input too large, agent notices) |
 | Composition preview (`ime-preview`) | At the terminal cursor | During IME composition in direct input |
-| Drop outline (`.stage[data-drop="true"]`) | A 2px accent outline inside the terminal area | While files are dragged over the page ([input.md](input.md#sending-files-ac-323)) |
-| Session drawer (phone), settings, session menu | See [Sheets](#sheets) | When open |
+| Drop outline (`.stage[data-drop="true"]`) | A 2px accent outline inside the terminal area | While files are dragged over the page ([input.md](input.md#sending-files-ac-323)); over the file browser's sheets the sheet gets the outline instead ([ADR-0059](../20-architecture/adr/0059-files.md) §5) |
+| Session drawer (phone), settings, session menu, file browser | See [Sheets](#sheets) | When open |
 
 ### Safe area
 
@@ -120,7 +120,7 @@ keyboard up := visualViewport.height < documentElement.clientHeight − 80
 
 ## Sheets
 
-There are five: the session drawer (phone), settings, close confirmation ([ADR-0038](../20-architecture/adr/0038-close-confirm-sheet.md)), sign-out confirmation ([ADR-0048](../20-architecture/adr/0048-sign-out.md)), and rename (phone, [ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md)). They share the `Drawer` primitive (`web/src/ui/drawer.tsx`, [ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)), and **their shape follows the form** (`compact` / `wide`), not `pointer` ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §4):
+The session drawer (phone), settings, close confirmation ([ADR-0038](../20-architecture/adr/0038-close-confirm-sheet.md)), sign-out confirmation ([ADR-0048](../20-architecture/adr/0048-sign-out.md)), rename (phone, [ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md)), the command editor ([ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md)), and the file browser's sheets: the list, a file, the name sheet and delete confirmation ([ADR-0059](../20-architecture/adr/0059-files.md)). They share the `Drawer` primitive (`web/src/ui/drawer.tsx`, [ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)), and **their shape follows the form** (`compact` / `wide`), not `pointer` ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §4):
 
 | | `compact` (phone) | `wide` (PC / tablet) |
 |---|---|---|
@@ -129,7 +129,7 @@ There are five: the session drawer (phone), settings, close confirmation ([ADR-0
 | Enter animation | `sheet-up`, ~170ms (none with `prefers-reduced-motion`) | None |
 | Grab handle | Yes (36×4) | No |
 | Swipe down to close | Yes (once the body is scrolled to the top; release after > 90px) | — |
-| Used by | Session drawer, settings, close and sign-out confirmation, rename | Settings, close and sign-out confirmation |
+| Used by | Session drawer, settings, close and sign-out confirmation, rename, the file browser | Settings, close and sign-out confirmation, the file browser |
 
 ```
 ┌─────────────── ═══ ───────────────┐  grab handle (bottom sheet only)
@@ -146,9 +146,9 @@ There are five: the session drawer (phone), settings, close confirmation ([ADR-0
 ```
 
 - **Track the visible area** ([ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md) §3): `.app` has `contain: layout`, which makes it the containing block for `position: fixed` descendants. `.app` already tracks `visualViewport` (height, plus `translateY` while the keyboard is up), so the backdrop covers exactly the visible area and the sheet's bottom edge is the keyboard's top edge. Without this, Android shrinks only the visual viewport for the keyboard, and a sheet pinned to the bottom of the layout viewport ends up entirely behind the keyboard.
-- **Height**: a percentage of the backdrop (the visible area), not `vh`: at most 80%, growing with content. **The session drawer is at least 50%** (the iOS "medium" sheet detent), so a short list doesn't leave a sliver; extra height goes to the list, and the bottom row stays at the bottom of the sheet. Settings has only a few rows and no minimum height.
+- **Height**: a percentage of the backdrop (the visible area), not `vh`: at most 80%, growing with content. **The session drawer is at least 50%** (the iOS "medium" sheet detent), so a short list doesn't leave a sliver; extra height goes to the list, and the bottom row stays at the bottom of the sheet. Settings has only a few rows and no minimum height. **The file list and a file are always 80%** on `compact` (`min(80%, 720px)` tall and `min(720px, 100vw − 32px)` wide on `wide`), so a file covers the list exactly and the list doesn't jump between folders ([ADR-0059](../20-architecture/adr/0059-files.md) §1).
 - **Breathing room at the bottom**: the bottom row is padded 12px top, 16px on the sides, and `max(16px, var(--sa-bottom))` at the bottom; sheets without a bottom row leave the same `max(16px, var(--sa-bottom))` under the body. `--sa-bottom` is `.app`'s safe-area variable, set to 0 while the keyboard is up (the keyboard covers the home indicator, so no extra gap is needed). Buttons don't stretch edge to edge; they're blocks with a `--surface` background, a thin `--line` border, and a 12px radius.
-- **Closing**: tap the backdrop, `Esc`, ✕, or (bottom sheets) swipe down. The session drawer also closes when you pick a session and on the system back button ([session-ux.md](session-ux.md)). Settings doesn't handle the back button (ADR-0037 §4).
+- **Closing**: tap the backdrop, `Esc`, ✕, or (bottom sheets) swipe down. The session drawer also closes when you pick a session and on the system back button ([session-ux.md](session-ux.md)). Settings doesn't handle the back button (ADR-0037 §4). The file browser's sheets all do, and Back closes only the top one: each pushes an entry, and the ones closed any other way are removed together with one `history.go(-n)` ([ADR-0059](../20-architecture/adr/0059-files.md) §1).
 - **Focus moves into the sheet when it opens** (modal), so keyboard and screen reader users aren't left on the layer behind it, and `Esc` has a definite target.
 - **Sheets stack**: close confirmation and rename can stack on top of the session drawer. `Esc` closes only the top one (the last `.drawer` in the DOM), and only the top backdrop receives taps.
 - **Sheets don't change terminal geometry**: `position: fixed`, no `resize`.
@@ -222,7 +222,7 @@ The terminal uses this `--font-mono` stack (`term/terminal.ts` keeps an identica
 
 ## Icons
 
-All hand-drawn icons in the UI use one style ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §3): **inline SVG, stroke only, no fill, `stroke="currentColor"`, 1.75px stroke, round caps and joins**, colored by the button (normally `--muted`, `--fg` on hover). Used for: `+` and ⚙ (a six-tooth gear with a center hole) in the tab bar and at the bottom of the session drawer; `−` / `+` for font size in settings; the drag handle on drawer rows (three horizontal lines); ✕ on tabs and sheet headers; the pin icon on pinned sessions and the check mark in the session menu ([ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §2); the text page button ✎ (`toggle-text`) in the extra keys' left column; the paperclip that sends files, in the tab bar (`upload-file`) and on the text page (`text-upload-file`) ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)).
+All hand-drawn icons in the UI use one style ([ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md) §3): **inline SVG, stroke only, no fill, `stroke="currentColor"`, 1.75px stroke, round caps and joins**, colored by the button (normally `--muted`, `--fg` on hover). Used for: `+` and ⚙ (a six-tooth gear with a center hole) in the tab bar and at the bottom of the session drawer; `−` / `+` for font size in settings; the drag handle on drawer rows (three horizontal lines); ✕ on tabs and sheet headers; the pin icon on pinned sessions and the check mark in the session menu ([ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §2); the text page button ✎ (`toggle-text`) in the extra keys' left column; the paperclip that sends files, in the tab bar (`upload-file`) and on the text page (`text-upload-file`) ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)); the file browser's folder (`open-files`, in the tab bar and the session drawer), file, upload, new folder, terminal (`>_`) and up (`‹`) icons ([ADR-0059](../20-architecture/adr/0059-files.md)).
 
 Two sizes: in the top bar, drawer, and settings, a **14×14 box with a 1.75px stroke**, scaled per position (12px for the tab ✕ and the pin, 16px for the sheet header ✕); in the extra keys' left column and on the text page, **22×22 with a 2px stroke**, the same size and weight as the session button's box next to it (22px, 2px border). The paperclip comes in both: 14×14 in the tab bar next to `+` and ⚙, 22×22 in the text box's corner on the text page, drawn separately for each so the stroke is 1.75px and 2px rather than one drawing scaled. ✎ is a rounded box with its top-right corner missing and a pencil coming diagonally out of the gap toward the top right ([ADR-0041](../20-architecture/adr/0041-tab-index-and-edit-icon.md) §2). The paperclip is one stroke: a long loop, a shorter loop nested inside it, leaning 45° like the pencil. Don't use Unicode symbols as icons: glyphs like `⚙` look different on each platform, some render as color emoji, and their vertical position shifts with font metrics.
 

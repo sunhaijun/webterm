@@ -44,7 +44,9 @@ Released together as **v0.6.0** (2026-11-08): m19–m22.
 
 ## In progress
 
-Nothing right now. Next candidates are below.
+### m23 · `feat/40-files`
+
+The file browser ([ADR-0059](../20-architecture/adr/0059-files.md)): stacked sheets like the session drawer, opened from the drawer's bottom row (phone) or the tab bar (desktop / tablet) in the current session's folder; previews images, video, audio and text (a log from its end); Share (touch) or Download; Send to session (a backslash-escaped path); upload into the folder without overwriting; new folder, rename, delete; new session here. `/api/fs/*` with the agent user's rights; served files never run on webterm's origin. Exit: the usual criteria plus AC-9, E2E-53, and the manual checklist's "Files".
 
 ## Planned
 
@@ -68,7 +70,7 @@ Since m17, links open or copy with a tap and programs can copy with OSC 52 (clau
 
 By value (scrollback is already solved by [ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1 and ADR-0026):
 
-1. **File browser + download**: a separate feature area. Sending a file to a session is m15; uploading into a chosen directory belongs here
+1. **File browser + download**: m23 ([ADR-0059](../20-architecture/adr/0059-files.md)). Next on top of it: a folder as a zip, tapping a path in the terminal to open it, editing text files
 2. **Passkey / WebAuthn**: closes the gap where adding a new device requires access to the server's terminal
 3. **Split panes on desktop**
 

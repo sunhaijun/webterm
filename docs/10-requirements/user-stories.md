@@ -100,3 +100,15 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 **US-7.2** (m2) When certificate issuance fails, the server terminal tells me why and how to fix it — not a raw Go error.
 
 **US-7.3** (m6) When I hit the session limit I get a clear message, not a new-session button that does nothing.
+
+---
+
+## US-9 Files
+
+**US-9.1** (m23) On my phone I tap the session button and then the folder: I'm looking at the folder my session is in, as a list in the same kind of sheet as my sessions. I can go up or into folders, and hidden files are there at the end without a setting ([ADR-0059](../20-architecture/adr/0059-files.md)).
+
+**US-9.2** (m23) I tap a file and see it: an image, a video, a log (from its end if it's long), or at least its size. One tap saves it to my phone through the system share sheet, or downloads it on a laptop. Nothing the file contains can run as part of webterm.
+
+**US-9.3** (m23) I put photos or any file into the folder I'm looking at, under their own names; nothing that's already there is overwritten. I can create a folder, rename and delete things, each with the same small sheets the sessions use.
+
+**US-9.4** (m23) A screenshot my tests wrote on the server goes to claude with one tap (Send to session), and New session here opens a shell in the folder I'm looking at.
