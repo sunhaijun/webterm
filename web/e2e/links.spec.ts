@@ -36,7 +36,15 @@ async function recordOpen(page: Page): Promise<() => Promise<string[]>> {
  * first screen row matching `row` (DOM renderer rows, NBSP read as space).
  */
 async function cellPoint(page: Page, row: RegExp, needle: string, offset = 2): Promise<{ x: number; y: number }> {
-  const p = await page.evaluate(
+  // The buffer holds the text before the DOM renderer has drawn it (it draws on the next
+  // frame), so wait for the row to be on screen rather than reading the DOM once
+  let p: { x: number; y: number } | null = null
+  await waitFor(async () => (p = await rowPoint(page, row, needle, offset)) !== null, `screen row ${row} with ${needle}`, 5_000)
+  return p!
+}
+
+function rowPoint(page: Page, row: RegExp, needle: string, offset: number): Promise<{ x: number; y: number } | null> {
+  return page.evaluate(
     ([src, flags, needle, offset]) => {
       const re = new RegExp(src, flags)
       const screen = document.querySelector<HTMLElement>('.xterm-screen')
@@ -57,8 +65,6 @@ async function cellPoint(page: Page, row: RegExp, needle: string, offset = 2): P
     },
     [row.source, row.flags, needle, offset] as const,
   )
-  if (!p) throw new Error(`no screen row matching ${row} with ${needle}`)
-  return p
 }
 
 /** tap sends a real CDP touch tap at p. */
