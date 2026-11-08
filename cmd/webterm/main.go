@@ -27,6 +27,7 @@ Usage:
   webterm update                  Upgrade to the latest release using the last install's flags (hot upgrade; sessions survive)
   webterm reload [--when-idle]    Swap the running agent for the binary on disk; sessions survive
   webterm attach [name | n]       Attach this terminal to a session (ssh -t host webterm attach)
+  webterm setup [--check] [--yes] Check and add the claude, codex and shell settings webterm uses
   webterm version                 Print the version
 
 Run webterm with no command for a status overview (service, URL, certificate, devices).
@@ -62,6 +63,8 @@ func main() {
 		err = runReload(os.Args[2:])
 	case "attach":
 		err = runAttach(os.Args[2:])
+	case "setup":
+		err = runSetup(os.Args[2:])
 	case "handoff-check":
 		err = runHandoffCheck(os.Args[2:])
 	case "version":

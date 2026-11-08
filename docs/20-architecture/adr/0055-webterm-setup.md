@@ -28,7 +28,7 @@ webterm setup --check    only report; exit 0 when nothing is missing, 1 otherwis
 - Without `--yes`, it asks `Add these? [Y/n]` on the terminal; with no terminal it adds nothing and says to run it with `--yes`.
 - Running it again changes nothing: every item checks before it writes.
 - **Edits are minimal and textual**: one or two lines inserted where they belong; the rest of the file keeps its bytes, order and comments. No JSON or TOML library rewrites the file.
-- **Safety**: before the first change to a file it's copied to `<file>.webterm-bak` (`<file>.webterm-bak-<time>` when that exists already); the new content is checked (JSON parses, the inserted TOML lines sit in the `[tui]` table) and written atomically with the file's mode kept. A file that doesn't parse is left alone and reported.
+- **Safety**: before the first change to a file it's copied to `<file>.webterm-bak` (`<file>.webterm-bak-<time>` when that exists already); the new content is checked (JSON parses, the inserted TOML lines sit in the `[tui]` table) and written atomically with the file's mode kept. A symlinked dotfile is written through to its target, so the link stays. A file that doesn't parse is left alone and reported.
 - The shell is the session shell: `--shell`, else `shell` in the config file, else bash, the same as `serve`.
 
 ### 2. The items
@@ -36,7 +36,7 @@ webterm setup --check    only report; exit 0 when nothing is missing, 1 otherwis
 | Item | When | Change | Left as is when |
 |---|---|---|---|
 | claude notifications | `~/.claude` exists | `"preferredNotifChannel": "terminal_bell"` added to `~/.claude/settings.json` (created as `{}` if missing), or `"auto"` replaced | It's set to anything but `auto`: `iterm2` / `kitty` / `ghostty` send OSC 9 / 99 / 777, which webterm also counts; `notifications_disabled` is a choice |
-| codex notifications | `~/.codex` exists | `notifications = true` and `notification_condition = "always"` under `[tui]` in `~/.codex/config.toml` (the table is appended if missing) | Either key is already there, with any value |
+| codex notifications | `~/.codex` exists | `notifications = true` and `notification_condition = "always"` under `[tui]` in `~/.codex/config.toml`, whichever is missing (the table is appended if missing) | `notifications = false` (you turned them off), or `tui` is an inline table; a key already there keeps its value |
 | shell history | the session shell is bash or zsh | A block between `# >>> webterm >>>` and `# <<< webterm <<<` at the end of `~/.bashrc` (`PROMPT_COMMAND="history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}"`) or `~/.zshrc` (`setopt INC_APPEND_HISTORY`) | bash: `history -a` already appears in `.bashrc`; zsh: `INC_APPEND_HISTORY` or `SHARE_HISTORY` already does |
 
 `notification_condition = "always"` rather than codex's default `unfocused`: "unfocused" depends on focus reports, which a background webterm session may not get. A notification while you're looking is cleared at once anyway (ADR-0052 §2).
@@ -46,7 +46,7 @@ webterm setup --check    only report; exit 0 when nothing is missing, 1 otherwis
 - On a **first install**, after the service is up and before the pairing code, the guided install asks `Set up claude, codex and your shell for webterm (notifications, frequent input)? [Y/n]` on the terminal and runs `webterm setup --yes`.
 - `--setup` answers yes without asking, on any install or upgrade; `--no-setup` skips the question. Without a terminal and without `--setup`, it's skipped with a one-line hint (`webterm setup`).
 - Neither flag goes into install-state: `webterm update` replays install-state and must never touch dotfiles.
-- `--dry-run` prints `webterm setup --check` instead of changing anything.
+- `--dry-run` only says it would run `webterm setup --yes`.
 
 ### Rejected alternatives
 
