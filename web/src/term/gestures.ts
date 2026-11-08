@@ -2,6 +2,8 @@
  * Touch gestures on the terminal (ADR-0025 §5, input.md, AC-3.20).
  *
  * Tap:
+ *   - on a URL → the link popover (ADR-0053 §3), before anything else, so it works under
+ *     mouse tracking too; nothing reaches the program and the keyboard doesn't toggle;
  *   - the foreground program enabled mouse tracking → do nothing and leave it to xterm
  *     (the browser synthesizes mouse events and xterm reports the click in the program's
  *     protocol);
@@ -30,6 +32,8 @@ export function isTap(start: TouchPoint, end: TouchPoint, maxMove: number): bool
 }
 
 export interface TapTarget {
+  /** A tap at viewport point (x, y) landed on a link and was handled (ADR-0053 §3). */
+  tapLink?(x: number, y: number): boolean
   /** The foreground program enabled mouse tracking. */
   mouseTracking(): boolean
   /** Whether the terminal (xterm's helper textarea) has focus. */
@@ -70,6 +74,11 @@ export function installTapToggle(el: HTMLElement, target: () => TapTarget | null
     const move = Math.max(maxMove, Math.hypot(end.x - s.x, end.y - s.y))
     if (!isTap(s, end, move)) return
     const t = target()
+    if (t?.tapLink?.(end.x, end.y)) {
+      // Handled as a link: no synthesized click for the program, no keyboard toggle
+      if (e.cancelable) e.preventDefault()
+      return
+    }
     if (!t || t.mouseTracking()) return // Leave it to xterm: the synthesized mousedown reports the click
     // Stop the browser from synthesizing mousedown / click: xterm's mousedown always calls
     // focus(), which would bring back the keyboard we just hid

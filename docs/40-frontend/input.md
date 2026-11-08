@@ -134,6 +134,7 @@ Sending from the text page **ignores sticky CTRL / ALT**: text and Enter go out 
 
 | Condition | A tap |
 |---|---|
+| **On a URL** (checked first, [Links](#links-ac-519)) | Shows the link popover (Open · Copy); nothing goes to the program and the keyboard doesn't toggle |
 | The foreground program enabled mouse tracking (`term.modes.mouseTrackingMode !== 'none'`) | Goes to xterm: the browser synthesizes `mousedown` / `mouseup` from the touch, and xterm reports the click in the protocol the program asked for |
 | Not enabled | **Toggles the on-screen keyboard**: if the terminal's helper textarea has focus, `blur()` (keyboard hides); otherwise `focus()` (keyboard shows) |
 
@@ -279,6 +280,23 @@ Nothing is pasted, a toast says why, and the remaining files still go:
 A `401` is a revoked device: the usual revocation handling takes over (AC-1.11).
 
 ---
+
+## Links (AC-5.19)
+
+[ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md) §1–§3. One detector, `term/links.ts`, serves the mouse and the tap.
+
+- **What counts as a link**: an OSC 8 hyperlink (xterm.js's own, http / https only), or an `http://` / `https://` run in a logical line. Rows are joined while the next one is a soft wrap, so a URL wrapped across rows is one link. Trailing `.,;:!?'"` and a closing `) ] } >` without its opening partner are trimmed off the end.
+- **Desktop**: hover underlines it; **Ctrl+click** (Cmd+click on macOS) opens it in a new tab (`noopener`). A plain click leaves it alone, so selection and the program's mouse work as before. OSC 8 links do the same instead of xterm's `confirm()`.
+- **Touch**: a tap on a URL in text shows a popover (`link-popover`) next to it: the URL (`link-url`, one line, shortened in the middle) and two buttons, **Open** (`link-open`) and **Copy** (`link-copy`). Both act inside the tap's click, so iOS lets them open a tab and write the clipboard. A tap elsewhere, `Esc` (taken before the terminal, so the program doesn't get it), or switching sessions closes it. The check runs before the mouse-tracking rule, so under claude's full-screen renderer a tap on a URL opens the popover instead of clicking.
+- OSC 8 links whose text differs from the URL aren't found by a tap (xterm.js 5.5 keeps their ranges internal).
+
+## Clipboard from programs (AC-5.20)
+
+[ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md) §4. A program can put text on the clipboard with OSC 52; claude's `/copy` does.
+
+- `OSC 52 ; Pc ; Pd`: `Pd` is base64, decoded as UTF-8; `Pc` is ignored (one clipboard). **`Pd = ?` (a read) is ignored and never answered.**
+- Only **live output of the current session**: OSC 52 parsed while replaying (catch-up, snapshot, `TermHandle.replaying()`) or in a pinned background session is dropped. More than 1 MiB of decoded text is dropped.
+- The page calls `navigator.clipboard.writeText`. Success → a short "Copied" toast. Rejected (iOS Safari and Firefox want a user gesture) → a bar at the bottom (`clip-bar`) with the start of the text and a **Copy** button (`clip-copy`) that writes inside the tap; the next OSC 52 replaces it; it closes after copying, with its ✕ (`clip-close`), or after 30 s. Not on `Esc`, which belongs to the program.
 
 ## Troubleshooting: where input stops (AC-3.17)
 

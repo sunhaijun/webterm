@@ -12,11 +12,13 @@ import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, routeInput, type SessionView } from '../sessions/store'
 import { shouldSendSeen } from '../sessions/attention'
 import { installDragWheel, installTapToggle } from '../term/gestures'
+import { openUrl } from '../term/links'
 import { themeFromCss, type TermHandle } from '../term/terminal'
 import { asUserInput, inUserInputEvent } from '../term/userinput'
 import { applyTheme, readFontSize, readTheme, validFontSize, writeFontSize, writeTheme, type Theme } from '../ui/prefs'
 import { debounce, installAppFit, isCoarsePointer, watchCoarse } from '../ui/viewport'
 import { readForm, type Form } from './form'
+import type { ClipOffer, LinkPop } from './linkpop'
 import { dragHasFiles, pastedFiles, sessionGoneError, uploadError, uploadFile, type Upload } from './uploads'
 
 export interface Toast {
@@ -77,9 +79,15 @@ export interface AppState {
   uploading: boolean
   /** Files are being dragged over the page: the terminal area shows an outline. */
   dropping: boolean
+  /** The link popover after a tap on a URL (ADR-0053 §3). */
+  linkPop: LinkPop | null
+  /** OSC 52 text the browser wouldn't copy without a tap: the Copy bar (ADR-0053 §4). */
+  clip: ClipOffer | null
 }
 
 const TOAST_MS = 3000
+/** How long the Copy bar stays (ADR-0053 §4). */
+const CLIP_MS = 30_000
 /** dragover repeats every ~50ms while files hover; without one for this long, the drag left. */
 const DROP_IDLE_MS = 1000
 /** How long a connection note stays in the banner (ADR-0049). */
@@ -196,6 +204,8 @@ export class AppController {
       page: 'keys',
       uploading: false,
       dropping: false,
+      linkPop: null,
+      clip: null,
     }
     this.conn = new Connection({
       url: opts.url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
@@ -229,6 +239,7 @@ export class AppController {
       allowKey: (e) => appAction(e) === null,
       theme: () => cssTheme(),
       fontSize: () => this.state.fontSize,
+      onClipboard: (sid, text) => this.onClipboard(sid, text),
     })
   }
 
@@ -253,6 +264,70 @@ export class AppController {
     // The session behind an open close-confirm is gone (closed elsewhere, agent restart): close it too, sids are reused (ADR-0038 §4)
     const closing = this.state.closing !== null && this.store.has(this.state.closing) ? this.state.closing : null
     this.set({ sessions: this.store.list(), active: this.store.active, page: this.pages.page(this.store.active), closing })
+  }
+
+  // ---------- links and the clipboard (ADR-0053) ----------
+
+  private clipSeq = 0
+  private clipTimer: ReturnType<typeof setTimeout> | undefined
+
+  readonly closeLinkPop = (): void => {
+    if (this.state.linkPop) this.set({ linkPop: null })
+  }
+
+  /** The popover's Open: runs inside the click, so iOS lets it open a tab. */
+  openLink(): void {
+    const pop = this.state.linkPop
+    this.set({ linkPop: null })
+    if (pop) openUrl(pop.url)
+  }
+
+  /** The popover's Copy: inside the click, so the clipboard accepts it. */
+  copyLink(): void {
+    const pop = this.state.linkPop
+    this.set({ linkPop: null })
+    if (pop) this.writeClipboard(pop.url).then(() => this.toast('info', 'Copied'), () => this.toast('error', "Couldn't copy"))
+  }
+
+  /** OSC 52 from the active session's live output; other sessions never touch the clipboard. */
+  private onClipboard(sid: number, text: string): void {
+    if (sid !== this.store.active) return
+    this.writeClipboard(text).then(
+      () => {
+        this.dismissClip()
+        this.toast('info', 'Copied')
+      },
+      // iOS Safari and Firefox want a user gesture: offer a Copy button
+      () => {
+        if (this.clipTimer) clearTimeout(this.clipTimer)
+        this.set({ clip: { id: ++this.clipSeq, text } })
+        this.clipTimer = setTimeout(() => this.set({ clip: null }), CLIP_MS)
+      },
+    )
+  }
+
+  /** The Copy bar's button. */
+  copyClip(): void {
+    const clip = this.state.clip
+    if (!clip) return
+    this.writeClipboard(clip.text).then(
+      () => {
+        this.dismissClip()
+        this.toast('info', 'Copied')
+      },
+      () => this.toast('error', "Couldn't copy"),
+    )
+  }
+
+  readonly dismissClip = (): void => {
+    if (this.clipTimer) clearTimeout(this.clipTimer)
+    this.clipTimer = undefined
+    if (this.state.clip) this.set({ clip: null })
+  }
+
+  private writeClipboard(text: string): Promise<void> {
+    const c = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+    return c ? c.writeText(text) : Promise.reject(new Error('no clipboard'))
   }
 
   private toast(kind: Toast['kind'], text: string): void {
@@ -342,6 +417,12 @@ export class AppController {
       const t = this.activeTerm()
       if (!t) return null
       return {
+        tapLink: (x: number, y: number) => {
+          const link = t.linkAtPoint(x, y)
+          if (!link) return false
+          this.set({ linkPop: { url: link.text, x, y } })
+          return true
+        },
         mouseTracking: () => t.mouseTracking(),
         focused: () => document.activeElement === t.term.textarea,
         focus: () => t.term.focus(),
@@ -467,6 +548,7 @@ export class AppController {
     const typing = this.typing()
     const same = sid === this.store.active
     this.store.activate(sid, area)
+    this.closeLinkPop()
     this.attachIme()
     this.syncTextPage()
     if ((focus ?? this.refocus(typing)) && !(same && typing)) this.focusInput()

@@ -677,3 +677,26 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 7. **Paste a screenshot**: on the terminal's helper textarea, dispatch a `paste` event whose `clipboardData` holds one `image/png` file and no text → the path is pasted (bracketed); then dispatch a `paste` with only `text/plain` `echo PASTED` → the INPUT frames are the bracketed text `echo PASTED`, and no upload request was made
 8. **Drop**: dispatch `dragenter` / `dragover` with a `DataTransfer` holding a file over `.term` → `.stage` has `data-drop="true"`; dispatch `drop` → the path is pasted, `data-drop` is gone, and the page URL hasn't changed
 9. **The target is fixed at pick time**: two sessions A and B, A current; hold the upload, pick a file in A, switch to B, release → the bracketed path appears only in A's INPUT frames
+
+---
+
+## E2E-49 Links (AC-5.19)
+
+> [ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md) §1–§3. `window.open` is replaced with a recorder; the context has clipboard permissions.
+
+1. **Desktop** (1440×900, mouse): `printf 'see https://example.com/a?b=1.\n'` → a plain click on the URL opens nothing; Ctrl+click opens `https://example.com/a?b=1` (no trailing `.`) exactly once
+2. **Not a link**: `printf 'file:///etc/passwd javascript:alert(1)\n'` → Ctrl+click on either opens nothing
+3. **Soft-wrapped**: a URL longer than the terminal width (`https://example.com/` + 150 × `x`) → Ctrl+click on its second row opens the whole URL
+4. **Touch** (Pixel 5): tap the URL from step 1 → `link-popover` is visible, `link-url` shows it, no INPUT frame was sent and the keyboard state didn't change; tap `link-copy` → the clipboard holds the URL and the popover closes; tap the URL again, then `link-open` → the recorder got the URL
+5. **Under mouse tracking**: run `mouselink.py` (SGR mouse tracking, a URL on row 1, a click counter on row 3) → a tap on the URL opens `link-popover` and sends no mouse report; after `Esc`, a tap on the counter is a click (`clicks: 1`)
+6. **Closing**: open the popover, press `Esc` → closed, and no `ESC` reached the PTY; open it, `Ctrl+Shift+↓` to the next session → closed
+
+## E2E-50 Clipboard from programs (AC-5.20)
+
+> [ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md) §4. Context with clipboard permissions; read the clipboard with `navigator.clipboard.readText()`.
+
+1. **Write**: in the current session `printf '\e]52;c;%s\a' "$(printf 'hello 52 你好' | base64)"` → the clipboard holds `hello 52 你好` and a "Copied" toast appears
+2. **No read**: `printf '\e]52;c;?\a'` → no INPUT frame carries a reply; the clipboard is unchanged
+3. **Not from replay**: set the clipboard to `before`; run `sleep 3; printf '\e]52;c;%s\a' "$(printf replayed | base64)"` in A and switch to B before it fires; switch back to A after 4 s (catch-up carries the sequence) → the clipboard still holds `before`; reload the page (snapshot path) → still `before`
+4. **Not from a background session**: pin A, switch to B, A writes OSC 52 → the clipboard is unchanged
+5. **Fallback bar**: make `navigator.clipboard.writeText` reject once, then work → OSC 52 shows `clip-bar` with the start of the text; click `clip-copy` → the clipboard holds the text and the bar is gone

@@ -85,6 +85,8 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 
 **US-5.4** (m6) I can select and copy output text, and long selections aren't lost to auto-scroll.
 
+**US-5.5** (m17) On my phone I tap a link claude printed and choose Open or Copy; on a laptop I Ctrl+click it. When I type `/copy` in claude, the answer is on my phone's clipboard ([ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md)).
+
 ---
 
 ## US-7 Diagnosability

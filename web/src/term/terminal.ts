@@ -16,9 +16,12 @@
  * Rows and columns are computed here instead of with FitAddon (ADR-0033). No scrollback
  * pause, frame coalescing or write budget until the E2E-37 baseline says we need them.
  */
-import { Terminal, type ITheme } from '@xterm/xterm'
+import { Terminal, type ILink, type ITheme } from '@xterm/xterm'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
+
+import { linkAt, linksInRow, openUrl, type FoundLink } from './links'
+import { parseOsc52 } from './osc52'
 
 /**
  * Terminal font: the system monospace stack, identical to `--font-mono` in CSS. The tail is
@@ -91,11 +94,25 @@ export interface TermHandle {
   rowHeight(): number
   /** Dispatches one wheel step at viewport coordinates (x, y) (ADR-0029); up = scroll up. */
   wheel(up: boolean, x: number, y: number): void
+  /** The URL in the text under viewport point (x, y), or null (ADR-0053 §3). */
+  linkAtPoint(x: number, y: number): FoundLink | null
   dispose(): void
 }
 
+/** What the terminal tells its owner. */
+export interface TermHooks {
+  /**
+   * A program asked to put text on the clipboard (OSC 52) in live output; never called while
+   * replaying (ADR-0053 §4). Reads are never answered.
+   */
+  clipboard?(text: string): void
+}
+
+/** Ctrl+click, or Cmd+click on macOS, opens a link (ADR-0053 §2). */
+const opensLink = (e: MouseEvent) => e.ctrlKey || e.metaKey
+
 /** `fontSize` comes from settings (`ui/prefs.ts`, default 14, ADR-0037). */
-export function createTerminal(theme: ITheme | undefined, fontSize: number): TermHandle {
+export function createTerminal(theme: ITheme | undefined, fontSize: number, hooks: TermHooks = {}): TermHandle {
   const term = new Terminal({
     fontSize,
     fontFamily: FONT_FAMILY,
@@ -104,6 +121,29 @@ export function createTerminal(theme: ITheme | undefined, fontSize: number): Ter
     convertEol: false,
     cursorBlink: true,
     theme,
+    // OSC 8 hyperlinks: http / https only (allowNonHttpProtocols stays off), opened like
+    // URLs in text instead of through xterm's confirm() (ADR-0053 §1–§2)
+    linkHandler: {
+      activate: (e, uri) => {
+        if (opensLink(e)) openUrl(uri)
+      },
+    },
+  })
+
+  // URLs in text (ADR-0053 §1): underlined on hover, opened with Ctrl/Cmd+click
+  term.registerLinkProvider({
+    provideLinks(lineNumber, callback) {
+      const row = lineNumber - 1
+      const links: ILink[] = linksInRow(term.buffer.active, row).map((l) => ({
+        range: { start: { x: l.start.x + 1, y: l.start.y + 1 }, end: { x: l.end.x + 1, y: l.end.y + 1 } },
+        text: l.text,
+        decorations: { pointerCursor: false, underline: true },
+        activate: (e, text) => {
+          if (opensLink(e)) openUrl(text)
+        },
+      }))
+      callback(links.length ? links : undefined)
+    },
   })
 
   const serialize = new SerializeAddon()
@@ -115,6 +155,15 @@ export function createTerminal(theme: ITheme | undefined, fontSize: number): Ter
 
   let decoder = new TextDecoder('utf-8')
   let replayDepth = 0
+
+  // OSC 52 (ADR-0053 §4): write only, and never from replayed bytes (catch-up, snapshot), so
+  // a reconnect or switching back doesn't put something old on the clipboard. Handled either
+  // way, so nothing answers a read.
+  term.parser.registerOscHandler(52, (data) => {
+    const m = parseOsc52(data)
+    if (m?.kind === 'write' && replayDepth === 0) hooks.clipboard?.(m.text)
+    return true
+  })
   /** Bumped on every snapshot; local lines queued before it are dropped. */
   let generation = 0
 
@@ -203,6 +252,17 @@ export function createTerminal(theme: ITheme | undefined, fontSize: number): Ter
           cancelable: true,
         }),
       )
+    },
+    linkAtPoint(x, y) {
+      const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
+      if (!screen) return null
+      const r = screen.getBoundingClientRect()
+      if (r.width <= 0 || r.height <= 0) return null
+      const col = Math.floor(((x - r.left) / r.width) * term.cols)
+      const row = Math.floor(((y - r.top) / r.height) * term.rows)
+      if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null
+      const buf = term.buffer.active
+      return linkAt(buf, col, buf.viewportY + row)
     },
     dispose() {
       term.dispose()

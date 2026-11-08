@@ -44,11 +44,18 @@
 
 Exit criteria, beyond the usual: IT-attention-1..4, UT-attn-spinner, UT-vterm-signals, IT-handoff-1 with attention, UT-attention-1, E2E-6; codex's notification settings checked on a real run (manual checklist).
 
-## Planned
-
 ### m17 · `feat/40-links-clipboard`
 
-Links you can open and text you can copy on a phone: URL and OSC 8 links (http/https only) open with Ctrl/Cmd+click on desktop and through an Open · Copy popover when tapped; programs can put text on the clipboard with OSC 52 (write only), so claude's `/copy` works from a phone.
+Links you can open and text you can copy on a phone. Stacked on m16.
+
+| Deliverable | Docs |
+|---|---|
+| One URL detector (`term/links.ts`, soft-wrapped rows joined, http / https only) for Ctrl/Cmd+click on desktop and a tap popover (Open · Copy) on touch, checked before mouse tracking | [ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md), [input.md](../40-frontend/input.md#links-ac-519) |
+| OSC 52 write-only, from the current session's live output; "Copied" toast, or a Copy bar where the browser wants a gesture | ADR-0053, [input.md](../40-frontend/input.md#clipboard-from-programs-ac-520), [threat-model.md](../60-security/threat-model.md) |
+
+Exit criteria, beyond the usual: UT-links-1, UT-osc52-1, E2E-49, E2E-50; the "Links and the clipboard" section of the manual checklist on an iPhone and an Android phone.
+
+## Planned
 
 ### m18 · `feat/40-input-menus`
 

@@ -53,6 +53,8 @@ export interface StoreHooks {
   theme(): ITheme | undefined
   /** The configured terminal font size (AC-5.3), used for new instances. */
   fontSize(): number
+  /** A program in session sid put text on the clipboard with OSC 52, in live output (ADR-0053 §4). */
+  onClipboard?(sid: number, text: string): void
 }
 
 interface Entry {
@@ -121,7 +123,9 @@ export class SessionStore {
       this.h.onChange()
       return
     }
-    const term = createTerminal(this.h.theme(), this.h.fontSize())
+    const term = createTerminal(this.h.theme(), this.h.fontSize(), {
+      clipboard: (text) => this.h.onClipboard?.(info.sid, text),
+    })
     const host = document.createElement('div')
     host.className = 'term-host'
     host.dataset.sid = String(info.sid)
