@@ -15,7 +15,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/sunhaijun/webterm/internal/auth"
 	"github.com/sunhaijun/webterm/internal/commands"
-	"github.com/sunhaijun/webterm/internal/history"
 	"github.com/sunhaijun/webterm/internal/protocol"
 	"github.com/sunhaijun/webterm/internal/session"
 	"github.com/sunhaijun/webterm/internal/uploads"
@@ -262,7 +261,7 @@ func (a *Agent) writeError(w http.ResponseWriter, status int, code, message stri
 	a.writeJSON(w, status, map[string]string{"code": code, "message": message})
 }
 
-// ---------- History and the command strip (ADR-0057) ----------
+// ---------- The command strip (ADR-0057) ----------
 
 func (a *Agent) home() string {
 	if a.cfg.Home != "" {
@@ -278,16 +277,6 @@ func probeDir(cfg Config) string {
 		return cfg.ProbeDir
 	}
 	return filepath.Join(os.TempDir(), fmt.Sprintf("webterm-%d", os.Getuid()), "probe")
-}
-
-// handleHistory returns what the program was sent recently, newest first, read
-// now from its own history file (ADR-0057 §1). Nothing is kept or logged.
-func (a *Agent) handleHistory(w http.ResponseWriter, r *http.Request) {
-	items := []string{}
-	if home := a.home(); home != "" {
-		items = history.Items(r.URL.Query().Get("program"), home, a.sessions.Shell())
-	}
-	a.writeJSON(w, http.StatusOK, map[string][]string{"items": items})
 }
 
 // stripProgram reports whether a program has a command strip.

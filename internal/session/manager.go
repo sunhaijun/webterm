@@ -237,10 +237,6 @@ func NewManager(cfg Config) *Manager {
 	}
 }
 
-// Shell returns the configured session shell (a name or a path), which
-// decides which history file frequent input reads (ADR-0054 §3).
-func (m *Manager) Shell() string { return m.cfg.Shell }
-
 // InstanceID returns this process's instance id (sent in welcome).
 func (m *Manager) InstanceID() string { return m.instanceID }
 

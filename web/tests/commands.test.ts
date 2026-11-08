@@ -1,6 +1,6 @@
 /**
- * UT-strip-1 (AC-3.24, AC-3.25, ADR-0057): parsing /api/commands, and the changes the
- * editor makes to an arrangement before sending it back whole.
+ * UT-strip-1 (AC-3.25, ADR-0057): parsing /api/commands, and the changes the editor makes
+ * to an arrangement before sending it back whole.
  */
 import { describe, expect, it } from 'vitest'
 
@@ -8,8 +8,8 @@ import {
   addItem,
   defaultLabel,
   editItem,
+  firstLine,
   hasStrip,
-  historyRow,
   moveItem,
   newItemId,
   parseStrip,
@@ -104,10 +104,11 @@ describe('editor changes', () => {
   })
 })
 
-describe('historyRow', () => {
-  it('first line and line count', () => {
-    expect(historyRow('one')).toEqual({ first: 'one', lines: 1 })
-    expect(historyRow('first\nsecond')).toEqual({ first: 'first', lines: 2 })
-    expect(historyRow('\n  \nreal\n')).toEqual({ first: 'real', lines: 4 })
+describe('firstLine', () => {
+  it('the first non-blank line', () => {
+    expect(firstLine('one')).toBe('one')
+    expect(firstLine('first\nsecond')).toBe('first')
+    expect(firstLine('\n  \nreal\n')).toBe('real')
+    expect(firstLine('')).toBe('')
   })
 })

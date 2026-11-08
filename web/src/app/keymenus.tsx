@@ -1,20 +1,19 @@
 /**
- * The last key column's popovers and the command editor (input.md §History and commands,
- * ADR-0057):
+ * The command strip and its editor (input.md §Commands, ADR-0057, ADR-0058):
  *
- * - `KeyMenus`: ⟲'s history list, or ⌘'s command strip (one row of chips scrolled
- *   sideways, ✎ fixed at its right end), just above the extra keys. Nothing in them takes
- *   focus, so the on-screen keyboard stays as it was.
+ * - `KeyMenus`: ⌘'s command strip, just above the extra keys: chips in two rows filled
+ *   column by column, scrolled sideways, ✎ fixed at the right end (ADR-0058 §2). Nothing
+ *   in it takes focus, so the on-screen keyboard stays as it was.
  * - `CommandEditor`: a bottom sheet listing the tool's items: ≡ drags (the session
  *   drawer's drag, ADR-0040), 👁 hides or shows, a tap edits.
  * - `CommandItemSheet`: editing one item, or adding one, stacked over the editor.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
-import { historyRow, type CommandItem, type ItemForm, type Strip } from '../keys/commands'
+import { firstLine, type CommandItem, type ItemForm, type Strip } from '../keys/commands'
 import type { KeyMenu } from '../keys/extrakeys'
 import { Drawer } from '../ui/drawer'
-import { EditIcon, EyeIcon, EyeOffIcon, GripIcon, PencilIcon } from '../ui/icons'
+import { EyeIcon, EyeOffIcon, GripIcon, PencilIcon } from '../ui/icons'
 import { capturePointer } from '../ui/pointer'
 import { DragReorder } from '../ui/reorder'
 import { useEscape } from './linkpop'
@@ -32,12 +31,8 @@ const sideways = (e: WheelEvent) => {
 
 export interface KeyMenusProps {
   menu: KeyMenu | null
-  /** History of the program in front; null while the first list loads. */
-  history: string[] | null
   /** The command strip of the tool in front; null while it loads. */
   strip: Strip | null
-  onSendHistory(i: number): void
-  onInsertHistory(i: number): void
   onRun(id: string): void
   onEdit(): void
   onClose(): void
@@ -53,65 +48,30 @@ export function KeyMenus(p: KeyMenusProps) {
     const keys = document.querySelector<HTMLElement>('[data-testid="extrakeys"]')
     if (!p.menu || !el || !keys) return setTop(null)
     setTop(Math.max(keys.getBoundingClientRect().top - el.offsetHeight - GAP, GAP))
-  }, [p.menu, p.history, p.strip])
+  }, [p.menu, p.strip])
   if (!p.menu) return null
   const style = top === null ? { visibility: 'hidden' } : { top: `${top}px` }
   return (
     <>
       <div class="km-backdrop" data-testid="menu-backdrop" onPointerDown={(e) => (e.preventDefault(), p.onClose())} />
-      {p.menu === 'history' ? (
-        <div class="km-menu" data-testid="history-menu" ref={box} style={style} onPointerDown={noFocus}>
-          <HistoryRows items={p.history} onSend={p.onSendHistory} onInsert={p.onInsertHistory} />
+      <div class="km-strip" data-testid="command-strip" ref={box} style={style} onPointerDown={noFocus}>
+        <div class="cs-scroll" onWheel={sideways}>
+          {p.strip === null ? (
+            <span class="cs-loading">…</span>
+          ) : (
+            p.strip.items
+              .filter((it) => !it.hidden)
+              .map((it) => (
+                <button type="button" key={it.id} class="cs-chip" data-testid={`command-${it.id}`} onPointerDown={noFocus} onClick={() => p.onRun(it.id)}>
+                  {it.label}
+                </button>
+              ))
+          )}
         </div>
-      ) : (
-        <div class="km-strip" data-testid="command-strip" ref={box} style={style} onPointerDown={noFocus}>
-          <div class="cs-scroll" onWheel={sideways}>
-            {p.strip === null ? (
-              <span class="cs-loading">…</span>
-            ) : (
-              p.strip.items
-                .filter((it) => !it.hidden)
-                .map((it) => (
-                  <button type="button" key={it.id} class="cs-chip" data-testid={`command-${it.id}`} onPointerDown={noFocus} onClick={() => p.onRun(it.id)}>
-                    {it.label}
-                  </button>
-                ))
-            )}
-          </div>
-          <button type="button" class="cs-edit" data-testid="command-edit" aria-label="Edit commands" onPointerDown={noFocus} onClick={p.onEdit}>
-            <PencilIcon />
-          </button>
-        </div>
-      )}
-    </>
-  )
-}
-
-function HistoryRows(p: { items: string[] | null; onSend(i: number): void; onInsert(i: number): void }) {
-  if (p.items === null) return null
-  if (p.items.length === 0) {
-    return (
-      <div class="km-empty" data-testid="history-empty">
-        No history
+        <button type="button" class="cs-edit" data-testid="command-edit" aria-label="Edit commands" onPointerDown={noFocus} onClick={p.onEdit}>
+          <PencilIcon />
+        </button>
       </div>
-    )
-  }
-  return (
-    <>
-      {p.items.map((text, i) => {
-        const row = historyRow(text)
-        return (
-          <div class="km-row" key={`${i}:${text}`}>
-            <button type="button" class="km-send" data-testid={`history-${i}`} title={text} onPointerDown={noFocus} onClick={() => p.onSend(i)}>
-              <span class="km-text">{row.first}</span>
-              {row.lines > 1 && <span class="km-lines">{row.lines} lines</span>}
-            </button>
-            <button type="button" class="km-insert" data-testid={`history-insert-${i}`} aria-label="Insert without sending" onPointerDown={noFocus} onClick={() => p.onInsert(i)}>
-              <EditIcon />
-            </button>
-          </div>
-        )
-      })}
     </>
   )
 }
@@ -121,7 +81,7 @@ function rowDetail(it: CommandItem): string {
   if (it.kind !== 'text') return ''
   const text = it.send[0] ?? ''
   if (text === it.label && it.enter) return ''
-  return `${historyRow(text).first}${it.enter ? ' ↵' : ''}`
+  return `${firstLine(text)}${it.enter ? ' ↵' : ''}`
 }
 
 /** Reset takes a second tap within this long. */

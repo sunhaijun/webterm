@@ -15,15 +15,14 @@ import (
 // setupOut is where `webterm setup` writes; tests replace it.
 var setupOut io.Writer = os.Stdout
 
-// runSetup checks and adds the settings claude, codex and the shell need for
-// "waiting for you" and frequent input (ADR-0055). --check only reports (exit
-// 1 when something is missing); --yes adds without asking; otherwise it asks
-// once on the terminal, and adds nothing without one.
+// runSetup checks and adds the settings claude and codex need for "waiting
+// for you" (ADR-0055, ADR-0058 §4). --check only reports (exit 1 when
+// something is missing); --yes adds without asking; otherwise it asks once on
+// the terminal, and adds nothing without one.
 func runSetup(args []string) error {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 	check := fs.Bool("check", false, "only report; exit 1 when something would be added")
 	yes := fs.Bool("yes", false, "add what's missing without asking")
-	shell := fs.String("shell", "bash", "the session shell (default: the config file's, else bash)")
 	if err := applyConfig(fs, args); err != nil {
 		return err
 	}
@@ -35,8 +34,8 @@ func runSetup(args []string) error {
 		return err
 	}
 	out := setupOut
-	items := setup.Plan(home, *shell)
-	fmt.Fprintln(out, "webterm setup: claude, codex and the shell")
+	items := setup.Plan(home)
+	fmt.Fprintln(out, "webterm setup: claude and codex")
 	fmt.Fprintln(out)
 	pending := 0
 	for _, it := range items {

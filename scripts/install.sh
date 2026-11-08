@@ -92,8 +92,8 @@ Usage: install.sh [options]
   --when-idle         Upgrade only once no session is running a command
   --force-restart     Restart instead of hot upgrade (closes all sessions);
                       also migrates an old user service to a system service
-  --setup             Set up claude, codex and your shell for webterm without asking
-                      (notifications and frequent input; a first install asks)
+  --setup             Set up claude and codex for webterm without asking
+                      (notifications; a first install asks)
   --no-setup          Don't ask about it
   --print-unit        Print the systemd unit and exit
   --force             Continue even if the certificate check fails
@@ -770,7 +770,7 @@ else
     } > "$STATE_FILE"
 fi
 
-# ---------- claude, codex and the shell (ADR-0055) ----------
+# ---------- claude and codex (ADR-0055) ----------
 #
 # A first install asks; --setup runs it on any install without asking; --no-setup
 # skips the question. Never during `webterm update`: neither flag goes into
@@ -778,7 +778,7 @@ fi
 setup_programs() {
     [ "$SETUP_CLI" != 0 ] || return 0
     [ "$SETUP_CLI" = 1 ] || [ "$FRESH" = 1 ] || return 0
-    step "Setting up claude, codex and your shell"
+    step "Setting up claude and codex"
     if [ "$DRY_RUN" = 1 ]; then
         info "Would run: webterm setup --yes"
         return 0
@@ -790,7 +790,7 @@ setup_programs() {
         fi
         # --check lists what's set and what's missing; exit 0 = nothing to add
         if "$PREFIX/webterm" setup --check; then return 0; fi
-        printf '  Add these for notifications and frequent input? [Y/n] ' >/dev/tty
+        printf '  Add these for notifications? [Y/n] ' >/dev/tty
         local ans=""
         IFS= read -r ans </dev/tty || ans=n
         case "$ans" in

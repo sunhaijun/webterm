@@ -97,48 +97,6 @@ func TestCodexConfig(t *testing.T) {
 	}
 }
 
-// UT-setup-shell (AC-1.24, ADR-0055 §2): history as you go, for bash and zsh.
-func TestShellHistory(t *testing.T) {
-	cases := []struct {
-		name, shell, in string
-		exists          bool
-		state           State
-		contains        string
-	}{
-		{"bash, nothing yet", "bash", "alias ll='ls -l'\n", true, Add, "PROMPT_COMMAND=\"history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}\""},
-		{"bash path", "/usr/bin/bash", "", false, Add, "# >>> webterm >>>"},
-		{"bash, already", "bash", "export PROMPT_COMMAND='history -a; history -n'\n", true, OK, ""},
-		{"zsh, nothing yet", "zsh", "autoload -U compinit\n", true, Add, "setopt INC_APPEND_HISTORY"},
-		{"zsh, share history", "/bin/zsh", "setopt share_history\n", true, OK, ""},
-		{"zsh, lower case", "zsh", "setopt incappendhistory\n", true, OK, ""},
-		{"fish", "fish", "", false, Skipped, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			out, state, detail := shellHistory(c.shell, []byte(c.in), c.exists)
-			if state != c.state {
-				t.Fatalf("state = %v (%s), want %v", state, detail, c.state)
-			}
-			if detail == "" {
-				t.Error("every state explains itself")
-			}
-			if state != Add {
-				return
-			}
-			s := string(out)
-			if !strings.HasPrefix(s, c.in) {
-				t.Fatalf("the existing content changed:\n%s", s)
-			}
-			if !strings.Contains(s, c.contains) || !strings.Contains(s, "# <<< webterm <<<\n") {
-				t.Fatalf("block missing:\n%s", s)
-			}
-			if c.exists && c.in != "" && !strings.Contains(s, c.in+"\n# >>> webterm >>>") {
-				t.Fatalf("block should follow a blank line:\n%s", s)
-			}
-		})
-	}
-}
-
 func write(t *testing.T, path, content string, mode os.FileMode) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -166,17 +124,21 @@ func states(items []Item) map[string]State {
 func TestPlanAndApply(t *testing.T) {
 	home := t.TempDir()
 	write(t, filepath.Join(home, ".claude", "settings.json"), "{\n  \"theme\": \"dark\"\n}\n", 0o664)
-	write(t, filepath.Join(home, ".codex", "config.toml"), "[tui]\nx = 1\n", 0o600)
-	// ~/.bashrc is a symlink into a dotfiles directory
-	real := filepath.Join(home, "dotfiles", "bashrc")
-	write(t, real, "# mine\n", 0o644)
-	if err := os.Symlink(real, filepath.Join(home, ".bashrc")); err != nil {
+	// ~/.codex/config.toml is a symlink into a dotfiles directory
+	real := filepath.Join(home, "dotfiles", "codex.toml")
+	write(t, real, "[tui]\nx = 1\n", 0o600)
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink(real, filepath.Join(home, ".codex", "config.toml")); err != nil {
+		t.Fatal(err)
+	}
+	// The shell's files are never touched (ADR-0058 §4)
+	write(t, filepath.Join(home, ".bashrc"), "# mine\n", 0o644)
 
-	items := Plan(home, "bash")
-	if got := states(items); got[ItemClaude] != Add || got[ItemCodex] != Add || got[ItemShell] != Add {
-		t.Fatalf("plan = %v, want three adds", got)
+	items := Plan(home)
+	if got := states(items); len(items) != 2 || got[ItemClaude] != Add || got[ItemCodex] != Add {
+		t.Fatalf("plan = %v, want two adds", got)
 	}
 	now := time.Date(2026, 11, 7, 18, 0, 0, 0, time.UTC)
 	if err := Apply(items, now); err != nil {
@@ -189,8 +151,7 @@ func TestPlanAndApply(t *testing.T) {
 		was  string
 	}{
 		{filepath.Join(home, ".claude", "settings.json"), 0o664, "{\n  \"theme\": \"dark\"\n}\n"},
-		{filepath.Join(home, ".codex", "config.toml"), 0o600, "[tui]\nx = 1\n"},
-		{real, 0o644, "# mine\n"},
+		{real, 0o600, "[tui]\nx = 1\n"},
 	} {
 		fi, err := os.Stat(c.path)
 		if err != nil {
@@ -204,14 +165,17 @@ func TestPlanAndApply(t *testing.T) {
 			t.Errorf("%s backup = %q, %v; want %q", c.path, bak, err, c.was)
 		}
 	}
-	if fi, err := os.Lstat(filepath.Join(home, ".bashrc")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("~/.bashrc is no longer a symlink: %v %v", fi.Mode(), err)
+	if fi, err := os.Lstat(filepath.Join(home, ".codex", "config.toml")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("config.toml is no longer a symlink: %v %v", fi.Mode(), err)
 	}
-	if b, _ := os.ReadFile(real); !strings.Contains(string(b), "history -a") {
+	if b, _ := os.ReadFile(real); !strings.Contains(string(b), "notifications = true") {
 		t.Fatalf("the symlink's target wasn't written:\n%s", b)
 	}
+	if b, _ := os.ReadFile(filepath.Join(home, ".bashrc")); string(b) != "# mine\n" {
+		t.Fatalf("~/.bashrc was changed:\n%s", b)
+	}
 
-	again := Plan(home, "bash")
+	again := Plan(home)
 	for _, it := range again {
 		if it.State != OK {
 			t.Errorf("second plan: %s is %v (%s), want OK", it.Name, it.State, it.Detail)
@@ -220,7 +184,7 @@ func TestPlanAndApply(t *testing.T) {
 
 	// A later change to the same file keeps the first backup and adds a dated one
 	write(t, filepath.Join(home, ".claude", "settings.json"), "{\"preferredNotifChannel\": \"auto\"}\n", 0o664)
-	if err := Apply(Plan(home, "bash"), now); err != nil {
+	if err := Apply(Plan(home), now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json.webterm-bak-20261107-180000")); err != nil {
@@ -230,15 +194,15 @@ func TestPlanAndApply(t *testing.T) {
 
 func TestPlanSkipsWhatIsNotInstalled(t *testing.T) {
 	home := t.TempDir()
-	got := states(Plan(home, "fish"))
-	if got[ItemClaude] != Skipped || got[ItemCodex] != Skipped || got[ItemShell] != Skipped {
+	got := states(Plan(home))
+	if got[ItemClaude] != Skipped || got[ItemCodex] != Skipped {
 		t.Fatalf("plan = %v, want all skipped", got)
 	}
 	// claude installed but no settings file yet: it's created
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	items := Plan(home, "fish")
+	items := Plan(home)
 	if states(items)[ItemClaude] != Add {
 		t.Fatalf("claude without settings.json should be added: %v", states(items))
 	}
@@ -255,7 +219,7 @@ func TestBrokenFilesAreLeftAlone(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".claude", "settings.json")
 	write(t, path, "{ broken", 0o644)
-	items := Plan(home, "fish")
+	items := Plan(home)
 	if states(items)[ItemClaude] != Broken {
 		t.Fatalf("plan = %v", states(items))
 	}

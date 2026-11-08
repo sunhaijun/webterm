@@ -1,10 +1,9 @@
 /**
- * E2E-51 History and the command strip (AC-3.24, AC-3.25, ADR-0057).
+ * E2E-51 The last column and the command strip (AC-3.24, AC-3.25, ADR-0057, ADR-0058).
  *
- * Pixel 5. The agent runs with a temporary HOME holding .bash_history,
- * .claude/history.jsonl and .claude/commands/hello.md; a script named `claude` stands in for
- * the real one: run with -p it prints an init line, otherwise it echoes FAKE-CLAUDE and
- * sleeps. INPUT frames are recorded.
+ * Pixel 5. The agent runs with a temporary HOME holding .claude/commands/hello.md; a script
+ * named `claude` stands in for the real one: run with -p it prints an init line, otherwise
+ * it echoes FAKE-CLAUDE and sleeps. INPUT frames are recorded.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -28,10 +27,7 @@ let agent: Agent
 let home: string
 test.beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'webterm-home-'))
-  writeFileSync(join(home, '.bash_history'), '#1700000000\ngit status\nls\ngit status\nmake test\ngit status\nmake test\n')
   mkdirSync(join(home, '.claude', 'commands'), { recursive: true })
-  const claude = ['/clear', 'first line\nsecond line', '/clear', '[Pasted text #1 +20 lines] explain', '继续']
-  writeFileSync(join(home, '.claude', 'history.jsonl'), claude.map((d) => JSON.stringify({ display: d })).join('\n') + '\n')
   writeFileSync(join(home, '.claude', 'commands', 'hello.md'), 'Say hello.\n')
   mkdirSync(join(home, 'bin'))
   // No exec: bash running the script stays the group leader, argv[1] = .../claude
@@ -45,6 +41,8 @@ async function framesAfter(rec: SentRecorder, from: number): Promise<string[]> {
   await new Promise((r) => setTimeout(r, 400))
   return (await rec.input()).slice(from)
 }
+
+const focused = (p: Page) => p.evaluate(() => document.activeElement?.className ?? '')
 
 /** The strip's chips (their ids), in order. */
 const chips = (p: Page) =>
@@ -82,41 +80,34 @@ async function touchDrag(page: Page, from: { x: number; y: number }, to: { x: nu
   await cdp.detach()
 }
 
-test('E2E-51 history for the shell and claude; the command strip, its editor, sharing and reset; closing', async ({ page }) => {
+test('E2E-51 ↵ and the empty ⌘ cell at a shell; the two-row command strip, its editor, sharing and reset; closing', async ({ page }) => {
   test.setTimeout(120_000)
   const rec = await recordSent(page)
   await agent.open(page)
   const a = (await hooks.sid(page))!
   await waitFor(async () => (await hooks.program(page)) === 'shell', 'program is shell')
 
-  // (1) Shell: no ⌘, its cell kept; history newest first, each entry once
+  // (1) Shell: no ⌘, its cell kept above ↵; ↵ sends CR without moving focus; ALT ↵ is ESC CR
   await expect(page.getByTestId('key-commands')).toHaveCount(0)
+  await expect(page.getByTestId('key-history')).toHaveCount(0)
   const blank = (await page.getByTestId('commands-blank').boundingBox())!
-  const hist = (await page.getByTestId('key-history').boundingBox())!
-  expect(Math.abs(blank.x - hist.x), 'the empty cell sits under ⟲').toBeLessThanOrEqual(1)
-  expect(Math.abs(blank.width - hist.width)).toBeLessThanOrEqual(1)
-  await page.getByTestId('key-history').click()
-  await expect(page.getByTestId('history-menu')).toBeVisible()
-  await expect(page.getByTestId('history-0')).toHaveText('make test')
-  await expect(page.getByTestId('history-1')).toHaveText('git status')
-  await expect(page.getByTestId('history-2')).toHaveText('ls')
-  await expect(page.getByTestId('history-3'), '#<digits> is a timestamp; duplicates appear once').toHaveCount(0)
-  let n = (await rec.input()).length
-  await page.getByTestId('history-1').click()
-  await expect(page.getByTestId('history-menu')).toHaveCount(0)
-  let sent = await framesAfter(rec, n)
-  expect(sent.length, `frames: ${JSON.stringify(sent)}`).toBe(2)
-  expect(sent[0]).toContain('git status')
-  expect(sent[1], 'Enter in its own frame').toBe('\r')
-  await waitText(page, /On branch|not a git repository/, 'git status ran')
-  n = (await rec.input()).length
-  await page.getByTestId('key-history').click()
-  await page.getByTestId('history-insert-0').click()
-  sent = await framesAfter(rec, n)
-  expect(sent.length).toBe(1)
-  expect(sent[0]).toContain('make test')
+  const enter = (await page.getByTestId('key-Enter').boundingBox())!
+  expect(Math.abs(blank.x - enter.x), 'the empty cell sits above ↵').toBeLessThanOrEqual(1)
+  expect(Math.abs(blank.width - enter.width)).toBeLessThanOrEqual(1)
+  expect(blank.y + blank.height).toBeLessThanOrEqual(enter.y + 1)
+  const icon = (await page.locator('[data-testid=key-Enter] svg').boundingBox())!
+  expect(Math.abs(icon.x + icon.width / 2 - (enter.x + enter.width / 2)), 'the ↵ icon is centered').toBeLessThanOrEqual(1)
   await focusTerm(page)
-  await page.keyboard.press('Control+u')
+  const focusBefore = await focused(page)
+  let n = (await rec.input()).length
+  await page.getByTestId('key-Enter').click()
+  expect(await framesAfter(rec, n)).toEqual(['\r'])
+  expect(await focused(page), 'focus stays').toBe(focusBefore)
+  n = (await rec.input()).length
+  await page.getByTestId('key-Alt').click()
+  await page.getByTestId('key-Enter').click()
+  expect(await framesAfter(rec, n)).toEqual(['\x1b\r'])
+  await expect(page.getByTestId('key-Alt')).toHaveAttribute('data-sticky', 'off')
 
   // (2) claude in front: ⌘ appears; the strip comes from the tool
   await submit(page, `${home}/bin/claude`)
@@ -139,7 +130,27 @@ test('E2E-51 history for the shell and claude; the command strip, its editor, sh
   await chip(page, 'key:shift-tab').click()
   expect(await framesAfter(rec, n)).toEqual(['\x1b[Z'])
 
-  // (3) The editor: drag, hide, rename, add
+  // (3) Two rows, filled column by column; it scrolls sideways; ✎ spans both rows
+  await openStrip(page)
+  const box = async (i: number) => (await page.locator('[data-testid=command-strip] .cs-chip').nth(i).boundingBox())!
+  const [c0, c1, c2, c3] = [await box(0), await box(1), await box(2), await box(3)]
+  expect(Math.abs(c1.x - c0.x), 'chip 2 under chip 1').toBeLessThanOrEqual(1)
+  expect(c1.y).toBeGreaterThanOrEqual(c0.y + c0.height - 1)
+  expect(Math.abs(c1.width - c0.width), 'both stretch to the column').toBeLessThanOrEqual(1)
+  expect(Math.abs(c2.y - c0.y), 'chip 3 on the top row').toBeLessThanOrEqual(1)
+  expect(c2.x).toBeGreaterThanOrEqual(c0.x + c0.width - 1)
+  expect(Math.abs(c3.x - c2.x), 'chip 4 under chip 3').toBeLessThanOrEqual(1)
+  expect(Math.abs(c3.y - c1.y)).toBeLessThanOrEqual(1)
+  expect(await page.evaluate(() => {
+    const el = document.querySelector<HTMLElement>('.cs-scroll')!
+    return el.scrollWidth > el.clientWidth
+  }), 'scrolls sideways').toBe(true)
+  const edit = (await page.getByTestId('command-edit').boundingBox())!
+  expect(edit.height, '✎ as tall as both rows').toBeGreaterThanOrEqual(c1.y + c1.height - c0.y)
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('command-strip')).toHaveCount(0)
+
+  // (4) The editor: drag, hide, rename, add
   await openEditor(page)
   expect(await rows(page)).toContain('/deep-research')
   await expect(row(page, '/deep-research').locator('xpath=..')).toHaveAttribute('data-hidden', 'true')
@@ -186,7 +197,7 @@ test('E2E-51 history for the shell and claude; the command strip, its editor, sh
   await chip(page, added).click()
   expect(await framesAfter(rec, n)).toEqual(['继续', '\r'])
 
-  // (4) Kept by the agent: a reload shows the same; Reset takes a second tap
+  // (5) Kept by the agent: a reload shows the same; Reset takes a second tap
   await page.reload()
   await waitOnline(page)
   await waitFor(async () => (await hooks.program(page)) === 'claude', 'program is claude after reload', 10_000)
@@ -206,20 +217,6 @@ test('E2E-51 history for the shell and claude; the command strip, its editor, sh
   await expect(row(page, '/compact').locator('.ce-label')).toHaveText('/compact')
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('command-editor')).toHaveCount(0)
-
-  // (5) History in claude: newest first, a multi-line entry kept, the placeholder dropped
-  await page.getByTestId('key-history').click()
-  await expect(page.getByTestId('history-0')).toHaveText('继续')
-  await expect(page.getByTestId('history-1')).toHaveText('/clear')
-  await expect(page.getByTestId('history-2').locator('.km-text')).toHaveText('first line')
-  await expect(page.getByTestId('history-2').locator('.km-lines')).toHaveText('2 lines')
-  await expect(page.getByTestId('history-3'), "claude's paste placeholder is dropped").toHaveCount(0)
-  n = (await rec.input()).length
-  await page.getByTestId('history-2').click()
-  sent = await framesAfter(rec, n)
-  expect(sent.length, `frames: ${JSON.stringify(sent)}`).toBe(2)
-  expect(sent[0], 'both lines in one paste').toMatch(/first line[\r\n]+second line/)
-  expect(sent[1]).toBe('\r')
 
   // (6) Closing: Esc goes to the strip, not the program; switching sessions closes it
   await openStrip(page)
