@@ -93,6 +93,15 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Upgrade from v0.3.0 with a new `--https-port`: `reload` does two hot upgrades (the old agent can't take a command line), sessions survive, and the new port answers
 - [ ] Install from the web (`gh api … | bash -s -- --channel dev`): the log shows "Handing over to webterm …" (the binary's bundled install script), and the installed version is the dev build
 
+## Setting up claude, codex and the shell (every time `webterm setup` or the installer's question changes, since m19)
+
+[ADR-0055](../20-architecture/adr/0055-webterm-setup.md).
+
+- [ ] On a fresh server with claude and codex installed, a first install asks the setup question; Enter adds the settings, and `webterm setup --check` then reports all ok
+- [ ] `webterm setup` with nothing missing says so and changes no file (timestamps unchanged)
+- [ ] After setup, claude in a background session asking for permission lights the waiting-for-you dot; codex finishing a turn does too
+- [ ] A new shell started after setup: a command run in it shows in the frequent-input menu without exiting the shell
+
 ## SSH attach (every time attach or the size rules change, since m14)
 
 - [ ] From a laptop terminal (iTerm2 / Windows Terminal / GNOME Terminal), `ssh -t server webterm attach` with several sessions lists them in the tab order; picking one draws its screen and history, and the laptop's scrollback holds that history once (no copy after resizing the window)

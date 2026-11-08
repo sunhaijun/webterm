@@ -1,6 +1,6 @@
 # ADR-0052 "Waiting for you" replaces the unread dot
 
-Status: Accepted (2026-11-07). Replaces the unread marker of AC-4.3 and [session-ux.md](../../40-frontend/session-ux.md) (the dot keeps its places and its accent color, [ADR-0042](0042-red-means-error-and-line-icons.md) §1). Adds `attention` to session info and `session.updated`, and a client message `session.seen`. The protocol version stays 2.
+Status: Accepted (2026-11-07). Replaces the unread marker of AC-4.3 and [session-ux.md](../../40-frontend/session-ux.md) (the dot keeps its places and its accent color, [ADR-0042](0042-red-means-error-and-line-icons.md) §1). Adds `attention` to session info and `session.updated`, and a client message `session.seen`. The protocol version stays 2. §6 revised by [ADR-0055](0055-webterm-setup.md) (2026-11-07): `webterm setup` adds these settings with consent, and claude's is `preferredNotifChannel` in `~/.claude/settings.json` (claude 2.1.317 has no `claude config set`).
 
 ## Context
 
