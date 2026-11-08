@@ -488,6 +488,10 @@ button { font: inherit; color: inherit; }
 /* Session drawer footer: "+ New session" fills the row, ⚙ is a square */
 .drawer-new .icon { color: var(--muted); }
 .drawer-settings { flex: none; width: 48px; color: var(--muted); }
+/* Square icon buttons in a sheet's bottom row: files in the session drawer, new folder and >_ in the file list */
+.drawer-square { flex: none; width: 48px; color: var(--muted); }
+/* In the file list's bottom row on a mouse device, square with the 40px-tall buttons */
+.app[data-coarse='false'] .drawer[data-variant='files'] .drawer-square { width: 40px; }
 
 /* compact: full-width bottom sheet with grab handle, swipe down to close */
 .app[data-form='compact'] .drawer-backdrop { align-items: flex-end; padding: 0; }
@@ -820,4 +824,104 @@ button { font: inherit; color: inherit; }
   content: ''; position: absolute; top: 4px; right: 4px;
   width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* ---------- File browser (ADR-0059): sheets like the session drawer ---------- */
+
+/* The list and a file have a fixed size, so a file covers the list exactly and the list doesn't jump between folders */
+.drawer[data-variant='files'], .drawer[data-variant='file'] { width: min(720px, 100%); height: min(80%, 720px); }
+.app[data-form='compact'] .drawer[data-variant='files'], .app[data-form='compact'] .drawer[data-variant='file'] { height: 80%; }
+.app[data-files-drop='true'] .drawer:is([data-variant='files'], [data-variant='file']) { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Header: ‹ · the path (each part a button, scrolling sideways) · ✕ */
+.files-head { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; margin-left: -10px; }
+.files-up {
+  flex: none; width: 36px; height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer;
+}
+.app[data-coarse='true'] .files-up { width: 44px; height: 44px; }
+.files-up:hover:not(:disabled) { background: var(--surface); color: var(--fg); }
+.files-up:disabled { opacity: 0.35; cursor: default; }
+.files-crumbs {
+  flex: 1; min-width: 0; display: flex; align-items: center;
+  overflow-x: auto; white-space: nowrap; scrollbar-width: none;
+}
+.files-crumbs::-webkit-scrollbar { display: none; }
+.files-crumb-wrap { flex: none; display: inline-flex; align-items: center; }
+.files-sep { color: var(--muted); padding: 0 1px; }
+.files-crumb {
+  border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  font: inherit; font-size: 15px; padding: 6px 4px; border-radius: 6px;
+}
+.files-crumb-wrap:last-child .files-crumb { color: var(--fg); font-weight: 600; }
+.files-crumb:hover { background: var(--surface); color: var(--fg); }
+
+.files-filter { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 8px 16px 4px; }
+.files-filter input {
+  width: 100%; height: 36px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); color: var(--fg);
+  font-size: 16px; /* under 16px iOS zooms the page on focus */
+  outline: none; -webkit-appearance: none; appearance: none;
+}
+.files-filter input:focus { border-color: var(--accent); }
+
+/* Rows: the session drawer's, with two buttons underneath (--row-actions = 2 × ROW_ACT_PX) */
+.files-list { list-style: none; margin: 0; padding: 4px 0; --row-actions: 144px; }
+.file-row {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 12px;
+  height: 52px; padding: 0 16px;
+  background: var(--bg);
+  cursor: pointer; outline: none;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  touch-action: pan-y;
+  transition: transform 180ms ease;
+}
+.sl-item[data-open='true'] .file-row { transform: translateX(calc(-1 * var(--row-actions))); }
+.file-row:hover { background: color-mix(in srgb, var(--fg) 7%, var(--bg)); }
+.file-row:focus-visible { box-shadow: inset 0 0 0 2px var(--ring); }
+.file-icon { flex: none; display: inline-flex; color: var(--muted); }
+.file-icon[data-type='dir'] { color: var(--accent); }
+.file-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.file-info {
+  flex: none; display: flex; gap: 10px;
+  color: var(--muted); font-family: var(--font-mono); font-size: 12px; white-space: nowrap;
+}
+.file-row[data-hidden='true'] :is(.file-icon, .file-name) { opacity: 0.55; }
+.file-row[data-type='other'] .file-name, .file-row[data-bad='true'] .file-name { opacity: 0.55; }
+.file-row[data-bad='true'] { cursor: default; }
+.files-more { padding: 14px 16px; color: var(--muted); font-size: 13px; }
+.files-error { margin: 0; padding: 24px 16px; color: var(--muted); font-size: 15px; }
+.drawer-btn[data-busy='true'] { color: var(--accent); }
+.files-upload .icon { color: var(--muted); }
+.files-upload[data-busy='true'] .icon { color: var(--accent); animation: pulse 1s infinite; }
+
+/* A file: one line of size and time, then the preview filling the rest */
+.file-view { min-height: 100%; display: flex; flex-direction: column; }
+.file-meta {
+  flex: none; display: flex; align-items: center; gap: 8px; min-height: 36px;
+  padding: 6px 16px; color: var(--muted); font-size: 13px;
+}
+.file-meta > span { flex: 1; min-width: 0; }
+.file-end {
+  flex: none; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--fg); font: inherit; font-size: 13px;
+  padding: 4px 12px; cursor: pointer;
+}
+.file-stage { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 16px 16px; }
+.file-view[data-kind='image'], .file-view[data-kind='video'] { height: 100%; }
+.file-stage img, .file-stage video { max-width: 100%; max-height: 100%; object-fit: contain; }
+.file-stage img { cursor: zoom-in; }
+/* Tap: actual size, scrolling inside the sheet */
+.file-stage[data-zoom] { display: block; overflow: auto; padding: 0; }
+.file-stage[data-zoom] img { max-width: none; max-height: none; cursor: zoom-out; }
+.file-stage audio { width: 100%; }
+.file-none { color: var(--muted); }
+.file-text {
+  margin: 0; padding: 4px 16px 16px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4;
+  user-select: text; -webkit-user-select: text;
 }

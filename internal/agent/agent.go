@@ -131,6 +131,13 @@ func (a *Agent) routes() {
 	a.mux.Handle("GET /api/commands", a.requireAuth(http.HandlerFunc(a.handleCommands)))
 	a.mux.Handle("PUT /api/commands", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handlePutCommands))))
 	a.mux.Handle("DELETE /api/commands", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleDeleteCommands))))
+	// The file browser (ADR-0059): reads authenticated, writes also check Origin
+	a.mux.Handle("GET /api/fs/list", a.requireAuth(http.HandlerFunc(a.handleFsList)))
+	a.mux.Handle("GET /api/fs/raw", a.requireAuth(http.HandlerFunc(a.handleFsRaw)))
+	a.mux.Handle("POST /api/fs/upload", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleFsUpload))))
+	a.mux.Handle("POST /api/fs/mkdir", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleFsMkdir))))
+	a.mux.Handle("POST /api/fs/rename", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleFsRename))))
+	a.mux.Handle("DELETE /api/fs", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleFsDelete))))
 
 	// Every other /api/* path authenticates first, then 404s (auth matrix:
 	// /api/* ✓). Without this they would fall through to the SPA fallback on

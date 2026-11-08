@@ -16,6 +16,7 @@
 import type { ComponentChildren } from 'preact'
 import { useLayoutEffect, useRef } from 'preact/hooks'
 
+import { backStack } from './backstack'
 import { CloseIcon } from './icons'
 import { installSwipeDismiss } from './swipe'
 
@@ -27,15 +28,17 @@ export interface DrawerProps {
   /** testid of the backdrop. */
   backdropTestid?: string
   /**
-   * Close with the system back button (session-ux.md): push a history entry on open and
-   * close on `popstate`. When closed any other way, `history.back()` removes that entry so
-   * entries don't pile up; otherwise Back in an Android PWA would exit the app.
+   * Close with the system back button (session-ux.md): push a history entry on open, and
+   * Back closes the top such sheet. Closed any other way, the entry is removed again so
+   * entries don't pile up; otherwise Back in an Android PWA would exit the app (backstack.ts).
    */
   backButton?: boolean
+  /** Replaces the title in the header row (the file browser's up button and path); `title` still names the dialog. */
+  head?: ComponentChildren
   /** A fixed row of buttons at the bottom ("+ New session · ⚙" in the session drawer, "Cancel · OK" in confirm and rename). */
   foot?: ComponentChildren
   /** Which kind of sheet; CSS sizes each one by it (the session drawer has a minimum height, ADR-0037 §5). */
-  variant?: 'sessions' | 'settings' | 'confirm' | 'rename'
+  variant?: 'sessions' | 'settings' | 'confirm' | 'rename' | 'files' | 'file'
   children: ComponentChildren
 }
 
@@ -47,6 +50,7 @@ export function Drawer({
   backButton = false,
   foot,
   variant,
+  head,
   children,
 }: DrawerProps) {
   const sheetRef = useRef<HTMLDivElement>(null)
@@ -94,18 +98,7 @@ export function Drawer({
   }, [])
   useLayoutEffect(() => {
     if (!backButton) return
-    let popped = false
-    history.pushState({ webtermDrawer: true }, '')
-    const onPop = () => {
-      popped = true
-      closeRef.current()
-    }
-    window.addEventListener('popstate', onPop)
-    return () => {
-      window.removeEventListener('popstate', onPop)
-      // Not closed by Back: remove the entry we pushed
-      if (!popped) history.back()
-    }
+    return backStack().push(() => closeRef.current())
   }, [backButton])
 
   return (
@@ -133,7 +126,7 @@ export function Drawer({
       >
         <div class="drawer-grab" />
         <div class="drawer-head">
-          <h2 class="drawer-title">{title}</h2>
+          {head ?? <h2 class="drawer-title">{title}</h2>}
           <button class="drawer-close" data-testid="drawer-close" aria-label="Close" onClick={() => closeRef.current()}>
             <CloseIcon size={16} />
           </button>

@@ -16,7 +16,7 @@ import { useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { ConnState, StateInfo } from '../conn/connection'
 import type { SessionView } from '../sessions/store'
-import { CloseIcon, GearIcon, PaperclipIcon, PinIcon, PlusIcon } from '../ui/icons'
+import { CloseIcon, FolderIcon, GearIcon, PaperclipIcon, PinIcon, PlusIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { DragReorder } from '../ui/reorder'
@@ -39,6 +39,8 @@ export interface TopBarProps {
   onRename(sid: number, name: string): void
   onCancelRename(): void
   onSettings(): void
+  /** Opens the file browser (ADR-0059). */
+  onFiles(): void
   /** The paperclip: open the file picker (called inside the click, ADR-0051). */
   onUpload(): void
   /** Files are uploading: the paperclip pulses. */
@@ -289,6 +291,9 @@ export function TopBar(p: TopBarProps) {
       >
         {/* An icon, not a `+` glyph: glyph position depends on font metrics and won't line up with the status dot (ADR-0035 §3) */}
         <PlusIcon />
+      </button>
+      <button class="topbar-btn" data-testid="open-files" aria-label="Files" title="Files" onClick={p.onFiles}>
+        <FolderIcon />
       </button>
       <button
         class="topbar-btn"

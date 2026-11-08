@@ -30,6 +30,7 @@
 │  │  POST /auth/pair     → pairing                     │  │
 │  │  *    /api/devices*  → device management REST      │  │
 │  │  POST /api/uploads   → files for sessions → /tmp   │  │
+│  │  *    /api/fs/*      → file browser (user's rights)│  │
 │  │  GET  /ws            → WebSocket upgrade           │  │
 │  │                        (auth + Origin)             │  │
 │  │  TLS: autocert (production) | plain HTTP (--dev)   │  │
@@ -116,6 +117,7 @@ internal/
   store/                SQLite schema, migrations, queries
   wsconn/               WebSocket connection layer
   uploads/              files sent to sessions: private temp directory, safe names, cleanup (ADR-0051)
+  files/                file browser: list, open regular files, upload without overwriting, mkdir / rename / delete (ADR-0059)
   webui/                go:embed mount point for the frontend build
 web/
   src/
@@ -123,6 +125,7 @@ web/
     keys/               extra keys and text page, keymap, IME fallbacks for direct input, input path counters
     term/               xterm wrapper, replay gate, gestures
     sessions/           session state, switching, waiting-for-you
+    files/              file browser sheets and the /api/fs client (ADR-0059)
     conn/               WebSocket connection layer, seq accounting, resend queue, backoff
     ui/                 shared components: sheets, pairing page, viewport
     protocol/           message types, codec (TS side of the contract)
@@ -225,3 +228,4 @@ In the `exited` state a session keeps its ring buffer and emulator: it can be vi
 | [0056](adr/0056-collapsible-extra-keys.md) | The extra keys collapse with a swipe right into a corner button (tap or swipe left to restore), one resize each way; every control acts only when released in place; pages switch with vertical swipes |
 | [0057](adr/0057-command-strip-and-history.md) | ⟲ becomes recent history (newest first, multi-line kept); ⌘ a strip of claude's / codex's own commands (claude's from its `init` message, re-probed after upgrades) in an order you drag, stored on the agent |
 | [0058](adr/0058-enter-key-and-two-row-strip.md) | The last key column becomes ⌘ over ↵ (Enter, for prompts and pickers with the keyboard down); the command strip has two rows, filled column by column; the history list and setup's shell item go |
+| [0059](adr/0059-files.md) | A file browser in stacked sheets like the session drawer: opens in the session's folder, previews images / video / audio / text, Share or Download, Send to session, upload without overwriting, new folder / rename / delete, new session here; served files run nowhere (`sandbox` CSP, attachment) |

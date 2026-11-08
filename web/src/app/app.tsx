@@ -7,9 +7,10 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 
+import { FilesBrowser } from '../files/browser'
 import { ExtraKeys } from '../keys/extrakeys'
 import { Drawer } from '../ui/drawer'
-import { GearIcon, PlusIcon } from '../ui/icons'
+import { FolderIcon, GearIcon, PlusIcon } from '../ui/icons'
 import { AppController } from './controller'
 import { showsExtraKeys } from './form'
 import { CommandEditor, CommandItemSheet, KeyMenus } from './keymenus'
@@ -64,6 +65,8 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
   // compact renames in a small sheet over the drawer (ADR-0039 §2); wide renames the tab in place
   const renamingSheet = s.form === 'compact' && renaming !== null ? s.sessions.find((x) => x.sid === renaming) : undefined
   const anyAttention = s.sessions.some((x) => x.attention)
+  // Send to session needs the session the file browser was opened from, still running (AC-9.7)
+  const filesSession = s.files?.sid != null ? s.sessions.find((x) => x.sid === s.files?.sid) : undefined
   const empty = s.welcomed && s.sessions.length === 0
 
   // The session behind the menu or rename is gone (closed elsewhere, agent restart):
@@ -85,7 +88,14 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
   }
 
   return (
-    <div class="app" ref={rootRef} data-form={s.form} data-coarse={s.coarse ? 'true' : 'false'} data-keys={keys ? 'true' : 'false'}>
+    <div
+      class="app"
+      ref={rootRef}
+      data-form={s.form}
+      data-coarse={s.coarse ? 'true' : 'false'}
+      data-keys={keys ? 'true' : 'false'}
+      data-files-drop={s.dropping && s.files ? 'true' : undefined}
+    >
       {s.form === 'wide' && (
         <TopBar
           sessions={s.sessions}
@@ -102,13 +112,14 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
           onRename={rename}
           onCancelRename={endRename}
           onSettings={() => ctl.openSettings()}
+          onFiles={() => ctl.openFiles()}
           onUpload={() => ctl.pickFiles()}
           uploading={s.uploading}
           onMove={(sid, before) => ctl.moveSession(sid, before)}
         />
       )}
 
-      <div class="stage" data-drop={s.dropping ? 'true' : undefined}>
+      <div class="stage" data-drop={s.dropping && !s.files ? 'true' : undefined}>
         <div class="term" data-testid="terminal" ref={areaRef} />
         <ConnBanner state={s.conn} info={s.connInfo} fatal={s.fatal} note={s.connNote} />
         <ToastView toast={s.toast} />
@@ -184,6 +195,16 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
               </button>
               <button
                 type="button"
+                class="drawer-btn drawer-square"
+                data-testid="open-files"
+                aria-label="Files"
+                title="Files"
+                onClick={() => ctl.openFiles()}
+              >
+                <FolderIcon />
+              </button>
+              <button
+                type="button"
                 class="drawer-btn drawer-settings"
                 data-testid="open-settings"
                 aria-label="Settings"
@@ -214,6 +235,24 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
           onFontSize={(px) => ctl.setFontSize(px)}
           onSignOut={() => ctl.requestSignOut()}
           onClose={() => ctl.closeSettings()}
+        />
+      )}
+
+      {s.files && (
+        <FilesBrowser
+          start={s.files.start}
+          home={s.home}
+          coarse={s.coarse}
+          canSend={filesSession?.status === 'running'}
+          upload={s.filesUpload}
+          changed={s.filesChanged}
+          onDir={(dir) => ctl.setFilesDir(dir)}
+          onClose={(dir) => ctl.closeFiles(dir)}
+          onSend={(path) => ctl.sendFromFiles(path)}
+          onTerminal={(dir) => ctl.newSessionIn(dir)}
+          onUpload={(dir, files) => ctl.uploadToDir(dir, files)}
+          notify={(kind, text) => ctl.notify(kind, text)}
+          onUnauthorized={() => ctl.unauthorized()}
         />
       )}
 

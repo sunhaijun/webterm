@@ -165,3 +165,22 @@ export const EyeOffIcon = () => <Icon d="M1.25 7C2.75 4.25 4.75 2.9 7 2.9s4.25 1
 export const KeyboardIcon = () => (
   <Icon d="M2.25 3.75h9.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1zM3.75 5.75h.01M6 5.75h.01M8.25 5.75h.01M10.25 5.75h.01M4.75 8h4.5" size={18} />
 )
+
+/** File browser (ADR-0059): a folder, its tab on the top left. Also the row icon for folders. */
+export const FOLDER = 'M1.75 3.5a1 1 0 0 1 1-1h2.8l1.4 1.5h4.3a1 1 0 0 1 1 1v5.75a1 1 0 0 1-1 1h-8.5a1 1 0 0 1-1-1z'
+export const FolderIcon = ({ size = 14 }: { size?: number }) => <Icon d={FOLDER} size={size} />
+
+/** A file: a page with its top-right corner folded. */
+export const FileIcon = ({ size = 14 }: { size?: number }) => <Icon d="M3.25 1.75h4.5l3 3v7.5h-7.5zM7.75 1.75v3h3" size={size} />
+
+/** Upload: an arrow rising out of a tray. */
+export const UploadIcon = () => <Icon d="M7 9V2.25M4.5 4.75L7 2.25l2.5 2.5M2.25 8.75v3h9.5v-3" />
+
+/** New folder: the folder with a plus inside. */
+export const FolderPlusIcon = () => <Icon d={`${FOLDER}M7 6v3.5M5.25 7.75h3.5`} />
+
+/** New session here: a prompt, `>` and a cursor line. */
+export const TerminalIcon = () => <Icon d="M2.75 3.5L6.25 7l-3.5 3.5M7.75 10.75h3.75" />
+
+/** Up one folder: a chevron pointing left. */
+export const BackIcon = ({ size = 14 }: { size?: number }) => <Icon d="M8.75 2.75L4.5 7l4.25 4.25" size={size} />

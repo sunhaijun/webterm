@@ -282,7 +282,7 @@ User-input events: `keydown` `keypress` `beforeinput` `input` `paste` `compositi
 | Paperclip `text-upload-file` | Text page, over the text box's bottom-right corner (so on `compact`, and on `wide` with touch) | Opens the system file picker |
 | Paperclip `upload-file` | `wide` tab bar, left of the connection dot | Same |
 | Paste | Into the terminal or the text box, when the clipboard holds files and its `text/plain` is empty | The files are sent; the event is stopped (capture phase), so xterm and the text box get nothing |
-| Drop | Anywhere on the page, when the drag carries files | The files are sent; the page never navigates to the dropped file. While files are dragged over the page, `.stage` has `data-drop="true"` (an accent outline) |
+| Drop | Anywhere on the page, when the drag carries files | The files are sent; the page never navigates to the dropped file. While files are dragged over the page, `.stage` has `data-drop="true"` (an accent outline). While the file browser is open, files dropped anywhere go into the folder it shows instead, and nothing is pasted ([ADR-0059](../20-architecture/adr/0059-files.md) §5) |
 
 - Both buttons open the **same** hidden `<input type="file" multiple data-testid="upload-input">`, with no `accept` filter, from inside the click (iOS opens pickers only from a user gesture). Its value is cleared after each pick, so picking the same file twice works.
 - Both buttons use `preventDefault` on `pointerdown`, like the other buttons in the extra keys and tab bar, so pressing one doesn't move focus. Picking files doesn't move focus either.

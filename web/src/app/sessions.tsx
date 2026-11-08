@@ -8,16 +8,16 @@
  * - `SessionMenu`: Rename · Pin · Close, from right-click / long-press on a wide tab.
  * - `RenameInput`: on wide the tab name turns into this input; `Enter` commits, `Esc` cancels.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks'
 
 import type { SessionView } from '../sessions/store'
 import { shortCwd } from '../sessions/store'
 import { Drawer } from '../ui/drawer'
 import { CheckIcon, GripIcon, PinIcon } from '../ui/icons'
-import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { DragReorder } from '../ui/reorder'
-import { RowSwipe } from '../ui/rowswipe'
+import { useRowGestures } from '../ui/rowgestures'
+import { ROW_ACTIONS_PX } from '../ui/rowswipe'
 import { menuPosition } from '../ui/viewport'
 
 export interface SessionListProps {
@@ -32,23 +32,13 @@ export interface SessionListProps {
   onMove(sid: number, before: number | null): void
 }
 
-interface RowGesture {
-  sid: number
-  row: HTMLElement
-  /** Swallow the click after this gesture (it swiped or long-pressed). */
-  swallow: boolean
-}
-
 export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, onClose, onMove }: SessionListProps) {
-  // Only one press at a time, so the whole list shares one tracker
-  const press = useRef(new PressTracker()).current
-  const swipe = useRef(new RowSwipe()).current
-  const gesture = useRef<RowGesture | null>(null)
-  const swallowClick = useRef(false)
+  /** Swipe / long-press opens a row; at most one at a time (ADR-0039 §1). */
+  const rows = useRowGestures<number>(ROW_ACTIONS_PX)
+  const openSid = rows.open
+  const setOpenSid = rows.setOpen
   const grip = useRef<DragReorder | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
-  /** At most one row open at a time (ADR-0039 §1). */
-  const [openSid, setOpenSid] = useState<number | null>(null)
   const active = sessions.find((s) => s.active)?.sid ?? null
 
   useLayoutEffect(() => {
@@ -65,86 +55,10 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
   // The list went away mid-drag (drawer closed): reset the offsets
   useEffect(() => () => void grip.current?.finish(true), [])
 
-  /**
-   * Swallows the click the browser synthesizes after a swipe or long-press. This matters
-   * most for long-press: once the row slides open, a button sits under the finger and the
-   * synthesized click would hit Rename or even Close. The flag is cleared on the next press
-   * so that, when no click is synthesized, the next real click isn't eaten.
-   */
-  const takeSwallow = () => {
-    const s = swallowClick.current
-    swallowClick.current = false
-    return s
-  }
-
-  const act = (fn: (sid: number) => void, sid: number) => (e: MouseEvent) => {
-    e.stopPropagation()
-    if (takeSwallow()) return
-    setOpenSid(null)
-    fn(sid)
-  }
-
-  const onRowDown = (e: PointerEvent, s: SessionView) => {
-    if (e.button !== 0 || (e.target as Element).closest('.row-grip')) return
-    const row = e.currentTarget as HTMLElement
-    swipe.start(e.clientX, e.clientY, openSid === s.sid)
-    gesture.current = { sid: s.sid, row, swallow: false }
-    const { clientX: x, clientY: y } = e
-    press.down(x, y, () => {
-      // Long-press opens the row, same as a swipe (ADR-0039 §1)
-      if (gesture.current) gesture.current.swallow = true
-      setOpenSid(s.sid)
-    })
-  }
-
-  const onRowMove = (e: PointerEvent) => {
-    if (e.buttons === 0) return // Nothing pressed (mouse hover): not a gesture
-    press.move(e.clientX, e.clientY)
-    const g = gesture.current
-    if (!g) return
-    const off = swipe.move(e.clientX, e.clientY)
-    if (off === null) return
-    if (!g.swallow) {
-      g.swallow = true
-      press.cancel()
-      capturePointer(g.row, e.pointerId)
-      if (openSid !== null && openSid !== g.sid) setOpenSid(null)
-    }
-    g.row.style.transition = 'none'
-    g.row.style.transform = `translateX(${off}px)`
-  }
-
-  const onRowUp = () => {
-    press.up()
-    const g = gesture.current
-    gesture.current = null
-    const res = swipe.end()
-    if (!g) return
-    g.row.style.transition = ''
-    g.row.style.transform = '' // data-open (CSS) decides where it rests, with a transition
-    if (res) setOpenSid(res === 'open' ? g.sid : openSid === g.sid ? null : openSid)
-    if (g.swallow) swallowClick.current = true
-  }
-
-  const onRowCancel = () => {
-    press.cancel()
-    swipe.end()
-    const g = gesture.current
-    gesture.current = null
-    if (g) {
-      g.row.style.transition = ''
-      g.row.style.transform = ''
-    }
-  }
+  const act = (fn: (sid: number) => void, sid: number) => rows.act(() => fn(sid))
 
   const onRowClick = (s: SessionView) => {
-    if (takeSwallow()) return
-    // A row is open: any click just closes it, no switch
-    if (openSid !== null) {
-      setOpenSid(null)
-      return
-    }
-    onSelect(s.sid)
+    if (rows.click()) onSelect(s.sid)
   }
 
   const onGripDown = (e: PointerEvent, index: number) => {
@@ -176,9 +90,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
       class="session-list"
       data-testid="session-list"
       ref={listRef}
-      onPointerDownCapture={() => {
-        swallowClick.current = false
-      }}
+      onPointerDownCapture={rows.onListPointerDown}
     >
       {sessions.map((s, i) => {
         const open = openSid === s.sid
@@ -213,14 +125,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
               data-attention={s.attention ? 'true' : 'false'}
               aria-current={s.active ? 'true' : undefined}
               title={s.cwd}
-              onPointerDown={(e) => onRowDown(e, s)}
-              onPointerMove={onRowMove}
-              onPointerUp={onRowUp}
-              onPointerCancel={onRowCancel}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                setOpenSid(s.sid)
-              }}
+              {...rows.row(s.sid)}
               onClick={() => onRowClick(s)}
               onKeyDown={(e) => {
                 if (e.target !== e.currentTarget) return
