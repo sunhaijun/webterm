@@ -54,11 +54,11 @@ text page (both forms)
 |---|---|---|
 | Tab bar | None | 36px; 40px with `pointer: coarse` |
 | Terminal | All remaining space | All remaining space |
-| Extra keys | 80px, always | 80px, only with `pointer: coarse` |
+| Extra keys | 80px, or 0 when collapsed | 80px, only with `pointer: coarse`; 0 when collapsed |
 
 - **No title bar, no status bar.** Connection status, notices, and sheets all **float over the terminal** and take no grid row (see [Floating over the terminal](#floating-over-the-terminal)).
 - The extra-keys area is a fixed 80px slot. The keys page and the text page both live in it, so switching doesn't change its height or reflow the terminal ([input.md](input.md)). The fixed left column is 44px: on `compact` the session button (top) and ✎ (bottom); on `wide` only ✎ (spanning both rows).
-- **Only three things change terminal geometry at runtime**: visual viewport changes (on-screen keyboard, rotation, window resize), font size changes ([Terminal size](#terminal-size-ac-53)), and `pointer: coarse` changes (plugging a mouse into a tablet or unplugging it, which shows or hides the extra keys). Switching sessions, opening or closing sheets, changing the theme, and reconnecting don't.
+- **Only four things change terminal geometry at runtime**: visual viewport changes (on-screen keyboard, rotation, window resize), font size changes ([Terminal size](#terminal-size-ac-53)), `pointer: coarse` changes (plugging a mouse into a tablet or unplugging it, which shows or hides the extra keys), and collapsing or restoring the extra keys ([input.md](input.md#collapsing-the-extra-keys-ac-326), [ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md)). Collapsed, the bar leaves the grid and a restore button floats in the bottom-right corner. Switching sessions, opening or closing sheets, changing the theme, and reconnecting don't.
 
 ### Floating over the terminal
 

@@ -10,12 +10,15 @@ import {
   FONT_MAX,
   FONT_MIN,
   FONT_SIZE_KEY,
+  KEYS_COLLAPSED_KEY,
   THEME_KEY,
   applyTheme,
+  readKeysCollapsed,
   readFontSize,
   readTheme,
   validFontSize,
   writeFontSize,
+  writeKeysCollapsed,
   writeTheme,
 } from '../src/ui/prefs'
 
@@ -78,6 +81,17 @@ describe('UT-prefs-1 font size', () => {
   })
 })
 
+describe('UT-prefs collapsed extra keys (ADR-0056)', () => {
+  it('defaults to expanded and reads back what was written', () => {
+    expect(readKeysCollapsed()).toBe(false)
+    writeKeysCollapsed(true)
+    expect(localStorage.getItem(KEYS_COLLAPSED_KEY)).toBe('1')
+    expect(readKeysCollapsed()).toBe(true)
+    writeKeysCollapsed(false)
+    expect(readKeysCollapsed()).toBe(false)
+  })
+})
+
 describe('UT-prefs-1 storage unavailable', () => {
   it('reads defaults and writes without throwing when localStorage throws', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
@@ -90,6 +104,8 @@ describe('UT-prefs-1 storage unavailable', () => {
     expect(readFontSize()).toBe(14)
     expect(() => writeTheme('dark')).not.toThrow()
     expect(() => writeFontSize(16)).not.toThrow()
+    expect(readKeysCollapsed()).toBe(false)
+    expect(() => writeKeysCollapsed(true)).not.toThrow()
   })
 })
 

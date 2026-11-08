@@ -1,7 +1,7 @@
 /** UT-textinput-1: Enter semantics on the text page and the page-flip swipe (AC-3.19, input.md). */
 import { describe, expect, it } from 'vitest'
 
-import { PAGE_SWIPE_PX, TextPages, isPageSwipe, textEnter } from '../src/keys/textpage'
+import { TextPages, textEnter } from '../src/keys/textpage'
 
 const key = (isComposing = false, keyCode = 13) => ({ isComposing, keyCode })
 
@@ -27,17 +27,6 @@ describe('UT-textinput-1 Enter sends and submits (ADR-0027)', () => {
 
   it('treats whitespace-only text as content (sent as is)', () => {
     expect(textEnter('  ', key())).toEqual({ kind: 'submit', text: '  ' })
-  })
-})
-
-describe('swiping across the keys flips pages', () => {
-  it('requires > 40px of mostly horizontal movement', () => {
-    expect(PAGE_SWIPE_PX).toBe(40)
-    expect(isPageSwipe(80, 0)).toBe(true)
-    expect(isPageSwipe(-80, 10)).toBe(true)
-    expect(isPageSwipe(40, 0), 'exactly 40 does not count').toBe(false)
-    expect(isPageSwipe(50, 60), 'mostly vertical does not count').toBe(false)
-    expect(isPageSwipe(0, 0), 'a tap does not count').toBe(false)
   })
 })
 

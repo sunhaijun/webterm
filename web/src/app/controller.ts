@@ -11,11 +11,22 @@ import { clearLocalData } from './localdata'
 import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, routeInput, type SessionView } from '../sessions/store'
 import { shouldSendSeen } from '../sessions/attention'
-import { installDragWheel, installTapToggle } from '../term/gestures'
+import { installDragWheel, installRestoreSwipe, installTapToggle } from '../term/gestures'
+import { previewBar } from '../keys/collapse'
 import { openUrl } from '../term/links'
 import { themeFromCss, type TermHandle } from '../term/terminal'
 import { asUserInput, inUserInputEvent } from '../term/userinput'
-import { applyTheme, readFontSize, readTheme, validFontSize, writeFontSize, writeTheme, type Theme } from '../ui/prefs'
+import {
+  applyTheme,
+  readFontSize,
+  readKeysCollapsed,
+  readTheme,
+  validFontSize,
+  writeFontSize,
+  writeKeysCollapsed,
+  writeTheme,
+  type Theme,
+} from '../ui/prefs'
 import { debounce, installAppFit, isCoarsePointer, watchCoarse } from '../ui/viewport'
 import { readForm, type Form } from './form'
 import { COMBO_GAP_MS, combosFor, type Combo } from '../keys/combos'
@@ -90,6 +101,8 @@ export interface AppState {
   keyMenu: KeyMenu | null
   /** Frequent input for the program in front; null while the first list loads. */
   frequent: string[] | null
+  /** The extra keys are collapsed into the corner button (ADR-0056), kept per device. */
+  keysCollapsed: boolean
 }
 
 const TOAST_MS = 3000
@@ -215,6 +228,7 @@ export class AppController {
       clip: null,
       keyMenu: null,
       frequent: null,
+      keysCollapsed: readKeysCollapsed(),
     }
     this.conn = new Connection({
       url: opts.url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
@@ -273,6 +287,33 @@ export class AppController {
     // The session behind an open close-confirm is gone (closed elsewhere, agent restart): close it too, sids are reused (ADR-0038 §4)
     const closing = this.state.closing !== null && this.store.has(this.state.closing) ? this.state.closing : null
     this.set({ sessions: this.store.list(), active: this.store.active, page: this.pages.page(this.store.active), closing })
+  }
+
+  // ---------- collapsing the extra keys (ADR-0056) ----------
+
+  /** A swipe right on the bar: it leaves the grid, the terminal takes its 80px (one resize). */
+  collapseKeys(): void {
+    if (this.state.keysCollapsed) return
+    previewBar(this.textPage?.slot ?? null, false, null)
+    const ta = this.textPage?.text
+    if (ta && document.activeElement === ta) ta.blur()
+    this.closeMenu()
+    this.closeLinkPop()
+    writeKeysCollapsed(true)
+    this.set({ keysCollapsed: true })
+  }
+
+  /** The restore button, or a swipe left along the bottom: the bar comes back (one resize). */
+  restoreKeys(): void {
+    previewBar(this.textPage?.slot ?? null, true, null)
+    if (!this.state.keysCollapsed) return
+    writeKeysCollapsed(false)
+    this.set({ keysCollapsed: false })
+  }
+
+  /** While a restore drag is under way, the collapsed bar slides in with the finger. */
+  readonly previewRestore = (dx: number | null): void => {
+    if (this.state.keysCollapsed) previewBar(this.textPage?.slot ?? null, true, dx)
   }
 
   // ---------- frequent input and combo keys (ADR-0054) ----------
@@ -502,6 +543,12 @@ export class AppController {
     window.addEventListener('keydown', onKeyTrace, true)
     window.addEventListener('keydown', onKey)
 
+    // Collapsed extra keys come back with a swipe left along the bottom (ADR-0056 §3)
+    const unrestore = installRestoreSwipe(area, {
+      collapsed: () => this.state.keysCollapsed,
+      preview: this.previewRestore,
+      restore: () => this.restoreKeys(),
+    })
     const untap = installTapToggle(area, () => {
       const t = this.activeTerm()
       if (!t) return null
@@ -581,6 +628,7 @@ export class AppController {
       unfit()
       uncoarse()
       untap()
+      unrestore()
       undrag()
       this.sendResize.cancel()
       this.ime?.dispose()

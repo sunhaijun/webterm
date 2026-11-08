@@ -29,13 +29,6 @@ export function textEnter(value: string, ev: EnterEventLike): TextSend {
   return { kind: 'submit', text: value }
 }
 
-/** A horizontal swipe on the key area flips pages: > 40px and mostly horizontal (a shortcut; ✎ is the visible control). */
-export const PAGE_SWIPE_PX = 40
-
-export function isPageSwipe(dx: number, dy: number): boolean {
-  return Math.abs(dx) > PAGE_SWIPE_PX && Math.abs(dx) > Math.abs(dy)
-}
-
 /** Which page the extra-keys slot shows. */
 export type KeyPage = 'keys' | 'text'
 

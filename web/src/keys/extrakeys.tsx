@@ -11,9 +11,12 @@
  * `onTogglePage` and hands the text box DOM over via `register`.
  *
  * Every key calls preventDefault on pointerdown, so pressing one never shows or hides the
- * on-screen keyboard or moves focus. Bytes go out from the pointerup dispatch
- * (`term.input()`, through onData), so a horizontal swipe across the keys flips pages
- * without pressing anything, and a CTRL / ALT press only becomes a tap or a lock on release.
+ * on-screen keyboard or moves focus. A control acts only when released within 10px of where
+ * it was pressed (ADR-0056 §1): the pressed look is `data-pressed`, dropped as soon as the
+ * finger moves on, so a swipe never highlights or sends a key. Swipes are read from touch
+ * events, which keep coming while the text box scrolls natively: right collapses the bar
+ * (it follows the finger until release), up goes to the text page, down comes back from
+ * it while the box is at its top.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
@@ -21,8 +24,9 @@ import type { Form } from '../app/form'
 import { CombosIcon, EditIcon, HistoryIcon, PaperclipLargeIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
+import { TAP_PX, keyGesture, previewBar } from './collapse'
 import { EXTRA_KEYS, appAction, isModifierKey, type ExtraKeyId, type Sticky } from './keymap'
-import { isPageSwipe, textEnter, type KeyPage, type TextPageEls, type TextSend } from './textpage'
+import { textEnter, type KeyPage, type TextPageEls, type TextSend } from './textpage'
 
 export interface ExtraKeysProps {
   form: Form
@@ -34,8 +38,12 @@ export interface ExtraKeysProps {
   /** The active session's page. */
   page: KeyPage
   onOpenSessions(): void
-  /** ✎ or a swipe across the keys: flip the active session's page (the controller flips the DOM and handles focus). */
+  /** ✎, or a swipe up / down: flip the active session's page (the controller flips the DOM and handles focus). */
   onTogglePage(): void
+  /** Collapsed into the corner button (ADR-0056): out of the grid, off to the right. */
+  collapsed: boolean
+  /** A swipe right: collapse. */
+  onCollapse(): void
   /** A non-modifier key was pressed (called from the pointerup dispatch). */
   onKey(id: ExtraKeyId): void
   /** The last column: open the frequent-input or the combo-key menu (ADR-0054). */
@@ -66,7 +74,19 @@ export function ExtraKeys(p: ExtraKeysProps) {
   const slotRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const press = useRef(new PressTracker()).current
-  const gesture = useRef<{ x: number; y: number; key: ExtraKeyId | null; menu: KeyMenu | null } | null>(null)
+  const gesture = useRef<{
+    x: number
+    y: number
+    key: ExtraKeyId | null
+    menu: KeyMenu | null
+    el: HTMLElement | null
+    maxMove: number
+  } | null>(null)
+  // The touch behind the current swipe, if any (touch events, see the header comment)
+  const swipe = useRef<{ x: number; y: number; maxMove: number; textTop: boolean } | null>(null)
+  // The last press moved past TAP_PX: the side buttons' click (which the browser may still
+  // fire after a short drag) is ignored then
+  const moved = useRef(false)
   const [, setTick] = useState(0)
   const rerender = () => setTick((n) => n + 1)
 
@@ -89,18 +109,34 @@ export function ExtraKeys(p: ExtraKeysProps) {
   }, [])
 
   const onDown = (e: PointerEvent) => {
-    const keyEl = (e.target as Element).closest<HTMLElement>('[data-key]')
+    const target = e.target as Element
+    const el = target.closest<HTMLElement>('[data-tap]')
+    const keyEl = target.closest<HTMLElement>('[data-key]')
     const key = (keyEl?.dataset.key as ExtraKeyId | undefined) ?? null
-    const menuEl = (e.target as Element).closest<HTMLElement>('[data-menu]')
+    const menuEl = target.closest<HTMLElement>('[data-menu]')
     const menu = page === 'keys' ? ((menuEl?.dataset.menu as KeyMenu | undefined) ?? null) : null
-    if (page === 'keys') {
+    const inKeys = page === 'keys' && target.closest('.ek-main') !== null
+    if (inKeys) {
       e.preventDefault() // Don't take focus
       capturePointer(e.currentTarget as Element, e.pointerId)
     }
-    gesture.current = { x: e.clientX, y: e.clientY, key: page === 'keys' ? key : null, menu }
-    if (key && isModifierKey(key) && page === 'keys') {
+    moved.current = false
+    el?.setAttribute('data-pressed', 'true')
+    gesture.current = { x: e.clientX, y: e.clientY, key: inKeys ? key : null, menu: inKeys ? menu : null, el, maxMove: 0 }
+    if (key && isModifierKey(key) && inKeys) {
       const mod = key === 'Ctrl' ? 'ctrl' : 'alt'
       press.down(e.clientX, e.clientY, () => p.sticky.hold(mod))
+    }
+  }
+
+  const onMove = (e: PointerEvent) => {
+    press.move(e.clientX, e.clientY)
+    const g = gesture.current
+    if (!g) return
+    g.maxMove = Math.max(g.maxMove, Math.hypot(e.clientX - g.x, e.clientY - g.y))
+    if (g.maxMove > TAP_PX) {
+      g.el?.removeAttribute('data-pressed')
+      moved.current = true
     }
   }
 
@@ -108,9 +144,11 @@ export function ExtraKeys(p: ExtraKeysProps) {
     const g = gesture.current
     gesture.current = null
     if (!g) return
-    if (isPageSwipe(e.clientX - g.x, e.clientY - g.y)) {
+    g.el?.removeAttribute('data-pressed')
+    if (Math.max(g.maxMove, Math.hypot(e.clientX - g.x, e.clientY - g.y)) > TAP_PX) {
+      // A swipe: the touch handlers decide what it was; it presses nothing
+      moved.current = true
       press.cancel()
-      p.onTogglePage()
       return
     }
     if (g.menu) {
@@ -128,6 +166,54 @@ export function ExtraKeys(p: ExtraKeysProps) {
     p.onKey(g.key)
   }
 
+  const onCancel = () => {
+    gesture.current?.el?.removeAttribute('data-pressed')
+    gesture.current = null
+    press.cancel()
+  }
+
+  // ---------- swipes (touch events) ----------
+
+  const onTouchStart = (e: TouchEvent) => {
+    const t = e.touches[0]
+    swipe.current = e.touches.length === 1 && t ? { x: t.clientX, y: t.clientY, maxMove: 0, textTop: (taRef.current?.scrollTop ?? 0) <= 0 } : null
+  }
+
+  const onTouchMove = (e: TouchEvent) => {
+    const s = swipe.current
+    const t = e.touches[0]
+    if (!s || !t) return
+    const dx = t.clientX - s.x
+    const dy = t.clientY - s.y
+    s.maxMove = Math.max(s.maxMove, Math.hypot(dx, dy))
+    // Rightward and mostly horizontal: the bar follows the finger (no relayout until release)
+    previewBar(slotRef.current, false, dx > TAP_PX && Math.abs(dx) > Math.abs(dy) ? dx : null)
+  }
+
+  const onTouchEnd = (e: TouchEvent) => {
+    const s = swipe.current
+    swipe.current = null
+    previewBar(slotRef.current, false, null)
+    const t = e.changedTouches[0]
+    if (!s || !t) return
+    const dx = t.clientX - s.x
+    const dy = t.clientY - s.y
+    switch (keyGesture(dx, dy, Math.max(s.maxMove, Math.hypot(dx, dy)), page, s.textTop)) {
+      case 'collapse':
+        p.onCollapse()
+        break
+      case 'toText':
+      case 'toKeys':
+        p.onTogglePage()
+        break
+    }
+  }
+
+  const onTouchCancel = () => {
+    swipe.current = null
+    previewBar(slotRef.current, false, null)
+  }
+
   const onTextKey = (e: KeyboardEvent) => {
     if (e.key !== 'Enter') return
     if (appAction(e) !== null) return // Ctrl+Shift+Enter is New session; leave it to the global shortcut
@@ -139,17 +225,32 @@ export function ExtraKeys(p: ExtraKeysProps) {
   }
 
   return (
-    <div class="extrakeys" data-testid="extrakeys" data-page={page} ref={slotRef}>
+    <div
+      class="extrakeys"
+      data-testid="extrakeys"
+      data-page={page}
+      data-collapsed={p.collapsed ? 'true' : undefined}
+      ref={slotRef}
+      onPointerDown={onDown}
+      onPointerMove={onMove}
+      onPointerUp={onUp}
+      onPointerCancel={onCancel}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onTouchCancel={onTouchCancel}
+    >
       <div class="ek-side">
         {p.form === 'compact' && (
           <button
             type="button"
             class="ek-side-btn"
+            data-tap
             data-testid="open-sessions"
             data-attention={p.attention ? 'true' : 'false'}
             aria-label={p.attention ? `Sessions: ${p.count} (waiting for you)` : `Sessions: ${p.count}`}
             onPointerDown={noFocus}
-            onClick={p.onOpenSessions}
+            onClick={() => moved.current || p.onOpenSessions()}
           >
             {/* Styled like a mobile browser's tabs button: the count in a rounded box (ADR-0030 §3) */}
             <span class="ek-count" aria-hidden="true">
@@ -160,25 +261,17 @@ export function ExtraKeys(p: ExtraKeysProps) {
         <button
           type="button"
           class="ek-side-btn"
+          data-tap
           data-testid="toggle-text"
           aria-pressed={page === 'text' ? 'true' : 'false'}
           aria-label={page === 'text' ? 'Back to extra keys' : 'Text input'}
           onPointerDown={noFocus}
-          onClick={p.onTogglePage}
+          onClick={() => moved.current || p.onTogglePage()}
         >
           <EditIcon />
         </button>
       </div>
-      <div
-        class="ek-main"
-        onPointerDown={onDown}
-        onPointerMove={(e) => press.move(e.clientX, e.clientY)}
-        onPointerUp={onUp}
-        onPointerCancel={() => {
-          gesture.current = null
-          press.cancel()
-        }}
-      >
+      <div class="ek-main">
         <div class="ek-keys" role="group" aria-label="Extra keys">
           {EXTRA_KEYS.map((row, r) => [
             ...row.map((k) => {
@@ -190,6 +283,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
                   key={k.id}
                   tabIndex={-1}
                   class="ek-key"
+                  data-tap
                   data-key={k.id}
                   data-testid={`key-${k.id}`}
                   data-sticky={sticky}
@@ -206,6 +300,7 @@ export function ExtraKeys(p: ExtraKeysProps) {
                 key={menu}
                 tabIndex={-1}
                 class="ek-key ek-menu-key"
+                data-tap
                 data-menu={menu}
                 data-testid={`key-${menu}`}
                 aria-label={label}

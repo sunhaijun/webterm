@@ -55,7 +55,7 @@ On `wide` the left column has only ✎, spanning both rows.
 ### Behavior
 
 - **Geometry**: two 40px rows; 44px left column; eight equal-width key columns. At 393px wide each key is about 44px. **Never scrolls horizontally, at any width.**
-- **Fire on release**: `pointerdown` only calls `preventDefault` (to keep focus); bytes go out on `pointerup`. A horizontal swipe across the keys to switch pages therefore doesn't press a key, and CTRL / ALT can tell a tap (arm) from a long press (lock).
+- **A tap is a release in place** ([ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md) §1): `pointerdown` only calls `preventDefault` (to keep focus) and marks the control `data-pressed`; it acts on `pointerup` **only if the finger moved no more than 10px**, over the same control. Past 10px the pressed look goes and nothing is sent, so a swipe (to collapse, or to switch pages) never presses a key. The same holds for the session button, ✎ and the last column. CTRL / ALT still tell a tap (arm) from a long press (lock).
 - **Never steal focus**: every key calls `preventDefault` on `pointerdown`. Pressing an extra key doesn't show or hide the on-screen keyboard; focus stays in the terminal or the textarea.
 - **Same encoding as a physical keyboard**: byte table in [keymap.md](keymap.md). Arrows and `HOME` / `END` follow application cursor key mode (DECCKM, `term.modes.applicationCursorKeysMode`): `ESC O A` / `ESC O H` when it's on, `ESC [ A` / `ESC [ H` when it's off.
 - **Destination**: extra-key bytes take the same `onData` path as keystrokes (counted in `inputStats`, judged by the replay gate) and go to the current session's PTY. This holds with the text page open too: extra keys are always terminal keys and never edit the textarea.
@@ -88,11 +88,20 @@ A grid of tiles (`combo-<id>`), each a key name and a short action name. A tap s
 | `shell` | `↵` Enter `\r` · `^C` Interrupt · `^D` EOF `0x04` · `^R` Search `0x12` · `^L` Clear `0x0c` · `^Z` Suspend `0x1a` · `^W` Delete word `0x17` · `^U` Delete line `0x15` |
 | `other` | `↵` Enter · `Esc` · `^C` Interrupt · `^D` EOF · `^Z` Suspend · `^L` Clear |
 
+## Collapsing the extra keys (AC-3.26)
+
+[ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md). For reading: the bar gives its 80px (4–5 rows) to the terminal.
+
+- **Collapse**: swipe right on the bar, keys page or text page (travel > 40px, mostly horizontal). The bar follows the finger; released past 40px it collapses, otherwise it slides back. There's no collapse button.
+- **Collapsed**: the terminal takes the space with **one** `resize`. A restore button (`keys-restore`) floats in the bottom-right corner: 44×44, 16px from the right edge, above the bottom safe area and the on-screen keyboard, translucent until pressed, a keyboard line icon, and the waiting-for-you dot (`data-attention`) when another session has `attention`.
+- **Restore**: tap `keys-restore`; or swipe left in the bottom band (the 80px where the bar was) starting at least 24px from either screen edge; or drag `keys-restore` to the left. The bar slides in with the finger and comes back on the page it left, with one `resize`.
+- Kept per device (`localStorage`, `webterm.keysCollapsed`), across reloads. The on-screen keyboard, switching sessions and the form don't change it. Open key menus and the link popover close when it collapses.
+
 ## Text page (AC-3.19)
 
 ### Switching
 
-- Tap ✎ (the visible entry point), or swipe left/right over the keys (shortcut: horizontal travel > 40px and mostly horizontal).
+- Tap ✎ (the visible entry point), or swipe: **up** on the keys page to the text page, **down** on the text page back to the keys, the latter only while the text box is scrolled to its top (otherwise the drag scrolls the text). Travel > 40px, mostly vertical ([ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md)). A sideways swipe doesn't switch pages; right collapses the bar ([below](#collapsing-the-extra-keys-ac-326)).
 - Both pages share one 80px slot, so switching **doesn't change the terminal's rows or columns** and sends no `resize`.
 - Switching to the text page focuses the `textarea` (inside the click handler, or iOS won't show the keyboard). Switching back returns focus to the terminal if the `textarea` had it.
 - Switching only changes which page the **current session** is on (below).

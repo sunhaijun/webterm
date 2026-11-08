@@ -16,6 +16,8 @@
  * ignores touch while mouse tracking. Horizontal drags do nothing.
  */
 
+import { canStartRestore, isRestoreSwipe } from '../keys/collapse'
+
 /** A tap moves < 10px and lasts < 300ms. */
 export const TAP_MAX_MOVE = 10
 export const TAP_MAX_MS = 300
@@ -197,5 +199,62 @@ export function installDragWheel(el: HTMLElement, target: () => WheelTarget | nu
     el.removeEventListener('touchmove', onMove)
     el.removeEventListener('touchend', onEnd)
     el.removeEventListener('touchcancel', onEnd)
+  }
+}
+
+export interface RestoreSwipeTarget {
+  /** The extra keys are collapsed (only then does a swipe restore them). */
+  collapsed(): boolean
+  /** The bar follows the finger: dx (negative, leftward), or null to put it back. */
+  preview(dx: number | null): void
+  /** A swipe far enough: bring the bar back. */
+  restore(): void
+}
+
+/**
+ * Installs "swipe left along the bottom to bring the collapsed extra keys back" on the
+ * terminal area (ADR-0056 §3). The swipe must start in the bottom band, where the bar was,
+ * and at least EDGE_PX from either screen edge: edge swipes belong to the system (Android
+ * Back, Safari Forward). Horizontal drags do nothing else on the terminal, so this takes
+ * nothing from taps, scrolling or the program's mouse.
+ */
+export function installRestoreSwipe(el: HTMLElement, target: RestoreSwipeTarget): () => void {
+  let start: { x: number; y: number } | null = null
+  const onStart = (e: TouchEvent) => {
+    start = null
+    const t = e.touches[0]
+    if (e.touches.length !== 1 || !t || !target.collapsed()) return
+    if (canStartRestore(t.clientX, t.clientY, el.getBoundingClientRect().bottom, window.innerWidth)) {
+      start = { x: t.clientX, y: t.clientY }
+    }
+  }
+  const onMove = (e: TouchEvent) => {
+    const t = e.touches[0]
+    if (!start || !t) return
+    const dx = t.clientX - start.x
+    const dy = t.clientY - start.y
+    target.preview(dx < 0 && Math.abs(dx) > Math.abs(dy) ? dx : null)
+  }
+  const onEnd = (e: TouchEvent) => {
+    const s = start
+    start = null
+    const t = e.changedTouches[0]
+    if (!s || !t) return
+    target.preview(null)
+    if (isRestoreSwipe(t.clientX - s.x, t.clientY - s.y)) target.restore()
+  }
+  const onCancel = () => {
+    if (start) target.preview(null)
+    start = null
+  }
+  el.addEventListener('touchstart', onStart, { passive: true })
+  el.addEventListener('touchmove', onMove, { passive: true })
+  el.addEventListener('touchend', onEnd, { passive: true })
+  el.addEventListener('touchcancel', onCancel, { passive: true })
+  return () => {
+    el.removeEventListener('touchstart', onStart)
+    el.removeEventListener('touchmove', onMove)
+    el.removeEventListener('touchend', onEnd)
+    el.removeEventListener('touchcancel', onCancel)
   }
 }

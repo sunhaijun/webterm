@@ -13,6 +13,7 @@ import { GearIcon, PlusIcon } from '../ui/icons'
 import { AppController } from './controller'
 import { showsExtraKeys } from './form'
 import { KeyMenus } from './keymenus'
+import { KeysRestore } from './keysrestore'
 import { ClipBar, LinkPopover } from './linkpop'
 import { ConnBanner, ImePreview, ToastView } from './notices'
 import { CloseConfirm, SignOutConfirm } from './confirm'
@@ -132,6 +133,8 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
           page={s.page}
           onOpenSessions={() => ctl.openSessions()}
           onTogglePage={() => ctl.togglePage()}
+          collapsed={s.keysCollapsed}
+          onCollapse={() => ctl.collapseKeys()}
           onKey={(id) => ctl.pressKey(id)}
           onMenu={(m) => ctl.openMenu(m)}
           menu={s.keyMenu}
@@ -140,6 +143,10 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
           onUpload={() => ctl.pickFiles()}
           uploading={s.uploading}
         />
+      )}
+
+      {keys && s.keysCollapsed && (
+        <KeysRestore attention={anyAttention} onRestore={() => ctl.restoreKeys()} onPreview={ctl.previewRestore} />
       )}
 
       {/* Both paperclips open this one input (ADR-0051 §2): any file type, several at once */}
