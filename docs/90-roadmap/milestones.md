@@ -46,7 +46,7 @@ Released together as **v0.6.0** (2026-11-08): m19–m22.
 
 ### m23 · `feat/40-files`
 
-The file browser ([ADR-0059](../20-architecture/adr/0059-files.md)): stacked sheets like the session drawer, opened from the drawer's bottom row (phone) or the tab bar (desktop / tablet) in the current session's folder; previews images, video, audio and text (a log from its end); Share (touch) or Download; Send to session (a backslash-escaped path); upload into the folder without overwriting; new folder, rename, delete; new session here. `/api/fs/*` with the agent user's rights; served files never run on webterm's origin. Then maximize on wide screens and Markdown rendered ([ADR-0060](../20-architecture/adr/0060-files-maximize-and-markdown.md)). Exit: the usual criteria plus AC-9, E2E-53, E2E-54, and the manual checklist's "Files".
+The file browser ([ADR-0059](../20-architecture/adr/0059-files.md)): stacked sheets like the session drawer, opened from the drawer's bottom row (phone) or the tab bar (desktop / tablet) in the current session's folder; previews images, video, audio and text (a log from its end); Share (touch) or Download; Send to session (a backslash-escaped path); upload into the folder without overwriting; new folder, rename, delete; new session here. `/api/fs/*` with the agent user's rights; served files never run on webterm's origin. Then maximize on wide screens and Markdown rendered ([ADR-0060](../20-architecture/adr/0060-files-maximize-and-markdown.md)), with its text size ([ADR-0061](../20-architecture/adr/0061-markdown-text-size.md)). Exit: the usual criteria plus AC-9, E2E-53, E2E-54, E2E-55, and the manual checklist's "Files".
 
 ## Planned
 
