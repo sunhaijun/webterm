@@ -10,7 +10,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 
 import { Drawer } from '../ui/drawer'
-import { readFilesMax, writeFilesMax } from '../ui/prefs'
+import { MD_SIZES, readFilesMax, readMdSize, stepMdSize, writeFilesMax, writeMdSize } from '../ui/prefs'
 import { BackIcon, FileIcon, FolderIcon, FolderPlusIcon, TerminalIcon, UploadIcon } from '../ui/icons'
 import { useRowGestures } from '../ui/rowgestures'
 import { ROW_ACT_PX } from '../ui/rowswipe'
@@ -432,6 +432,33 @@ interface FileSheetProps {
   onUnauthorized(): void
 }
 
+/** Where the reader is in a preview (ADR-0061 §1): the first block whose bottom is below the size line, and how far into it the line falls. */
+interface ReadingPoint {
+  el: Element
+  f: number
+  scroller: HTMLElement
+}
+
+function readingPoint(md: HTMLElement | null, meta: HTMLElement | null): ReadingPoint | null {
+  const scroller = md?.closest<HTMLElement>('.drawer-body')
+  // At the top of the file nothing moves
+  if (!md || !meta || !scroller || scroller.scrollTop < 1) return null
+  const line = meta.getBoundingClientRect().bottom
+  for (const el of md.children) {
+    const r = el.getBoundingClientRect()
+    // Not clamped: a line in the gap above a block stays that far above it, scaled with the text
+    if (r.height > 0 && r.bottom > line) return { el, f: (line - r.top) / r.height, scroller }
+  }
+  return null
+}
+
+/** Scrolls so the same point of the same block is at the size line again. */
+function restoreReadingPoint(p: ReadingPoint, meta: HTMLElement | null): void {
+  if (!meta || !p.el.isConnected) return
+  const r = p.el.getBoundingClientRect()
+  p.scroller.scrollTop += r.top + p.f * r.height - meta.getBoundingClientRect().bottom
+}
+
 function canShareFile(name: string): boolean {
   try {
     return typeof navigator.canShare === 'function' && navigator.canShare({ files: [new File([], name, { type: mimeOf(name) })] })
@@ -455,6 +482,10 @@ function FileSheet({ path, entry, coarse, canSend, max, onOpenPath, onClose, onS
   const mdMod = useRef<typeof import('./markdown') | null>(null)
   const mdRef = useRef<HTMLDivElement>(null)
   const rendered = kind === 'markdown' && !source && !binary
+  /** Rendered Markdown's text size, remembered per device (ADR-0061 §1). */
+  const [mdSize, setMdSize] = useState(readMdSize)
+  const metaRef = useRef<HTMLDivElement>(null)
+  const reading = useRef<ReadingPoint | null>(null)
   const [zoom, setZoom] = useState(false)
   const [fetching, setFetching] = useState(false)
   const shared = useRef<File | null>(null)
@@ -491,6 +522,20 @@ function FileSheet({ path, entry, coarse, canSend, max, onOpenPath, onClose, onS
       live = false
     }
   }, [text, tail])
+
+  const resizeText = (dir: -1 | 1) => {
+    const px = stepMdSize(mdSize, dir)
+    if (px === mdSize) return
+    reading.current = readingPoint(mdRef.current, metaRef.current)
+    setMdSize(px)
+    writeMdSize(px)
+  }
+
+  useLayoutEffect(() => {
+    const p = reading.current
+    reading.current = null
+    if (p) restoreReadingPoint(p, metaRef.current)
+  }, [mdSize])
 
   /** Links in the preview, all through this one listener (ADR-0060 §2). */
   const onMdClick = (e: MouseEvent) => {
@@ -570,7 +615,14 @@ function FileSheet({ path, entry, coarse, canSend, max, onOpenPath, onClose, onS
     view =
       html === null ? null : (
         // markdown-it's output with raw HTML off: the one place the page inserts HTML (ADR-0060 §2)
-        <div class="file-markdown" data-testid="file-markdown" ref={mdRef} onClick={onMdClick} dangerouslySetInnerHTML={{ __html: html }} />
+        <div
+          class="file-markdown"
+          data-testid="file-markdown"
+          ref={mdRef}
+          style={{ fontSize: `${mdSize}px` }}
+          onClick={onMdClick}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
       )
   } else if (kind === 'none' || binary) {
     view = (
@@ -613,8 +665,38 @@ function FileSheet({ path, entry, coarse, canSend, max, onOpenPath, onClose, onS
       }
     >
       <div class="file-view" data-kind={binary ? 'none' : kind}>
-        <div class="file-meta" data-testid="file-meta">
+        <div class="file-meta" data-testid="file-meta" ref={metaRef}>
           <span>{regular ? `${formatSize(entry.size)} · ${formatFullTime(entry.mtime)}` : formatFullTime(entry.mtime)}</span>
+          {rendered && (
+            <>
+              <button
+                type="button"
+                class="file-end file-textsize"
+                data-testid="md-smaller"
+                aria-label="Smaller text"
+                title="Smaller text"
+                disabled={mdSize <= MD_SIZES[0]!}
+                onClick={() => resizeText(-1)}
+              >
+                <span class="file-textsize-a" data-size="small" aria-hidden="true">
+                  A
+                </span>
+              </button>
+              <button
+                type="button"
+                class="file-end file-textsize"
+                data-testid="md-larger"
+                aria-label="Larger text"
+                title="Larger text"
+                disabled={mdSize >= MD_SIZES[MD_SIZES.length - 1]!}
+                onClick={() => resizeText(1)}
+              >
+                <span class="file-textsize-a" data-size="large" aria-hidden="true">
+                  A
+                </span>
+              </button>
+            </>
+          )}
           {kind === 'markdown' && !binary && (
             <button
               type="button"

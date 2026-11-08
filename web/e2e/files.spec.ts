@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { devices, expect, test, type Page } from '@playwright/test'
+import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 
 import { Agent, focusTerm, hooks, openDrawer, recordSent, settled, submit, terminalText, waitFor } from './harness'
 
@@ -509,12 +509,14 @@ test.describe('desktop markdown', () => {
     // (4) Links: the anchor scrolls, the web link opens a tab, relative links open in the browser
     await md.getByRole('link', { name: 'next' }).click()
     await waitFor(async () => {
-      const [h, body] = await Promise.all([
+      const [h, body, meta] = await Promise.all([
         md.locator('h2#md-next-steps').boundingBox(),
         page.getByTestId('file-sheet').locator('.drawer-body').boundingBox(),
+        page.getByTestId('file-meta').boundingBox(),
       ])
-      return !!h && !!body && h.y >= body.y - 1 && h.y < body.y + body.height
-    }, 'the heading scrolled into view')
+      // Below the size line that stays at the top (ADR-0061 §2)
+      return !!h && !!body && !!meta && h.y >= meta.y + meta.height - 1 && h.y < body.y + body.height
+    }, 'the heading scrolled into view below the size line')
     const popup = page.waitForEvent('popup')
     await md.getByRole('link', { name: 'web' }).click()
     const tab = await popup
@@ -551,5 +553,127 @@ test.describe('phone markdown', () => {
     await atPrompt(page)
     await openFiles(page)
     await expect(page.getByTestId('files-max')).toHaveCount(0)
+  })
+
+  test('E2E-55 (4) text size on a phone', async ({ page }) => {
+    writeDocs()
+    await agent.open(page)
+    await atPrompt(page)
+    await cd(page, proj)
+    await openFiles(page)
+    await waitRow(page, 'doc.md')
+    await openFile(page, 'doc.md')
+    const md = page.getByTestId('file-markdown')
+    await expect(md.locator('h2#md-next-steps')).toHaveCount(1)
+    const [meta, sheet, source] = await Promise.all([
+      page.getByTestId('file-meta').boundingBox(),
+      page.getByTestId('file-sheet').boundingBox(),
+      page.getByTestId('file-source').boundingBox(),
+    ])
+    expect(meta!.height, 'one line').toBeLessThanOrEqual(48)
+    expect(source!.x + source!.width).toBeLessThanOrEqual(sheet!.x + sheet!.width)
+    expect(await fontPx(md)).toBe(15)
+    await page.getByTestId('md-larger').tap()
+    await waitFor(async () => (await fontPx(md)) === 17, '17px')
+  })
+})
+
+// ---------- E2E-55 Markdown text size (ADR-0061) ----------
+
+const fontPx = (loc: Locator) => loc.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
+
+/** Where the sheet body and the size line are, and how far "Paragraph 30" starts below the line. */
+const layout = (page: Page) =>
+  page.getByTestId('file-sheet').evaluate((sheet) => {
+    const body = sheet.querySelector('.drawer-body')!.getBoundingClientRect()
+    const meta = sheet.querySelector('[data-testid=file-meta]')!.getBoundingClientRect()
+    const p = [...sheet.querySelectorAll('.file-markdown p')].find((e) => e.textContent!.startsWith('Paragraph 30 '))
+    return { bodyTop: body.top, metaTop: meta.top, offset: p ? p.getBoundingClientRect().top - meta.bottom : NaN }
+  })
+
+const scrollToEnd = (page: Page) =>
+  page.getByTestId('file-sheet').evaluate((sheet) => {
+    const body = sheet.querySelector<HTMLElement>('.drawer-body')!
+    body.scrollTop = body.scrollHeight
+  })
+
+test.describe('desktop markdown text size', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  test('E2E-55 (1)-(3) steps, the place you read, remembered, only rendered Markdown', async ({ page }) => {
+    writeDocs()
+    writeFileSync(join(proj, 'long.txt'), Array.from({ length: 300 }, (_, i) => `line ${i}`).join('\n'))
+    await agent.open(page)
+    await atPrompt(page)
+    await cd(page, proj)
+    await openFiles(page)
+    await waitRow(page, 'doc.md')
+
+    // (1) Steps; the paragraph at the size line stays there
+    await openFile(page, 'doc.md')
+    const md = page.getByTestId('file-markdown')
+    await expect(md.locator('h2#md-next-steps')).toHaveCount(1)
+    expect(await fontPx(md)).toBe(15)
+    const xs = await Promise.all(['md-smaller', 'md-larger', 'file-source'].map(async (id) => (await page.getByTestId(id).boundingBox())!.x))
+    expect([...xs].sort((a, b) => a - b), 'smaller, larger, Source').toEqual(xs)
+    const larger = page.getByTestId('md-larger')
+    await larger.click()
+    await waitFor(async () => (await fontPx(md)) === 17, '17px')
+    await page.getByTestId('file-sheet').evaluate((sheet) => {
+      const body = sheet.querySelector<HTMLElement>('.drawer-body')!
+      const meta = sheet.querySelector('[data-testid=file-meta]')!
+      const p = [...sheet.querySelectorAll('.file-markdown p')].find((e) => e.textContent!.startsWith('Paragraph 30 '))!
+      // Twice: the first scroll is what makes the size line stick
+      for (let i = 0; i < 2; i++) body.scrollTop += p.getBoundingClientRect().top - meta.getBoundingClientRect().bottom - 10
+    })
+    expect(Math.round((await layout(page)).offset)).toBe(10)
+    await larger.click()
+    await waitFor(async () => (await fontPx(md)) === 19, '19px')
+    const at = await layout(page)
+    expect(Math.abs(at.offset - 10), `Paragraph 30 stays at the size line (${at.offset})`).toBeLessThanOrEqual(4)
+    expect(Math.round(at.metaTop), 'the size line is at the top').toBe(Math.round(at.bodyTop))
+    expect(Math.abs((await fontPx(md.locator('pre code'))) - 0.84 * 19)).toBeLessThanOrEqual(0.5)
+    await larger.click()
+    await larger.click()
+    await waitFor(async () => (await fontPx(md)) === 24, '24px')
+    await expect(larger).toBeDisabled()
+
+    // (2) Remembered across a reload and for every Markdown file
+    await closeSheet(page, 'file-sheet')
+    await closeSheet(page, 'files-sheet')
+    await page.reload()
+    await atPrompt(page)
+    await openFiles(page)
+    await waitRow(page, 'doc.md')
+    await openFile(page, 'doc.md')
+    await expect(page.getByTestId('file-markdown').locator('h2#md-next-steps')).toHaveCount(1)
+    expect(await fontPx(page.getByTestId('file-markdown'))).toBe(24)
+    const smaller = page.getByTestId('md-smaller')
+    for (let i = 0; i < 7; i++) await smaller.click()
+    await waitFor(async () => (await fontPx(page.getByTestId('file-markdown'))) === 12, '12px')
+    await expect(smaller).toBeDisabled()
+    await page.getByTestId('file-markdown').getByRole('link', { name: 'other' }).click()
+    await expect(page.getByTestId('file-markdown').locator('h1')).toHaveText('Other')
+    expect(await fontPx(page.getByTestId('file-markdown'))).toBe(12)
+
+    // (3) Only rendered Markdown; the size line stays at the top of text too
+    await closeSheet(page, 'file-sheet')
+    await waitRow(page, 'doc.md')
+    await openFile(page, 'doc.md')
+    await page.getByTestId('file-source').click()
+    await expect(page.getByTestId('file-text')).toContainText('## Next Steps')
+    await expect(page.getByTestId('md-smaller')).toHaveCount(0)
+    await expect(page.getByTestId('md-larger')).toHaveCount(0)
+    await scrollToEnd(page)
+    let l = await layout(page)
+    expect(Math.round(l.metaTop), 'Source: the size line is at the top').toBe(Math.round(l.bodyTop))
+    await closeSheet(page, 'file-sheet')
+    await waitRow(page, 'long.txt')
+    await openFile(page, 'long.txt')
+    await expect(page.getByTestId('file-text')).toContainText('line 299')
+    await expect(page.getByTestId('md-larger')).toHaveCount(0)
+    await scrollToEnd(page)
+    l = await layout(page)
+    expect(Math.round(l.metaTop), 'text: the size line is at the top').toBe(Math.round(l.bodyTop))
   })
 })
