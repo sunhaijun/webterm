@@ -151,3 +151,8 @@ export const HistoryIcon = () => <Icon d="M2.2 4.6A5.25 5.25 0 1 1 1.75 7M1.75 2
 
 /** Combo keys (ADR-0054): two key caps, one behind the other. */
 export const CombosIcon = () => <Icon d="M2.75 1.75h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1zM8.25 5.75h3a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-3" />
+
+/** Show the extra keys (ADR-0056): a keyboard, a rounded body with two rows of keys and a space bar. */
+export const KeyboardIcon = () => (
+  <Icon d="M2.25 3.75h9.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1zM3.75 5.75h.01M6 5.75h.01M8.25 5.75h.01M10.25 5.75h.01M4.75 8h4.5" size={18} />
+)

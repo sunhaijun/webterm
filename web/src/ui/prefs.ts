@@ -10,6 +10,8 @@ export type Theme = 'system' | 'light' | 'dark'
 
 export const THEME_KEY = 'webterm.theme'
 export const FONT_SIZE_KEY = 'webterm.fontSize'
+/** The extra keys are collapsed (ADR-0056): a UI state kept per device, not a setting. */
+export const KEYS_COLLAPSED_KEY = 'webterm.keysCollapsed'
 
 export const FONT_MIN = 10
 export const FONT_MAX = 24
@@ -46,6 +48,14 @@ export function readFontSize(): number {
 
 export function writeFontSize(px: number): void {
   safeSet(FONT_SIZE_KEY, String(px))
+}
+
+export function readKeysCollapsed(): boolean {
+  return safeGet(KEYS_COLLAPSED_KEY) === '1'
+}
+
+export function writeKeysCollapsed(collapsed: boolean): void {
+  safeSet(KEYS_COLLAPSED_KEY, collapsed ? '1' : '0')
 }
 
 // localStorage throws in private windows or with site data disabled, so wrap every access.

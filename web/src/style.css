@@ -349,7 +349,13 @@ button { font: inherit; color: inherit; }
   user-select: none; -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
-.ek-side { display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+/* Collapsed (ADR-0056): out of the grid, so the terminal takes the 80px, and parked off to the
+   right where it was; a restore drag slides it back in (style.transform set from JS) */
+.extrakeys[data-collapsed='true'] {
+  position: absolute; left: var(--sa-left); right: var(--sa-right); bottom: var(--sa-bottom);
+  transform: translateX(100%); visibility: hidden; pointer-events: none;
+}
+.ek-side { display: flex; flex-direction: column; border-right: 1px solid var(--line); touch-action: none; }
 .ek-side-btn {
   position: relative;
   flex: 1 1 0; min-height: 0;
@@ -358,7 +364,7 @@ button { font: inherit; color: inherit; }
   font-size: 18px; cursor: pointer;
   touch-action: manipulation;
 }
-.ek-side-btn:active { background: var(--hover); }
+.ek-side-btn[data-pressed='true'] { background: var(--hover); }
 .ek-side-btn[aria-pressed='true'] { color: var(--accent); }
 /* Sessions button: the count in a rounded box, like a mobile browser's tabs button (ADR-0030 §3) */
 .ek-count {
@@ -391,7 +397,7 @@ button { font: inherit; color: inherit; }
   cursor: pointer; padding: 0;
   white-space: nowrap; overflow: hidden;
 }
-.ek-key:active { background: var(--hover); }
+.ek-key[data-pressed='true'] { background: var(--hover); }
 /* CTRL / ALT: accent when armed or locked, plus an underline when locked, so the effect on the next key is obvious */
 .ek-key[data-sticky='armed'] { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); font-weight: 700; }
 .ek-key[data-sticky='locked'] { background: var(--accent); color: var(--bg); font-weight: 700; box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--bg) 60%, transparent); }
@@ -754,3 +760,22 @@ button { font: inherit; color: inherit; }
 }
 .km-key { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
 .km-label { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+/* Restore button for collapsed extra keys (ADR-0056): bottom-right, translucent until pressed */
+.keys-restore {
+  position: absolute; z-index: 3;
+  right: calc(var(--sa-right) + 16px); bottom: calc(var(--sa-bottom) + 16px);
+  width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center;
+  border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--fg);
+  opacity: 0.45;
+  touch-action: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+.keys-restore[data-pressed='true'] { opacity: 1; }
+.keys-restore[data-attention='true']::after {
+  content: ''; position: absolute; top: 4px; right: 4px;
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface);
+}

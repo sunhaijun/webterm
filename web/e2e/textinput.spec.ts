@@ -18,11 +18,13 @@ test.beforeEach(async () => {
 })
 test.afterEach(() => agent.stop())
 
-/** swipe performs a horizontal CDP drag (real touch -> pointer events). */
-async function swipe(page: Page, x0: number, y: number, dx: number) {
+/** swipe performs a CDP drag from (x0, y0) by (dx, dy) (real touch -> touch and pointer events). */
+async function swipe(page: Page, x0: number, y0: number, dx: number, dy = 0) {
   const cdp = await page.context().newCDPSession(page)
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y }] })
-  for (let i = 1; i <= 8; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (dx * i) / 8, y }] })
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] })
+  for (let i = 1; i <= 8; i++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (dx * i) / 8, y: y0 + (dy * i) / 8 }] })
+  }
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
   await cdp.detach()
 }
@@ -42,7 +44,7 @@ const hasLine = async (page: Page, line: string) => (await terminalText(page)).s
 const atPrompt = (page: Page) => waitFor(async () => (await terminalText(page)).trimEnd().endsWith('$'), 'shell back at the prompt')
 const noNewline = async (page: Page) => expect(await page.getByTestId('textinput').inputValue(), 'Enter does not insert a newline into the box').not.toContain('\n')
 
-test('E2E-40 (1)(2) toggling keeps geometry: both ✎ and a horizontal swipe toggle and focus the box; the text box has a border on all four sides', async ({ page }) => {
+test('E2E-40 (1)(2) toggling keeps geometry: both ✎ and a vertical swipe toggle and focus the box; a swipe left does nothing; the text box has a border on all four sides', async ({ page }) => {
   await agent.open(page)
   await page.waitForTimeout(300)
   const size = await hooks.size(page)
@@ -77,13 +79,16 @@ test('E2E-40 (1)(2) toggling keeps geometry: both ✎ and a horizontal swipe tog
   await page.getByTestId('toggle-text').tap()
   await expect(ek).toHaveAttribute('data-page', 'keys')
 
-  // (2) Horizontal swipe of 80px.
+  // (2) Swipe up 80px over the keys -> text page; down over the (empty) box -> keys page (ADR-0056).
   const box = (await page.locator('.ek-main').boundingBox())!
-  const y = box.y + box.height / 2
-  await swipe(page, box.x + 60, y, 80)
-  await expect(ek, 'swipe -> text page').toHaveAttribute('data-page', 'text')
-  await swipe(page, box.x + 200, y, -80)
-  await expect(ek, 'swipe back -> keys page').toHaveAttribute('data-page', 'keys')
+  await swipe(page, box.x + 120, box.y + box.height - 5, 0, -80)
+  await expect(ek, 'swipe up -> text page').toHaveAttribute('data-page', 'text')
+  await swipe(page, box.x + 120, box.y + 10, 0, 80)
+  await expect(ek, 'swipe down -> keys page').toHaveAttribute('data-page', 'keys')
+  // A swipe left switches nothing (and collapses nothing)
+  await swipe(page, box.x + 200, box.y + box.height / 2, -80)
+  await expect(ek).toHaveAttribute('data-page', 'keys')
+  await expect(ek).not.toHaveAttribute('data-collapsed', 'true')
   expect(await hooks.size(page)).toEqual(size)
   expect(await hooks.resizes(page)).toBe(resizes)
 })
