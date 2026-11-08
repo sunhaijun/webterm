@@ -229,8 +229,8 @@ In direct input, dispatch on the helper textarea what an on-screen keyboard does
 
 `web/e2e/mobile.spec.ts`, Pixel 5 device descriptor (touch). Hook `WebSocket.send` to record INPUT frames.
 
-1. **Structure**: `data-form=compact`; no `tabbar`; the extra-keys area is below the terminal, 80px tall; the left column is `open-sessions` and `toggle-text`; the keys' testids in DOM order are `key-Escape key-Slash key-Minus key-Home key-ArrowUp key-End key-PageUp key-frequent key-Tab key-Ctrl key-Alt key-ArrowLeft key-ArrowDown key-ArrowRight key-PageDown key-combos` (each row's seven keys, then its key of the last column, [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md))
-2. **All visible, no horizontal scroll**: key area `scrollWidth ≤ clientWidth + 1`, and all 16 key rects are inside the viewport
+1. **Structure**: `data-form=compact`; no `tabbar`; the extra-keys area is below the terminal, 80px tall; the left column is `open-sessions` and `toggle-text`; the keys' testids in DOM order are `key-Escape key-Slash key-Minus key-Home key-ArrowUp key-End key-PageUp key-history key-Tab key-Ctrl key-Alt key-ArrowLeft key-ArrowDown key-ArrowRight key-PageDown` (each row's seven keys, then its key of the last column; at a shell prompt `key-commands` is absent and its cell empty, [ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md))
+2. **All visible, no horizontal scroll**: key area `scrollWidth ≤ clientWidth + 1`, and all 15 key rects are inside the viewport
 3. **Static**: while `sleep 30` runs, while `less` holds the screen, and after quitting `less`, the key testid sequence matches step 1
 4. **Bytes**: `key-Escape` → `1b`; `key-ArrowUp` → `1b5b41`; after `printf '\033[?1h'` turns on DECCKM, `key-ArrowUp` → `1b4f41`, `key-Home` → `1b4f48`; back to normal after `printf '\033[?1l'`. Every press increments `inputStats().data.n`
 5. **Doesn't steal focus**: click the terminal so it has focus, press `key-Tab` → `document.activeElement` is unchanged
@@ -238,7 +238,7 @@ In direct input, dispatch on the helper textarea what an on-screen keyboard does
 7. **Lock**: long-press `key-Ctrl` (> 500ms) → `data-sticky=locked`; `c` then `u` → `03` `15` (not `d`: `^D` at an empty prompt makes bash exit); tap again → `off`
 8. **Tapping the terminal** (AC-3.20): tap `.term` once → focus moves to xterm's helper textarea; tap again → focus leaves; a 30px vertical drag doesn't change focus; **vertical drags really scroll** (with enough scrollback, 20 consecutive drag frames change `viewportY` by more than one line — guards against touchmove landing on a node detached when the DOM renderer replaces row elements, which scrolls only the first frame); after `printf '\033[?1000h'` turns on mouse tracking, a tap → focus unchanged and a mouse report (starting with `1b5b4d`) appears in the INPUT frames; restore with `printf '\033[?1000l'`
 9. **Safe area**: in Chromium `env(safe-area-inset-*)` is always 0, so override `--sa-top: 47px` and `--sa-bottom: 34px` directly on `.app` → the terminal's top edge is at 47px, the extra keys' bottom edge is 34px above `.app`'s bottom, `.app`'s height is unchanged, the terminal is exactly 81px shorter, and the page doesn't overflow; clear `--sa-bottom` → back to normal
-10. **Landscape**: `viewport` and `screen` both 851×393 → still `compact`, extra keys 80px, all 16 keys visible
+10. **Landscape**: `viewport` and `screen` both 851×393 → still `compact`, extra keys 80px, all 15 keys visible
 
 > **Note**: Playwright can't actually open an on-screen keyboard. Keyboard geometry is covered by E2E-21 (simulated by changing the container height and replaying `visualViewport` events); real devices are in the manual checklist.
 
@@ -701,16 +701,16 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 4. **Not from a background session**: pin A, switch to B, A writes OSC 52 → the clipboard is unchanged
 5. **Fallback bar**: make `navigator.clipboard.writeText` reject once, then work → OSC 52 shows `clip-bar` with the start of the text; click `clip-copy` → the clipboard holds the text and the bar is gone
 
-## E2E-51 Frequent input and combo keys (AC-3.24, AC-3.25)
+## E2E-51 History and the command strip (AC-3.24, AC-3.25)
 
-> [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md). Pixel 5. The agent runs with a temporary `HOME` holding `.bash_history` and `.claude/history.jsonl`; a fake `claude` (a script named `claude`) stands in for the real one. INPUT frames are recorded.
+> [ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md). Pixel 5. The agent runs with a temporary `HOME` holding `.bash_history`, `.claude/history.jsonl` (with a two-line entry and a `[Pasted text #1 …]` one) and `.claude/commands/hello.md`. A fake `claude` (a script) prints an `init` line with `slash_commands` `clear compact model __internal deep-research` and `skills` `deep-research` when run with `-p`, and otherwise echoes `FAKE-CLAUDE` and sleeps. INPUT frames are recorded.
 
-1. **Geometry**: `key-frequent` sits above `key-combos` in the last column; all eight key columns are the same width (±1px); the extra keys don't scroll horizontally
-2. **Shell**: at the prompt, `key-combos` → `combo-menu` has `combo-ctrl-r`; tapping `combo-ctrl-c` sends `03` and closes the menu; focus didn't move
-3. **Frequent, shell**: `key-frequent` → `frequent-menu` lists the most repeated entry of `.bash_history` first, no entry shorter than 3 characters, no `#<digits>` line; tapping `frequent-0` sends a bracketed paste of it followed by a separate `\r` frame
-4. **Insert**: `frequent-insert-0` sends the bracketed paste and no `\r`
-5. **claude**: run the fake `claude` → within 2 s `combo-menu` shows `combo-shift-tab`; tapping it sends `1b5b5a`; `combo-esc-esc` sends `1b` and `1b` as two separate frames (120 ms apart); `frequent-menu` lists claude's most repeated `display` first and none of its `[Pasted text #1 …]` entries
-6. **Closing**: open a menu, press `Esc` → closed, and no `1b` frame was sent; open one, `Ctrl+Shift+↓` → closed
+1. **Shell**: `key-commands` is absent and its cell empty; `key-history` lists `.bash_history` newest first, each entry once; tapping `history-0` sends a bracketed paste of it then a separate `\r` frame; `history-insert-0` sends the paste only
+2. **claude in front**: run the fake `claude` → within 2 s `key-commands` appears; tapping it shows `command-strip` with `command-key:shift-tab` before `command-/compact`, and `command-/copy`, `command-/resume`, `command-/hello` present, `command-/__internal` absent, `command-/deep-research` absent (a hidden skill); tapping `command-/compact` sends a paste of `/compact` then `\r`; tapping `command-key:shift-tab` sends `1b5b5a`
+3. **Editor**: `command-edit` opens `command-editor` listing every item including `/deep-research` (hidden); drag `/compact` above `⇧Tab` → the strip starts with `/compact`; hide `⇧Tab` → it leaves the strip; rename `/compact` to `压缩` → the chip reads `压缩`; add `继续` → it is the strip's last chip and sends `继续` then `\r`
+4. **Shared and resettable**: reload the page → the strip keeps that arrangement (it came from the agent); `command-reset` → the defaults are back
+5. **History in claude**: `key-history` lists claude's entries newest first; the two-line entry shows its first line and `2 lines`; the placeholder entry is absent; tapping the two-line row sends both lines in one bracketed paste
+6. **Closing**: open the strip, press `Esc` → closed, and no `1b` frame was sent; open it, `Ctrl+Shift+↓` → closed
 
 ## E2E-52 Collapsing the extra keys (AC-3.26, AC-3.18)
 

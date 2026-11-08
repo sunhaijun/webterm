@@ -1,6 +1,6 @@
 # ADR-0054 Frequent input and combo keys at the end of the extra keys
 
-Status: Accepted (2026-11-07). Amends [ADR-0025](0025-termux-style-ui.md) §2: the fourteen extra keys stay static, and two keys are added at the end whose places never change but whose menus follow the foreground program. Adds `program` to session info and `session.updated`, and `GET /api/frequent`. §3's shell-history line is revised by [ADR-0055](0055-webterm-setup.md) (2026-11-07): `webterm setup` adds it, with consent.
+Status: Accepted (2026-11-07). §3–§4 superseded by [ADR-0057](0057-command-strip-and-history.md) (2026-11-08): ⟲ is now recent history and ⌘ a command strip for claude and codex only; §1 and §2 stand. Amends [ADR-0025](0025-termux-style-ui.md) §2: the fourteen extra keys stay static, and two keys are added at the end whose places never change but whose menus follow the foreground program. Adds `program` to session info and `session.updated`, and `GET /api/frequent`. §3's shell-history line is revised by [ADR-0055](0055-webterm-setup.md) (2026-11-07): `webterm setup` adds it, with consent.
 
 ## Context
 
@@ -86,5 +86,5 @@ Both open a popover above the extra keys (`frequent-menu`, `combo-menu`), closed
 ## Consequences
 
 - ADR-0025 §2's "static" now reads: the fourteen keys are static; the two at the end are static in place, and their menus follow the program.
-- Docs: [input.md](../../40-frontend/input.md#frequent-input-and-combo-keys-ac-324) (layout, the two menus), protocol (`program`), [http-api.md](../../30-protocol/http-api.md#frequent-input), [session-manager.md](../../50-backend/session-manager.md), [privacy-history.md](../../60-security/privacy-history.md), AC-3.24, AC-3.25, troubleshooting.
+- Docs: [input.md](../../40-frontend/input.md#history-and-commands-ac-324) (layout, the two menus), protocol (`program`), [http-api.md](../../30-protocol/http-api.md#history), [session-manager.md](../../50-backend/session-manager.md), [privacy-history.md](../../60-security/privacy-history.md), AC-3.24, AC-3.25, troubleshooting.
 - Tests: UT-program-1 (classification), UT-frequent-1 (each format, filters, ranking, the 1 MiB tail), IT-program-1 (`session.updated{program}` for a shell, a program named `claude`, and back), IT-frequent-1 (the route: authentication, a temporary `HOME`), UT-combos-1 (tile sets and bytes), E2E-51 (the column's geometry, both menus, sending).

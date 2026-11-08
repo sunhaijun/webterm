@@ -36,7 +36,7 @@ left    key area (8 columns × 2 rows, equal width, no horizontal scroll)
 └────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┴────┘
 ```
 
-The last column, frequent input (⟲) and combo keys (⌘), stays put like every other key; only the menus they open follow the program in front ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [below](#frequent-input-and-combo-keys-ac-324)).
+The last column, history (⟲) and commands (⌘), stays put like every other key; ⌘ is there only for claude and codex, and what both open follows the program in front ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md), [below](#history-and-commands-ac-324)).
 
 | Position | testid | Action |
 |---|---|---|
@@ -47,8 +47,8 @@ The last column, frequent input (⟲) and combo keys (⌘), stays put like every
 | TAB | `key-Tab` | Same |
 | CTRL ALT | `key-Ctrl` `key-Alt` | Sticky modifiers (below) |
 | ← ↓ → PGDN | `key-ArrowLeft` `key-ArrowDown` `key-ArrowRight` `key-PageDown` | Send the corresponding bytes |
-| ⟲ (top right) | `key-frequent` | Opens the frequent-input menu ([below](#frequent-input-and-combo-keys-ac-324)) |
-| ⌘ (bottom right) | `key-combos` | Opens the combo-key menu for the program in front |
+| ⟲ (top right) | `key-history` | Opens the history list ([below](#history-and-commands-ac-324)) |
+| ⌘ (bottom right) | `key-commands` | Opens the command strip; only for claude and codex, otherwise an empty cell |
 
 On `wide` the left column has only ✎, spanning both rows.
 
@@ -67,26 +67,22 @@ On `wide` the left column has only ✎, spanning both rows.
 
 ---
 
-## Frequent input and combo keys (AC-3.24)
+## History and commands (AC-3.24)
 
-[ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md). Both menus open as a popover above the extra keys and close on a tap outside, `Esc` (taken before the terminal) or switching sessions. They never take focus from the terminal or the text box. Which program is in front comes from the agent (`program` on the session: `shell`, `claude`, `codex`, `other`).
+[ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md). Both open as a popover above the extra keys and close on a tap outside, `Esc` (taken before the terminal) or switching sessions; they never take focus from the terminal or the text box. Which program is in front comes from the agent (`program`: `shell`, `claude`, `codex`, `other`).
 
-### Frequent input
+### ⟲ History
 
-- On open, the page asks `GET /api/frequent?program=<program>` ([http-api.md](../30-protocol/http-api.md#frequent-input)) and meanwhile shows the last list it got for that program (kept in memory only).
-- One row per item (`frequent-<i>`), the text on one line. **Tapping a row sends it and Enter** to the current session the way the text page does: a bracketed paste, then a separate `\r` ([ADR-0027](../20-architecture/adr/0027-text-page-enter-submits.md)). The row's ✎ (`frequent-insert-<i>`) pastes it without Enter.
-- An empty list shows one muted row: "No history".
+- On open, the page asks `GET /api/history?program=<program>` ([http-api.md](../30-protocol/http-api.md#history)) and meanwhile shows the last list it got for that program (memory only).
+- The program's own history, **newest first**, each distinct entry once, at most 30 (`history-<i>`). A multi-line entry shows its first line and "N lines".
+- **Tapping a row sends it and Enter** to the current session the way the text page does (bracketed paste, then a separate `\r`, [ADR-0027](../20-architecture/adr/0027-text-page-enter-submits.md)); its ✎ (`history-insert-<i>`) pastes it without Enter. An empty list shows "No history".
 
-### Combo keys (AC-3.25)
+### ⌘ Commands (AC-3.25)
 
-A grid of tiles (`combo-<id>`), each a key name and a short action name. A tap sends the bytes on the extra keys' path (counted, past the replay gate), ignores an armed CTRL / ALT, and closes the menu.
-
-| Program | Tiles (key · action · bytes) |
-|---|---|
-| `claude` | `⇧Tab` Mode `ESC [ Z` · `Esc Esc` Rewind (two `ESC`, 120 ms apart) · `^O` Transcript `0x0f` · `^T` Todos `0x14` · `^B` Background `0x02` · `^R` History `0x12` · `⌥P` Model `ESC p` · `^C` Interrupt `0x03` |
-| `codex` | `Esc` Interrupt `ESC` · `Esc Esc` Edit previous · `^T` Transcript `0x14` · `^J` Newline `0x0a` · `^L` Clear `0x0c` · `^C` Quit `0x03` |
-| `shell` | `↵` Enter `\r` · `^C` Interrupt · `^D` EOF `0x04` · `^R` Search `0x12` · `^L` Clear `0x0c` · `^Z` Suspend `0x1a` · `^W` Delete word `0x17` · `^U` Delete line `0x15` |
-| `other` | `↵` Enter · `Esc` · `^C` Interrupt · `^D` EOF · `^Z` Suspend · `^L` Clear |
+- `key-commands` is there **only while `program` is `claude` or `codex`**; otherwise its cell is empty and nothing else moves.
+- It opens the **command strip** (`command-strip`): one row of chips (`command-<id>`), scrolled sideways, each the item's label. A tap runs the item and closes the strip: keys go out on the extra keys' path past sticky modifiers (sequences 120 ms apart); text is sent with Enter (paste + `\r`) or only inserted, per item.
+- ✎ at the right end (`command-edit`) opens the **editor** (`command-editor`), a bottom sheet listing the tool's items in order: ≡ drags (`command-grip-<i>`, the session drawer's drag), 👁 hides or shows (`command-eye-<i>`), a tap on the row edits label, what it sends and Enter. **+ Add** adds a text item; **Reset** restores the defaults; **Refresh** (claude) asks the tool again. Each change is saved at once (`PUT /api/commands`).
+- The items, their default order, and how the arrangement is stored: ADR-0057 §4–§5, [http-api.md](../30-protocol/http-api.md#commands). Skills start hidden; new commands appear at the end; nothing is ordered automatically.
 
 ## Collapsing the extra keys (AC-3.26)
 
