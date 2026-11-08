@@ -1,6 +1,6 @@
 # ADR-0057 The command strip and the history list
 
-Status: Accepted (2026-11-08). Replaces the two menus of [ADR-0054](0054-frequent-input-and-combo-keys.md) §3–§4: ⟲ becomes a **history** list (newest first) and ⌘ a **command strip** with its own editor, shown only while claude or codex is in front. The last key column itself (§1) and the agent's `program` (§2) stay. `GET /api/frequent` is replaced by `GET /api/history`; `/api/commands` is new.
+Status: Accepted (2026-11-08); §1 (the history list) removed and §2's strip made two rows by [ADR-0058](0058-enter-key-and-two-row-strip.md). Replaces the two menus of [ADR-0054](0054-frequent-input-and-combo-keys.md) §3–§4: ⟲ becomes a **history** list (newest first) and ⌘ a **command strip** with its own editor, shown only while claude or codex is in front. The last key column itself (§1) and the agent's `program` (§2) stay. `GET /api/frequent` is replaced by `GET /api/history`; `/api/commands` is new.
 
 ## Context
 
@@ -76,5 +76,5 @@ The probe result is cached in memory by the executable's resolved path, which ca
 
 ## Consequences
 
-- ADR-0054 §3–§4 are superseded; §1 (the column) and §2 (`program`) stand. AC-3.24 and AC-3.25 rewritten; [input.md](../../40-frontend/input.md#history-and-commands-ac-324), [http-api.md](../../30-protocol/http-api.md#history), [privacy-history.md](../../60-security/privacy-history.md), E2E-51 rewritten.
+- ADR-0054 §3–§4 are superseded; §1 (the column) and §2 (`program`) stand. AC-3.24 and AC-3.25 rewritten; [input.md](../../40-frontend/input.md#the-last-column-ac-324), [http-api.md](../../30-protocol/http-api.md), [privacy-history.md](../../60-security/privacy-history.md), E2E-51 rewritten.
 - Tests: UT-history-1 (newest first, dedup, 30, multi-line, placeholders), UT-catalog-claude (init parsing, filters, supplement, custom files, keybinding overrides), UT-catalog-codex, UT-arrange-1 (merge: order, appended new items, visibility defaults and overrides, edits, added), IT-commands-1 (the routes, a fake `claude` printing an `init` line, the cache by executable path, store round-trip, reset), E2E-51 (⌘ hidden in a shell, strip, run, editor drag / hide / rename / add, shared across a reload, history newest first with a multi-line entry).

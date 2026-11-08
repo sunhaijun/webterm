@@ -1,6 +1,6 @@
 # ADR-0055 `webterm setup`: check and add the settings claude, codex and the shell need
 
-Status: Accepted (2026-11-07). Adds the `webterm setup` command and the installer's `--setup` / `--no-setup`. Revises [ADR-0052](0052-waiting-for-you-replaces-unread.md) §6 and [ADR-0054](0054-frequent-input-and-combo-keys.md) §3, which said webterm doesn't change the user's configuration: it still never does on its own, only through this command, with consent.
+Status: Accepted (2026-11-07); the shell history item and `--shell` removed by [ADR-0058](0058-enter-key-and-two-row-strip.md) §4, with the history list they served. Adds the `webterm setup` command and the installer's `--setup` / `--no-setup`. Revises [ADR-0052](0052-waiting-for-you-replaces-unread.md) §6 and [ADR-0054](0054-frequent-input-and-combo-keys.md) §3, which said webterm doesn't change the user's configuration: it still never does on its own, only through this command, with consent.
 
 ## Context
 
@@ -58,5 +58,5 @@ webterm setup --check    only report; exit 0 when nothing is missing, 1 otherwis
 
 ## Consequences
 
-- AC-1.24 (the command), AC-1.25 (the installer); [install.md](../../80-ops/install.md#set-up-claude-codex-and-the-shell) gains a section and the option rows; [troubleshooting.md](../../80-ops/troubleshooting.md) points to `webterm setup --check` and drops the wrong `claude config set`; ADR-0052 §6 and ADR-0054 §3 get notes.
+- AC-1.24 (the command), AC-1.25 (the installer); [install.md](../../80-ops/install.md#set-up-claude-and-codex) gains a section and the option rows; [troubleshooting.md](../../80-ops/troubleshooting.md) points to `webterm setup --check` and drops the wrong `claude config set`; ADR-0052 §6 and ADR-0054 §3 get notes.
 - Tests: UT-setup-claude, UT-setup-codex, UT-setup-shell (add, idempotent, respect the user's value, backups, formatting kept, unparseable files untouched), IT-setup-1 (the command with a temporary `HOME`: `--check` exit codes, `--yes`, a second run changes nothing, no terminal adds nothing), UT-install-setup (`--setup` runs `webterm setup --yes`, `--no-setup` and no terminal skip it, install-state doesn't keep either).

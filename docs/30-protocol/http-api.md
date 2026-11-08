@@ -39,27 +39,6 @@ Content-Type: image/png            (informational; not used)
 - The body is streamed to disk, not buffered in memory.
 - There is no route to list, read or delete uploads.
 
-## History
-
-What you sent recently to a program, newest first, from that program's own history file ([ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md) §1). Authenticated. Read on request; the agent keeps no copy and logs no entry.
-
-```
-GET /api/history?program=claude
-
-200 {"items": ["继续", "fix the login bug\nand add a test", "/clear"]}
-```
-
-| `program` | Source |
-|---|---|
-| `claude` | `~/.claude/history.jsonl`, field `display` |
-| `codex` | `~/.codex/history.jsonl`, field `text` |
-| `shell` | the session shell's history: `~/.bash_history` (bash; `#<digits>` timestamp lines skipped) or `~/.zsh_history` (zsh; `: <time>:<n>;` prefix removed) |
-| anything else | `{"items": []}` |
-
-- At most the last 1 MiB of the file is read. Entries are trimmed; blank ones, ones over 32 KiB and claude's placeholders (`[Pasted text #N …]`, `[Image #N]`) are skipped. Multi-line entries are kept.
-- Newest first; an entry seen more than once appears once, at its newest position; at most 30.
-- A missing or unreadable file is an empty list, not an error.
-
 ## Commands
 
 The command strip's items for the program in front of a session, merged with your arrangement (ADR-0057 §4–§5). Authenticated; `PUT` and `DELETE` need the `Origin` check.
