@@ -109,6 +109,17 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Run claude in the session from the laptop, then close the ssh window: the session keeps running, and the laptop terminal's title and modes (mouse, bracketed paste) are back to normal in the next ssh login
 - [ ] `webterm update` on the server while attached: the attach redraws within seconds and keeps working
 
+## Collapsing the extra keys (every time the extra keys' gestures change, since m20)
+
+[ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md). claude running, with a long answer on screen.
+
+- [ ] iPhone and Android: swipe right on the keys → they slide away, claude redraws once with more rows, the round button sits in the bottom-right corner clear of the home indicator
+- [ ] Tap the button → the keys come back; swipe left along the bottom (not from the edge) → they come back too; a swipe from the very right edge does what the system does (Android: Back) and leaves the keys collapsed
+- [ ] Swiping across the keys in any direction never sends a key or leaves one looking pressed; a normal tap on each key still works first time
+- [ ] Swipe up on the keys → text page; swipe down on an empty text box → keys; in a long text, swiping down scrolls the text until it's at the top
+- [ ] Collapsed, with the keyboard up: the button sits above the keyboard
+- [ ] iPad (touch): the same
+
 ## Sending files (every time uploads or the text page change, since m15)
 
 [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md). Run claude (and codex if installed) in a session.

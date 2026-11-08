@@ -4,6 +4,7 @@ Status: Accepted (2026-10-30). Rolled out as milestones m8–m10 (see [Rollout](
 
 Later changes:
 
+- **§2 always shown, §3 sideways swipe**: revised by [ADR-0056](0056-collapsible-extra-keys.md). The bar collapses with a swipe right into a corner button; the text page is reached by swiping up (down to come back); every control acts only when released in place.
 - **§2 static keys**: amended by [ADR-0054](0054-frequent-input-and-combo-keys.md). The fourteen keys stay static; a last column adds frequent input and combo keys, fixed in place, whose menus follow the program in front.
 - **§3 Enter behavior and send path**: revised by [ADR-0027](0027-text-page-enter-submits.md). Enter with content sends the content **and** a carriage return (`term.paste()`, then `\r`).
 - **§3 text page**: revised by [ADR-0036](0036-text-page-per-session.md). Each session keeps its own page and draft; switching sessions swaps both, and focus goes to the new session's input.

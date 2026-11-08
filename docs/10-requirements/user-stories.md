@@ -63,6 +63,8 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 
 **US-3.8** (m18) The two or three things I send claude most (a slash command, a short reply in Chinese) are one tap away: the last-column key shows my most frequent inputs from claude's own history, and a tap sends one. The key below it gives me the keys my phone can't type for whatever is running: `Shift+Tab` and double `Esc` in claude, `Ctrl+R` in the shell ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md)).
 
+**US-3.9** (m20) Reading a long answer on my phone, I swipe the extra keys away to the right and get four or five more rows; a small button in the corner (or a swipe left where the keys were) brings them back. Swiping across the keys never presses one by accident ([ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md)).
+
 ---
 
 ## US-4 Multiple sessions

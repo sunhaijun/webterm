@@ -557,7 +557,7 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 > `web/e2e/textinput.spec.ts`, Pixel 5. Hook `WebSocket.send` to record INPUT frames; when asserting, concatenate the frames from that step (paste and Enter are two `onData` calls; whether they share a frame doesn't matter). The E2E bash has bracketed paste enabled.
 
 1. **Switching doesn't move geometry**: click `toggle-text` → `textinput` is visible and focused; `__webterm.size()` and `resizes()` are unchanged; **the textarea's `border-*-width` is ≥ 1px on all four sides, and the whole box (border included) lies inside the `extrakeys` rect, with a gap on every side**; click `toggle-text` again → back to the keys page
-2. **Swiping also switches**: drag 80px horizontally over the keys → text page; drag back the other way → keys page
+2. **Swiping also switches** ([ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md)): drag 80px up over the keys → text page; on the text page with an empty box, drag 80px down → keys page; a sideways drag of 80px to the left switches nothing
 3. **Attributes**: the actual attribute values of `autocorrect` / `autocapitalize` / `spellcheck` on `textinput` are `off` / `off` / `false`, and `enterkeyhint` is `send`
 4. **Enter with text = send and press Enter**: fill in `echo TEXT-ONE` and press Enter → this step's INPUT frames concatenate to `ESC[200~echo TEXT-ONEESC[201~` + `0d`; the command runs and a `TEXT-ONE` line appears in the output; the textarea is cleared and still focused; `inputStats().data.n` and `sent.n` both rise
 5. **Empty Enter**: press Enter again → the INPUT frame is `0d`
@@ -711,3 +711,17 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 4. **Insert**: `frequent-insert-0` sends the bracketed paste and no `\r`
 5. **claude**: run the fake `claude` → within 2 s `combo-menu` shows `combo-shift-tab`; tapping it sends `1b5b5a`; `combo-esc-esc` sends `1b` and `1b` as two separate frames (120 ms apart); `frequent-menu` lists claude's most repeated `display` first and none of its `[Pasted text #1 …]` entries
 6. **Closing**: open a menu, press `Esc` → closed, and no `1b` frame was sent; open one, `Ctrl+Shift+↓` → closed
+
+## E2E-52 Collapsing the extra keys (AC-3.26, AC-3.18)
+
+> [ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md). `web/e2e/collapse.spec.ts`, Pixel 5 and iPad Mini (touch), real CDP touch drags; `WebSocket.send` recorded.
+
+1. **A drag presses nothing**: on the keys page, press `key-Escape` and drag 30px down before lifting → no INPUT frame, and `key-Escape` has no `data-pressed` once the finger has moved; a plain tap on `key-Escape` still sends `1b`
+2. **Collapse**: drag 120px right over the keys → `extrakeys` has `data-collapsed="true"`, `keys-restore` is visible inside the viewport's bottom-right corner (right edge 16 ± 1px from the viewport's), `__webterm.size().rows` grew by ≥ 4, and `resizes()` grew by exactly 1; no INPUT frame
+3. **Short swipe slides back**: drag 20px right → still expanded, no resize
+4. **Restore by tapping** `keys-restore` → `data-collapsed` is gone, rows are back to the value before step 2, one more resize
+5. **Restore by swiping**: collapse again; drag 120px left starting at x = 200 in the bottom 40px of the terminal → restored; collapse again; the same drag starting 10px from the right edge → still collapsed
+6. **The dot**: collapsed, session B rings the bell while A is current → `keys-restore` has `data-attention="true"`
+7. **Persistence**: reload while collapsed → still collapsed, `keys-restore` visible
+8. **Pages**: collapse from the text page, restore → back on the text page
+9. **Tablet** (iPad Mini, touch): steps 2 and 4 behave the same
