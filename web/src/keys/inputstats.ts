@@ -67,7 +67,7 @@ export function verdictOf(s: InputSnapshot, now: number): string {
   if (s.unackedBytes > 0 && now - s.sent.at > ACK_MS) {
     return 'Agent has not acked: the connection may be a zombie, or the agent cannot write to the PTY'
   }
-  return 'All four stages OK: input reached the agent. If the program still does not react, the cause is outside webterm (the foreground program is not reading stdin, or is in another mode such as tmux copy-mode)'
+  return 'All four stages OK: input reached the agent. If the program still does not react, the cause is outside webterm (the foreground program is not reading stdin, or is in a mode of its own)'
 }
 
 /** The counters. A single global: the controller, session store and connection all record into it, and threading it through as a parameter would be messier. */

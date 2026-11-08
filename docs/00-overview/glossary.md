@@ -34,7 +34,7 @@ Use these terms in docs and code. Don't invent synonyms.
 | Term | Meaning |
 |---|---|
 | **form** | The two UI forms, by device: `compact` (phone, screen short side < 600px) and `wide` (desktop, tablet). The form only decides how sessions are switched, and it never flips on a given device ([ADR-0025](../20-architecture/adr/0025-termux-style-ui.md)). |
-| **session button** | On `compact`, the button in the top-left cell of the extra keys: a rounded box showing the session count, with an unread dot when something is unread. Tapping it opens the session drawer. |
+| **session button** | On `compact`, the button in the top-left cell of the extra keys: a rounded box showing the session count, with a dot when another session is waiting for you ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)). Tapping it opens the session drawer. |
 | **session drawer** | On `compact`, the bottom drawer opened by the session button: the session list + "New session". |
 | **tab bar** | On `wide`, the row of session tabs fixed at the top of the terminal. Tabs share the width equally (120–240px) and scroll horizontally when they don't fit; `+` follows them, and the connection status dot sits at the far right. |
 

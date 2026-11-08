@@ -28,8 +28,8 @@ export interface ExtraKeysProps {
   form: Form
   /** Session count, shown in the sessions button's box. */
   count: number
-  /** Some non-active session has unread output: a dot on the sessions button. */
-  unread: boolean
+  /** Some non-active session is waiting for you (ADR-0052): a dot on the sessions button. */
+  attention: boolean
   sticky: Sticky
   /** The active session's page. */
   page: KeyPage
@@ -129,8 +129,8 @@ export function ExtraKeys(p: ExtraKeysProps) {
             type="button"
             class="ek-side-btn"
             data-testid="open-sessions"
-            data-unread={p.unread ? 'true' : 'false'}
-            aria-label={p.unread ? `Sessions: ${p.count} (new output)` : `Sessions: ${p.count}`}
+            data-attention={p.attention ? 'true' : 'false'}
+            aria-label={p.attention ? `Sessions: ${p.count} (waiting for you)` : `Sessions: ${p.count}`}
             onPointerDown={noFocus}
             onClick={p.onOpenSessions}
           >

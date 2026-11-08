@@ -22,7 +22,7 @@ describe('UT-inputstats-1 which stage input stops at (AC-3.17)', () => {
   it('points outside webterm when all four stages pass', () => {
     const v = verdictOf(healthy(), T)
     expect(v).toContain('All four stages OK')
-    expect(v, 'should name cases outside webterm such as tmux copy-mode').toContain('copy-mode')
+    expect(v, 'should say the cause is outside webterm').toContain('outside webterm')
   })
 
   it('draws no conclusion without recent keystrokes and asks to type first', () => {

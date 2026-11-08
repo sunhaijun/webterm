@@ -210,7 +210,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
               data-testid={`session-${s.sid}`}
               data-sid={s.sid}
               data-exited={s.status === 'exited' ? 'true' : 'false'}
-              data-unread={s.unread ? 'true' : 'false'}
+              data-attention={s.attention ? 'true' : 'false'}
               aria-current={s.active ? 'true' : undefined}
               title={s.cwd}
               onPointerDown={(e) => onRowDown(e, s)}
@@ -239,7 +239,7 @@ export function SessionList({ sessions, home, onSelect, onTogglePin, onRename, o
                 )}
                 <span class="sl-text">{s.name}</span>
               </span>
-              {s.unread && <span class="unread-dot" aria-label="New output" />}
+              {s.attention && <span class="attention-dot" aria-label="Waiting for you" />}
               <span class="sl-meta" data-failed={s.status === 'exited' && s.exitCode !== 0 ? 'true' : 'false'}>
                 {/* The outer rtl only truncates from the left; the path itself stays ltr so `~` and `/` don't jump to the right (ADR-0042 §3) */}
                 <bdi dir="ltr">{s.status === 'exited' ? `exit ${s.exitCode ?? '?'}` : shortCwd(s.cwd, home)}</bdi>

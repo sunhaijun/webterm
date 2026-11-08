@@ -254,16 +254,15 @@ describe('UT-replay-1 replay window and snapshots', () => {
     const h = harness()
     online(h)
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 0n, payload: text('ab') })
-    // While switched away the agent reports progress via session.updated (that is how unread is derived)
+    // While switched away the agent reports progress via session.updated (the replay gate's catchup_to)
     h.socket().deliverText({ t: 'session.updated', sid: 1, head_seq: 100 })
-    expect(h.conn.isUnread(1)).toBe(true)
+    expect(h.conn.headSeqOf(1)).toBe(100)
 
     h.conn.subscribe(1)
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 2n, payload: text('c'.repeat(98)) })
     h.socket().deliverFrame({ type: TYPE_OUTPUT, flags: 0, sid: 1, seq: 100n, payload: text('live') })
 
     expect(h.output.map((o) => o.isReplay)).toEqual([false, true, false])
-    expect(h.conn.isUnread(1)).toBe(false)
   })
 
   it('SNAPSHOT sets out_seq to its seq (snapshot bytes do not count), and later OUTPUT continues from seq as live', () => {
@@ -885,30 +884,6 @@ describe('UT-hb-2 immediate probe for zombie connections', () => {
     h.conn.retryNow()
 
     expect(h.socket().sent.length).toBe(sentAfterClose)
-  })
-})
-
-// Unread is derived from head_seq; it is not server state.
-describe('unread derivation', () => {
-  it('is unread when head_seq exceeds the local out_seq', () => {
-    const h = harness()
-    h.conn.connect()
-    h.socket().open()
-    h.socket().deliverText(welcome())
-
-    expect(h.conn.isUnread(2)).toBe(false)
-    h.socket().deliverText({ t: 'session.updated', sid: 2, head_seq: 500 })
-    expect(h.conn.isUnread(2)).toBe(true)
-
-    // Switching to it and catching up clears unread
-    h.socket().deliverFrame({
-      type: TYPE_OUTPUT,
-      flags: 0,
-      sid: 2,
-      seq: 0n,
-      payload: new Uint8Array(500),
-    })
-    expect(h.conn.isUnread(2)).toBe(false)
   })
 })
 

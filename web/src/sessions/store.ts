@@ -24,7 +24,6 @@ export interface ConnLike {
   forget(sid: number): void
   outSeqOf(sid: number): number
   headSeqOf(sid: number): number
-  isUnread(sid: number): boolean
 }
 
 /** Read-only view for the UI. */
@@ -38,8 +37,8 @@ export interface SessionView {
   index: number
   /** Pinned: stays subscribed while in the background. */
   pinned: boolean
-  /** Not the active session and headSeq > outSeq. */
-  unread: boolean
+  /** Not the active session, and the agent says it's waiting for you (ADR-0052). */
+  attention: boolean
   active: boolean
 }
 
@@ -109,7 +108,7 @@ export class SessionStore {
       exitCode: e.info.exit_code,
       index: i + 1,
       pinned: e.pinned,
-      unread: e.info.sid !== this.activeSid && this.conn.isUnread(e.info.sid),
+      attention: e.info.sid !== this.activeSid && e.info.attention === true,
       active: e.info.sid === this.activeSid,
     }))
   }

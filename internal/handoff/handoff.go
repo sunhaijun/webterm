@@ -76,6 +76,10 @@ type Session struct {
 	// sets its title again. Absent in older snapshots, meaning no title in use.
 	Title     string `json:"title,omitempty"`
 	TitlePgrp int    `json:"title_pgrp,omitempty"`
+	// Attention is "waiting for you" (ADR-0052 §5), with a bell or
+	// notification the poll hadn't seen yet folded in. Absent in older
+	// snapshots, meaning not set.
+	Attention bool   `json:"attention,omitempty"`
 	CWD       string `json:"cwd"`
 	Status    string `json:"status"`
 	ExitCode  *int   `json:"exit_code,omitempty"`

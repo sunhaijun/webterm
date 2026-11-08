@@ -314,7 +314,7 @@ user_unit_active() { systemctl --user is-active --quiet webterm 2>/dev/null; }
 service_active() { system_unit_active || user_unit_active; }
 # inside_webterm_unit: are we running inside a webterm session? Migrating stops the
 # user service, which would kill this session and the script with it. Checks the
-# cgroup, not $WEBTERM_SESSION, which tmux panes may have inherited.
+# cgroup, not $WEBTERM_SESSION, which any child process may have inherited.
 inside_webterm_unit() { grep -q '/webterm\.service$' /proc/self/cgroup 2>/dev/null; }
 migrate_hint() {
     cat <<EOF
@@ -580,7 +580,7 @@ fi
 if [ "$MIGRATE" = 1 ] && user_unit_active && inside_webterm_unit; then
     MSG="Migrating to a system service stops every webterm session, including the one
       running this script, so the migration would die halfway.
-      Run the same command over SSH (or in a tmux started outside webterm)."
+      Run the same command over SSH."
     [ "$DRY_RUN" = 1 ] || die "$MSG"
     info "Note (a real run would refuse): $MSG"
 fi

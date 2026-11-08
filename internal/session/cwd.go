@@ -112,10 +112,48 @@ func (s *Session) poll() {
 	if name := s.displayNameLocked(); name != oldName {
 		upd.Name = strPtr(name)
 	}
+	attn := s.attentionSignalsLocked(pgrp, shell, time.Now())
 	s.mu.Unlock()
 	if upd.CWD != nil || upd.Name != nil {
 		s.emit(upd)
 	}
+	if attn {
+		s.setAttention()
+	}
+}
+
+// attentionSignalsLocked applies the three "waiting for you" rules (ADR-0052
+// §1) and updates their bookkeeping, which runs every round whether or not
+// attention is already set. Called by poll with mu held, after s.title is
+// current.
+//
+//  1. The title in use went from a spinner to anything else.
+//  2. The emulator counted a bell or desktop notification since the last
+//     round. The output path only counts; turning counts into attention
+//     here caps sets at one per poll, whatever a program prints.
+//  3. A foreground group other than the shell held the terminal for at least
+//     LongCommand and the shell is back in front.
+func (s *Session) attentionSignalsLocked(pgrp, shell int, now time.Time) bool {
+	attn := false
+	if sig := s.term.Signals(); sig != s.signalSeen {
+		s.signalSeen = sig
+		attn = true
+	}
+	busy := busyTitle(s.title)
+	if s.titleBusy && s.title != "" && !busy {
+		attn = true
+	}
+	s.titleBusy = busy
+	switch {
+	case shell > 0 && pgrp == shell:
+		if !s.fgSince.IsZero() && now.Sub(s.fgSince) >= s.mgr.cfg.LongCommand {
+			attn = true
+		}
+		s.fgSince = time.Time{}
+	case s.fgSince.IsZero():
+		s.fgSince = now
+	}
+	return attn
 }
 
 // busy reports whether the session is running a command, meaning the PTY's

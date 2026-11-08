@@ -330,9 +330,9 @@ button { font: inherit; color: inherit; }
 /* A paperclip while its files upload (ADR-0051 §2): accent and pulsing, like the reconnecting dot */
 :is(.topbar-btn, .ek-upload)[data-busy='true'] { color: var(--accent); animation: pulse 1s infinite; }
 
-/* The pin mark and the unread dot (ADR-0042): unread uses the accent; red only means error */
+/* The pin mark and the waiting-for-you dot (ADR-0042, ADR-0052): the dot uses the accent; red only means error */
 .pin-mark { flex: none; display: inline-flex; color: var(--muted); margin-right: 3px; }
-.unread-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.attention-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 
 /* ---------- Extra keys (input.md) ---------- */
 
@@ -367,8 +367,8 @@ button { font: inherit; color: inherit; }
   border: 2px solid currentColor; border-radius: 6px;
   font: 700 12px/1 var(--font-ui);
 }
-/* The unread dot sits on the box's top-right corner, outlined in the background color to separate it from the border */
-.ek-side-btn[data-unread='true']::after {
+/* The waiting-for-you dot sits on the box's top-right corner, outlined in the background color to separate it from the border */
+.ek-side-btn[data-attention='true']::after {
   content: ''; position: absolute; top: 5px; right: 4px;
   width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   box-shadow: 0 0 0 2px var(--surface);

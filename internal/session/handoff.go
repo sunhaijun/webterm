@@ -146,6 +146,8 @@ func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
 		nameManual: hs.NameManual,
 		title:      hs.Title,
 		titlePgrp:  hs.TitlePgrp,
+		attention:  hs.Attention,
+		titleBusy:  busyTitle(hs.Title), // a ◐ before the upgrade and ✳ after still counts
 		cwd:        hs.CWD,
 		status:     hs.Status,
 		exitCode:   hs.ExitCode,
@@ -164,6 +166,7 @@ func (m *Manager) restoreSession(hs handoff.Session) (*Session, error) {
 	// An emulator replayed from the ring buffer (schema 1) has already counted
 	// the titles in that history; they were not just set.
 	_, s.titleSeen = s.term.Title()
+	s.signalSeen = s.term.Signals() // likewise for bells in a replayed history
 	if hs.Status != protocol.StatusRunning {
 		// Exited: keep ring and emulator for scrollback (AC-4.5); there is no
 		// fd or process.

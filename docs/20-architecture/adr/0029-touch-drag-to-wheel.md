@@ -1,6 +1,6 @@
 # ADR-0029 Touch vertical drag: convert to wheel events when the program tracks the mouse
 
-Status: Accepted (2026-10-31). **Revises the "vertical drag" row of the gesture table in [ADR-0025](0025-termux-style-ui.md) §5**; adds AC-3.21. Main-screen touch scrolling, doing nothing on the alternate screen without mouse tracking ([ADR-0024](0024-scrollback-layered-model.md) §4), and the meaning of a tap are unchanged.
+Status: Accepted (2026-10-31). **Revises the "vertical drag" row of the gesture table in [ADR-0025](0025-termux-style-ui.md) §5**; adds AC-3.21. Main-screen touch scrolling, doing nothing on the alternate screen without mouse tracking ([ADR-0024](0024-scrollback-layered-model.md) §4), and the meaning of a tap are unchanged. 2026-11-07: webterm no longer documents running programs inside tmux; the tmux trap under Consequences is kept as history.
 
 Later: **§1 (auto-calibration) was removed by [ADR-0032](0032-drag-wheel-per-row.md)** because it felt too slow. Now one wheel event is sent per row of finger movement, and the program decides how many lines each one scrolls. §2's conditions, direction, dispatch and throttling are unchanged. The measurement table under Consequences no longer applies.
 
@@ -78,6 +78,6 @@ Measured with the Pixel 5 profile and real tmux 3.5a with `mouse on`, after `seq
 | For comparison: one event per row (Termux) | 50 lines | | |
 
 - tmux (`mouse on`), claude, htop, `less --mouse` and similar programs can now be scrolled with a finger on phones.
-- The tmux copy-mode trap ([troubleshooting.md, Stuck after scrolling inside tmux](../../80-ops/troubleshooting.md#stuck-after-scrolling-inside-tmux)) can now happen on phones too: if the program in the pane doesn't track the mouse, one drag pushes the pane into copy-mode. The way out is still `q` / `Esc`. It's the same thing a desktop wheel does.
+- The tmux copy-mode trap (then in troubleshooting.md, removed 2026-11-07) can now happen on phones too: if the program in the pane doesn't track the mouse, one drag pushes the pane into copy-mode. The way out is still `q` / `Esc`. It's the same thing a desktop wheel does.
 - Each drag starts with a calibration: the first wheel event goes out immediately, the second waits for the program to redraw (one round trip, at most 300ms).
 - Adds AC-3.21, E2E-44, UT-touch-1, and two manual checklist items (real-device tmux and claude).

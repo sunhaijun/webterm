@@ -421,7 +421,7 @@ interface WebtermWindow {
     form(): 'compact' | 'wide'
     fontSize(): number
     altScreen(): boolean
-    unread(sid: number): boolean
+    attention(sid: number): boolean
     frames(): FrameRec[]
     scrollLines(n: number): void
     viewport(): { y: number; top: string }
@@ -439,7 +439,7 @@ export const hooks = {
   size: (p: Page) => termSize(p),
   sessionSize: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.sessionSize()),
   altScreen: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.altScreen()),
-  unread: (p: Page, sid: number) => p.evaluate((s) => (window as unknown as WebtermWindow).__webterm.unread(s), sid),
+  attention: (p: Page, sid: number) => p.evaluate((s) => (window as unknown as WebtermWindow).__webterm.attention(s), sid),
   frames: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.frames()),
   scrollLines: (p: Page, n: number) => p.evaluate((k) => (window as unknown as WebtermWindow).__webterm.scrollLines(k), n),
   viewport: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.viewport()),

@@ -35,7 +35,7 @@ Modeled on Termux: one full-screen terminal with two fixed rows of extra keys be
 - The on-screen keyboard is handled with `visualViewport`: the terminal area shrinks instead of being covered, and the extra keys always sit right above the keyboard.
 - Two rows, 14 extra keys, in fixed positions, all visible at `393px` width without horizontal scrolling.
 - Long CJK text: switch the extra-keys area to the text page — a native text box with the IME candidate window in the right place.
-- Switching sessions: the session button (a box showing the session count) opens the bottom drawer; two taps. A session with new output puts an unread dot on the button.
+- Switching sessions: the session button (a box showing the session count) opens the bottom drawer; two taps. A session that's waiting for you (its program finished or asks for something) puts a dot on the button.
 - Default font size 14px (about 45 columns): **readability over fitting wide output**. Adjustable in settings (10–24px).
 - Respect `env(safe-area-inset-*)` (notch, Home indicator); in an Android PWA the system Back button closes the drawer first instead of exiting the app.
 
@@ -46,7 +46,7 @@ Modeled on Termux: one full-screen terminal with two fixed rows of extra keys be
 
 ### Tablet (`wide`)
 
-- Tab bar on top (40px): one tap to switch sessions, unread visible at a glance.
+- Tab bar on top (40px): one tap to switch sessions, which ones are waiting for you visible at a glance.
 - On touch, the same extra keys as on phones (wider keys); with a mouse (`pointer: fine`) the extra keys disappear, as on desktop.
 - With an external keyboard, the app's shortcuts work ([`../40-frontend/keymap.md`](../40-frontend/keymap.md)).
 

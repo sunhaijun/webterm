@@ -12,6 +12,7 @@ const (
 	TSessionClose  = "session.close"
 	TSessionRename = "session.rename"
 	TSessionMove   = "session.move"
+	TSessionSeen   = "session.seen"
 	TSubscribe     = "subscribe"
 	TUnsubscribe   = "unsubscribe"
 	TResize        = "resize"
@@ -100,6 +101,14 @@ type SessionRename struct {
 	Name  *string `json:"name"` // null restores automatic naming
 }
 
+// SessionSeen says the user is looking at session SID, so its attention is
+// cleared (ADR-0052 §2). Only the client that has the session in front of the
+// user sends it; there is no reply beyond the broadcast session.updated.
+type SessionSeen struct {
+	T   string `json:"t"`
+	SID uint16 `json:"sid"`
+}
+
 // SessionMove moves session SID in front of Before (ADR-0040).
 //
 // A null Before moves it to the end. A Before that no longer exists (closed
@@ -154,9 +163,8 @@ type Limits struct {
 }
 
 // SessionInfo is the full state of a session (welcome.sessions[] and
-// session.created). There is no unread field: clients derive it from
-// head_seq > local out_seq. Unread is inherently per client; tracking it on
-// the server would let two tabs clear each other's unread state.
+// session.created). There is no unread field (ADR-0052): output alone marks
+// nothing; Attention is the one "look here" flag, the same for every client.
 type SessionInfo struct {
 	SID          uint16 `json:"sid"`
 	Name         string `json:"name"`
@@ -164,11 +172,14 @@ type SessionInfo struct {
 	CWD          string `json:"cwd"`
 	Status       string `json:"status"`
 	ExitCode     *int   `json:"exit_code"`
-	Cols         uint16 `json:"cols"`
-	Rows         uint16 `json:"rows"`
-	BaseSeq      uint64 `json:"base_seq"`
-	HeadSeq      uint64 `json:"head_seq"`
-	CreatedAt    int64  `json:"created_at"`
+	// Attention is "waiting for you" (ADR-0052): set when the program signals
+	// it's your turn, cleared by session.seen.
+	Attention bool   `json:"attention"`
+	Cols      uint16 `json:"cols"`
+	Rows      uint16 `json:"rows"`
+	BaseSeq   uint64 `json:"base_seq"`
+	HeadSeq   uint64 `json:"head_seq"`
+	CreatedAt int64  `json:"created_at"`
 }
 
 // ResumeResult is one entry of welcome.resumed[].
@@ -221,6 +232,7 @@ type SessionUpdated struct {
 	Cols         *uint16 `json:"cols,omitempty"`
 	Rows         *uint16 `json:"rows,omitempty"`
 	HeadSeq      *uint64 `json:"head_seq,omitempty"`
+	Attention    *bool   `json:"attention,omitempty"` // a pointer so false is sent (ADR-0052)
 }
 
 // SessionOrder is the full display order after a session.move; clients replace
@@ -279,6 +291,8 @@ func Encode(msg any) ([]byte, error) {
 		m.T = TSessionRename
 	case *SessionMove:
 		m.T = TSessionMove
+	case *SessionSeen:
+		m.T = TSessionSeen
 	case *Subscribe:
 		m.T = TSubscribe
 	case *Unsubscribe:
@@ -336,6 +350,8 @@ func Decode(data []byte) (any, error) {
 		dst = &SessionRename{}
 	case TSessionMove:
 		dst = &SessionMove{}
+	case TSessionSeen:
+		dst = &SessionSeen{}
 	case TSubscribe:
 		dst = &Subscribe{}
 	case TUnsubscribe:

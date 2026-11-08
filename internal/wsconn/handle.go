@@ -92,6 +92,12 @@ func (c *Conn) handleControl(data []byte) {
 	case *protocol.SessionMove:
 		c.handleSessionMove(m)
 
+	case *protocol.SessionSeen:
+		// The client has this session in front of the user (ADR-0052 §2).
+		if err := c.deps.Sessions.Seen(m.SID); err != nil {
+			c.unknownSession("", m.SID)
+		}
+
 	case *protocol.Subscribe:
 		// The session decides between incremental and snapshot (protocol
 		// §5.1). The size travels with this message, not as a separate

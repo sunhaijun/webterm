@@ -6,6 +6,7 @@ export const T = {
   sessionClose: 'session.close',
   sessionRename: 'session.rename',
   sessionMove: 'session.move',
+  sessionSeen: 'session.seen',
   subscribe: 'subscribe',
   unsubscribe: 'unsubscribe',
   resize: 'resize',
@@ -61,6 +62,8 @@ export interface SessionInfo {
   cwd: string
   status: SessionStatus
   exit_code: number | null
+  /** "Waiting for you", held by the agent (ADR-0052). */
+  attention?: boolean
   cols: number
   rows: number
   base_seq: number
@@ -112,6 +115,8 @@ export interface SessionUpdated {
   cols?: number
   rows?: number
   head_seq?: number
+  /** Sent whenever it changes, true or false (ADR-0052). */
+  attention?: boolean
 }
 
 /** The full display order, broadcast after session.move (§4.2, ADR-0040). */

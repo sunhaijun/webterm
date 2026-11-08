@@ -10,7 +10,7 @@
 │                                                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────┐  │
 │  │ drawer/tabs  │  │ xterm.js     │  │ extra keys /   │  │
-│  │ unread dots  │  │ display only │  │ text page      │  │
+│  │ waiting dots │  │ display only │  │ text page      │  │
 │  └──────────────┘  └──────────────┘  └────────────────┘  │
 │         └─────────────────┬──────────────────┘           │
 │                    ┌──────▼───────┐                      │
@@ -122,7 +122,7 @@ web/
     app/                wiring: form detection, tab bar / session drawer, connection banner and toasts
     keys/               extra keys and text page, keymap, IME fallbacks for direct input, input path counters
     term/               xterm wrapper, replay gate, gestures
-    sessions/           session state, switching, unread
+    sessions/           session state, switching, waiting-for-you
     conn/               WebSocket connection layer, seq accounting, resend queue, backoff
     ui/                 shared components: sheets, pairing page, viewport
     protocol/           message types, codec (TS side of the contract)
@@ -218,3 +218,4 @@ In the `exited` state a session keeps its ring buffer and emulator: it can be vi
 | [0049](adr/0049-connection-status-in-one-place.md) | Connection status in one place: every connection message is in the top banner, from the first frame of a page load |
 | [0050](adr/0050-ssh-attach.md) | Attach over SSH: `webterm attach` joins a session through the agent's local socket, which speaks the same protocol; the size follows the client in use |
 | [0051](adr/0051-send-files-to-a-session.md) | Send files to a session: upload over HTTP to a private temp directory, paste the path (one paste per file), so claude and codex attach images; deleted after 24 hours |
+| [0052](adr/0052-waiting-for-you-replaces-unread.md) | "Waiting for you" replaces the unread dot: the agent sets a per-session flag when the program signals it's your turn (title spinner → idle, bell / notification, a long command finishing); looking at the session clears it |

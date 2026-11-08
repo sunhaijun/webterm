@@ -691,14 +691,15 @@ func TestITSub2_SubscribeOverflowSendsSnapshot(t *testing.T) {
 	}
 }
 
-// IT-unread-1: a head_seq held back by throttling must be sent later
-// (AC-4.3).
+// IT-headseq-1: a head_seq held back by throttling must be sent later
+// (AC-4.3, protocol §6.2).
 //
 // Output from an unsubscribed session often comes in bursts that end within a
 // second, with nothing afterwards to trigger another notification. Throttling
 // without a trailing flush would leave the client's head_seq before the
-// burst forever: the unread dot never lights and the user never learns the
-// background session did anything.
+// burst forever: its catchup_to falls short on the next incremental
+// subscribe, and the tail of the catch-up counts as live output, so terminal
+// query replies in it reach the PTY (protocol §5.3).
 func TestHeadSeqThrottleFlushesLastValue(t *testing.T) {
 	h := newHarness(t)
 	c := h.client()
@@ -726,7 +727,7 @@ func TestHeadSeqThrottleFlushesLastValue(t *testing.T) {
 	time.Sleep(2 * time.Second) // output stopped long ago; nothing else will trigger
 
 	if got := cl.headSeqOf(sid); got < h1+500 {
-		t.Fatalf("head_seq stuck at %d (was %d after the first burst): the throttled value was never flushed, so unread is missed", got, h1)
+		t.Fatalf("head_seq stuck at %d (was %d after the first burst): the throttled value was never flushed", got, h1)
 	}
 }
 

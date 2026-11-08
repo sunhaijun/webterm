@@ -18,7 +18,8 @@ type Session = {
   // Local state, not from the server
   term: Terminal               // xterm instance; kept when switching away
   outSeq: number               // output bytes received so far
-  headSeq: number              // output bytes the agent has produced for this session (unread = headSeq > outSeq)
+  headSeq: number              // output bytes the agent has produced for this session (the replay gate's catchup_to)
+  attention: boolean           // "waiting for you", held by the agent (ADR-0052)
   inSeqNext: number            // next input seq to assign
   pending: PendingInput[]      // unacked input
   pinnedSubscription: boolean  // pinned (below)
@@ -31,7 +32,7 @@ The cost is memory: each instance holds 5000 lines of scrollback, which is accep
 
 ## Subscriptions
 
-**Only the visible session is subscribed.** Unsubscribed sessions keep running on the agent and keep feeding its terminal emulator; the agent sends only `session.updated{head_seq}` so the client can work out unread. **This is the key bandwidth saver on mobile**: a background session running `tail -f` sends nothing over the network.
+**Only the visible session is subscribed.** Unsubscribed sessions keep running on the agent and keep feeding its terminal emulator; the agent sends only `session.updated{head_seq}` (for the replay gate) and changes of name, directory and `attention`. **This is the key bandwidth saver on mobile**: a background session running `tail -f` sends nothing over the network.
 
 ```
 switch to session X:
@@ -59,11 +60,11 @@ This is the only place the two forms differ (form rules in [layout.md](layout.md
 
 ### compact (phone): session button and bottom drawer
 
-The top cell of the extra keys' left column is the **session button** (`data-testid="open-sessions"`), modeled on the tabs button in mobile browsers: a rounded box with the number of sessions in it, updated immediately on create and close. Tapping it opens the session drawer. When any **non-current** session has unread output (`headSeq > outSeq`), an unread dot appears at the box's top-right corner (`data-unread="true"`, accent color, [ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md)). Why not ☰: [ADR-0030](../20-architecture/adr/0030-no-settings.md) §3.
+The top cell of the extra keys' left column is the **session button** (`data-testid="open-sessions"`), modeled on the tabs button in mobile browsers: a rounded box with the number of sessions in it, updated immediately on create and close. Tapping it opens the session drawer. When any **non-current** session is waiting for you (`attention`, [ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)), a dot appears at the box's top-right corner (`data-attention="true"`, accent color, [ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md)). Why not ☰: [ADR-0030](../20-architecture/adr/0030-no-settings.md) §3.
 
 ```
 ┌────┐
-│ ┌─┐•     rounded box + session count; • is the unread dot
+│ ┌─┐•     rounded box + session count; • is the waiting-for-you dot
 │ │3│
 │ └─┘
 ├────┤
@@ -76,7 +77,7 @@ The top cell of the extra keys' left column is the **session button** (`data-tes
 │ Sessions                          ✕ │
 ├─────────────────────────────────────┤
 │▎[1] webterm     ~/github/webterm    │  ← current: accent left bar + tint
-│ [2] api       • ~/srv/api           │  ← unread dot
+│ [2] api       • ~/srv/api           │  ← waiting-for-you dot
 │ [3] build       exit 1              │  ← exited (nonzero in the warning color)
 │                                     │  ← at least half the screen: extra height goes to the list
 ├─────────────────────────────────────┤
@@ -106,7 +107,7 @@ The top cell of the extra keys' left column is the **session button** (`data-tes
 ```
 
 - The top bar `.topbar` is 36px tall (40px with `pointer: coarse`) and always visible. Left to right: the horizontally scrollable tab strip `data-testid="tabbar"` (**tabs only**), `+`, a spacer, the paperclip that sends files (`upload-file`, [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)), the connection dot (`conn-dot`), and settings (`open-settings`). `+`, the paperclip, the dot, and settings are outside the tab strip and don't scroll with it ([ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)).
-- A tab (`tab-<sid>`) = index + session name + unread dot; pinned sessions show a pin icon before the name (drawn as `⇵` in the diagram); exited sessions are grayed out. Long names are truncated with an ellipsis (the index never is); `title` holds the full name and CWD.
+- A tab (`tab-<sid>`) = index + session name + waiting-for-you dot; pinned sessions show a pin icon before the name (drawn as `⇵` in the diagram); exited sessions are grayed out. Long names are truncated with an ellipsis (the index never is); `title` holds the full name and CWD.
 - The **index** (`tab-<sid>-idx`) is the same `[n]` as in the drawer (current order, starting at 1), so tabs with the same name can be told apart. **Every tab has one**, renamed tabs included, matching the drawer ([ADR-0041](../20-architecture/adr/0041-tab-index-and-edit-icon.md)). Monospace, `--muted`, accent on the current tab.
 - **Width** ([ADR-0031](../20-architecture/adr/0031-tabs-equal-width.md)): all tabs are equal width, sharing the strip's available width, between 120px and 240px.
 - **`+`** (`new-session`) sits right of the tab strip. When the tabs fit, the strip is exactly as wide as the tabs and `+` follows the last tab; when they don't, the strip shrinks to the remaining width and scrolls, and `+` stays to its right, **always visible**.
@@ -179,7 +180,7 @@ Click outside the menu or press `Esc` to close it.
 The current session (current tab / current drawer row) gets: **an accent left bar or underline + an accent background tint + the name in bold `--accent` + `aria-current="true"`**. Tabs use a 2px underline; drawer rows use a 3px left bar.
 
 - **Hover must not look like selection.** Selection is marked by **hue** (`--accent`); hover stays a neutral gray (`--fg` at low opacity), and the two still read correctly when combined.
-- Status dot / unread dot / exit code colors keep their meanings; they answer other questions (is it running, is there new output, how did it exit).
+- Status dot / waiting-for-you dot / exit code colors keep their meanings; they answer other questions (is it running, is it your turn, how did it exit).
 - **The current item must be in view.** With up to 20 sessions, neither the tab bar nor the drawer may fit them all, and `Ctrl+Shift+↑/↓` or the auto-switch after closing can make an off-screen item current. If it's already fully visible, **do nothing**; otherwise `scrollIntoView({ block: 'nearest', inline: 'nearest' })`, **without `smooth`**.
 - **Current-session styling doesn't depend on focus.** Per AC-4.8, focus goes back to the terminal along with the session, so only this styling can say which session is current.
 
@@ -204,14 +205,19 @@ typing = focus was in the terminal or the textarea before the switch
 after the switch: typing || no touch  →  new session on text page ? textarea.focus() : term.focus()
 ```
 
-## Unread (AC-4.3)
+## Waiting for you (AC-4.3)
 
-- **Unread is derived on the client; it isn't server state**: `unread = headSeq > outSeq`.
-- When an unsubscribed session produces output, the agent sends `session.updated{head_seq}` (at most once per second per session; when throttling swallows an update, the latest value is sent afterwards).
-- The server stores no `unread` flag: unread is inherently per client, and two browser tabs would clear each other's.
-- Shown as an unread dot on drawer rows and tabs; on `compact`, also on the corner of the session button (lit when any non-current session is unread).
-- **The unread dot uses the accent color** (`--accent`), not red: red is reserved for errors and destructive actions (nonzero exit, close, disconnected), so "new output" doesn't look like "something broke" ([ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §1).
-- An exited session also needs attention: show `exit <code>`, in the warning color when nonzero.
+The dot answers one question: **is it my turn in that session?** ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md))
+
+- **The agent holds it** (`attention`, one flag per session, the same on every device). It's set when the program signals that it's your turn:
+  - its terminal title goes from a spinner (braille, `◐ ◓ ◑ ◒`) to anything else — claude's `◐` → `✳`;
+  - it rings the bell or sends a desktop notification (BEL, OSC 9 / 777 / 99);
+  - a command that ran for 10 s or more returns to the shell prompt.
+- **Looking at it clears it.** The page sends `session.seen{sid}` when that session is current, the page is visible and focused, and the session has `attention`: when `session.updated{attention: true}` arrives for it, on switching to it, when the page becomes visible or gains focus, after `welcome`. The current session therefore never shows the dot.
+- **There's no unread marker.** Output alone marks nothing: claude and codex redraw spinners several times a second, so "new output" was on almost all the time and couldn't tell "working" from "done".
+- Shown as a dot on drawer rows (`data-attention`) and tabs (`tab-<sid>-attention`); on `compact`, also on the corner of the session button (lit when any non-current session has it). Labeled "Waiting for you".
+- **The dot uses the accent color** (`--accent`), not red: red is reserved for errors and destructive actions (nonzero exit, close, disconnected), so "your turn" doesn't look like "something broke" ([ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §1).
+- An exited session also needs a look: show `exit <code>`, in the warning color when nonzero.
 
 ## Auto naming (AC-4.4)
 
@@ -221,7 +227,7 @@ name = nameIsManual ? manual name
 ```
 
 - The agent computes the name: `~` when `cwd` is the home directory, `/` when the basename is empty (`/`).
-- **Terminal title** ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)): a title the foreground program (claude, vim, ssh…, not the shell itself) sets with OSC 0 / 2 takes priority and is shown as is (claude's `✳` idle / `◐` working). Titles the shell sets at the prompt, like `user@host: dir`, are ignored; when the program exits the name goes back to the directory. tmux doesn't forward inner programs' titles by default ([troubleshooting.md](../80-ops/troubleshooting.md#tab-name-doesnt-follow-claudes-title)).
+- **Terminal title** ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)): a title the foreground program (claude, vim, ssh…, not the shell itself) sets with OSC 0 / 2 takes priority and is shown as is (claude's `✳` idle / `◐` working). Titles the shell sets at the prompt, like `user@host: dir`, are ignored; when the program exits the name goes back to the directory.
 - The CWD shown in lists is abbreviated by the browser: `~` when it equals or is under `welcome.home`; shown as is when there's no `home`, without guessing `/home/<user>`.
 - **No dedup suffixes** for duplicate names: two sessions in a `webterm` directory should both be called `webterm`; the index / order and the full CWD tell them apart.
 - After a manual rename, `nameIsManual = true` and automatic naming stops (neither the title nor the CWD is followed). Renaming to an empty string turns it back on.

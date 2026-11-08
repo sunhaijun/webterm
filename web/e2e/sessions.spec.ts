@@ -1,5 +1,5 @@
 /**
- * E2E-6 Multiple sessions and unread (AC-2.11 / AC-4.3)
+ * E2E-6 Multiple sessions and waiting for you (AC-2.11 / AC-4.3, ADR-0052)
  * E2E-11 Session lifecycle (AC-4.2 / AC-4.5 / US-7.3)
  * E2E-18 No session mix-up after an agent restart (AC-2.13)
  */
@@ -41,43 +41,44 @@ const atBottom = async (p: Page) => {
   return (await hooks.viewport(p)).y >= lines - rows
 }
 
-/** unreadFlow is the body of E2E-6; the two forms differ only in where the unread marker appears. */
-async function unreadFlow(page: Page, agent: Agent, form: 'compact' | 'wide') {
+/** dotShown reports whether session sid shows the waiting-for-you dot where this form shows it. */
+async function dotShown(page: Page, sid: number, form: 'compact' | 'wide'): Promise<boolean> {
+  if (form === 'wide') return (await page.getByTestId(`tab-${sid}`).getAttribute('data-attention')) === 'true'
+  return (await page.getByTestId('open-sessions').getAttribute('data-attention')) === 'true'
+}
+
+/**
+ * attentionFlow is the body of E2E-6 (ADR-0052); the two forms differ only in where the dot
+ * appears. Output alone lights nothing; a bell or a title going from a spinner to idle does;
+ * looking at the session clears it.
+ */
+async function attentionFlow(page: Page, agent: Agent, form: 'compact' | 'wide') {
   await agent.open(page)
   const a = (await hooks.sid(page))!
   const b = await newSession(page)
   await switchTo(page, a)
 
-  // A produces output for 5s.
+  // A produces output for 5s (shorter than the 10s long-command rule).
   await submit(page, `${EMIT} 100 50`)
   await waitText(page, 'line 00005', 'A started producing output')
   await switchTo(page, b)
 
-  // A gets an unread marker (session.updated{head_seq} > local out_seq; no bytes cross the network).
-  await waitFor(async () => hooks.unread(page, a), 'A shows unread', 20_000)
-  if (form === 'compact') {
-    await expect(page.getByTestId('open-sessions'), 'sessions button has a red dot').toHaveAttribute('data-unread', 'true')
-    await openDrawer(page)
-    await expect(page.getByTestId(`session-${a}`), "A's drawer row has an unread dot").toHaveAttribute('data-unread', 'true')
-    await expect(page.getByTestId(`session-${a}`).locator('.unread-dot')).toBeVisible()
-    await page.keyboard.press('Escape')
-  } else {
-    await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'true')
-    await expect(page.getByTestId(`tab-${a}-unread`), "A's tab has an unread dot").toBeVisible()
+  // Output alone lights nothing.
+  for (let i = 0; i < 6; i++) {
+    await page.waitForTimeout(500)
+    expect(await hooks.attention(page, a), 'output alone sets no attention').toBe(false)
+    expect(await dotShown(page, a, form), 'output alone shows no dot').toBe(false)
   }
 
   // B works normally.
   await submit(page, 'echo in-b')
   await waitFor(async () => (await terminalText(page)).split('\n').some((l) => l.trimEnd() === 'in-b'), 'B works normally')
 
-  // Back to A: all output from while away is there and unread is cleared.
+  // Back to A: all output from while away is there.
   await switchTo(page, a)
   await waitText(page, 'EMIT-DONE', "A's output has caught up", 30_000)
   const t = await terminalText(page)
   for (const n of [1, 50, 100]) expect(count(t, `line ${String(n).padStart(5, '0')} `), `line ${n} exactly once`).toBe(1)
-  expect(await hooks.unread(page, a)).toBe(false)
-  if (form === 'compact') await expect(page.getByTestId('open-sessions')).toHaveAttribute('data-unread', 'false')
-  else await expect(page.getByTestId(`tab-${a}`)).toHaveAttribute('data-unread', 'false')
 
   // At the bottom before switching away -> follows to the bottom on return.
   expect(await atBottom(page), 'was at the bottom before switching away, so should be at the bottom on return').toBe(true)
@@ -94,9 +95,43 @@ async function unreadFlow(page: Page, agent: Agent, form: 'compact' | 'wide') {
   await waitFor(async () => count(await terminalText(page), 'EMIT-DONE') === 2, 'second burst caught up')
   const back = await hooks.viewport(page)
   expect(back.top, `scrollback position should not move on return (before y=${top.y}, after y=${back.y})`).toBe(top.top)
+
+  // A bell lights it.
+  await submit(page, `sleep 2; printf '\\a'`)
+  await switchTo(page, b)
+  await waitFor(async () => dotShown(page, a, form), 'A shows the waiting-for-you dot after its bell', 10_000)
+  expect(await hooks.attention(page, a)).toBe(true)
+  if (form === 'compact') {
+    await openDrawer(page)
+    await expect(page.getByTestId(`session-${a}`), "A's drawer row has the dot").toHaveAttribute('data-attention', 'true')
+    await expect(page.getByTestId(`session-${a}`).locator('.attention-dot')).toBeVisible()
+    await expect(page.getByTestId(`session-${b}`), 'the current session never shows it').toHaveAttribute('data-attention', 'false')
+    await page.keyboard.press('Escape')
+  } else {
+    await expect(page.getByTestId(`tab-${a}-attention`), "A's tab has the dot").toBeVisible()
+  }
+
+  // Looking at it clears it, on the agent too.
+  await switchTo(page, a)
+  await waitFor(async () => !(await hooks.attention(page, a)), 'switching to A clears its attention (session.seen)')
+  expect(await dotShown(page, a, form)).toBe(false)
+
+  // A title going from a spinner to idle lights it: ◐ (E2 97 90) -> ✳ (E2 9C B3), typed as ASCII escapes.
+  await submit(page, `bash -c "printf '\\e]0;\\xe2\\x97\\x90 work\\a'; sleep 2; printf '\\e]0;\\xe2\\x9c\\xb3 done\\a'; sleep 30"`)
+  await switchTo(page, b)
+  await waitFor(async () => dotShown(page, a, form), 'A shows the dot after its title goes ◐ -> ✳', 10_000)
+  if (form === 'wide') await expect(page.getByTestId(`tab-${a}`)).toContainText('✳ done')
+  await switchTo(page, a)
+  await waitFor(async () => !(await hooks.attention(page, a)), 'cleared on return')
+  await page.keyboard.press('Control+C')
+
+  // Looking at it means it never stays lit: the bell's attention is cleared right away.
+  await submit(page, `printf '\\a'`)
+  await page.waitForTimeout(3000)
+  expect(await hooks.attention(page, a), 'a bell in the session in front of the user is cleared at once').toBe(false)
 }
 
-test.describe('E2E-6 multiple sessions and unread', () => {
+test.describe('E2E-6 multiple sessions and waiting for you', () => {
   let agent: Agent
   test.beforeEach(async () => {
     agent = await Agent.start()
@@ -105,15 +140,15 @@ test.describe('E2E-6 multiple sessions and unread', () => {
 
   test.describe('Pixel 5', () => {
     test.use(PIXEL)
-    test('background session keeps running: red dot on sessions button and unread dot in drawer; on return content is complete, unread cleared, scrollback position kept', async ({ page }) => {
-      await unreadFlow(page, agent, 'compact')
+    test('output alone lights nothing; a bell or a title spinner going idle lights the sessions button and the drawer row; looking clears it; content complete and scrollback kept', async ({ page }) => {
+      await attentionFlow(page, agent, 'compact')
     })
   })
 
   test.describe('1440×900', () => {
     test.use(WIDE)
-    test('background session keeps running: unread dot on its tab; on return content is complete, unread cleared, scrollback position kept', async ({ page }) => {
-      await unreadFlow(page, agent, 'wide')
+    test('output alone lights nothing; a bell or a title spinner going idle lights the tab; looking clears it; content complete and scrollback kept', async ({ page }) => {
+      await attentionFlow(page, agent, 'wide')
     })
   })
 })

@@ -9,7 +9,7 @@ In direct input **every key must be able to reach the PTY**, so app shortcuts ca
 | Modifiers | Usable by the app? | Why |
 |---|---|---|
 | `Ctrl+<letter>` | ❌ | Terminal control codes (`Ctrl+C`, `Ctrl+D`, `Ctrl+R`, `Ctrl+K`…) |
-| `Alt+<letter/digit>` | ❌ | Meta in TUIs (emacs, vim, tmux prefix) |
+| `Alt+<letter/digit>` | ❌ | Meta in TUIs (emacs, vim) |
 | `Ctrl+Alt+<letter>` | ❌ | Same as AltGr on Windows and European layouts, so it eats typed characters (Termux uses it; we don't) |
 | `Ctrl+<digit>` | ❌ | Browser tab switching |
 | `Cmd+<letter>` (macOS) | ⚠️ Partly | Mostly taken by the browser |

@@ -60,7 +60,7 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
   const closing = s.closing === null ? undefined : s.sessions.find((x) => x.sid === s.closing)
   // compact renames in a small sheet over the drawer (ADR-0039 §2); wide renames the tab in place
   const renamingSheet = s.form === 'compact' && renaming !== null ? s.sessions.find((x) => x.sid === renaming) : undefined
-  const anyUnread = s.sessions.some((x) => x.unread)
+  const anyAttention = s.sessions.some((x) => x.attention)
   const empty = s.welcomed && s.sessions.length === 0
 
   // The session behind the menu or rename is gone (closed elsewhere, agent restart):
@@ -124,7 +124,7 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
         <ExtraKeys
           form={s.form}
           count={s.sessions.length}
-          unread={anyUnread}
+          attention={anyAttention}
           sticky={ctl.sticky}
           page={s.page}
           onOpenSessions={() => ctl.openSessions()}

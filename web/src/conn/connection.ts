@@ -42,7 +42,7 @@ export type ConnState = 'connecting' | 'online' | 'reconnecting' | 'closed'
 interface SessionState {
   /** Total output bytes received; this is what we report when resuming. */
   outSeq: number
-  /** Total output bytes the agent has produced for this session; unread = headSeq > outSeq. */
+  /** Total output bytes the agent has produced for this session; the replay gate's catchupTo follows it. */
   headSeq: number
   /** Replay gate (§5.3): OUTPUT received before outSeq reaches this counts as replay. */
   catchupTo: number
@@ -173,12 +173,6 @@ export class Connection {
   /** How far the agent has produced output for a session (highest known). */
   headSeqOf(sid: number): number {
     return this.sessions.get(sid)?.headSeq ?? 0
-  }
-
-  /** Unread = the agent has produced more bytes than we have received. */
-  isUnread(sid: number): boolean {
-    const s = this.sessions.get(sid)
-    return s ? s.headSeq > s.outSeq : false
   }
 
   /** Recently received binary frames (a copy). */

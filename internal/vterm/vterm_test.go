@@ -418,3 +418,59 @@ func TestTitleAndWrites(t *testing.T) {
 		t.Fatalf("count after one write post-Import = %d", n)
 	}
 }
+
+// UT-vterm-signals (ADR-0052 §1): the emulator counts bells and desktop
+// notifications. A BEL that terminates an OSC string isn't a bell, and OSC 9;4
+// (progress) and OSC 9;9 (working directory) aren't notifications.
+func TestSignalsCountBellsAndNotifications(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want uint64
+	}{
+		{"plain text", "hello\r\n", 0},
+		{"BEL", "done\a", 1},
+		{"two BELs in one write", "\a\a", 2},
+		{"OSC 0 terminated by BEL", "\x1b]0;title\a", 0},
+		{"OSC 9 notification", "\x1b]9;Build finished\a", 1},
+		{"OSC 9 terminated by ST", "\x1b]9;Build finished\x1b\\", 1},
+		{"OSC 9;4 progress", "\x1b]9;4;1;50\a", 0},
+		{"OSC 9;9 working directory", "\x1b]9;9;/tmp\a", 0},
+		{"OSC 777 notify", "\x1b]777;notify;codex;Turn complete\a", 1},
+		{"OSC 777 other", "\x1b]777;preexec\a", 0},
+		{"OSC 99 notification", "\x1b]99;;Hello\x1b\\", 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			term := New(80, 24)
+			term.Write([]byte(c.in))
+			if got := term.Signals(); got != c.want {
+				t.Fatalf("Signals() = %d, want %d", got, c.want)
+			}
+		})
+	}
+
+	// Split across writes, the way PTY reads cut sequences.
+	term := New(80, 24)
+	for _, chunk := range []string{"\x1b]9;Bui", "ld fin", "ished\a", "\x1b]0;t", "\a"} {
+		term.Write([]byte(chunk))
+	}
+	if got := term.Signals(); got != 1 {
+		t.Fatalf("split OSC 9 + split OSC 0: Signals() = %d, want 1", got)
+	}
+
+	// An imported emulator starts counting from 0: what it counted before was
+	// already turned into attention by the old process (ADR-0052 §5).
+	term.Write([]byte("\a"))
+	data, err := term.Export()
+	if err != nil {
+		t.Fatal(err)
+	}
+	imp, err := Import(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := imp.Signals(); got != 0 {
+		t.Fatalf("imported Signals() = %d, want 0", got)
+	}
+}
