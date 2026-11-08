@@ -107,7 +107,7 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 
 **US-9.1** (m23) On my phone I tap the session button and then the folder: I'm looking at the folder my session is in, as a list in the same kind of sheet as my sessions. I can go up or into folders, and hidden files are there at the end without a setting ([ADR-0059](../20-architecture/adr/0059-files.md)).
 
-**US-9.2** (m23) I tap a file and see it: an image, a video, a log (from its end if it's long), or at least its size. One tap saves it to my phone through the system share sheet, or downloads it on a laptop. Nothing the file contains can run as part of webterm.
+**US-9.2** (m23) I tap a file and see it: an image, a video, a log (from its end if it's long), a Markdown file rendered, or at least its size. On a PC I maximize the window to read. One tap saves it to my phone through the system share sheet, or downloads it on a laptop. Nothing the file contains can run as part of webterm.
 
 **US-9.3** (m23) I put photos or any file into the folder I'm looking at, under their own names; nothing that's already there is overwritten. I can create a folder, rename and delete things, each with the same small sheets the sessions use.
 

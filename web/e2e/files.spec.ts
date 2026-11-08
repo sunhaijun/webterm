@@ -405,3 +405,151 @@ test.describe('desktop', () => {
     expect(await rec.input()).toEqual([])
   })
 })
+
+// ---------- E2E-54 maximize and Markdown (ADR-0060) ----------
+
+/** doc.md and notes/other.md; written per test so E2E-53's listing stays as it was. */
+function writeDocs() {
+  const filler = Array.from({ length: 60 }, (_, i) => `Paragraph ${i} keeps the heading below the fold.`).join('\n\n')
+  writeFileSync(
+    join(proj, 'doc.md'),
+    [
+      '# Plan',
+      '[next](#next-steps) · [other](notes/other.md) · [up](src) · [js](javascript:alert(1)) · [web](https://example.com/)',
+      '![shot](shot.png) ![remote](https://example.com/x.png)',
+      '<script>window.__md=1</script>',
+      '<img src=x onerror="window.__md=2">',
+      '| a | b |\n|---|---|\n| 1 | 2 |',
+      '```\ncode\n```',
+      '- one\n- two',
+      filler,
+      '## Next Steps',
+      'done',
+    ].join('\n\n'),
+  )
+  mkdirSync(join(proj, 'notes'), { recursive: true })
+  writeFileSync(join(proj, 'notes', 'other.md'), '# Other\n')
+}
+
+const sheetRect = (page: Page, testid: string) => page.getByTestId(testid).evaluate((el) => el.getBoundingClientRect().toJSON() as DOMRect)
+
+test.describe('desktop markdown', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  test('E2E-54 (1) maximize and restore, remembered', async ({ page }) => {
+    writeDocs()
+    await agent.open(page)
+    await atPrompt(page)
+    await cd(page, proj)
+    const resizes = await hooks.resizes(page)
+
+    await openFiles(page)
+    const max = page.getByTestId('files-sheet').getByTestId('files-max')
+    await expect(max).toHaveAttribute('aria-pressed', 'false')
+    await max.click()
+    await expect(max).toHaveAttribute('aria-pressed', 'true')
+    let r = await sheetRect(page, 'files-sheet')
+    expect([r.x, r.y, r.width, r.height].map(Math.round)).toEqual([0, 0, 1440, 900])
+    await waitRow(page, 'b.txt')
+    await openFile(page, 'b.txt')
+    r = await sheetRect(page, 'file-sheet')
+    expect([r.x, r.y, r.width, r.height].map(Math.round)).toEqual([0, 0, 1440, 900])
+
+    // Double-click the header (not a button): both restore, and again both maximize
+    await page.getByTestId('file-sheet').locator('.drawer-title').dblclick()
+    await expect(page.getByTestId('file-sheet').getByTestId('files-max')).toHaveAttribute('aria-pressed', 'false')
+    expect(Math.round((await sheetRect(page, 'file-sheet')).width)).toBe(720)
+    expect(Math.round((await sheetRect(page, 'files-sheet')).width)).toBe(720)
+    await page.getByTestId('file-sheet').locator('.drawer-title').dblclick()
+    expect(Math.round((await sheetRect(page, 'files-sheet')).width)).toBe(1440)
+    expect(await hooks.resizes(page), 'no resize').toBe(resizes)
+
+    // Remembered across closing and a reload
+    await closeSheet(page, 'file-sheet')
+    await closeSheet(page, 'files-sheet')
+    await page.reload()
+    await atPrompt(page)
+    await openFiles(page)
+    await expect(page.getByTestId('files-sheet').getByTestId('files-max')).toHaveAttribute('aria-pressed', 'true')
+    expect(Math.round((await sheetRect(page, 'files-sheet')).width)).toBe(1440)
+    await page.getByTestId('files-sheet').getByTestId('files-max').click()
+    expect(Math.round((await sheetRect(page, 'files-sheet')).width)).toBe(720)
+  })
+
+  test('E2E-54 (3)-(5) Markdown rendered: escaping, links, images, Source', async ({ page }) => {
+    writeDocs()
+    const external: string[] = []
+    page.on('request', (req) => {
+      if (req.url().includes('example.com')) external.push(req.url())
+    })
+    await page.context().route('https://example.com/**', (route) => route.fulfill({ body: 'ok', contentType: 'text/plain' }))
+    await agent.open(page)
+    await atPrompt(page)
+    await cd(page, proj)
+    await openFiles(page)
+    await waitRow(page, 'doc.md')
+
+    // (3) Rendered, nothing from the file runs, nothing external loads
+    await openFile(page, 'doc.md')
+    const md = page.getByTestId('file-markdown')
+    await expect(md.locator('h2#md-next-steps')).toHaveText('Next Steps')
+    await expect(md.locator('table td').first()).toHaveText('1')
+    await expect(md.locator('pre')).toHaveText('code')
+    await expect(md).toContainText('<script>window.__md=1</script>')
+    expect(await md.locator('script, iframe, img[onerror]').count()).toBe(0)
+    expect(await page.evaluate(() => (window as unknown as { __md?: number }).__md)).toBeUndefined()
+    expect(await md.locator('a', { hasText: /^js$/ }).count(), 'javascript: stays text').toBe(0)
+    const shot = md.locator('img[alt=shot]')
+    await expect(shot).toHaveAttribute('src', /^\/api\/fs\/raw\?path=/)
+    await waitFor(() => shot.evaluate((img) => (img as HTMLImageElement).naturalWidth > 0), 'the relative image loaded')
+    await expect(md.locator('a', { hasText: 'remote' })).toHaveAttribute('href', 'https://example.com/x.png')
+    expect(await md.locator('img').count()).toBe(1)
+    expect(external, 'nothing external requested').toEqual([])
+
+    // (4) Links: the anchor scrolls, the web link opens a tab, relative links open in the browser
+    await md.getByRole('link', { name: 'next' }).click()
+    await waitFor(async () => {
+      const [h, body] = await Promise.all([
+        md.locator('h2#md-next-steps').boundingBox(),
+        page.getByTestId('file-sheet').locator('.drawer-body').boundingBox(),
+      ])
+      return !!h && !!body && h.y >= body.y - 1 && h.y < body.y + body.height
+    }, 'the heading scrolled into view')
+    const popup = page.waitForEvent('popup')
+    await md.getByRole('link', { name: 'web' }).click()
+    const tab = await popup
+    await tab.waitForLoadState()
+    expect(tab.url()).toBe('https://example.com/')
+    await tab.close()
+    await expect(page.getByTestId('file-sheet')).toBeVisible()
+    await md.getByRole('link', { name: 'other' }).click()
+    await expect(page.getByTestId('file-sheet').locator('.drawer-title')).toHaveText('other.md')
+    await expect(page.getByTestId('file-markdown').locator('h1')).toHaveText('Other')
+    await closeSheet(page, 'file-sheet')
+    await openFile(page, 'doc.md')
+    await page.getByTestId('file-markdown').getByRole('link', { name: 'up' }).click()
+    await expect(page.getByTestId('file-sheet')).toHaveCount(0)
+    await expect(lastCrumb(page)).toHaveText('src')
+
+    // (5) Source and back
+    await page.getByTestId('files-up').click()
+    await waitRow(page, 'doc.md')
+    await openFile(page, 'doc.md')
+    await page.getByTestId('file-source').click()
+    await expect(page.getByTestId('file-text')).toContainText('## Next Steps')
+    await expect(page.getByTestId('file-source')).toHaveText('Preview')
+    await page.getByTestId('file-source').click()
+    await expect(page.getByTestId('file-markdown').locator('h2#md-next-steps')).toBeVisible()
+  })
+})
+
+test.describe('phone markdown', () => {
+  test.use(PIXEL)
+
+  test('E2E-54 (2) no maximize on a phone', async ({ page }) => {
+    await agent.open(page)
+    await atPrompt(page)
+    await openFiles(page)
+    await expect(page.getByTestId('files-max')).toHaveCount(0)
+  })
+})

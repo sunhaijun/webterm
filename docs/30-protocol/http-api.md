@@ -87,7 +87,7 @@ ETag: "<size hex>-<mtime ns hex>"
 
 - **Only regular files.** A folder, device, FIFO or socket is `400 bad_request`, refused before it is opened; opening never blocks.
 - `http.ServeContent` semantics: `Range` (one range or a suffix like `bytes=-524288`) gives `206`, `If-None-Match` / `If-Modified-Since` give `304`, `HEAD` works. `no-store` keeps viewed files out of the browser's disk cache, so a browser won't revalidate; `ETag` still lets a resumed download check the file didn't change.
-- `Content-Type` comes from the extension (lowercased): `png` `jpg`/`jpeg` `gif` `webp` `avif` `bmp` `ico` `svg` → the image types; `mp4`/`m4v` `webm` `mov` `ogv` → video; `mp3` `m4a` `aac` `wav` `flac` `ogg`/`oga`/`opus` → audio; `pdf` → `application/pdf`; `txt` `log` `md` `csv` → `text/plain; charset=utf-8`; anything else `application/octet-stream`.
+- `Content-Type` comes from the extension (lowercased): `png` `jpg`/`jpeg` `gif` `webp` `avif` `bmp` `ico` `svg` → the image types; `mp4`/`m4v` `webm` `mov` `ogv` → video; `mp3` `m4a` `aac` `wav` `flac` `ogg`/`oga`/`opus` → audio; `pdf` → `application/pdf`; `txt` `log` `md` `markdown` `csv` → `text/plain; charset=utf-8`; anything else `application/octet-stream`.
 - `Content-Disposition` is `inline` only for image types other than SVG, video and audio, and only without `download=1`; everything else is `attachment`. The filename uses RFC 5987 encoding (`filename*=utf-8''…`) when it isn't plain ASCII.
 
 ### Upload into a folder

@@ -17,7 +17,7 @@ import type { ComponentChildren } from 'preact'
 import { useLayoutEffect, useRef } from 'preact/hooks'
 
 import { backStack } from './backstack'
-import { CloseIcon } from './icons'
+import { CloseIcon, MaximizeIcon, RestoreIcon } from './icons'
 import { installSwipeDismiss } from './swipe'
 
 export interface DrawerProps {
@@ -35,6 +35,11 @@ export interface DrawerProps {
   backButton?: boolean
   /** Replaces the title in the header row (the file browser's up button and path); `title` still names the dialog. */
   head?: ComponentChildren
+  /**
+   * Maximize and restore (the file browser on `wide`, ADR-0060 §1): a button left of ✕ and a
+   * double-click on the header toggle it; maximized, the sheet fills the visible area.
+   */
+  max?: { on: boolean; toggle(): void }
   /** A fixed row of buttons at the bottom ("+ New session · ⚙" in the session drawer, "Cancel · OK" in confirm and rename). */
   foot?: ComponentChildren
   /** Which kind of sheet; CSS sizes each one by it (the session drawer has a minimum height, ADR-0037 §5). */
@@ -51,6 +56,7 @@ export function Drawer({
   foot,
   variant,
   head,
+  max,
   children,
 }: DrawerProps) {
   const sheetRef = useRef<HTMLDivElement>(null)
@@ -102,12 +108,13 @@ export function Drawer({
   }, [backButton])
 
   return (
-    <div class="drawer-backdrop" data-testid={backdropTestid} onClick={() => closeRef.current()}>
+    <div class="drawer-backdrop" data-testid={backdropTestid} data-max={max?.on ? 'true' : undefined} onClick={() => closeRef.current()}>
       <div
         class="drawer"
         data-testid={testid}
         data-variant={variant}
         data-foot={foot ? 'true' : undefined}
+        data-max={max?.on ? 'true' : undefined}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -125,8 +132,28 @@ export function Drawer({
         }}
       >
         <div class="drawer-grab" />
-        <div class="drawer-head">
+        <div
+          class="drawer-head"
+          onDblClick={(e) => {
+            // Like a window's title bar; the header's own buttons keep their meaning
+            if (!max || (e.target as Element).closest('button')) return
+            max.toggle()
+          }}
+        >
           {head ?? <h2 class="drawer-title">{title}</h2>}
+          {max && (
+            <button
+              type="button"
+              class="drawer-close drawer-max"
+              data-testid="files-max"
+              aria-label={max.on ? 'Restore' : 'Maximize'}
+              title={max.on ? 'Restore' : 'Maximize'}
+              aria-pressed={max.on ? 'true' : 'false'}
+              onClick={() => max.toggle()}
+            >
+              {max.on ? <RestoreIcon /> : <MaximizeIcon />}
+            </button>
+          )}
           <button class="drawer-close" data-testid="drawer-close" aria-label="Close" onClick={() => closeRef.current()}>
             <CloseIcon size={16} />
           </button>

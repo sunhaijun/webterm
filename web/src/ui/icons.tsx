@@ -184,3 +184,9 @@ export const TerminalIcon = () => <Icon d="M2.75 3.5L6.25 7l-3.5 3.5M7.75 10.75h
 
 /** Up one folder: a chevron pointing left. */
 export const BackIcon = ({ size = 14 }: { size?: number }) => <Icon d="M8.75 2.75L4.5 7l4.25 4.25" size={size} />
+
+/** Maximize (ADR-0060 §1): one rounded square, like a window's maximize button. */
+export const MaximizeIcon = () => <Icon d="M3.5 2.5h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z" />
+
+/** Restore: two overlapping squares, the front one at the bottom left. */
+export const RestoreIcon = () => <Icon d="M3 5h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1zM5 5v-2a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-2" />
