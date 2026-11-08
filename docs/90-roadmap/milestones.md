@@ -30,41 +30,15 @@
 | m13 | `feat/60-sign-out` | Sign out a device from the device itself: `POST /auth/logout` revokes it and clears the cookie; "Sign out this device" in Settings clears the page's storage, service worker and caches | [ADR-0048](../20-architecture/adr/0048-sign-out.md), [auth-pairing.md](../60-security/auth-pairing.md) |
 | m14 | `feat/50-ssh-attach` | `webterm attach` over SSH through `run/attach.sock`, speaking the same protocol; the session size follows the client in use (`session.updated{cols, rows}`, claims only on use) | [ADR-0050](../20-architecture/adr/0050-ssh-attach.md), [install.md](../80-ops/install.md#from-a-terminal-over-ssh) |
 | m15 | `feat/40-uploads` | Send screenshots, photos and other files to a session from any device: `POST /api/uploads` to a private temp directory (deleted after 24 hours), the paperclip, paste and drop; the path is pasted into the session it was sent from | [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md), [http-api.md](../30-protocol/http-api.md#uploads), [input.md](../40-frontend/input.md#sending-files-ac-323) |
+| m16 | `feat/40-attention` | "Waiting for you" replaces the unread dot: the agent sets a per-session `attention` flag when the program signals it's your turn (title spinner → idle, a bell or desktop notification, a command of ≥ 10 s returning to the shell) and clears it on `session.seen` from the client in front of the user; tmux-specific guidance removed | [ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md), [session-ux.md](../40-frontend/session-ux.md#waiting-for-you-ac-43), [websocket-protocol.md](../30-protocol/websocket-protocol.md#sessionseen) |
+| m17 | `feat/40-links-clipboard` | Links and the clipboard on touch: one URL detector for Ctrl/Cmd+click and a tap popover (Open · Copy), checked before mouse tracking; OSC 52 write-only from the current session's live output, so claude's `/copy` reaches a phone | [ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md), [input.md](../40-frontend/input.md#links-ac-519) |
+| m18 | `feat/40-input-menus` | A last key column: frequent input from the program's own history (`GET /api/frequent`) and combo keys for the program in front (`program`: shell / claude / codex / other); m10 replanned around a copy view | [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [input.md](../40-frontend/input.md#frequent-input-and-combo-keys-ac-324) |
+
+Released together as **v0.5.0** (2026-11-08): m14–m18.
 
 ## In progress
 
-### m16 · `feat/40-attention`
-
-"Waiting for you" replaces the unread dot: tell at a glance which claude / codex session finished its turn or wants something.
-
-| Deliverable | Docs |
-|---|---|
-| Agent: per-session `attention`, set in the once-a-second poll by a title going from a spinner to idle, a bell or desktop notification (counted by the emulator), or a command of ≥ 10 s returning to the shell; cleared by `session.seen`; handed over on upgrades | [ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md), [websocket-protocol.md](../30-protocol/websocket-protocol.md#sessionseen), [session-manager.md](../50-backend/session-manager.md#waiting-for-you-ac-43) |
-| Browser: the unread dot becomes the attention dot (same places and color); the page sends `session.seen` for the session in front of the user; `webterm attach` does the same for its session | ADR-0052, [session-ux.md](../40-frontend/session-ux.md#waiting-for-you-ac-43) |
-
-Exit criteria, beyond the usual: IT-attention-1..4, UT-attn-spinner, UT-vterm-signals, IT-handoff-1 with attention, UT-attention-1, E2E-6; codex's notification settings checked on a real run (manual checklist).
-
-### m17 · `feat/40-links-clipboard`
-
-Links you can open and text you can copy on a phone. Stacked on m16.
-
-| Deliverable | Docs |
-|---|---|
-| One URL detector (`term/links.ts`, soft-wrapped rows joined, http / https only) for Ctrl/Cmd+click on desktop and a tap popover (Open · Copy) on touch, checked before mouse tracking | [ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md), [input.md](../40-frontend/input.md#links-ac-519) |
-| OSC 52 write-only, from the current session's live output; "Copied" toast, or a Copy bar where the browser wants a gesture | ADR-0053, [input.md](../40-frontend/input.md#clipboard-from-programs-ac-520), [threat-model.md](../60-security/threat-model.md) |
-
-Exit criteria, beyond the usual: UT-links-1, UT-osc52-1, E2E-49, E2E-50; the "Links and the clipboard" section of the manual checklist on an iPhone and an Android phone.
-
-### m18 · `feat/40-input-menus`
-
-Two keys at the end of the extra keys: frequent input and combo keys, both following the program in front. Stacked on m17.
-
-| Deliverable | Docs |
-|---|---|
-| Agent: `program` (`shell` / `claude` / `codex` / `other`) from `/proc/<pgrp>/exe` and `argv`, sent on change; `GET /api/frequent` reading the program's own history file on request | [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [http-api.md](../30-protocol/http-api.md#frequent-input), [session-manager.md](../50-backend/session-manager.md#which-program-is-in-front-ac-324) |
-| Browser: the last key column (⟲ frequent input, ⌘ combo keys) and their two menus | ADR-0054, [input.md](../40-frontend/input.md#frequent-input-and-combo-keys-ac-324) |
-
-Exit criteria, beyond the usual: UT-program-1, UT-frequent-1, IT-program-1, IT-frequent-1, UT-combos-1, E2E-51; the "Frequent input and combo keys" section of the manual checklist, codex's tiles on a real run.
+Nothing right now. Next candidates are below.
 
 ## Planned
 

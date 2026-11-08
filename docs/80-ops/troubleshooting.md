@@ -183,7 +183,7 @@ What `ssh -t server webterm attach` prints when it can't attach ([install.md](in
 |---|---|---|
 | `attach needs a terminal` | ssh ran the command without a terminal | Add `-t`; in `~/.ssh/config`, `RequestTTY yes`. Only `--list` works without one |
 | `webterm isn't running for this user` | Logged in as a different user than the service's; or the service is down; or the agent uses another data directory | Log in as the user who installed webterm. `webterm` shows whether the service runs. For an agent started with `--data-dir`, pass the same `--data-dir` to attach |
-| `the running agent is too old for attach` | The agent is v0.4.0 or older | `webterm update`; sessions survive. Before a release has it, reinstall with `--channel dev` |
+| `the running agent is too old for attach` | The agent is older than v0.5.0 | `webterm update`; sessions survive |
 | `webterm: command not found` | Installed with `--prefix` outside the `PATH` of ssh's non-login shell | Give the full path: `ssh -t server ~/.local/bin/webterm attach` |
 | `that is the session this command runs in` | Ran attach inside a webterm session and picked that same session | Pick another one; a session can't show itself |
 
