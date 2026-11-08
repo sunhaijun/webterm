@@ -36,22 +36,15 @@
 | m19 | `feat/80-ops-setup` | `webterm setup [--check] [--yes]` checks and adds the settings claude, codex and the shell need (claude's `preferredNotifChannel`, codex's `[tui]` notifications, history as you go) with minimal line inserts and backups; a first install offers it | [ADR-0055](../20-architecture/adr/0055-webterm-setup.md), [install.md](../80-ops/install.md#set-up-claude-and-codex) |
 | m20 | `feat/40-collapse-keys` | The extra keys collapse with a swipe right into a corner button (tap it or swipe left along the bottom to restore; one resize each way); every control acts only when released in place; pages switch with vertical swipes | [ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md), [input.md](../40-frontend/input.md#collapsing-the-extra-keys-ac-326) |
 | m21 | `feat/40-command-strip` | ⌘ becomes a strip of claude's / codex's own commands in your order, with an editor (drag, hide, rename, add, reset, refresh); claude's list from its `init` message, cached by executable and re-probed after upgrades; arrangement in `~/.config/webterm/commands.json`, shared by devices; ⟲ became recent history (removed again in m22) | [ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md), [http-api.md](../30-protocol/http-api.md#commands) |
+| m22 | `feat/40-enter-key` | The last key column becomes ⌘ over ↵ (Enter, for prompts and pickers with the keyboard down); the command strip has two rows, filled column by column; the history list, `GET /api/history` and setup's shell item removed | [ADR-0058](../20-architecture/adr/0058-enter-key-and-two-row-strip.md), [input.md](../40-frontend/input.md#the-last-column-ac-324) |
 
 Released together as **v0.5.0** (2026-11-08): m14–m18.
 
+Released together as **v0.6.0** (2026-11-08): m19–m22.
+
 ## In progress
 
-### m22 · `feat/40-enter-key`
-
-From use of m21: the last column becomes ⌘ over ↵, the strip gets two rows, and the history list goes.
-
-| Deliverable | Docs |
-|---|---|
-| ↵ (`key-Enter`) at the bottom right, always; ⌘ moves to the top right | [ADR-0058](../20-architecture/adr/0058-enter-key-and-two-row-strip.md), [input.md](../40-frontend/input.md#the-last-column-ac-324) |
-| The command strip in two rows, filled column by column | ADR-0058, [input.md](../40-frontend/input.md#commands-ac-325) |
-| The history list, `GET /api/history`, and setup's shell item removed | ADR-0058, [install.md](../80-ops/install.md#set-up-claude-and-codex) |
-
-Exit criteria, beyond the usual: UT-keys-1 (↵), UT-setup and IT-setup-1 updated, E2E-10, E2E-51; the "The last column and the command strip" section of the manual checklist.
+Nothing right now. Next candidates are below.
 
 ## Planned
 
