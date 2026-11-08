@@ -86,12 +86,13 @@ test.describe('Pixel 5', () => {
     expect(r.right, 'full width').toBeGreaterThanOrEqual(v.w)
     await expect(page.getByTestId('session-drawer').locator('.drawer-grab'), 'touch shows a grab handle').toBeVisible()
     await expect(page.getByTestId('session-drawer').getByTestId('drawer-close'), 'title bar has ✕').toBeVisible()
-    // Fixed bottom row: new session and settings, each with a line icon (ADR-0037).
+    // Fixed bottom row: new session, files and settings, each with a line icon (ADR-0037, ADR-0059).
     const foot = page.getByTestId('session-drawer').locator('.drawer-foot')
     await expect(foot.getByTestId('new-session')).toBeVisible()
+    await expect(foot.getByTestId('open-files')).toBeVisible()
     await expect(foot.getByTestId('open-settings')).toBeVisible()
-    await expect(foot.locator('button')).toHaveCount(2)
-    await expect(foot.locator('button svg')).toHaveCount(2)
+    await expect(foot.locator('button')).toHaveCount(3)
+    await expect(foot.locator('button svg')).toHaveCount(3)
     expect(await activeInDrawer(page), 'focus moves into the sheet on open').toBe(true)
 
     expect(await termGeo(page), 'opening the drawer keeps terminal geometry and sends no resize').toEqual(before)
@@ -303,13 +304,17 @@ test.describe('Pixel 5', () => {
     const foot = (await rectOf(page, '[data-testid=session-drawer] .drawer-foot'))!
     expect(Math.abs(foot.bottom - d.bottom), 'bottom row sits at the bottom of the sheet').toBeLessThanOrEqual(1)
     const n = (await rectOf(page, '[data-testid=session-drawer] [data-testid=new-session]'))!
+    const f = (await rectOf(page, '[data-testid=session-drawer] [data-testid=open-files]'))!
     const s = (await rectOf(page, '[data-testid=session-drawer] [data-testid=open-settings]'))!
     expect(d.bottom - n.bottom, 'padding between buttons and the sheet bottom').toBeGreaterThanOrEqual(16 - 0.5)
     expect(Math.abs(n.left - d.left - 16), '16px on the left').toBeLessThanOrEqual(1)
     expect(Math.abs(d.right - s.right - 16), '16px on the right').toBeLessThanOrEqual(1)
-    expect(Math.abs(s.left - n.right - 12), '12px between buttons').toBeLessThanOrEqual(1)
+    expect(Math.abs(f.left - n.right - 12), '12px between buttons').toBeLessThanOrEqual(1)
+    expect(Math.abs(s.left - f.right - 12), '12px between buttons').toBeLessThanOrEqual(1)
     expect(Math.round(n.bottom - n.top)).toBe(48)
+    expect(Math.round(f.bottom - f.top)).toBe(48)
     expect(Math.round(s.bottom - s.top)).toBe(48)
+    expect(Math.round(f.right - f.left), 'files button is square').toBe(48)
     expect(Math.round(s.right - s.left), 'settings button is square').toBe(48)
   })
 

@@ -47,6 +47,8 @@ import {
 import type { KeyMenu } from '../keys/extrakeys'
 import type { Program } from '../protocol/messages'
 import type { ClipOffer, LinkPop } from './linkpop'
+import type { UploadProgress } from '../files/browser'
+import { escapePath, failureText, startDir, uploadTo, type Visit } from '../files/fs'
 import { dragHasFiles, pastedFiles, sessionGoneError, uploadError, uploadFile, type Upload } from './uploads'
 
 export interface Toast {
@@ -121,6 +123,19 @@ export interface AppState {
   itemForm: string | null
   /** The extra keys are collapsed into the corner button (ADR-0056), kept per device. */
   keysCollapsed: boolean
+  /** The file browser is open (ADR-0059): for which session, starting where. */
+  files: FilesOpen | null
+  /** File browser uploads in flight (AC-9.8). */
+  filesUpload: UploadProgress | null
+  /** Bumped when a file browser upload into `dir` finished. */
+  filesChanged: { dir: string; seq: number } | null
+}
+
+export interface FilesOpen {
+  /** The session it was opened from: Send to session pastes there. */
+  sid: number | null
+  /** The folder it opens in. */
+  start: string
 }
 
 const TOAST_MS = 3000
@@ -201,6 +216,20 @@ export class AppController {
   private uploadsLeft = 0
   private dropTimer: ReturnType<typeof setTimeout> | undefined
 
+  // ---------- The file browser (ADR-0059) ----------
+  /** Per session: its cwd and the folder shown when the browser last closed (AC-9.2). */
+  private readonly filesVisits = new Map<number, Visit>()
+  /** The folder the open browser shows: drops go there. */
+  private filesDir: string | null = null
+  /** The session's terminal when the browser opened: sids are reused, terminals aren't. */
+  private filesTerm: TermHandle | undefined
+  private filesRefocus = false
+  /** File browser uploads run one at a time, in order. */
+  private filesChain: Promise<void> = Promise.resolve()
+  private filesTotal = 0
+  private filesDone = 0
+  private filesSeq = 0
+
   constructor(
     opts: {
       url?: string
@@ -248,6 +277,9 @@ export class AppController {
       strip: null,
       editorOpen: false,
       itemForm: null,
+      files: null,
+      filesUpload: null,
+      filesChanged: null,
       keysCollapsed: readKeysCollapsed(),
     }
     this.conn = new Connection({
@@ -765,7 +797,10 @@ export class AppController {
       if (!dragHasFiles(e.dataTransfer)) return
       e.preventDefault()
       this.hideDrop()
-      this.sendFiles(Array.from(e.dataTransfer?.files ?? []))
+      const files = Array.from(e.dataTransfer?.files ?? [])
+      // The file browser is open: files go into the folder it shows, not to the session (ADR-0059 §5)
+      if (this.state.files && this.filesDir !== null) this.uploadToDir(this.filesDir, files)
+      else this.sendFiles(files)
     }
     window.addEventListener('paste', onPaste, true)
     window.addEventListener('dragenter', onDragOver)
@@ -882,7 +917,8 @@ export class AppController {
     if (next !== null && next !== this.store.active) this.select(next)
   }
 
-  newSession(focus?: boolean): void {
+  /** `cwd`: where the new session starts; by default the active session's cwd. */
+  newSession(focus?: boolean, cwd?: string): void {
     if (this.state.sessions.length >= this.state.maxSessions) {
       this.toast('warn', `Session limit reached (${this.state.maxSessions})`)
       return
@@ -901,7 +937,7 @@ export class AppController {
       req_id: reqID,
       name: null,
       // Inherit the active session's cwd: usually you want another shell in the same project
-      cwd: cur?.cwd || null,
+      cwd: cwd ?? (cur?.cwd || null),
       cols: t?.cols ?? 80,
       rows: t?.rows ?? 24,
     })
@@ -1216,6 +1252,112 @@ export class AppController {
       this.keyBypass = false
     }
     return true
+  }
+
+  // ---------- The file browser (ADR-0059) ----------
+
+  /**
+   * Opens the file browser for the current session: back in the folder it showed last if
+   * the session's cwd hasn't changed since, otherwise in its cwd (AC-9.2). From the session
+   * drawer it closes the drawer, as settings does.
+   */
+  openFiles(): void {
+    if (this.state.files) return
+    this.filesRefocus = this.refocus(this.state.sessionsOpen ? this.drawerTyping : this.typing())
+    const sid = this.store.active
+    const cwd = sid === null ? undefined : this.store.info(sid)?.cwd
+    const start = startDir(sid === null ? undefined : this.filesVisits.get(sid), cwd, this.state.home)
+    this.filesTerm = sid === null ? undefined : this.store.termOf(sid)
+    this.filesDir = start
+    this.set({ files: { sid, start }, sessionsOpen: false, settingsOpen: false })
+  }
+
+  /** The folder the browser shows changed. */
+  setFilesDir(dir: string): void {
+    this.filesDir = dir
+  }
+
+  /** The list closed (✕, backdrop, Back, swipe): remember where it was, return focus as after settings. */
+  closeFiles(dir: string): void {
+    const open = this.state.files
+    if (!open) return
+    this.endFiles(open, dir)
+    if (this.filesRefocus) this.focusInput()
+  }
+
+  private endFiles(open: FilesOpen, dir: string): void {
+    if (open.sid !== null && this.store.has(open.sid)) {
+      const at = startDir(undefined, this.store.info(open.sid)?.cwd, this.state.home)
+      this.filesVisits.set(open.sid, { cwd: at, dir })
+    }
+    this.filesDir = null
+    this.set({ files: null })
+  }
+
+  /**
+   * Send to session (AC-9.7): pastes the backslash-escaped path into the session the browser
+   * was opened from, like a sent file's path (ADR-0051 §3), then closes the browser.
+   * Focus goes back as after settings.
+   */
+  sendFromFiles(path: string): void {
+    const open = this.state.files
+    if (!open) return
+    // A control character in the path is never pasted (ADR-0059 §4); the button is disabled for it too
+    const text = escapePath(path)
+    if (text === null) return
+    const sid = open.sid
+    const term = this.filesTerm
+    this.endFiles(open, this.filesDir ?? open.start)
+    if (this.filesRefocus) this.focusInput()
+    if (sid === null || !term || !this.pastePath(sid, term, text)) this.toast('warn', 'Session ended; path not inserted')
+  }
+
+  /** New session here (AC-9.10): a session in `dir`, focused like New session from the drawer. */
+  newSessionIn(dir: string): void {
+    const open = this.state.files
+    if (!open) return
+    this.endFiles(open, dir)
+    this.newSession(this.filesRefocus, dir)
+  }
+
+  /**
+   * Uploads files into a folder, one at a time and in order, behind earlier ones (AC-9.8).
+   * They go on after the browser closes; when one lands, a list showing that folder reloads.
+   */
+  uploadToDir(dir: string, files: File[]): void {
+    if (files.length === 0) return
+    this.filesTotal += files.length
+    this.set({ filesUpload: { done: this.filesDone, total: this.filesTotal, fraction: 0 } })
+    for (const file of files) {
+      this.filesChain = this.filesChain.then(async () => {
+        const r = await uploadTo(dir, file, (fraction) => this.set({ filesUpload: { done: this.filesDone, total: this.filesTotal, fraction } }))
+        this.filesDone++
+        if (r.ok) {
+          if (r.name !== file.name) this.toast('info', `Saved as ${r.name}`)
+          this.set({ filesChanged: { dir, seq: ++this.filesSeq } })
+        } else if (r.status === 401) {
+          this.revoke()
+        } else {
+          this.toast('error', failureText(r, `Upload ${file.name}`))
+        }
+        if (this.filesDone === this.filesTotal) {
+          this.filesDone = this.filesTotal = 0
+          this.set({ filesUpload: null })
+        } else {
+          this.set({ filesUpload: { done: this.filesDone, total: this.filesTotal, fraction: 0 } })
+        }
+      })
+    }
+  }
+
+  /** A toast from the file browser. */
+  notify(kind: Toast['kind'], text: string): void {
+    this.toast(kind, text)
+  }
+
+  /** A file browser request got 401: the device was revoked. */
+  unauthorized(): void {
+    this.revoke()
   }
 
   private showDrop(): void {
@@ -1549,6 +1691,8 @@ export class AppController {
       attention: (sid: number) => this.store.info(sid)?.attention === true,
       /** What runs in front of the current session, per the agent (ADR-0054). */
       program: () => this.program(),
+      /** The current session's working directory, per the agent (the file browser opens there, ADR-0059). */
+      cwd: () => (this.store.active === null ? null : (this.store.info(this.store.active)?.cwd ?? null)),
       /** Recently received binary frames `{type, kind, sid, seq, flags, bytes, replay}`. */
       frames: () => this.conn.frames(),
       scrollLines: (n: number) => term()?.scrollLines(n),

@@ -426,6 +426,7 @@ interface WebtermWindow {
     altScreen(): boolean
     attention(sid: number): boolean
     program(): string
+    cwd(): string | null
     frames(): FrameRec[]
     scrollLines(n: number): void
     viewport(): { y: number; top: string }
@@ -445,6 +446,7 @@ export const hooks = {
   altScreen: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.altScreen()),
   attention: (p: Page, sid: number) => p.evaluate((s) => (window as unknown as WebtermWindow).__webterm.attention(s), sid),
   program: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.program()),
+  cwd: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.cwd()),
   frames: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.frames()),
   scrollLines: (p: Page, n: number) => p.evaluate((k) => (window as unknown as WebtermWindow).__webterm.scrollLines(k), n),
   viewport: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.viewport()),
