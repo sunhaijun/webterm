@@ -29,7 +29,21 @@ import {
 } from '../ui/prefs'
 import { debounce, installAppFit, isCoarsePointer, watchCoarse } from '../ui/viewport'
 import { readForm, type Form } from './form'
-import { COMBO_GAP_MS, combosFor, type Combo } from '../keys/combos'
+import {
+  KEY_GAP_MS,
+  addItem,
+  editItem,
+  hasStrip,
+  moveItem,
+  newItemId,
+  parseStrip,
+  removeItem,
+  setHidden,
+  type Arrangement,
+  type ItemForm,
+  type Strip,
+  type StripProgram,
+} from '../keys/commands'
 import type { KeyMenu } from '../keys/extrakeys'
 import type { Program } from '../protocol/messages'
 import type { ClipOffer, LinkPop } from './linkpop'
@@ -97,10 +111,16 @@ export interface AppState {
   linkPop: LinkPop | null
   /** OSC 52 text the browser wouldn't copy without a tap: the Copy bar (ADR-0053 §4). */
   clip: ClipOffer | null
-  /** The open menu of the last key column (ADR-0054 §4). */
+  /** The open popover of the last key column (ADR-0057). */
   keyMenu: KeyMenu | null
-  /** Frequent input for the program in front; null while the first list loads. */
-  frequent: string[] | null
+  /** History of the program in front; null while the first list loads. */
+  history: string[] | null
+  /** The command strip of the tool in front; null while it loads. */
+  strip: Strip | null
+  /** The command editor is open (ADR-0057 §3). */
+  editorOpen: boolean
+  /** The editor's form: the id of the item being edited, '' when adding one, null when closed. */
+  itemForm: string | null
   /** The extra keys are collapsed into the corner button (ADR-0056), kept per device. */
   keysCollapsed: boolean
 }
@@ -227,7 +247,10 @@ export class AppController {
       linkPop: null,
       clip: null,
       keyMenu: null,
-      frequent: null,
+      history: null,
+      strip: null,
+      editorOpen: false,
+      itemForm: null,
       keysCollapsed: readKeysCollapsed(),
     }
     this.conn = new Connection({
@@ -287,6 +310,7 @@ export class AppController {
     // The session behind an open close-confirm is gone (closed elsewhere, agent restart): close it too, sids are reused (ADR-0038 §4)
     const closing = this.state.closing !== null && this.store.has(this.state.closing) ? this.state.closing : null
     this.set({ sessions: this.store.list(), active: this.store.active, page: this.pages.page(this.store.active), closing })
+    this.checkStripOwner()
   }
 
   // ---------- collapsing the extra keys (ADR-0056) ----------
@@ -316,10 +340,21 @@ export class AppController {
     if (this.state.keysCollapsed) previewBar(this.textPage?.slot ?? null, true, dx)
   }
 
-  // ---------- frequent input and combo keys (ADR-0054) ----------
+  // ---------- history and the command strip (ADR-0057) ----------
 
-  /** The last list per program, in memory only, shown while a fresh one loads. */
-  private readonly frequentCache = new Map<Program, string[]>()
+  /** The last history per program, in memory only, shown while a fresh one loads. */
+  private readonly historyCache = new Map<Program, string[]>()
+  /** The last strip per tool, likewise. */
+  private readonly stripCache = new Map<StripProgram, Strip>()
+  /** The tool whose strip or editor is open; they close if another program takes over. */
+  private stripOwner: StripProgram | null = null
+  /** Bumped by every strip load and every change; a reply to an older load is dropped. */
+  private stripSeq = 0
+  /** Saves go out one after another, so the agent stores the last one. */
+  private saveChain: Promise<void> = Promise.resolve()
+  private savesPending = 0
+  /** Reload the merged list once the saves in flight are done (edits, adds, failures). */
+  private reloadAfterSave = false
 
   /** What runs in front of the current session, as the agent last said. */
   program(): Program {
@@ -327,24 +362,30 @@ export class AppController {
     return (sid === null ? undefined : this.store.info(sid)?.program) ?? 'shell'
   }
 
-  combos(): Combo[] {
-    return combosFor(this.program())
+  /** ⌘ is there only while claude or codex is in front (ADR-0057 §2). */
+  hasCommands(): boolean {
+    return hasStrip(this.program())
   }
 
-  /** A key of the last column: open its menu, or close it if it's the one open. */
+  /** A key of the last column: open its popover, or close it if it's the one open. */
   openMenu(menu: KeyMenu): void {
     if (this.state.keyMenu === menu) return this.closeMenu()
-    this.set({ keyMenu: menu })
-    if (menu !== 'frequent') return
     const program = this.program()
-    this.set({ frequent: this.frequentCache.get(program) ?? null })
-    fetch(`/api/frequent?program=${encodeURIComponent(program)}`, { credentials: 'same-origin' })
+    if (menu === 'commands') {
+      if (!hasStrip(program)) return
+      this.stripOwner = program
+      this.set({ keyMenu: menu, strip: this.stripCache.get(program) ?? null })
+      void this.loadStrip()
+      return
+    }
+    this.set({ keyMenu: menu, history: this.historyCache.get(program) ?? null })
+    fetch(`/api/history?program=${encodeURIComponent(program)}`, { credentials: 'same-origin' })
       .then((r) => (r.ok ? (r.json() as Promise<{ items?: unknown }>) : { items: [] }))
       .catch(() => ({ items: [] }))
       .then((b) => {
         const items = Array.isArray(b.items) ? b.items.filter((x): x is string => typeof x === 'string') : []
-        this.frequentCache.set(program, items)
-        if (this.state.keyMenu === 'frequent' && this.program() === program) this.set({ frequent: items })
+        this.historyCache.set(program, items)
+        if (this.state.keyMenu === 'history' && this.program() === program) this.set({ history: items })
       })
   }
 
@@ -352,19 +393,24 @@ export class AppController {
     if (this.state.keyMenu) this.set({ keyMenu: null })
   }
 
-  /** A frequent-input row: send it and Enter, the way the text page sends (ADR-0027). */
-  sendFrequent(i: number): void {
-    const text = this.state.frequent?.[i]
+  /** A history row: send it and Enter, the way the text page sends (ADR-0027). */
+  sendHistory(i: number): void {
+    const text = this.state.history?.[i]
     this.closeMenu()
     if (text !== undefined) this.sendText({ kind: 'submit', text })
   }
 
-  /** A row's ✎: paste it without Enter. */
-  insertFrequent(i: number): void {
-    const text = this.state.frequent?.[i]
+  /** A history row's ✎: paste it without Enter. */
+  insertHistory(i: number): void {
+    const text = this.state.history?.[i]
     this.closeMenu()
+    if (text !== undefined) this.insertText(text)
+  }
+
+  /** Pastes into the current session past sticky modifiers, without Enter. */
+  private insertText(text: string): void {
     const t = this.activeTerm()
-    if (text === undefined || !t) return
+    if (!t) return
     this.keyBypass = true
     try {
       t.term.paste(text)
@@ -373,13 +419,40 @@ export class AppController {
     }
   }
 
-  /** A combo tile: its writes on the extra keys' path, past sticky modifiers; Esc Esc spaced out. */
-  pickCombo(id: string): void {
-    const combo = this.combos().find((c) => c.id === id)
+  /** Asks the agent for the strip of the tool in front of the current session. */
+  private async loadStrip(refresh = false): Promise<void> {
+    const sid = this.store.active
+    if (sid === null || !hasStrip(this.program())) return
+    const seq = ++this.stripSeq
+    let strip: Strip | null = null
+    try {
+      const r = await fetch(`/api/commands?sid=${sid}${refresh ? '&refresh=1' : ''}`, { credentials: 'same-origin' })
+      if (r.ok) strip = parseStrip(await r.json())
+    } catch {
+      // Offline: keep what's shown
+    }
+    if (seq !== this.stripSeq || this.store.active !== sid) return
+    if (!strip) {
+      if (this.state.keyMenu === 'commands' || this.state.editorOpen) this.toast('error', "Couldn't load commands")
+      return
+    }
+    this.stripCache.set(strip.program, strip)
+    if (strip.program === this.stripOwner) this.set({ strip })
+  }
+
+  /** A chip: keys on the extra keys' path past sticky modifiers, text with or without Enter. */
+  runCommand(id: string): void {
+    const item = this.state.strip?.items.find((x) => x.id === id)
     this.closeMenu()
     const sid = this.store.active
-    if (!combo || sid === null) return
-    combo.send.forEach((bytes, i) => {
+    if (!item || sid === null) return
+    if (item.kind === 'text') {
+      const text = item.send[0] ?? ''
+      if (item.enter) this.sendText({ kind: 'submit', text })
+      else this.insertText(text)
+      return
+    }
+    item.send.forEach((bytes, i) => {
       const write = () => {
         if (this.store.active !== sid) return // switched away meanwhile
         const t = this.activeTerm()
@@ -392,8 +465,131 @@ export class AppController {
         }
       }
       if (i === 0) write()
-      else setTimeout(write, i * COMBO_GAP_MS)
+      else setTimeout(write, i * KEY_GAP_MS)
     })
+  }
+
+  /** The strip's ✎. */
+  openEditor(): void {
+    if (!this.stripOwner) return
+    this.set({ keyMenu: null, editorOpen: true })
+    if (!this.state.strip) void this.loadStrip()
+  }
+
+  readonly closeEditor = (): void => {
+    if (this.state.editorOpen || this.state.itemForm !== null) this.set({ editorOpen: false, itemForm: null })
+  }
+
+  /**
+   * Sends a change to the agent. `shown` is what to show meanwhile; without it the merged
+   * list is fetched again once the saves in flight are done.
+   */
+  private persist(send: (program: StripProgram) => Promise<Response>, shown: Strip | null): void {
+    const program = this.stripOwner
+    if (!program) return
+    this.stripSeq++ // a load already in flight would bring back the list from before this change
+    if (shown) {
+      this.stripCache.set(program, shown)
+      this.set({ strip: shown })
+    } else {
+      this.reloadAfterSave = true
+    }
+    this.savesPending++
+    this.saveChain = this.saveChain
+      .then(() => send(program).then((r) => r.ok, () => false))
+      .then((ok) => {
+        if (!ok) {
+          this.toast('error', "Couldn't save")
+          this.reloadAfterSave = true
+        }
+        if (--this.savesPending === 0 && this.reloadAfterSave) {
+          this.reloadAfterSave = false
+          void this.loadStrip()
+        }
+      })
+  }
+
+  private saveArrangement(a: Arrangement, shown: Strip | null): void {
+    const strip = this.state.strip
+    if (!strip) return
+    // Later changes build on this one even before the agent answers
+    this.set({ strip: shown ?? { ...strip, arrangement: a } })
+    this.persist(
+      (program) =>
+        fetch(`/api/commands?program=${program}`, {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(a),
+        }),
+      shown,
+    )
+  }
+
+  /** ≡ dropped: the item at `from` now sits at `to`. */
+  moveCommand(from: number, to: number): void {
+    const strip = this.state.strip
+    if (!strip || from === to) return
+    const next = moveItem(strip, from, to)
+    this.saveArrangement(next.arrangement, next)
+  }
+
+  /** 👁 */
+  toggleCommand(id: string): void {
+    const strip = this.state.strip
+    const item = strip?.items.find((x) => x.id === id)
+    if (!strip || !item) return
+    const next = setHidden(strip, id, !item.hidden)
+    this.saveArrangement(next.arrangement, next)
+  }
+
+  /** A tap on an editor row (its id), or + Add (''). */
+  openItemForm(id: string): void {
+    this.set({ itemForm: id })
+  }
+
+  readonly closeItemForm = (): void => {
+    if (this.state.itemForm !== null) this.set({ itemForm: null })
+  }
+
+  saveItemForm(f: ItemForm): void {
+    const strip = this.state.strip
+    const id = this.state.itemForm
+    if (!strip || id === null) return
+    this.set({ itemForm: null })
+    if (id === '') {
+      if (f.send !== '') this.saveArrangement(addItem(strip, f, newItemId()), null)
+      return
+    }
+    const item = strip.items.find((x) => x.id === id)
+    if (item) this.saveArrangement(editItem(strip, item, f), null)
+  }
+
+  /** Delete, for an item you added. */
+  deleteItem(): void {
+    const strip = this.state.strip
+    const id = this.state.itemForm
+    if (!strip || !id) return
+    this.set({ itemForm: null })
+    const a = removeItem(strip, id)
+    this.saveArrangement(a, { ...strip, items: strip.items.filter((x) => x.id !== id), arrangement: a })
+  }
+
+  /** Reset: back to the defaults. */
+  resetCommands(): void {
+    this.persist((program) => fetch(`/api/commands?program=${program}`, { method: 'DELETE', credentials: 'same-origin' }), null)
+  }
+
+  /** Refresh: ask claude again now. */
+  refreshCommands(): void {
+    void this.loadStrip(true)
+  }
+
+  /** claude or codex left (or the other took over): its strip and editor go too. */
+  private checkStripOwner(): void {
+    if (this.stripOwner === null || this.program() === this.stripOwner) return
+    this.stripOwner = null
+    this.set({ keyMenu: this.state.keyMenu === 'commands' ? null : this.state.keyMenu, editorOpen: false, itemForm: null, strip: null })
   }
 
   // ---------- links and the clipboard (ADR-0053) ----------

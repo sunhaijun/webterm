@@ -146,11 +146,20 @@ function round(n: number): number {
   return Math.round(n * 100) / 100
 }
 
-/** Frequent input (ADR-0054): a clock face whose rim turns back into an arrow. */
+/** History (ADR-0057): a clock face whose rim turns back into an arrow. */
 export const HistoryIcon = () => <Icon d="M2.2 4.6A5.25 5.25 0 1 1 1.75 7M1.75 2.25v2.6h2.6M7 4.25V7l1.9 1.25" />
 
-/** Combo keys (ADR-0054): two key caps, one behind the other. */
-export const CombosIcon = () => <Icon d="M2.75 1.75h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1zM8.25 5.75h3a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-3" />
+/** Commands (ADR-0057): two key caps, one behind the other. */
+export const CommandsIcon = () => <Icon d="M2.75 1.75h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1zM8.25 5.75h3a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-3" />
+
+/** Small pencil (the command strip's edit button, ADR-0057 §2). */
+export const PencilIcon = () => <Icon d="M2 12l.6-2.9 6.9-6.9a1.3 1.3 0 0 1 1.8 0l.5.5a1.3 1.3 0 0 1 0 1.8l-6.9 6.9z" />
+
+/** Shown (the command editor's 👁, ADR-0057 §3): an eye. */
+export const EyeIcon = () => <Icon d="M1.25 7C2.75 4.25 4.75 2.9 7 2.9s4.25 1.35 5.75 4.1C11.25 9.75 9.25 11.1 7 11.1S2.75 9.75 1.25 7zM7 5.4a1.6 1.6 0 1 0 0 3.2a1.6 1.6 0 1 0 0-3.2z" />
+
+/** Hidden: the eye, struck through. */
+export const EyeOffIcon = () => <Icon d="M1.25 7C2.75 4.25 4.75 2.9 7 2.9s4.25 1.35 5.75 4.1C11.25 9.75 9.25 11.1 7 11.1S2.75 9.75 1.25 7zM2.25 1.75l9.5 10.5" />
 
 /** Show the extra keys (ADR-0056): a keyboard, a rounded body with two rows of keys and a space bar. */
 export const KeyboardIcon = () => (

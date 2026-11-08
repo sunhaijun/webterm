@@ -21,7 +21,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { Form } from '../app/form'
-import { CombosIcon, EditIcon, HistoryIcon, PaperclipLargeIcon } from '../ui/icons'
+import { CommandsIcon, EditIcon, HistoryIcon, PaperclipLargeIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { TAP_PX, keyGesture, previewBar } from './collapse'
@@ -46,10 +46,12 @@ export interface ExtraKeysProps {
   onCollapse(): void
   /** A non-modifier key was pressed (called from the pointerup dispatch). */
   onKey(id: ExtraKeyId): void
-  /** The last column: open the frequent-input or the combo-key menu (ADR-0054). */
+  /** The last column: open the history list or the command strip (ADR-0057). */
   onMenu(menu: KeyMenu): void
-  /** Which of the two menus is open, if any. */
+  /** Which of the two is open, if any. */
   menu: KeyMenu | null
+  /** claude or codex is in front: ⌘ is there (otherwise its cell stays empty, ADR-0057 §2). */
+  commands: boolean
   /** Enter on the text page (called from the keydown dispatch). */
   /** Returns false when the text wasn't sent (too large); the box keeps it. */
   onSend(send: TextSend): boolean
@@ -62,11 +64,11 @@ export interface ExtraKeysProps {
 
 const noFocus = (e: Event) => e.preventDefault()
 
-/** The two keys at the end of the rows (ADR-0054 §1). */
-export type KeyMenu = 'frequent' | 'combos'
+/** The two keys at the end of the rows (ADR-0054 §1, ADR-0057). */
+export type KeyMenu = 'history' | 'commands'
 const MENU_KEYS: { menu: KeyMenu; label: string; icon: () => preact.JSX.Element }[] = [
-  { menu: 'frequent', label: 'Frequent input', icon: HistoryIcon },
-  { menu: 'combos', label: 'Combo keys', icon: CombosIcon },
+  { menu: 'history', label: 'History', icon: HistoryIcon },
+  { menu: 'commands', label: 'Commands', icon: CommandsIcon },
 ]
 
 export function ExtraKeys(p: ExtraKeysProps) {
@@ -293,8 +295,11 @@ export function ExtraKeys(p: ExtraKeysProps) {
                 </button>
               )
             }),
-            // The last column (ADR-0054 §1): fixed in place; only their menus follow the program
-            ...MENU_KEYS.slice(r, r + 1).map(({ menu, label, icon: MenuIcon }) => (
+            // The last column (ADR-0054 §1): fixed in place; ⌘ only for claude and codex, its cell kept empty otherwise
+            ...MENU_KEYS.slice(r, r + 1).map(({ menu, label, icon: MenuIcon }) =>
+              menu === 'commands' && !p.commands ? (
+                <span key={menu} class="ek-blank" data-testid="commands-blank" aria-hidden="true" />
+              ) : (
               <button
                 type="button"
                 key={menu}
@@ -308,7 +313,8 @@ export function ExtraKeys(p: ExtraKeysProps) {
               >
                 <MenuIcon />
               </button>
-            )),
+              ),
+            ),
           ])}
         </div>
         <div class="ek-textrow">

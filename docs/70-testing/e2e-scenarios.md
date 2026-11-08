@@ -707,8 +707,8 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 
 1. **Shell**: `key-commands` is absent and its cell empty; `key-history` lists `.bash_history` newest first, each entry once; tapping `history-0` sends a bracketed paste of it then a separate `\r` frame; `history-insert-0` sends the paste only
 2. **claude in front**: run the fake `claude` → within 2 s `key-commands` appears; tapping it shows `command-strip` with `command-key:shift-tab` before `command-/compact`, and `command-/copy`, `command-/resume`, `command-/hello` present, `command-/__internal` absent, `command-/deep-research` absent (a hidden skill); tapping `command-/compact` sends a paste of `/compact` then `\r`; tapping `command-key:shift-tab` sends `1b5b5a`
-3. **Editor**: `command-edit` opens `command-editor` listing every item including `/deep-research` (hidden); drag `/compact` above `⇧Tab` → the strip starts with `/compact`; hide `⇧Tab` → it leaves the strip; rename `/compact` to `压缩` → the chip reads `压缩`; add `继续` → it is the strip's last chip and sends `继续` then `\r`
-4. **Shared and resettable**: reload the page → the strip keeps that arrangement (it came from the agent); `command-reset` → the defaults are back
+3. **Editor**: `command-edit` opens `command-editor` listing every item including `/deep-research` (hidden); drag `/compact` by its ≡ above `/clear` → the strip has `/compact` before `/clear`; hide `⇧Tab` → it leaves the strip; rename `/compact` to `压缩` → the chip reads `压缩`; add `继续` → it is the strip's last chip and sends `继续` then `\r`
+4. **Shared and resettable**: reload the page → the strip keeps that arrangement (it came from the agent); `command-reset` once → nothing changes yet; again → the defaults are back
 5. **History in claude**: `key-history` lists claude's entries newest first; the two-line entry shows its first line and `2 lines`; the placeholder entry is absent; tapping the two-line row sends both lines in one bracketed paste
 6. **Closing**: open the strip, press `Esc` → closed, and no `1b` frame was sent; open it, `Ctrl+Shift+↓` → closed
 

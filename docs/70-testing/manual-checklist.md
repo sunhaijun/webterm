@@ -100,7 +100,7 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] On a fresh server with claude and codex installed, a first install asks the setup question; Enter adds the settings, and `webterm setup --check` then reports all ok
 - [ ] `webterm setup` with nothing missing says so and changes no file (timestamps unchanged)
 - [ ] After setup, claude in a background session asking for permission lights the waiting-for-you dot; codex finishing a turn does too
-- [ ] A new shell started after setup: a command run in it shows in the frequent-input menu without exiting the shell
+- [ ] A new shell started after setup: a command run in it shows at the top of the history list without exiting the shell
 
 ## SSH attach (every time attach or the size rules change, since m14)
 

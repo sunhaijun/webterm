@@ -13,7 +13,7 @@ import { Agent, EMIT, focusTerm, hooks, recordSent, rectOf, submit, waitFor, wai
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 test.use(PIXEL)
 
-/** DOM order: each row's seven keys, then that row's key of the last column (ADR-0054). */
+/** DOM order: each row's seven keys, then that row's key of the last column; at a shell prompt ⌘ is absent (ADR-0057). */
 const KEY_IDS = [
   'Escape',
   'Slash',
@@ -22,7 +22,7 @@ const KEY_IDS = [
   'ArrowUp',
   'End',
   'PageUp',
-  'frequent',
+  'history',
   'Tab',
   'Ctrl',
   'Alt',
@@ -30,7 +30,6 @@ const KEY_IDS = [
   'ArrowDown',
   'ArrowRight',
   'PageDown',
-  'combos',
 ]
 
 let agent: Agent
@@ -43,7 +42,7 @@ test.afterEach(() => agent.stop())
 const keyOrder = (p: Page) =>
   p.evaluate(() => [...document.querySelectorAll('[data-testid=extrakeys] .ek-key')].map((e) => (e as HTMLElement).dataset.testid))
 
-/** allKeysVisible asserts all 16 keys (14 plus the last column's two) are inside the viewport and the key area does not scroll horizontally. */
+/** allKeysVisible asserts all 15 keys (14 plus ⟲; ⌘ is absent at a shell prompt) are inside the viewport and the key area does not scroll horizontally. */
 async function allKeysVisible(page: Page) {
   const g = await page.evaluate(() => {
     const keys = document.querySelector('.ek-keys') as HTMLElement
@@ -60,7 +59,7 @@ async function allKeysVisible(page: Page) {
     return { scrollW: keys.scrollWidth, clientW: keys.clientWidth, out }
   })
   expect(g.scrollW, 'key area does not scroll horizontally').toBeLessThanOrEqual(g.clientW + 1)
-  expect(g.out.length).toBe(16)
+  expect(g.out.length).toBe(15)
   for (const k of g.out) expect(k.ok, `${k.id} should lie entirely within the viewport (${k.r})`).toBe(true)
 }
 
@@ -88,7 +87,7 @@ async function touch(page: Page, points: { x: number; y: number }[], holdMs = 0)
   await cdp.detach()
 }
 
-test('E2E-10 (1)(2) structure: compact, no tab bar, 80px extra keys below the terminal, all 16 keys visible without horizontal scrolling', async ({ page }) => {
+test('E2E-10 (1)(2) structure: compact, no tab bar, 80px extra keys below the terminal, all 15 keys visible without horizontal scrolling', async ({ page }) => {
   await agent.open(page)
 
   await expect(page.locator('.app')).toHaveAttribute('data-form', 'compact')
@@ -293,7 +292,7 @@ test('E2E-10 (9) safe area: --sa-top / --sa-bottom apply to .app, the terminal s
   expect((await geo()).termH, 'with --sa-bottom cleared only the 47px top inset remains').toBe(base.termH - 47)
 })
 
-test('E2E-10 (10) landscape (viewport and screen both 851×393): still compact, 80px extra keys, all 16 keys visible', async ({ browser }) => {
+test('E2E-10 (10) landscape (viewport and screen both 851×393): still compact, 80px extra keys, all 15 keys visible', async ({ browser }) => {
   const ctx = await browser.newContext({ ...PIXEL, viewport: { width: 851, height: 393 }, screen: { width: 851, height: 393 } })
   const page = await ctx.newPage()
   await agent.open(page)

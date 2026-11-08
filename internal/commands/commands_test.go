@@ -44,11 +44,18 @@ const initLine = `{"type":"system","subtype":"init","claude_code_version":"9.9.9
 
 // fakeClaude writes a script that prints an init line when run with -p (and
 // records its arguments), else sleeps. It stands in for claude's executable.
-func fakeClaude(t *testing.T, dir, line string) string {
+// uiLine is what claude 2.1.319 prints before its init message.
+const uiLine = `{"type":"system","subtype":"ui_invalidate","event":"ui.render"}`
+
+func fakeClaude(t *testing.T, dir string, lines ...string) string {
 	t.Helper()
 	path := filepath.Join(dir, "claude")
 	log := filepath.Join(dir, "args.log")
-	write(t, path, "#!/bin/bash\nprintf '%s\\n' \"$*\" >> "+log+"\necho '"+line+"'\nsleep 30\n", 0o755)
+	script := "#!/bin/bash\nprintf '%s\\n' \"$*\" >> " + log + "\n"
+	for _, l := range lines {
+		script += "echo '" + l + "'\n"
+	}
+	write(t, path, script+"sleep 30\n", 0o755)
 	return path
 }
 
@@ -62,7 +69,7 @@ func TestClaudeCatalog(t *testing.T) {
 	write(t, filepath.Join(cwd, ".claude", "commands", "deploy.md"), "deploy\n", 0o644)
 	write(t, filepath.Join(home, ".claude", "keybindings.json"),
 		`{"bindings":[{"context":"Global","bindings":{"ctrl+y":"app:toggleTranscript","ctrl+o":null}}]}`, 0o644)
-	exe := fakeClaude(t, bin, initLine)
+	exe := fakeClaude(t, bin, uiLine, initLine) // other system messages may come first
 
 	p := NewProber(t.TempDir())
 	items, warning := Catalog(context.Background(), Input{Program: "claude", Home: home, Cwd: cwd, Command: []string{exe}}, p)
@@ -145,10 +152,15 @@ func TestProbeDoesNotWait(t *testing.T) {
 func TestProbeFailureKeepsTheRest(t *testing.T) {
 	bin := t.TempDir()
 	exe := filepath.Join(bin, "claude")
-	write(t, exe, "#!/bin/bash\necho 'not json'\n", 0o755)
+	// Lines but no init message before the reply starts: give up there, don't wait for the timeout
+	write(t, exe, "#!/bin/bash\necho 'not json'\necho '"+uiLine+"'\necho '{\"type\":\"assistant\"}'\nsleep 30\n", 0o755)
+	start := time.Now()
 	items, warning := Catalog(context.Background(), Input{Program: "claude", Home: t.TempDir(), Cwd: t.TempDir(), Command: []string{exe}}, NewProber(t.TempDir()))
 	if warning == "" {
 		t.Fatal("no warning for a failed probe")
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Errorf("waited %v for an init message that was never coming", time.Since(start))
 	}
 	got := ids(items)
 	if !slices.Contains(got, "key:shift-tab") || !slices.Contains(got, "/copy") {

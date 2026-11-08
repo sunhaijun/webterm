@@ -14,7 +14,7 @@ What the tools offer (measured on this machine):
 
 | | claude 2.1.319 | codex 0.166 |
 |---|---|---|
-| Machine-readable command list | Yes: the first line of `claude -p --output-format stream-json --verbose` is an `init` message whose `slash_commands` lists the available commands (the data the Agent SDK uses) | No: the list is only in its TUI's `/` popup |
+| Machine-readable command list | Yes: one of the first lines of `claude -p --output-format stream-json --verbose` is an `init` message whose `slash_commands` lists the available commands (the data the Agent SDK uses); 2.1.319 sends a `system`/`ui_invalidate` line before it | No: the list is only in its TUI's `/` popup |
 | Getting it without side effects | With `--bare --strict-mcp-config --no-session-persistence` and the network pointed at a dead port: about 0.8 s, no hooks, no MCP servers, no auto-memory, no transcript, nothing left under `~/.claude/projects`, no usage | Driving its TUI blind is unsafe: an earlier probe nearly picked its "update now" prompt, which runs `curl … \| sh` |
 | What's missing | `--bare` doesn't load project or user custom commands (they're read from their files instead) and interactive-only commands such as `/copy` and `/resume` | — |
 | Custom commands | `~/.claude/commands/**/*.md`, `<project>/.claude/commands/**/*.md` | `~/.codex/prompts/*.md` (`/prompts:<name>`) |
@@ -40,8 +40,8 @@ What the tools offer (measured on this machine):
 A bottom sheet (the drawer primitive) for the tool in front only:
 
 - One row per item in the strip's order: ≡ to drag (the session drawer's drag, ADR-0040), the label with what it sends underneath, 👁 to hide or show.
-- Tap a row to edit its label, what it sends, and whether it presses Enter.
-- **+ Add**: a text item. **Reset**: back to the defaults. **Refresh** (claude): ask the tool again now.
+- Tap a row to edit its label, what it sends, and whether it presses Enter (keys: only the label); items you added can also be deleted.
+- **+ Add**: a text item. **Reset**: back to the defaults, on a second tap so a stray one costs nothing. **Refresh** (claude): ask the tool again now.
 - Changes save as they're made.
 
 ### 4. Where the items come from
@@ -49,7 +49,7 @@ A bottom sheet (the drawer primitive) for the tool in front only:
 **claude**, assembled by the agent for the session in front:
 
 1. **Keys**: webterm's list of claude's shortcuts (⇧Tab mode, Esc Esc rewind, ^O transcript, ^T todos, ^B background, ^R history search, ⌥P model, ^C interrupt, ^J newline, ^G external editor, ^S stash, ⌥T thinking, ^D exit), each tied to claude's action name where it has one. A key the user rebound in `~/.claude/keybindings.json` sends the new key; read on every request.
-2. **Built-in commands**: the `init` probe above, run with **the same executable as the claude in front** (its `/proc` exe, or interpreter plus script for an npm install), in webterm's private temp directory, network pointed at a dead port, killed after the first line, 5 s timeout. `slash_commands` minus `skills` minus names starting with `__`.
+2. **Built-in commands**: the `init` probe above, run with **the same executable as the claude in front** (its `/proc` exe, or interpreter plus script for an npm install), in webterm's private temp directory, network pointed at a dead port, read until the `init` line (other `system` lines are skipped; any other message before it, or 50 lines without it, is a failure) and then killed, 5 s timeout. `slash_commands` minus `skills` minus names starting with `__`.
 3. **Supplement**: `/copy` and `/resume`, which `--bare` doesn't list and webterm's clipboard flow leans on.
 4. **Custom commands**: `*.md` under `~/.claude/commands` and the session's `<cwd>/.claude/commands` (recursively; the name is the file name), read on every request.
 5. **Skills**: the probe's `skills`, **hidden by default**.

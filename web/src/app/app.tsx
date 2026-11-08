@@ -12,7 +12,7 @@ import { Drawer } from '../ui/drawer'
 import { GearIcon, PlusIcon } from '../ui/icons'
 import { AppController } from './controller'
 import { showsExtraKeys } from './form'
-import { KeyMenus } from './keymenus'
+import { CommandEditor, CommandItemSheet, KeyMenus } from './keymenus'
 import { KeysRestore } from './keysrestore'
 import { ClipBar, LinkPopover } from './linkpop'
 import { ConnBanner, ImePreview, ToastView } from './notices'
@@ -138,6 +138,7 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
           onKey={(id) => ctl.pressKey(id)}
           onMenu={(m) => ctl.openMenu(m)}
           menu={s.keyMenu}
+          commands={ctl.hasCommands()}
           onSend={(send) => ctl.sendText(send)}
           register={(els) => ctl.registerTextPage(els)}
           onUpload={() => ctl.pickFiles()}
@@ -248,13 +249,35 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
       <LinkPopover pop={s.linkPop} onOpen={() => ctl.openLink()} onCopy={() => ctl.copyLink()} onClose={ctl.closeLinkPop} />
       <KeyMenus
         menu={s.keyMenu}
-        frequent={s.frequent}
-        combos={ctl.combos()}
-        onSend={(i) => ctl.sendFrequent(i)}
-        onInsert={(i) => ctl.insertFrequent(i)}
-        onCombo={(id) => ctl.pickCombo(id)}
+        history={s.history}
+        strip={s.strip}
+        onSendHistory={(i) => ctl.sendHistory(i)}
+        onInsertHistory={(i) => ctl.insertHistory(i)}
+        onRun={(id) => ctl.runCommand(id)}
+        onEdit={() => ctl.openEditor()}
         onClose={ctl.closeMenu}
       />
+      {s.editorOpen && (
+        <CommandEditor
+          strip={s.strip}
+          onMove={(from, to) => ctl.moveCommand(from, to)}
+          onToggle={(id) => ctl.toggleCommand(id)}
+          onEditItem={(id) => ctl.openItemForm(id)}
+          onAdd={() => ctl.openItemForm('')}
+          onReset={() => ctl.resetCommands()}
+          onRefresh={() => ctl.refreshCommands()}
+          onClose={ctl.closeEditor}
+        />
+      )}
+      {s.editorOpen && s.itemForm !== null && (
+        <CommandItemSheet
+          key={s.itemForm}
+          item={s.strip?.items.find((x) => x.id === s.itemForm) ?? null}
+          onSave={(f) => ctl.saveItemForm(f)}
+          onDelete={s.strip?.items.find((x) => x.id === s.itemForm)?.origin === 'added' ? () => ctl.deleteItem() : undefined}
+          onCancel={ctl.closeItemForm}
+        />
+      )}
     </div>
   )
 }

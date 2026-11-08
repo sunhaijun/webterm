@@ -111,24 +111,42 @@ func (p *Prober) run(ctx context.Context, command []string) (Result, error) {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Wait()
 	}()
-	line, err := bufio.NewReaderSize(out, 64<<10).ReadString('\n')
-	if err != nil && line == "" {
-		if ctx.Err() != nil {
-			return Result{}, fmt.Errorf("no answer within %v", probeTimeout)
+	return readInit(ctx, bufio.NewReaderSize(out, 64<<10))
+}
+
+// maxProbeLines bounds how far the probe reads looking for the init message.
+const maxProbeLines = 50
+
+// readInit reads stream-json lines until the init message. Other system
+// messages may come first (2.1.319 starts with "ui_invalidate"); anything
+// else means the session has begun without one.
+func readInit(ctx context.Context, r *bufio.Reader) (Result, error) {
+	for range maxProbeLines {
+		line, err := r.ReadString('\n')
+		if err != nil && line == "" {
+			if ctx.Err() != nil {
+				return Result{}, fmt.Errorf("no init message within %v", probeTimeout)
+			}
+			return Result{}, errors.New("it exited without an init message")
 		}
-		return Result{}, errors.New("it exited without an init message")
+		var m struct {
+			Type     string   `json:"type"`
+			Subtype  string   `json:"subtype"`
+			Version  string   `json:"claude_code_version"`
+			Commands []string `json:"slash_commands"`
+			Skills   []string `json:"skills"`
+		}
+		if json.Unmarshal([]byte(line), &m) != nil {
+			continue // a stray warning on stdout
+		}
+		if m.Type == "system" && m.Subtype == "init" {
+			return Result{Version: m.Version, Commands: m.Commands, Skills: m.Skills}, nil
+		}
+		if m.Type != "system" {
+			return Result{}, fmt.Errorf("a %q message came before any init message", m.Type)
+		}
 	}
-	var m struct {
-		Type     string   `json:"type"`
-		Subtype  string   `json:"subtype"`
-		Version  string   `json:"claude_code_version"`
-		Commands []string `json:"slash_commands"`
-		Skills   []string `json:"skills"`
-	}
-	if json.Unmarshal([]byte(line), &m) != nil || m.Type != "system" || m.Subtype != "init" {
-		return Result{}, errors.New("its first line isn't an init message")
-	}
-	return Result{Version: m.Version, Commands: m.Commands, Skills: m.Skills}, nil
+	return Result{}, fmt.Errorf("no init message in its first %d lines", maxProbeLines)
 }
 
 // interpreters run claude installed from npm (claude's cli.js is argv[1]).

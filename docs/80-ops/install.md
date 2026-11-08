@@ -72,7 +72,7 @@ Problems: [troubleshooting.md](troubleshooting.md).
 
 ## Set up claude, codex and the shell
 
-[ADR-0055](../20-architecture/adr/0055-webterm-setup.md). Three settings in other programs' files make "waiting for you" and frequent input work fully: claude rings the bell for its notifications, codex sends its notifications, and the shell writes each command to its history as it runs. A first install asks whether to add them; any time later:
+[ADR-0055](../20-architecture/adr/0055-webterm-setup.md). Three settings in other programs' files make "waiting for you" and the history list work fully: claude rings the bell for its notifications, codex sends its notifications, and the shell writes each command to its history as it runs. A first install asks whether to add them; any time later:
 
 ```bash
 webterm setup --check   # what's set, what's missing
