@@ -298,6 +298,23 @@ set → broadcast session.updated{attention: true}
 - `Seen()` (from `session.seen`): if `attention`, clear it and broadcast `session.updated{attention: false}`.
 - Exited sessions: `cwdLoop` stops, so nothing new is set; a flag set before the exit stays until seen.
 
+## Which program is in front (AC-3.24)
+
+[ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md) §2. `program` is `shell`, `claude`, `codex` or `other`. `cwdLoop` works it out only when the foreground process group differs from the last round's:
+
+```
+pgrp == shell pid                                         → shell
+exe := readlink(/proc/<pgrp>/exe); argv := /proc/<pgrp>/cmdline
+exe under */claude/versions/*, or base(exe | argv[0] | argv[1]) == "claude",
+    or argv[0..1] under */@anthropic-ai/claude-code/*     → claude
+the same for "codex" and */@openai/codex/*                → codex
+otherwise                                                 → other
+changed → session.updated{program}
+```
+
+- Not `comm`: the same claude can be `claude` or `2.1.316`, its version file being the executable. A script named `claude` counts (`argv[1]` is its path), which is how tests fake one.
+- Exited sessions are `other`. Not handed over on upgrades: the first poll after one recomputes it (the remembered group starts at 0, so it always differs).
+
 ## Auto naming (AC-4.4)
 
 ```go

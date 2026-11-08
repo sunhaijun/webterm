@@ -28,13 +28,15 @@ Always on `compact`; on `wide` only with `pointer: coarse` ([layout.md](layout.m
 The default layout is Termux's default layout, and it is **static**: it doesn't change with the foreground program, prompt state, or shell integration state.
 
 ```
-left    key area (7 columns × 2 rows, equal width, no horizontal scroll)
-┌────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┐
-│ [3]│ ESC  │  /   │  -   │ HOME │  ↑   │ END  │ PGUP │
-├────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┤
-│ ✎  │ TAB  │ CTRL │ ALT  │  ←   │  ↓   │  →   │ PGDN │
-└────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┘
+left    key area (8 columns × 2 rows, equal width, no horizontal scroll)
+┌────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┬────┐
+│ [3]│ ESC  │  /   │  -   │ HOME │  ↑   │ END  │ PGUP │ ⟲  │
+├────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┼────┤
+│ ✎  │ TAB  │ CTRL │ ALT  │  ←   │  ↓   │  →   │ PGDN │ ⌘  │
+└────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┴────┘
 ```
+
+The last column, frequent input (⟲) and combo keys (⌘), stays put like every other key; only the menus they open follow the program in front ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [below](#frequent-input-and-combo-keys-ac-324)).
 
 | Position | testid | Action |
 |---|---|---|
@@ -45,12 +47,14 @@ left    key area (7 columns × 2 rows, equal width, no horizontal scroll)
 | TAB | `key-Tab` | Same |
 | CTRL ALT | `key-Ctrl` `key-Alt` | Sticky modifiers (below) |
 | ← ↓ → PGDN | `key-ArrowLeft` `key-ArrowDown` `key-ArrowRight` `key-PageDown` | Send the corresponding bytes |
+| ⟲ (top right) | `key-frequent` | Opens the frequent-input menu ([below](#frequent-input-and-combo-keys-ac-324)) |
+| ⌘ (bottom right) | `key-combos` | Opens the combo-key menu for the program in front |
 
 On `wide` the left column has only ✎, spanning both rows.
 
 ### Behavior
 
-- **Geometry**: two 40px rows; 44px left column; seven equal-width key columns. At 393px wide each key is about 50px. **Never scrolls horizontally, at any width.**
+- **Geometry**: two 40px rows; 44px left column; eight equal-width key columns. At 393px wide each key is about 44px. **Never scrolls horizontally, at any width.**
 - **Fire on release**: `pointerdown` only calls `preventDefault` (to keep focus); bytes go out on `pointerup`. A horizontal swipe across the keys to switch pages therefore doesn't press a key, and CTRL / ALT can tell a tap (arm) from a long press (lock).
 - **Never steal focus**: every key calls `preventDefault` on `pointerdown`. Pressing an extra key doesn't show or hide the on-screen keyboard; focus stays in the terminal or the textarea.
 - **Same encoding as a physical keyboard**: byte table in [keymap.md](keymap.md). Arrows and `HOME` / `END` follow application cursor key mode (DECCKM, `term.modes.applicationCursorKeysMode`): `ESC O A` / `ESC O H` when it's on, `ESC [ A` / `ESC [ H` when it's off.
@@ -62,6 +66,27 @@ On `wide` the left column has only ✎, spanning both rows.
   4. Armed and locked both use `--accent`, so you can see at a glance what the next key will turn into.
 
 ---
+
+## Frequent input and combo keys (AC-3.24)
+
+[ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md). Both menus open as a popover above the extra keys and close on a tap outside, `Esc` (taken before the terminal) or switching sessions. They never take focus from the terminal or the text box. Which program is in front comes from the agent (`program` on the session: `shell`, `claude`, `codex`, `other`).
+
+### Frequent input
+
+- On open, the page asks `GET /api/frequent?program=<program>` ([http-api.md](../30-protocol/http-api.md#frequent-input)) and meanwhile shows the last list it got for that program (kept in memory only).
+- One row per item (`frequent-<i>`), the text on one line. **Tapping a row sends it and Enter** to the current session the way the text page does: a bracketed paste, then a separate `\r` ([ADR-0027](../20-architecture/adr/0027-text-page-enter-submits.md)). The row's ✎ (`frequent-insert-<i>`) pastes it without Enter.
+- An empty list shows one muted row: "No history".
+
+### Combo keys (AC-3.25)
+
+A grid of tiles (`combo-<id>`), each a key name and a short action name. A tap sends the bytes on the extra keys' path (counted, past the replay gate), ignores an armed CTRL / ALT, and closes the menu.
+
+| Program | Tiles (key · action · bytes) |
+|---|---|
+| `claude` | `⇧Tab` Mode `ESC [ Z` · `Esc Esc` Rewind (two `ESC`, 120 ms apart) · `^O` Transcript `0x0f` · `^T` Todos `0x14` · `^B` Background `0x02` · `^R` History `0x12` · `⌥P` Model `ESC p` · `^C` Interrupt `0x03` |
+| `codex` | `Esc` Interrupt `ESC` · `Esc Esc` Edit previous · `^T` Transcript `0x14` · `^J` Newline `0x0a` · `^L` Clear `0x0c` · `^C` Quit `0x03` |
+| `shell` | `↵` Enter `\r` · `^C` Interrupt · `^D` EOF `0x04` · `^R` Search `0x12` · `^L` Clear `0x0c` · `^Z` Suspend `0x1a` · `^W` Delete word `0x17` · `^U` Delete line `0x15` |
+| `other` | `↵` Enter · `Esc` · `^C` Interrupt · `^D` EOF · `^Z` Suspend · `^L` Clear |
 
 ## Text page (AC-3.19)
 

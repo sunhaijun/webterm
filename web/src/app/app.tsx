@@ -12,6 +12,7 @@ import { Drawer } from '../ui/drawer'
 import { GearIcon, PlusIcon } from '../ui/icons'
 import { AppController } from './controller'
 import { showsExtraKeys } from './form'
+import { KeyMenus } from './keymenus'
 import { ClipBar, LinkPopover } from './linkpop'
 import { ConnBanner, ImePreview, ToastView } from './notices'
 import { CloseConfirm, SignOutConfirm } from './confirm'
@@ -132,6 +133,8 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
           onOpenSessions={() => ctl.openSessions()}
           onTogglePage={() => ctl.togglePage()}
           onKey={(id) => ctl.pressKey(id)}
+          onMenu={(m) => ctl.openMenu(m)}
+          menu={s.keyMenu}
           onSend={(send) => ctl.sendText(send)}
           register={(els) => ctl.registerTextPage(els)}
           onUpload={() => ctl.pickFiles()}
@@ -236,6 +239,15 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
       {s.signingOut && <SignOutConfirm onOk={() => void ctl.confirmSignOut()} onCancel={() => ctl.cancelSignOut()} />}
 
       <LinkPopover pop={s.linkPop} onOpen={() => ctl.openLink()} onCopy={() => ctl.copyLink()} onClose={ctl.closeLinkPop} />
+      <KeyMenus
+        menu={s.keyMenu}
+        frequent={s.frequent}
+        combos={ctl.combos()}
+        onSend={(i) => ctl.sendFrequent(i)}
+        onInsert={(i) => ctl.insertFrequent(i)}
+        onCombo={(id) => ctl.pickCombo(id)}
+        onClose={ctl.closeMenu}
+      />
     </div>
   )
 }

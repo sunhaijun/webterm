@@ -183,6 +183,7 @@
             "status": "running",
             "exit_code": null,
             "attention": false,
+            "program": "shell",
             "cols": 80,
             "rows": 24,
             "base_seq": 221776,
@@ -222,6 +223,7 @@
             "status": "running",
             "exit_code": null,
             "attention": false,
+            "program": "shell",
             "cols": 80,
             "rows": 24,
             "base_seq": 221776,
@@ -362,6 +364,15 @@
         "attention": false
       },
       "note": "attention:false must survive encoding: false is a value, not an omitted field"
+    },
+    {
+      "name": "session_updated_program",
+      "json": {
+        "t": "session.updated",
+        "sid": 2,
+        "program": "claude"
+      },
+      "note": "What runs in front: shell, claude, codex or other, from /proc when the foreground group changes (ADR-0054)"
     },
     {
       "name": "session_order",

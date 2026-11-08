@@ -55,11 +55,18 @@ Links you can open and text you can copy on a phone. Stacked on m16.
 
 Exit criteria, beyond the usual: UT-links-1, UT-osc52-1, E2E-49, E2E-50; the "Links and the clipboard" section of the manual checklist on an iPhone and an Android phone.
 
-## Planned
-
 ### m18 · `feat/40-input-menus`
 
-Two keys at the end of the extra keys: **frequent input** (the ten single-line inputs you send most, from the foreground program's own history: bash, claude or codex) and **combo keys** for the foreground program (claude, codex, shell). The agent tells the page which program is in front.
+Two keys at the end of the extra keys: frequent input and combo keys, both following the program in front. Stacked on m17.
+
+| Deliverable | Docs |
+|---|---|
+| Agent: `program` (`shell` / `claude` / `codex` / `other`) from `/proc/<pgrp>/exe` and `argv`, sent on change; `GET /api/frequent` reading the program's own history file on request | [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [http-api.md](../30-protocol/http-api.md#frequent-input), [session-manager.md](../50-backend/session-manager.md#which-program-is-in-front-ac-324) |
+| Browser: the last key column (⟲ frequent input, ⌘ combo keys) and their two menus | ADR-0054, [input.md](../40-frontend/input.md#frequent-input-and-combo-keys-ac-324) |
+
+Exit criteria, beyond the usual: UT-program-1, UT-frequent-1, IT-program-1, IT-frequent-1, UT-combos-1, E2E-51; the "Frequent input and combo keys" section of the manual checklist, codex's tiles on a real run.
+
+## Planned
 
 ### Web Push and the app badge
 
@@ -73,7 +80,9 @@ Extra-key enhancements (ADR-0025 §2): swipe-up secondary keys (default `-` → 
 
 ### m10 · `feat/40-termux-gestures`
 
-Gestures (ADR-0025 §5, §6): pinch to change font size (CSS preview while pinching; on release set `fontSize`, `fit()`, and send a `resize`; same value as the font size setting, [ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)); long-press selection with word select, drag handles, and a Copy · Paste · More menu (select link / share / keep screen on); vibrate on bell (Android). Docs: [layout.md](../40-frontend/layout.md). Real-device gestures go in the manual checklist.
+Gestures (ADR-0025 §5, §6): pinch to change font size (CSS preview while pinching; on release set `fontSize`, `fit()`, and send a `resize`; same value as the font size setting, [ADR-0037](../20-architecture/adr/0037-settings-theme-and-font-size.md)); selecting text on touch (below); keep screen on; vibrate on bell (Android). Docs: [layout.md](../40-frontend/layout.md). Real-device gestures go in the manual checklist.
+
+Since m17, links open or copy with a tap and programs can copy with OSC 52 (claude's `/copy`), so selection is for the rest: a path, an error line, a block of output. **Replanned 2026-11-07 from a spike** (Pixel 5, headless Chromium): letting the browser select xterm's DOM rows natively gives real spaces (no NBSP) and correct CJK, but every row boundary becomes a newline, soft wraps included, so a wrapped command or URL copies broken; and only the rows on screen exist in the DOM, so nothing above the viewport can be selected. Drawing our own handles over the grid would fix neither cheaply. The plan is a **copy view** instead: a visible entry (a tile in the combo-key menu, [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md)) opens the session's text, scrollback included and soft wraps joined (from xterm's buffer, the same logical lines as `term/links.ts`), in a native read-only text view scrolled to where the terminal was; the system's own selection handles, magnifier and Copy / Share menu do the rest; closing returns to the terminal unchanged. It is a tool you open and close, not a second reading surface ([ADR-0013](../20-architecture/adr/0013-terminal-only.md)), and needs its own ADR. "Select link" from the old plan is done (m17).
 
 ### v0.2 (no dates)
 

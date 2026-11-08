@@ -59,6 +59,8 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 
 **US-3.7** (m15) I show claude a screenshot or a photo from whatever device I'm on. On the phone I tap the paperclip on the text page and pick from the photo library or take a picture; on a laptop I paste the screenshot or drop the file on the terminal. It shows up in claude's prompt as `[Image #1]`, in the session I sent it from, and I write my question after it. Files other than images arrive as a path the program can read ([ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)).
 
+**US-3.8** (m18) The two or three things I send claude most (a slash command, a short reply in Chinese) are one tap away: the last-column key shows my most frequent inputs from claude's own history, and a tap sends one. The key below it gives me the keys my phone can't type for whatever is running: `Shift+Tab` and double `Esc` in claude, `Ctrl+R` in the shell ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md)).
+
 ---
 
 ## US-4 Multiple sessions

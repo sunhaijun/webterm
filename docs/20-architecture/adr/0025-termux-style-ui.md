@@ -4,6 +4,7 @@ Status: Accepted (2026-10-30). Rolled out as milestones m8–m10 (see [Rollout](
 
 Later changes:
 
+- **§2 static keys**: amended by [ADR-0054](0054-frequent-input-and-combo-keys.md). The fourteen keys stay static; a last column adds frequent input and combo keys, fixed in place, whose menus follow the program in front.
 - **§3 Enter behavior and send path**: revised by [ADR-0027](0027-text-page-enter-submits.md). Enter with content sends the content **and** a carriage return (`term.paste()`, then `\r`).
 - **§3 text page**: revised by [ADR-0036](0036-text-page-per-session.md). Each session keeps its own page and draft; switching sessions swaps both, and focus goes to the new session's input.
 - **§5 vertical drag**: revised by [ADR-0029](0029-touch-drag-to-wheel.md). xterm ignores touch drags when mouse tracking is on, so webterm converts vertical drags to wheel events (one per row of finger movement, per [ADR-0032](0032-drag-wheel-per-row.md)).

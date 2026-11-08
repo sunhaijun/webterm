@@ -135,6 +135,16 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] claude `/copy` on Android → "Copied", the answer pastes elsewhere without a bar
 - [ ] Desktop: Ctrl+click (Cmd+click on a Mac) on a URL opens a tab; a plain click and a drag-select don't
 
+## Frequent input and combo keys (every time the menus or `program` change, since m18)
+
+[ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md). claude and codex installed, used for a while so their history files have repeats.
+
+- [ ] iPhone and Android: the last column's two keys are as easy to hit as the others; nothing scrolls sideways
+- [ ] claude running: ⟲ lists your most frequent claude inputs; tapping one sends it; ✎ puts it in the prompt to edit
+- [ ] claude: ⌘ → `⇧Tab` cycles claude's mode; `Esc Esc` opens rewind; `^O` toggles the transcript; `^T` the todo list; `⌥P` the model picker
+- [ ] codex running: ⌘ → `Esc Esc` lets you edit the previous message; `^T` opens the transcript; `^J` adds a newline. Note any tile codex 0.166 ignores
+- [ ] At the shell: ⟲ lists frequent commands (after adding `history -a`, a command just run shows up)
+
 ## Terminal compatibility (every time rendering changes)
 
 - [x] `vim` / `nvim`: editing, `:wq`, visual mode, arrow keys

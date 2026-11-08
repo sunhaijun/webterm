@@ -22,7 +22,7 @@ export interface ClipOffer {
  * Escape closes the popover while it's open, and goes no further: captured before xterm sees
  * it, so dismissing doesn't also interrupt the program.
  */
-function useEscape(open: boolean, close: () => void): void {
+export function useEscape(open: boolean, close: () => void): void {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {

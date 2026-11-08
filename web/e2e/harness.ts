@@ -46,6 +46,8 @@ export interface AgentOptions {
    */
   ringBytes?: number
   maxSessions?: number
+  /** HOME for the agent and its shells: where frequent input reads history files (ADR-0054). */
+  home?: string
   /** Extra `serve` flags, for debugging (e.g. `--log-level debug`). */
   extraArgs?: string[]
 }
@@ -79,8 +81,8 @@ export class Agent {
   }
 
   /** The agent's environment: its own TMPDIR, so uploads (ADR-0051) land in `uploadDir()`. */
-  private static env(dataDir: string): NodeJS.ProcessEnv {
-    return { ...process.env, TMPDIR: join(dataDir, 'tmp') }
+  private static env(dataDir: string, opts: AgentOptions = {}): NodeJS.ProcessEnv {
+    return { ...process.env, TMPDIR: join(dataDir, 'tmp'), ...(opts.home ? { HOME: opts.home } : {}) }
   }
 
   /** Where `POST /api/uploads` saves files: `$TMPDIR/webterm-<uid>/uploads`. */
@@ -92,7 +94,7 @@ export class Agent {
     const port = await freePort()
     const dataDir = mkdtempSync(join(tmpdir(), 'webterm-e2e-'))
     mkdirSync(join(dataDir, 'tmp'), { mode: 0o700 })
-    const proc = spawn(BINARY, Agent.args(port, dataDir, opts), { stdio: ['ignore', 'pipe', 'pipe'], env: Agent.env(dataDir) })
+    const proc = spawn(BINARY, Agent.args(port, dataDir, opts), { stdio: ['ignore', 'pipe', 'pipe'], env: Agent.env(dataDir, opts) })
     const agent = new Agent(proc, port, dataDir, opts)
     agent.collect(proc)
     await waitFor(() => agent.healthy(), 'agent started')
@@ -131,7 +133,7 @@ export class Agent {
     old.kill('SIGKILL')
     await exited
     await waitFor(async () => !(await this.healthy()), 'old agent stopped serving', 10_000)
-    this.proc = spawn(BINARY, Agent.args(this.port, this.dataDir, this.opts), { stdio: ['ignore', 'pipe', 'pipe'], env: Agent.env(this.dataDir) })
+    this.proc = spawn(BINARY, Agent.args(this.port, this.dataDir, this.opts), { stdio: ['ignore', 'pipe', 'pipe'], env: Agent.env(this.dataDir, this.opts) })
     this.collect(this.proc)
     await waitFor(() => this.healthy(), 'new agent is up')
   }
@@ -422,6 +424,7 @@ interface WebtermWindow {
     fontSize(): number
     altScreen(): boolean
     attention(sid: number): boolean
+    program(): string
     frames(): FrameRec[]
     scrollLines(n: number): void
     viewport(): { y: number; top: string }
@@ -440,6 +443,7 @@ export const hooks = {
   sessionSize: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.sessionSize()),
   altScreen: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.altScreen()),
   attention: (p: Page, sid: number) => p.evaluate((s) => (window as unknown as WebtermWindow).__webterm.attention(s), sid),
+  program: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.program()),
   frames: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.frames()),
   scrollLines: (p: Page, n: number) => p.evaluate((k) => (window as unknown as WebtermWindow).__webterm.scrollLines(k), n),
   viewport: (p: Page) => p.evaluate(() => (window as unknown as WebtermWindow).__webterm.viewport()),

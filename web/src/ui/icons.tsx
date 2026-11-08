@@ -145,3 +145,9 @@ export function gearPath(teeth = 6, outer = 6.1, inner = 4.6, hole = 1.9, cx = 7
 function round(n: number): number {
   return Math.round(n * 100) / 100
 }
+
+/** Frequent input (ADR-0054): a clock face whose rim turns back into an arrow. */
+export const HistoryIcon = () => <Icon d="M2.2 4.6A5.25 5.25 0 1 1 1.75 7M1.75 2.25v2.6h2.6M7 4.25V7l1.9 1.25" />
+
+/** Combo keys (ADR-0054): two key caps, one behind the other. */
+export const CombosIcon = () => <Icon d="M2.75 1.75h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1zM8.25 5.75h3a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-3" />
