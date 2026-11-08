@@ -38,7 +38,16 @@ Released together as **v0.5.0** (2026-11-08): m14–m18.
 
 ## In progress
 
-Nothing right now. Next candidates are below.
+### m19 · `feat/80-ops-setup`
+
+The settings claude, codex and the shell need for "waiting for you" and frequent input, checked and added by webterm instead of by hand.
+
+| Deliverable | Docs |
+|---|---|
+| `webterm setup [--check] [--yes]`: claude's `preferredNotifChannel`, codex's `[tui]` notifications, bash / zsh history as you go; minimal line inserts, backups, idempotent | [ADR-0055](../20-architecture/adr/0055-webterm-setup.md), [install.md](../80-ops/install.md#set-up-claude-codex-and-the-shell) |
+| The installer asks on a first install; `--setup` / `--no-setup`; never on `webterm update` | ADR-0055 |
+
+Exit criteria, beyond the usual: UT-setup-claude, UT-setup-codex, UT-setup-shell, IT-setup-1, UT-install-setup; the "Setting up claude, codex and the shell" section of the manual checklist.
 
 ## Planned
 

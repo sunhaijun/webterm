@@ -36,6 +36,7 @@ BASE_URL=""
 HTTPS_PORT=443
 HTTP_PORT=80
 BINARY=""
+SETUP_CLI=""   # "" = ask on a first install, 1 = --setup, 0 = --no-setup
 ADDR_SOURCE=""
 # Kept verbatim: handed to the downloaded binary and replayed after install-state.
 ORIG_ARGS=("$@")
@@ -91,6 +92,9 @@ Usage: install.sh [options]
   --when-idle         Upgrade only once no session is running a command
   --force-restart     Restart instead of hot upgrade (closes all sessions);
                       also migrates an old user service to a system service
+  --setup             Set up claude, codex and your shell for webterm without asking
+                      (notifications and frequent input; a first install asks)
+  --no-setup          Don't ask about it
   --print-unit        Print the systemd unit and exit
   --force             Continue even if the certificate check fails
   --dry-run           Print what would be done
@@ -123,6 +127,8 @@ while [ $# -gt 0 ]; do
         --when-idle) WHEN_IDLE=1; shift ;;
         --force-restart) FORCE_RESTART=1; shift ;;
         --print-unit) PRINT_UNIT=1; shift ;;
+        --setup) SETUP_CLI=1; shift ;;
+        --no-setup) SETUP_CLI=0; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option $1 (see --help)" ;;
@@ -764,9 +770,40 @@ else
     } > "$STATE_FILE"
 fi
 
+# ---------- claude, codex and the shell (ADR-0055) ----------
+#
+# A first install asks; --setup runs it on any install without asking; --no-setup
+# skips the question. Never during `webterm update`: neither flag goes into
+# install-state, and an upgrade isn't a first install.
+setup_programs() {
+    [ "$SETUP_CLI" != 0 ] || return 0
+    [ "$SETUP_CLI" = 1 ] || [ "$FRESH" = 1 ] || return 0
+    step "Setting up claude, codex and your shell"
+    if [ "$DRY_RUN" = 1 ]; then
+        info "Would run: webterm setup --yes"
+        return 0
+    fi
+    if [ "$SETUP_CLI" != 1 ]; then
+        if ! have_tty; then
+            info "Skipped (no terminal to ask on). Any time: webterm setup"
+            return 0
+        fi
+        # --check lists what's set and what's missing; exit 0 = nothing to add
+        if "$PREFIX/webterm" setup --check; then return 0; fi
+        printf '  Add these for notifications and frequent input? [Y/n] ' >/dev/tty
+        local ans=""
+        IFS= read -r ans </dev/tty || ans=n
+        case "$ans" in
+            [nN]*) info "Skipped. Any time: webterm setup"; return 0 ;;
+        esac
+    fi
+    "$PREFIX/webterm" setup --yes || info "That didn't finish; run it again later: webterm setup"
+}
+
 # ---------- 6. Service ----------
 
 if [ "$SETUP_SERVICE" = 0 ]; then
+    setup_programs
     step "6/6 Done"
     if [ -n "$DOMAIN" ]; then
         cat <<EOF
@@ -877,6 +914,8 @@ if [ "$DRY_RUN" != 1 ]; then
 fi
 fi # SWITCH
 fi # KEEP_USER_UNIT
+
+setup_programs
 
 if [ "$DRY_RUN" = 1 ]; then
     step "Done (dry run)"

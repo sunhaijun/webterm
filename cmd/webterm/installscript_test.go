@@ -76,6 +76,7 @@ func fakeBinary(t *testing.T, path string, withInstall bool) {
 	script := "#!/bin/bash\ncase \"$1\" in\n" +
 		"  version) echo 'webterm fake-1' ;;\n" +
 		"  install) " + install + " ;;\n" +
+		"  setup) shift; printf '%s\\n' \"$@\" >> \"${FAKE_SETUP_LOG:-/dev/null}\"; echo FAKE-SETUP ;;\n" +
 		"  *) exit 0 ;;\n" +
 		"esac\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
@@ -289,4 +290,52 @@ func TestInstallScriptHandsOverToDownloadedBinary(t *testing.T) {
 			t.Error("handed over despite a failed checksum")
 		}
 	})
+}
+
+// UT-install-setup (AC-1.25, ADR-0055 §3): --setup runs `webterm setup --yes`
+// without asking; --no-setup, or an install that isn't a first one, doesn't run
+// it; --dry-run only says it would; install-state keeps neither flag.
+func TestInstallScriptSetup(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     []string
+		ran      bool
+		inOut    string
+		notInOut string
+	}{
+		{"--setup", []string{"--setup"}, true, "Setting up claude, codex and your shell", ""},
+		{"--no-setup", []string{"--setup", "--no-setup"}, false, "", "Setting up claude"},
+		{"not a first install, no flag", nil, false, "", "Setting up claude"},
+		{"--setup --dry-run", []string{"--setup", "--dry-run"}, false, "Would run: webterm setup --yes", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			bin := filepath.Join(sb.home, "webterm-new")
+			fakeBinary(t, bin, true)
+			log := filepath.Join(sb.home, "setup.log")
+			args := append([]string{"--binary", bin, "--no-service", "--no-setcap", "--prefix", sb.prefix}, c.args...)
+			out, err := sb.run(t, []string{"FAKE_SETUP_LOG=" + log}, args...)
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			got, _ := os.ReadFile(log)
+			if c.ran != (string(got) == "--yes\n") {
+				t.Fatalf("webterm setup ran with %q, want ran=%v\n%s", got, c.ran, out)
+			}
+			if c.inOut != "" && !strings.Contains(out, c.inOut) {
+				t.Errorf("output lacks %q:\n%s", c.inOut, out)
+			}
+			if c.notInOut != "" && strings.Contains(out, c.notInOut) {
+				t.Errorf("output has %q:\n%s", c.notInOut, out)
+			}
+			if state, err := os.ReadFile(filepath.Join(sb.config, "install-state")); err == nil {
+				for _, l := range strings.Split(string(state), "\n") {
+					if l == "--setup" || l == "--no-setup" {
+						t.Errorf("install-state keeps %s:\n%s", l, state)
+					}
+				}
+			}
+		})
+	}
 }

@@ -27,6 +27,8 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 
 **US-1.9** (m14) At a laptop with a real terminal, I `ssh` into the server and attach to any running session — the same sessions, names and order the browser shows — and pick it by name or number. Closing ssh leaves the session running ([ADR-0050](../20-architecture/adr/0050-ssh-attach.md)).
 
+**US-1.10** (m19) I don't hand-edit claude's, codex's or my shell's config to get the most out of webterm: the installer offers to set them up, and `webterm setup --check` tells me any time what's missing ([ADR-0055](../20-architecture/adr/0055-webterm-setup.md)).
+
 ---
 
 ## US-2 Never lose the connection

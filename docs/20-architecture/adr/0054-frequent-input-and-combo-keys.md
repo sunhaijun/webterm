@@ -1,6 +1,6 @@
 # ADR-0054 Frequent input and combo keys at the end of the extra keys
 
-Status: Accepted (2026-11-07). Amends [ADR-0025](0025-termux-style-ui.md) §2: the fourteen extra keys stay static, and two keys are added at the end whose places never change but whose menus follow the foreground program. Adds `program` to session info and `session.updated`, and `GET /api/frequent`.
+Status: Accepted (2026-11-07). Amends [ADR-0025](0025-termux-style-ui.md) §2: the fourteen extra keys stay static, and two keys are added at the end whose places never change but whose menus follow the foreground program. Adds `program` to session info and `session.updated`, and `GET /api/frequent`. §3's shell-history line is revised by [ADR-0055](0055-webterm-setup.md) (2026-11-07): `webterm setup` adds it, with consent.
 
 ## Context
 

@@ -140,21 +140,13 @@ bash writes its history file when the shell exits, so a shell that has been open
 PROMPT_COMMAND="history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 ```
 
-webterm doesn't change your shell config.
+`webterm setup` adds it for you (and checks the rest: `webterm setup --check`, [install.md](install.md#set-up-claude-codex-and-the-shell)); webterm never changes your shell config on its own.
 
 ### The waiting-for-you dot doesn't light
 
 The dot lights when the program signals it's your turn ([ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md)): its title goes from a spinner to idle, it rings the bell or sends a desktop notification, or a command of 10 s or more returns to the prompt. Output alone never lights it.
 
-- **claude**: works out of the box (its title goes `◐` → `✳`). To also get a dot for permission prompts: `claude config set --global preferredNotifChannel terminal_bell`.
-- **codex**: turn on its notifications in `~/.codex/config.toml`:
-
-  ```toml
-  [tui]
-  notifications = true
-  notification_condition = "always"
-  ```
-
+- **claude and codex**: run `webterm setup --check`. It reports whether claude rings the bell for its notifications (`preferredNotifChannel` in `~/.claude/settings.json`; without it finished turns still show through the title, but permission prompts don't) and whether codex sends its notifications (`[tui]` in `~/.codex/config.toml`); `webterm setup` adds what's missing ([install.md](install.md#set-up-claude-codex-and-the-shell)).
 - **Anything else**: end the command with a bell, e.g. `make; printf '\a'`.
 
 The current session never shows the dot: looking at it clears it, on every device. `__webterm.attention(<sid>)` in the browser console shows the flag.
