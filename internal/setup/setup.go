@@ -1,5 +1,6 @@
-// Package setup checks and adds the settings claude, codex and the shell need
-// for webterm's "waiting for you" and frequent input (ADR-0055).
+// Package setup checks and adds the settings claude and codex need for
+// webterm's "waiting for you" (ADR-0055; the shell item went with the history
+// list, ADR-0058 §4).
 //
 // Every edit is a minimal text insertion: the rest of each file keeps its
 // bytes, order and comments. Nothing here runs unless the user asks for it
@@ -29,7 +30,7 @@ const (
 	Add
 	// Kept: the user chose another value, which stays.
 	Kept
-	// Skipped: the program isn't installed, or the shell has nothing to set.
+	// Skipped: the program isn't installed.
 	Skipped
 	// Broken: the file doesn't parse; it's left alone.
 	Broken
@@ -53,7 +54,6 @@ func (s State) String() string {
 const (
 	ItemClaude = "claude notifications"
 	ItemCodex  = "codex notifications"
-	ItemShell  = "shell history"
 )
 
 // Item is one setting: where it lives, what it needs, and (for Add) the new
@@ -73,31 +73,14 @@ type Item struct {
 	mode    fs.FileMode
 }
 
-// Plan checks the three items under home. shell is the session shell, a name
-// or a path.
-func Plan(home, shell string) []Item {
+// Plan checks the items under home.
+func Plan(home string) []Item {
 	return []Item{
 		planFile(home, ItemClaude, ".claude", filepath.Join(".claude", "settings.json"), 0o644, "claude isn't installed (no ~/.claude)",
 			func(in []byte, exists bool) ([]byte, State, string) { return claudeSettings(in, exists) }),
 		planFile(home, ItemCodex, ".codex", filepath.Join(".codex", "config.toml"), 0o600, "codex isn't installed (no ~/.codex)",
 			func(in []byte, exists bool) ([]byte, State, string) { return codexConfig(in, exists) }),
-		planShell(home, shell),
 	}
-}
-
-func planShell(home, shell string) Item {
-	var rc string
-	switch filepath.Base(shell) {
-	case "bash":
-		rc = ".bashrc"
-	case "zsh":
-		rc = ".zshrc"
-	default:
-		_, state, detail := shellHistory(shell, nil, false)
-		return Item{Name: ItemShell, State: state, Detail: detail}
-	}
-	return planFile(home, ItemShell, "", rc, 0o644, "",
-		func(in []byte, exists bool) ([]byte, State, string) { return shellHistory(shell, in, exists) })
 }
 
 // planFile reads home/rel and asks edit what it needs. With needDir set, a
@@ -349,50 +332,4 @@ func tomlValue(v string) string {
 		v = v[:i]
 	}
 	return strings.TrimSpace(v)
-}
-
-// ---------- shell ----------
-
-const (
-	bashBlock = "# >>> webterm >>>\n" +
-		"# Write each command to the history file as it runs, so webterm's\n" +
-		"# frequent-input menu sees it before the shell exits (webterm setup).\n" +
-		"PROMPT_COMMAND=\"history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"\n" +
-		"# <<< webterm <<<\n"
-	zshBlock = "# >>> webterm >>>\n" +
-		"# Write each command to the history file as it runs (webterm setup).\n" +
-		"setopt INC_APPEND_HISTORY\n" +
-		"# <<< webterm <<<\n"
-)
-
-var zshHistoryOpt = regexp.MustCompile(`(?i)inc_?append_?history|share_?history`)
-
-// shellHistory appends a block that writes history as you go to ~/.bashrc or
-// ~/.zshrc, unless the file already does.
-func shellHistory(shell string, in []byte, _ bool) ([]byte, State, string) {
-	var block string
-	switch base := filepath.Base(shell); base {
-	case "bash":
-		if bytes.Contains(in, []byte("history -a")) {
-			return nil, OK, "bash writes history as you go (history -a)"
-		}
-		block = bashBlock
-	case "zsh":
-		if zshHistoryOpt.Match(in) {
-			return nil, OK, "zsh writes history as you go"
-		}
-		block = zshBlock
-	default:
-		return nil, Skipped, fmt.Sprintf("the session shell is %s; nothing to set", base)
-	}
-	var b bytes.Buffer
-	b.Write(in)
-	if len(in) > 0 {
-		if in[len(in)-1] != '\n' {
-			b.WriteByte('\n')
-		}
-		b.WriteByte('\n')
-	}
-	b.WriteString(block)
-	return b.Bytes(), Add, "add a block that writes each command to the history as it runs"
 }

@@ -13,7 +13,7 @@ import { Agent, EMIT, focusTerm, hooks, recordSent, rectOf, submit, waitFor, wai
 const { defaultBrowserType: _p, ...PIXEL } = devices['Pixel 5']!
 test.use(PIXEL)
 
-/** DOM order: each row's seven keys, then that row's key of the last column; at a shell prompt ⌘ is absent (ADR-0057). */
+/** DOM order: each row's keys, then the last column's (⌘ is absent at a shell prompt, ↵ ends the second row; ADR-0058). */
 const KEY_IDS = [
   'Escape',
   'Slash',
@@ -22,7 +22,6 @@ const KEY_IDS = [
   'ArrowUp',
   'End',
   'PageUp',
-  'history',
   'Tab',
   'Ctrl',
   'Alt',
@@ -30,6 +29,7 @@ const KEY_IDS = [
   'ArrowDown',
   'ArrowRight',
   'PageDown',
+  'Enter',
 ]
 
 let agent: Agent
@@ -42,7 +42,7 @@ test.afterEach(() => agent.stop())
 const keyOrder = (p: Page) =>
   p.evaluate(() => [...document.querySelectorAll('[data-testid=extrakeys] .ek-key')].map((e) => (e as HTMLElement).dataset.testid))
 
-/** allKeysVisible asserts all 15 keys (14 plus ⟲; ⌘ is absent at a shell prompt) are inside the viewport and the key area does not scroll horizontally. */
+/** allKeysVisible asserts all 15 keys (14 plus ↵; ⌘ is absent at a shell prompt) are inside the viewport and the key area does not scroll horizontally. */
 async function allKeysVisible(page: Page) {
   const g = await page.evaluate(() => {
     const keys = document.querySelector('.ek-keys') as HTMLElement

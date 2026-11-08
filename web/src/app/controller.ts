@@ -111,10 +111,8 @@ export interface AppState {
   linkPop: LinkPop | null
   /** OSC 52 text the browser wouldn't copy without a tap: the Copy bar (ADR-0053 §4). */
   clip: ClipOffer | null
-  /** The open popover of the last key column (ADR-0057). */
+  /** The command strip is open (ADR-0057). */
   keyMenu: KeyMenu | null
-  /** History of the program in front; null while the first list loads. */
-  history: string[] | null
   /** The command strip of the tool in front; null while it loads. */
   strip: Strip | null
   /** The command editor is open (ADR-0057 §3). */
@@ -247,7 +245,6 @@ export class AppController {
       linkPop: null,
       clip: null,
       keyMenu: null,
-      history: null,
       strip: null,
       editorOpen: false,
       itemForm: null,
@@ -340,11 +337,9 @@ export class AppController {
     if (this.state.keysCollapsed) previewBar(this.textPage?.slot ?? null, true, dx)
   }
 
-  // ---------- history and the command strip (ADR-0057) ----------
+  // ---------- the command strip (ADR-0057, ADR-0058) ----------
 
-  /** The last history per program, in memory only, shown while a fresh one loads. */
-  private readonly historyCache = new Map<Program, string[]>()
-  /** The last strip per tool, likewise. */
+  /** The last strip per tool, in memory only, shown while a fresh one loads. */
   private readonly stripCache = new Map<StripProgram, Strip>()
   /** The tool whose strip or editor is open; they close if another program takes over. */
   private stripOwner: StripProgram | null = null
@@ -367,44 +362,18 @@ export class AppController {
     return hasStrip(this.program())
   }
 
-  /** A key of the last column: open its popover, or close it if it's the one open. */
+  /** ⌘: open the command strip, or close it if it's open. */
   openMenu(menu: KeyMenu): void {
     if (this.state.keyMenu === menu) return this.closeMenu()
     const program = this.program()
-    if (menu === 'commands') {
-      if (!hasStrip(program)) return
-      this.stripOwner = program
-      this.set({ keyMenu: menu, strip: this.stripCache.get(program) ?? null })
-      void this.loadStrip()
-      return
-    }
-    this.set({ keyMenu: menu, history: this.historyCache.get(program) ?? null })
-    fetch(`/api/history?program=${encodeURIComponent(program)}`, { credentials: 'same-origin' })
-      .then((r) => (r.ok ? (r.json() as Promise<{ items?: unknown }>) : { items: [] }))
-      .catch(() => ({ items: [] }))
-      .then((b) => {
-        const items = Array.isArray(b.items) ? b.items.filter((x): x is string => typeof x === 'string') : []
-        this.historyCache.set(program, items)
-        if (this.state.keyMenu === 'history' && this.program() === program) this.set({ history: items })
-      })
+    if (!hasStrip(program)) return
+    this.stripOwner = program
+    this.set({ keyMenu: menu, strip: this.stripCache.get(program) ?? null })
+    void this.loadStrip()
   }
 
   readonly closeMenu = (): void => {
     if (this.state.keyMenu) this.set({ keyMenu: null })
-  }
-
-  /** A history row: send it and Enter, the way the text page sends (ADR-0027). */
-  sendHistory(i: number): void {
-    const text = this.state.history?.[i]
-    this.closeMenu()
-    if (text !== undefined) this.sendText({ kind: 'submit', text })
-  }
-
-  /** A history row's ✎: paste it without Enter. */
-  insertHistory(i: number): void {
-    const text = this.state.history?.[i]
-    this.closeMenu()
-    if (text !== undefined) this.insertText(text)
   }
 
   /** Pastes into the current session past sticky modifiers, without Enter. */
@@ -589,7 +558,7 @@ export class AppController {
   private checkStripOwner(): void {
     if (this.stripOwner === null || this.program() === this.stripOwner) return
     this.stripOwner = null
-    this.set({ keyMenu: this.state.keyMenu === 'commands' ? null : this.state.keyMenu, editorOpen: false, itemForm: null, strip: null })
+    this.set({ keyMenu: null, editorOpen: false, itemForm: null, strip: null })
   }
 
   // ---------- links and the clipboard (ADR-0053) ----------

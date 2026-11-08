@@ -41,8 +41,8 @@ type Config struct {
 	// UploadRoot replaces <temp>/webterm-<uid> as the directory for files
 	// sent to sessions (ADR-0051).
 	UploadRoot string
-	// Home replaces the user's home directory as where GET /api/history and
-	// GET /api/commands find the programs' files (ADR-0057). Tests set it.
+	// Home replaces the user's home directory as where GET /api/commands
+	// finds the programs' files (ADR-0057). Tests set it.
 	Home string
 	// CommandsFile is where the command strip's arrangement is kept
 	// (~/.config/webterm/commands.json, ADR-0057 §5). Empty: arrangements
@@ -128,7 +128,6 @@ func (a *Agent) routes() {
 	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeDevice))))
 	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeAll))))
 	a.mux.Handle("POST /api/uploads", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleUpload))))
-	a.mux.Handle("GET /api/history", a.requireAuth(http.HandlerFunc(a.handleHistory)))
 	a.mux.Handle("GET /api/commands", a.requireAuth(http.HandlerFunc(a.handleCommands)))
 	a.mux.Handle("PUT /api/commands", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handlePutCommands))))
 	a.mux.Handle("DELETE /api/commands", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleDeleteCommands))))

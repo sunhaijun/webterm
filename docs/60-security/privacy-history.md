@@ -4,9 +4,9 @@
 
 webterm keeps no command history (removed entirely by [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)) and stores no terminal output. This page defines the boundary.
 
-The history list ([ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md)) reads the programs' **own** history files (`~/.claude/history.jsonl`, `~/.codex/history.jsonl`, the shell's history) when you open it, and returns at most 30 entries to the page. The agent keeps no copy and logs nothing about them; the page keeps the last list in memory only.
+webterm doesn't read the programs' own history files either (`~/.claude/history.jsonl`, `~/.codex/history.jsonl`, the shell's history): the history list that did was removed by [ADR-0058](../20-architecture/adr/0058-enter-key-and-two-row-strip.md).
 
-The command strip stores only your **arrangement** of commands (order, labels, hidden items, text you added) in `~/.config/webterm/commands.json`, 0600: configuration you wrote, not output. To list claude's commands the agent runs the same claude executable you run, as you, with `--bare --no-session-persistence`, the network pointed at a dead port, and stops it after its first line: nothing is sent anywhere and claude records no session.
+The command strip stores only your **arrangement** of commands (order, labels, hidden items, text you added) in `~/.config/webterm/commands.json`, 0600: configuration you wrote, not output. To list claude's commands the agent runs the same claude executable you run, as you, with `--bare --no-session-persistence`, the network pointed at a dead port, and stops it once its `init` line arrives: nothing is sent anywhere and claude records no session ([ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md) §4).
 
 ## The rule: terminal output never touches disk
 

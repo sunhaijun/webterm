@@ -153,15 +153,22 @@ describe('UT-keymap-1 DECCKM: arrows and HOME / END follow application cursor ke
 })
 
 describe('UT-keys-1 extra keys (AC-3.18)', () => {
-  it('has 14 keys in two rows, in Termux\'s default order', () => {
+  it('has 15 keys in two rows, in Termux\'s default order, ↵ last (ADR-0058)', () => {
     expect(EXTRA_KEYS.map((row) => row.map((k) => k.label))).toEqual([
       ['ESC', '/', '-', 'HOME', '↑', 'END', 'PGUP'],
-      ['TAB', 'CTRL', 'ALT', '←', '↓', '→', 'PGDN'],
+      ['TAB', 'CTRL', 'ALT', '←', '↓', '→', 'PGDN', '↵'],
     ])
     expect(EXTRA_KEYS.flat().map((k) => `key-${k.id}`)).toEqual([
       'key-Escape', 'key-Slash', 'key-Minus', 'key-Home', 'key-ArrowUp', 'key-End', 'key-PageUp',
-      'key-Tab', 'key-Ctrl', 'key-Alt', 'key-ArrowLeft', 'key-ArrowDown', 'key-ArrowRight', 'key-PageDown',
+      'key-Tab', 'key-Ctrl', 'key-Alt', 'key-ArrowLeft', 'key-ArrowDown', 'key-ArrowRight', 'key-PageDown', 'key-Enter',
     ])
+  })
+
+  it('↵ sends CR; ALT makes it ESC CR (a newline in claude), CTRL leaves it CR (AC-3.24)', () => {
+    expect(extraKeyBytes('Enter', NO_MODS, false)).toBe('\r')
+    expect(extraKeyBytes('Enter', NO_MODS, true), 'DECCKM has no effect').toBe('\r')
+    expect(extraKeyBytes('Enter', { ctrl: false, alt: true }, false)).toBe('\x1b\r')
+    expect(extraKeyBytes('Enter', { ctrl: true, alt: false }, false)).toBe('\r')
   })
 
   it('matches the physical keyboard encoding without modifiers', () => {

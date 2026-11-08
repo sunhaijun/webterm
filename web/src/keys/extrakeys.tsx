@@ -21,7 +21,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
 
 import type { Form } from '../app/form'
-import { CommandsIcon, EditIcon, HistoryIcon, PaperclipLargeIcon } from '../ui/icons'
+import { CommandsIcon, EditIcon, EnterIcon, PaperclipLargeIcon } from '../ui/icons'
 import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { TAP_PX, keyGesture, previewBar } from './collapse'
@@ -46,9 +46,9 @@ export interface ExtraKeysProps {
   onCollapse(): void
   /** A non-modifier key was pressed (called from the pointerup dispatch). */
   onKey(id: ExtraKeyId): void
-  /** The last column: open the history list or the command strip (ADR-0057). */
+  /** ⌘: open the command strip (ADR-0057, ADR-0058). */
   onMenu(menu: KeyMenu): void
-  /** Which of the two is open, if any. */
+  /** Whether it's open. */
   menu: KeyMenu | null
   /** claude or codex is in front: ⌘ is there (otherwise its cell stays empty, ADR-0057 §2). */
   commands: boolean
@@ -64,12 +64,8 @@ export interface ExtraKeysProps {
 
 const noFocus = (e: Event) => e.preventDefault()
 
-/** The two keys at the end of the rows (ADR-0054 §1, ADR-0057). */
-export type KeyMenu = 'history' | 'commands'
-const MENU_KEYS: { menu: KeyMenu; label: string; icon: () => preact.JSX.Element }[] = [
-  { menu: 'history', label: 'History', icon: HistoryIcon },
-  { menu: 'commands', label: 'Commands', icon: CommandsIcon },
-]
+/** What the last column opens: only ⌘'s command strip (ADR-0058 §1; ↵ is an ordinary key). */
+export type KeyMenu = 'commands'
 
 export function ExtraKeys(p: ExtraKeysProps) {
   const page = p.page
@@ -284,37 +280,38 @@ export function ExtraKeys(p: ExtraKeysProps) {
                   type="button"
                   key={k.id}
                   tabIndex={-1}
-                  class="ek-key"
+                  class={k.id === 'Enter' ? 'ek-key ek-icon-key' : 'ek-key'}
                   data-tap
                   data-key={k.id}
                   data-testid={`key-${k.id}`}
                   data-sticky={sticky}
                   aria-pressed={sticky === undefined ? undefined : sticky === 'off' ? 'false' : 'true'}
+                  aria-label={k.id === 'Enter' ? 'Enter' : undefined}
                 >
-                  {k.label}
+                  {k.id === 'Enter' ? <EnterIcon /> : k.label}
                 </button>
               )
             }),
-            // The last column (ADR-0054 §1): fixed in place; ⌘ only for claude and codex, its cell kept empty otherwise
-            ...MENU_KEYS.slice(r, r + 1).map(({ menu, label, icon: MenuIcon }) =>
-              menu === 'commands' && !p.commands ? (
-                <span key={menu} class="ek-blank" data-testid="commands-blank" aria-hidden="true" />
-              ) : (
-              <button
-                type="button"
-                key={menu}
-                tabIndex={-1}
-                class="ek-key ek-menu-key"
-                data-tap
-                data-menu={menu}
-                data-testid={`key-${menu}`}
-                aria-label={label}
-                aria-expanded={p.menu === menu ? 'true' : 'false'}
-              >
-                <MenuIcon />
-              </button>
-              ),
-            ),
+            // The last column's top cell (ADR-0058 §1): ⌘ only for claude and codex, its cell kept empty otherwise
+            ...(r !== 0
+              ? []
+              : p.commands
+                ? [
+                    <button
+                      type="button"
+                      key="commands"
+                      tabIndex={-1}
+                      class="ek-key ek-menu-key"
+                      data-tap
+                      data-menu="commands"
+                      data-testid="key-commands"
+                      aria-label="Commands"
+                      aria-expanded={p.menu === 'commands' ? 'true' : 'false'}
+                    >
+                      <CommandsIcon />
+                    </button>,
+                  ]
+                : [<span key="commands" class="ek-blank" data-testid="commands-blank" aria-hidden="true" />]),
           ])}
         </div>
         <div class="ek-textrow">

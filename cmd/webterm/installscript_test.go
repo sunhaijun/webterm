@@ -303,7 +303,7 @@ func TestInstallScriptSetup(t *testing.T) {
 		inOut    string
 		notInOut string
 	}{
-		{"--setup", []string{"--setup"}, true, "Setting up claude, codex and your shell", ""},
+		{"--setup", []string{"--setup"}, true, "Setting up claude and codex", ""},
 		{"--no-setup", []string{"--setup", "--no-setup"}, false, "", "Setting up claude"},
 		{"not a first install, no flag", nil, false, "", "Setting up claude"},
 		{"--setup --dry-run", []string{"--setup", "--dry-run"}, false, "Would run: webterm setup --yes", ""},

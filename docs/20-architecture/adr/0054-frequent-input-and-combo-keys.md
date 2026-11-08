@@ -56,7 +56,7 @@ It's in `welcome.sessions[]` / `session.created` and in `session.updated` when i
 - Read at most the last 1 MiB of the file, take the last 1000 entries, keep single-line entries of 1–80 characters after trimming, drop claude's placeholders (`[Pasted text #N …]`, `[Image #N]`), and for the shell drop entries shorter than 3 characters (`ls` is faster typed). Rank by count, ties by the most recent; return the top ten.
 - `other`, a missing file or an unreadable one → an empty list.
 - **webterm stores nothing**: no copy, no log line, no cache in the agent. The browser keeps the last list per program in memory only, to show it while the new one loads.
-- bash writes its history when the shell exits, so commands from a shell that has been open for days show up late; `PROMPT_COMMAND="history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}"` in `~/.bashrc` writes each command as it runs. webterm doesn't change the user's shell config ([troubleshooting.md](../../80-ops/troubleshooting.md#history-is-empty-or-old)).
+- bash writes its history when the shell exits, so commands from a shell that has been open for days show up late; `PROMPT_COMMAND="history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}"` in `~/.bashrc` writes each command as it runs. webterm doesn't change the user's shell config.
 
 ### 4. The menus
 
@@ -86,5 +86,5 @@ Both open a popover above the extra keys (`frequent-menu`, `combo-menu`), closed
 ## Consequences
 
 - ADR-0025 §2's "static" now reads: the fourteen keys are static; the two at the end are static in place, and their menus follow the program.
-- Docs: [input.md](../../40-frontend/input.md#history-and-commands-ac-324) (layout, the two menus), protocol (`program`), [http-api.md](../../30-protocol/http-api.md#history), [session-manager.md](../../50-backend/session-manager.md), [privacy-history.md](../../60-security/privacy-history.md), AC-3.24, AC-3.25, troubleshooting.
+- Docs: [input.md](../../40-frontend/input.md#the-last-column-ac-324) (layout, the two menus), protocol (`program`), [http-api.md](../../30-protocol/http-api.md), [session-manager.md](../../50-backend/session-manager.md), [privacy-history.md](../../60-security/privacy-history.md), AC-3.24, AC-3.25, troubleshooting.
 - Tests: UT-program-1 (classification), UT-frequent-1 (each format, filters, ranking, the 1 MiB tail), IT-program-1 (`session.updated{program}` for a shell, a program named `claude`, and back), IT-frequent-1 (the route: authentication, a temporary `HOME`), UT-combos-1 (tile sets and bytes), E2E-51 (the column's geometry, both menus, sending).

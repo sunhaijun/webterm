@@ -30,13 +30,13 @@ The default layout is Termux's default layout, and it is **static**: it doesn't 
 ```
 left    key area (8 columns × 2 rows, equal width, no horizontal scroll)
 ┌────┬──────┬──────┬──────┬──────┬──────┬──────┬──────┬────┐
-│ [3]│ ESC  │  /   │  -   │ HOME │  ↑   │ END  │ PGUP │ ⟲  │
+│ [3]│ ESC  │  /   │  -   │ HOME │  ↑   │ END  │ PGUP │ ⌘  │
 ├────┼──────┼──────┼──────┼──────┼──────┼──────┼──────┼────┤
-│ ✎  │ TAB  │ CTRL │ ALT  │  ←   │  ↓   │  →   │ PGDN │ ⌘  │
+│ ✎  │ TAB  │ CTRL │ ALT  │  ←   │  ↓   │  →   │ PGDN │ ↵  │
 └────┴──────┴──────┴──────┴──────┴──────┴──────┴──────┴────┘
 ```
 
-The last column, history (⟲) and commands (⌘), stays put like every other key; ⌘ is there only for claude and codex, and what both open follows the program in front ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md), [below](#history-and-commands-ac-324)).
+The last column, commands (⌘) over Enter (↵), stays put like every other key; ⌘ is there only for claude and codex ([ADR-0058](../20-architecture/adr/0058-enter-key-and-two-row-strip.md), [below](#the-last-column-ac-324)).
 
 | Position | testid | Action |
 |---|---|---|
@@ -47,8 +47,8 @@ The last column, history (⟲) and commands (⌘), stays put like every other ke
 | TAB | `key-Tab` | Same |
 | CTRL ALT | `key-Ctrl` `key-Alt` | Sticky modifiers (below) |
 | ← ↓ → PGDN | `key-ArrowLeft` `key-ArrowDown` `key-ArrowRight` `key-PageDown` | Send the corresponding bytes |
-| ⟲ (top right) | `key-history` | Opens the history list ([below](#history-and-commands-ac-324)) |
-| ⌘ (bottom right) | `key-commands` | Opens the command strip; only for claude and codex, otherwise an empty cell |
+| ⌘ (top right) | `key-commands` | Opens the command strip ([below](#commands-ac-325)); only for claude and codex, otherwise an empty cell |
+| ↵ (bottom right) | `key-Enter` | Sends `\r`, so prompts and pickers can be answered with the keyboard down |
 
 On `wide` the left column has only ✎, spanning both rows.
 
@@ -67,20 +67,19 @@ On `wide` the left column has only ✎, spanning both rows.
 
 ---
 
-## History and commands (AC-3.24)
+## The last column (AC-3.24)
 
-[ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md). Both open as a popover above the extra keys and close on a tap outside, `Esc` (taken before the terminal) or switching sessions; they never take focus from the terminal or the text box. Which program is in front comes from the agent (`program`: `shell`, `claude`, `codex`, `other`).
+[ADR-0058](../20-architecture/adr/0058-enter-key-and-two-row-strip.md). ⌘ on top, ↵ below; neither moves. Which program is in front comes from the agent (`program`: `shell`, `claude`, `codex`, `other`).
 
-### ⟲ History
+### ↵ Enter
 
-- On open, the page asks `GET /api/history?program=<program>` ([http-api.md](../30-protocol/http-api.md#history)) and meanwhile shows the last list it got for that program (memory only).
-- The program's own history, **newest first**, each distinct entry once, at most 30 (`history-<i>`). A multi-line entry shows its first line and "N lines".
-- **Tapping a row sends it and Enter** to the current session the way the text page does (bracketed paste, then a separate `\r`, [ADR-0027](../20-architecture/adr/0027-text-page-enter-submits.md)); its ✎ (`history-insert-<i>`) pastes it without Enter. An empty list shows "No history".
+- Always there. Sends `\r` on the extra keys' path, like any other key: through `onData`, past the replay gate, focus unchanged, sticky modifiers applied (ALT → `ESC \r`, which claude reads as a newline; CTRL → `\r`, [keymap.md](keymap.md#sticky-modifiers-on-the-extra-keys)).
+- What it's for: answering claude's and codex's permission prompts, pickers (`/model`, `/resume`, Esc Esc's rewind list) and "Press Enter" with ↑ ↓ ↵ and ESC, without bringing up the on-screen keyboard.
 
-### ⌘ Commands (AC-3.25)
+### Commands (AC-3.25)
 
 - `key-commands` is there **only while `program` is `claude` or `codex`**; otherwise its cell is empty and nothing else moves.
-- It opens the **command strip** (`command-strip`): one row of chips (`command-<id>`), scrolled sideways, each the item's label. A tap runs the item and closes the strip: keys go out on the extra keys' path past sticky modifiers (sequences 120 ms apart); text is sent with Enter (paste + `\r`) or only inserted, per item.
+- It opens the **command strip** (`command-strip`) as a popover above the extra keys: chips (`command-<id>`), each the item's label, in **two rows filled column by column** (item 1 top left, item 2 under it, item 3 at the top of the next column), a column as wide as its wider chip, scrolled sideways. It closes on a tap outside, `Esc` (taken before the terminal) or switching sessions, and never takes focus from the terminal or the text box. A tap runs the item and closes the strip: keys go out on the extra keys' path past sticky modifiers (sequences 120 ms apart); text is sent with Enter (paste + `\r`) or only inserted, per item.
 - ✎ at the right end (`command-edit`) opens the **editor** (`command-editor`), a bottom sheet listing the tool's items in order (`command-row-<i>`): ≡ drags (`command-grip-<i>`, the session drawer's drag), 👁 hides or shows (`command-eye-<i>`), a tap on the row opens a small sheet (`command-form`) to edit its label (`command-form-label`), and for text items what it sends (`command-form-send`) and Enter (`command-form-enter`); items you added also have Delete (`command-form-delete`). A blank label or text means the default. **+ Add** (`command-add`) opens the same sheet for a new text item; **Reset** (`command-reset`) restores the defaults after a second tap within 3 s; **Refresh** (`command-refresh`, claude) asks the tool again. Each change is saved at once (`PUT /api/commands`); if the agent couldn't list claude's built-ins, the editor shows why (`command-warning`).
 - The items, their default order, and how the arrangement is stored: ADR-0057 §4–§5, [http-api.md](../30-protocol/http-api.md#commands). Skills start hidden; new commands appear at the end; nothing is ordered automatically.
 

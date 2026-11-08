@@ -249,10 +249,7 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
       <LinkPopover pop={s.linkPop} onOpen={() => ctl.openLink()} onCopy={() => ctl.copyLink()} onClose={ctl.closeLinkPop} />
       <KeyMenus
         menu={s.keyMenu}
-        history={s.history}
         strip={s.strip}
-        onSendHistory={(i) => ctl.sendHistory(i)}
-        onInsertHistory={(i) => ctl.insertHistory(i)}
         onRun={(id) => ctl.runCommand(id)}
         onEdit={() => ctl.openEditor()}
         onClose={ctl.closeMenu}

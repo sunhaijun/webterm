@@ -727,50 +727,40 @@ button { font: inherit; color: inherit; }
 }
 .clip-close { flex: none; width: 36px; height: 36px; border: none; background: none; color: inherit; display: grid; place-items: center; }
 
-/* The menu keys (ADR-0054, ADR-0057): icons in the key font's color; accent while their popover is open */
-.ek-menu-key { display: grid; place-items: center; }
+/* ⌘ and ↵ (ADR-0058): icons in the key font's color, centered; ⌘ is accent while the strip is open */
+.ek-menu-key, .ek-icon-key { display: grid; place-items: center; }
 .ek-menu-key[aria-expanded='true'] { color: var(--accent); }
 .ek-blank { min-width: 0; }
 
-/* History list and command strip (ADR-0057): popovers just above the extra keys */
+/* Command strip (ADR-0057, ADR-0058 §2): a popover just above the extra keys */
 .km-backdrop { position: fixed; inset: 0; z-index: 20; }
-.km-menu, .km-strip {
+.km-strip {
   position: fixed; z-index: 21; left: 8px; right: 8px;
   border-radius: 10px;
   background: var(--bg); color: var(--fg);
   border: 1px solid var(--line-strong);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
-.km-menu { max-height: 50vh; overflow-y: auto; padding: 6px; }
-.km-row { display: flex; align-items: stretch; border-radius: 8px; }
-.km-row + .km-row { margin-top: 2px; }
-.km-send {
-  flex: 1; min-width: 0; min-height: 40px; padding: 0 10px; text-align: left;
-  border: none; background: none; color: inherit; font: inherit; font-size: 14px;
-  display: flex; align-items: center; gap: 8px;
-}
-.km-text { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.km-lines { flex: none; font-size: 11px; color: var(--muted); }
-.km-insert { flex: none; width: 44px; border: none; background: none; color: var(--muted); display: grid; place-items: center; }
-.km-send:active, .km-insert:active { background: var(--hover); }
-.km-empty { padding: 10px; color: var(--muted); font-size: 13px; }
 
-/* The strip: chips scroll sideways, ✎ stays at the right end */
-.km-strip { display: flex; align-items: stretch; height: 48px; overflow: hidden; }
+/* Two rows filled column by column; a column is as wide as its wider chip, both chips stretch
+   to it; it scrolls sideways and ✎ stays at the right end, as tall as both rows */
+.km-strip { display: flex; align-items: stretch; overflow: hidden; }
 .cs-scroll {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
-  padding: 0 6px; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain;
+  flex: 1; min-width: 0;
+  display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, 34px); grid-auto-columns: max-content;
+  gap: 6px; align-content: center;
+  padding: 7px 6px; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain;
   scrollbar-width: none; touch-action: pan-x;
 }
 .cs-scroll::-webkit-scrollbar { display: none; }
 .cs-chip {
-  flex: none; height: 34px; padding: 0 12px;
+  min-width: 0; height: 34px; padding: 0 12px; justify-self: stretch;
   border: 1px solid var(--line); border-radius: 17px;
   background: var(--surface); color: inherit;
   font-family: var(--font-mono); font-size: 13px; white-space: nowrap;
 }
 .cs-chip:active { background: var(--hover); }
-.cs-loading { padding: 0 8px; color: var(--muted); }
+.cs-loading { grid-row: 1 / span 2; align-self: center; padding: 0 8px; color: var(--muted); }
 .cs-edit {
   flex: none; width: 44px; border: none; border-left: 1px solid var(--line);
   background: none; color: var(--muted); display: grid; place-items: center;

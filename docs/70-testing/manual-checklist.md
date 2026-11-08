@@ -93,14 +93,14 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Upgrade from v0.3.0 with a new `--https-port`: `reload` does two hot upgrades (the old agent can't take a command line), sessions survive, and the new port answers
 - [ ] Install from the web (`gh api … | bash -s -- --channel dev`): the log shows "Handing over to webterm …" (the binary's bundled install script), and the installed version is the dev build
 
-## Setting up claude, codex and the shell (every time `webterm setup` or the installer's question changes, since m19)
+## Setting up claude and codex (every time `webterm setup` or the installer's question changes, since m19)
 
 [ADR-0055](../20-architecture/adr/0055-webterm-setup.md).
 
 - [ ] On a fresh server with claude and codex installed, a first install asks the setup question; Enter adds the settings, and `webterm setup --check` then reports all ok
 - [ ] `webterm setup` with nothing missing says so and changes no file (timestamps unchanged)
 - [ ] After setup, claude in a background session asking for permission lights the waiting-for-you dot; codex finishing a turn does too
-- [ ] A new shell started after setup: a command run in it shows at the top of the history list without exiting the shell
+- [ ] `webterm setup` leaves `~/.bashrc` and `~/.zshrc` alone (since m22)
 
 ## SSH attach (every time attach or the size rules change, since m14)
 
@@ -155,16 +155,17 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] claude `/copy` on Android → "Copied", the answer pastes elsewhere without a bar
 - [ ] Desktop: Ctrl+click (Cmd+click on a Mac) on a URL opens a tab; a plain click and a drag-select don't
 
-## History and the command strip (every time ⟲, ⌘ or their sources change, since m21)
+## The last column and the command strip (every time ↵, ⌘ or the strip's sources change, since m21)
 
-[ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md). claude and codex installed and used for a while.
+[ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md), [ADR-0058](../20-architecture/adr/0058-enter-key-and-two-row-strip.md). claude and codex installed and used for a while.
 
-- [ ] In claude: ⟲ shows your latest prompts first, a long one as its first line plus a line count; tapping one sends it whole
-- [ ] In claude: ⌘ shows claude's shortcuts and commands; scroll sideways; `/compact`, `⇧Tab` and `Esc Esc` work from the strip
+- [ ] Keyboard down: answer a claude permission prompt and the `/model` picker with ↑ ↓ ↵ only; ↵ never pops the keyboard up; ALT ↵ adds a newline in claude's prompt
+- [ ] Sliding a finger across ↵ (to collapse the bar, or by accident) sends nothing
+- [ ] In claude: ⌘ shows claude's shortcuts and commands in two rows, first down then across; scroll sideways; `/compact`, `⇧Tab` and `Esc Esc` work from the strip
 - [ ] ✎: drag a command to the front, hide one, rename one, add a phrase; the phone and the tablet both show the same strip afterwards
 - [ ] After claude updates itself, a new built-in command shows up at the end of the strip without doing anything (or after Refresh)
 - [ ] In codex: ⌘ shows codex's commands; note any that codex 0.166 doesn't recognize
-- [ ] In a plain shell: ⌘ isn't there; ⟲ shows shell history
+- [ ] In a plain shell: ⌘ isn't there (an empty cell), ↵ is
 
 ## Terminal compatibility (every time rendering changes)
 

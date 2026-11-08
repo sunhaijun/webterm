@@ -46,7 +46,7 @@ curl -fsSL …/install.sh | bash -s -- --domain term.example.com
 | `--https-port <n>` | Use another HTTPS port when 443 is taken |
 | `--channel dev` | Install the rolling build of `main` |
 | `--version <tag>` | Install a specific release |
-| `--setup` / `--no-setup` | Set up claude, codex and the shell without asking / don't ask ([below](#set-up-claude-codex-and-the-shell)) |
+| `--setup` / `--no-setup` | Set up claude and codex without asking / don't ask ([below](#set-up-claude-and-codex)) |
 | `--dry-run` | Show what would happen |
 | `--force` | Continue even if the certificate check fails |
 
@@ -62,7 +62,7 @@ Run `webterm pair` (on the server, or in a session on a device that's already pa
 webterm                      # status: service, address, certificate, devices
 webterm update               # upgrade; sessions survive
 webterm devices              # list or revoke devices
-webterm setup --check        # are claude, codex and the shell set up?
+webterm setup --check        # are claude and codex set up?
 journalctl -u webterm -f     # logs
 ```
 
@@ -70,9 +70,9 @@ journalctl -u webterm -f     # logs
 
 Problems: [troubleshooting.md](troubleshooting.md).
 
-## Set up claude, codex and the shell
+## Set up claude and codex
 
-[ADR-0055](../20-architecture/adr/0055-webterm-setup.md). Three settings in other programs' files make "waiting for you" and the history list work fully: claude rings the bell for its notifications, codex sends its notifications, and the shell writes each command to its history as it runs. A first install asks whether to add them; any time later:
+[ADR-0055](../20-architecture/adr/0055-webterm-setup.md). Two settings in other programs' files make "waiting for you" work fully: claude rings the bell for its notifications, and codex sends its notifications. A first install asks whether to add them; any time later:
 
 ```bash
 webterm setup --check   # what's set, what's missing
@@ -84,7 +84,6 @@ webterm setup --yes     # add them without asking
 |---|---|---|
 | claude | `~/.claude/settings.json` | `"preferredNotifChannel": "terminal_bell"` (not if you chose another channel) |
 | codex | `~/.codex/config.toml` | `notifications = true`, `notification_condition = "always"` under `[tui]` |
-| bash / zsh | `~/.bashrc` / `~/.zshrc` | A block marked `# >>> webterm >>>` that writes history as you go |
 
 Only what's missing is added, and only lines are inserted: the rest of each file stays as it was. Each file is copied to `<file>.webterm-bak` before its first change. Programs that aren't installed are skipped. `webterm update` never runs it.
 
@@ -231,7 +230,7 @@ Command-line flags override the file; unknown keys are an error with the line nu
 | `webterm pair [--wait]` | Print a pairing code and QR code |
 | `webterm devices [list \| revoke <id> \| revoke-all]` | Manage devices |
 | `webterm doctor [--acme] [--guide]` | Check prerequisites; `--acme` obtains the certificate, `--guide` waits for you to fix things |
-| `webterm setup [--check] [--yes]` | Check and add the claude, codex and shell settings webterm uses ([above](#set-up-claude-codex-and-the-shell)) |
+| `webterm setup [--check] [--yes]` | Check and add the claude and codex settings webterm uses ([above](#set-up-claude-and-codex)) |
 | `webterm attach [name \| n] [--new] [--list]` | Attach this terminal to a session ([From a terminal over SSH](#from-a-terminal-over-ssh)) |
 | `webterm reload [--when-idle] [-- serve …]` | Hot-upgrade to the binary on disk; after `--`, the command line the new process starts with |
 | `webterm version` | Version |

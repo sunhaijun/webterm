@@ -183,6 +183,7 @@ export type ExtraKeyId =
   | 'ArrowDown'
   | 'ArrowRight'
   | 'PageDown'
+  | 'Enter'
 
 export interface ExtraKey {
   id: ExtraKeyId
@@ -211,6 +212,8 @@ export const EXTRA_KEYS: readonly (readonly ExtraKey[])[] = [
     { id: 'ArrowDown', label: '↓' },
     { id: 'ArrowRight', label: '→' },
     { id: 'PageDown', label: 'PGDN' },
+    // The last column's bottom cell (ADR-0058 §1); ⌘ above it isn't a key
+    { id: 'Enter', label: '↵' },
   ],
 ]
 
@@ -220,7 +223,7 @@ export function isModifierKey(id: ExtraKeyId): id is 'Ctrl' | 'Alt' {
 }
 
 const PAGE_NUM: Partial<Record<ExtraKeyId, number>> = { PageUp: 5, PageDown: 6 }
-const CHAR_OF: Partial<Record<ExtraKeyId, string>> = { Slash: '/', Minus: '-', Escape: ESC, Tab: '\t' }
+const CHAR_OF: Partial<Record<ExtraKeyId, string>> = { Slash: '/', Minus: '-', Escape: ESC, Tab: '\t', Enter: '\r' }
 
 /**
  * Extra key → bytes, encoded like a physical keyboard (keymap.md).

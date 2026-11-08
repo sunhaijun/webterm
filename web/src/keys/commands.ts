@@ -1,7 +1,7 @@
 /**
- * The command strip and the history list (input.md §History and commands, ADR-0057): the
- * shapes `/api/commands` and `/api/history` return, and the pure changes the editor makes
- * to an arrangement before sending it back whole (http-api.md §Commands).
+ * The command strip (input.md §Commands, ADR-0057, ADR-0058): the shape `/api/commands`
+ * returns, and the pure changes the editor makes to an arrangement before sending it back
+ * whole (http-api.md §Commands).
  */
 import type { Program } from '../protocol/messages'
 
@@ -166,9 +166,7 @@ export function newItemId(now = Date.now(), rand = Math.random()): string {
   return `add:${now.toString(36)}${Math.floor(rand * 1296).toString(36)}`
 }
 
-/** A history row: the first non-blank line, and how many lines there are. */
-export function historyRow(text: string): { first: string; lines: number } {
-  const lines = text.split('\n')
-  const first = lines.find((l) => l.trim() !== '') ?? ''
-  return { first, lines: lines.length }
+/** The first non-blank line of a text item, for its editor row. */
+export function firstLine(text: string): string {
+  return text.split('\n').find((l) => l.trim() !== '') ?? ''
 }

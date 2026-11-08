@@ -146,8 +146,8 @@ function round(n: number): number {
   return Math.round(n * 100) / 100
 }
 
-/** History (ADR-0057): a clock face whose rim turns back into an arrow. */
-export const HistoryIcon = () => <Icon d="M2.2 4.6A5.25 5.25 0 1 1 1.75 7M1.75 2.25v2.6h2.6M7 4.25V7l1.9 1.25" />
+/** Enter (ADR-0058): a return arrow, down from the top right and back to the left. */
+export const EnterIcon = () => <Icon d="M11.75 2.25v4.5a2 2 0 0 1-2 2H2.5M5.25 6L2.5 8.75l2.75 2.75" />
 
 /** Commands (ADR-0057): two key caps, one behind the other. */
 export const CommandsIcon = () => <Icon d="M2.75 1.75h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1zM8.25 5.75h3a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-3" />

@@ -73,6 +73,7 @@ When CTRL / ALT is armed on the extra keys ([input.md](input.md#behavior)), the 
 | `?` | `0x7f` | `ESC` + char |
 | Other printable characters | Unchanged | `ESC` + char |
 | Arrows / `HOME` / `END` / `PGUP` / `PGDN` | xterm's modifier encoding, e.g. `ESC [ 1 ; 5 A` | e.g. `ESC [ 1 ; 3 A` |
+| ↵ ([ADR-0058](../20-architecture/adr/0058-enter-key-and-two-row-strip.md)) | `\r` (unchanged) | `ESC \r` (a newline in claude) |
 | `ESC` / `TAB` | Unchanged | `ESC` + byte |
 
 With both armed, apply CTRL first, then prefix `ESC`.
