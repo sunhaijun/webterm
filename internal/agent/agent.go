@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sunhaijun/webterm/internal/auth"
+	"github.com/sunhaijun/webterm/internal/commands"
 	"github.com/sunhaijun/webterm/internal/session"
 	"github.com/sunhaijun/webterm/internal/store"
 	"github.com/sunhaijun/webterm/internal/uploads"
@@ -40,9 +41,16 @@ type Config struct {
 	// UploadRoot replaces <temp>/webterm-<uid> as the directory for files
 	// sent to sessions (ADR-0051).
 	UploadRoot string
-	// Home replaces the user's home directory as where GET /api/frequent finds
-	// the programs' history files (ADR-0054 §3). Tests set it.
+	// Home replaces the user's home directory as where GET /api/history and
+	// GET /api/commands find the programs' files (ADR-0057). Tests set it.
 	Home string
+	// CommandsFile is where the command strip's arrangement is kept
+	// (~/.config/webterm/commands.json, ADR-0057 §5). Empty: arrangements
+	// can't be saved.
+	CommandsFile string
+	// ProbeDir is the private directory claude's command probe runs in;
+	// default <temp>/webterm-<uid>/probe.
+	ProbeDir string
 }
 
 // Agent stitches the store, auth, sessions and connection layer into one
@@ -55,6 +63,8 @@ type Agent struct {
 	sessions *session.Manager
 	hub      *wsconn.Hub
 	uploads  *uploads.Store
+	prober   *commands.Prober
+	cmdStore *commands.Store
 	mux      *http.ServeMux
 }
 
@@ -72,6 +82,8 @@ func New(cfg Config, st *store.Store, sessions *session.Manager) *Agent {
 		sessions: sessions,
 		hub:      wsconn.NewHub(cfg.MaxConns),
 		uploads:  uploads.New(cfg.UploadRoot),
+		prober:   commands.NewProber(probeDir(cfg)),
+		cmdStore: &commands.Store{Path: cfg.CommandsFile},
 		mux:      http.NewServeMux(),
 	}
 	a.routes()
@@ -116,7 +128,10 @@ func (a *Agent) routes() {
 	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeDevice))))
 	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeAll))))
 	a.mux.Handle("POST /api/uploads", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleUpload))))
-	a.mux.Handle("GET /api/frequent", a.requireAuth(http.HandlerFunc(a.handleFrequent)))
+	a.mux.Handle("GET /api/history", a.requireAuth(http.HandlerFunc(a.handleHistory)))
+	a.mux.Handle("GET /api/commands", a.requireAuth(http.HandlerFunc(a.handleCommands)))
+	a.mux.Handle("PUT /api/commands", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handlePutCommands))))
+	a.mux.Handle("DELETE /api/commands", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleDeleteCommands))))
 
 	// Every other /api/* path authenticates first, then 404s (auth matrix:
 	// /api/* ✓). Without this they would fall through to the SPA fallback on

@@ -46,7 +46,7 @@ export interface AgentOptions {
    */
   ringBytes?: number
   maxSessions?: number
-  /** HOME for the agent and its shells: where frequent input reads history files (ADR-0054). */
+  /** HOME for the agent and its shells: where the history list reads history files (ADR-0057). */
   home?: string
   /** Extra `serve` flags, for debugging (e.g. `--log-level debug`). */
   extraArgs?: string[]
@@ -82,7 +82,8 @@ export class Agent {
 
   /** The agent's environment: its own TMPDIR, so uploads (ADR-0051) land in `uploadDir()`. */
   private static env(dataDir: string, opts: AgentOptions = {}): NodeJS.ProcessEnv {
-    return { ...process.env, TMPDIR: join(dataDir, 'tmp'), ...(opts.home ? { HOME: opts.home } : {}) }
+    // With a HOME of its own, the agent's config (commands.json) goes there too, never to the real one
+    return { ...process.env, TMPDIR: join(dataDir, 'tmp'), ...(opts.home ? { HOME: opts.home, XDG_CONFIG_HOME: join(opts.home, '.config') } : {}) }
   }
 
   /** Where `POST /api/uploads` saves files: `$TMPDIR/webterm-<uid>/uploads`. */

@@ -2,7 +2,7 @@
 
 > Status: Accepted
 >
-> ★ The second half of the frontend–backend contract (the first is [`websocket-protocol.md`](websocket-protocol.md)). The terminal stream uses the WebSocket; HTTP covers pairing, device management, uploads, frequent input and the health check.
+> ★ The second half of the frontend–backend contract (the first is [`websocket-protocol.md`](websocket-protocol.md)). The terminal stream uses the WebSocket; HTTP covers pairing, device management, uploads, history, the command strip and the health check.
 
 ## General rules
 
@@ -39,14 +39,14 @@ Content-Type: image/png            (informational; not used)
 - The body is streamed to disk, not buffered in memory.
 - There is no route to list, read or delete uploads.
 
-## Frequent input
+## History
 
-The ten single-line inputs sent most often to a program, from that program's own history file ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md) §3). Authenticated. Read on request; the agent keeps no copy and logs no entry.
+What you sent recently to a program, newest first, from that program's own history file ([ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md) §1). Authenticated. Read on request; the agent keeps no copy and logs no entry.
 
 ```
-GET /api/frequent?program=claude
+GET /api/history?program=claude
 
-200 {"items": ["/clear", "继续", "/compact"]}
+200 {"items": ["继续", "fix the login bug\nand add a test", "/clear"]}
 ```
 
 | `program` | Source |
@@ -56,9 +56,46 @@ GET /api/frequent?program=claude
 | `shell` | the session shell's history: `~/.bash_history` (bash; `#<digits>` timestamp lines skipped) or `~/.zsh_history` (zsh; `: <time>:<n>;` prefix removed) |
 | anything else | `{"items": []}` |
 
-- At most the last 1 MiB of the file and its last 1000 entries are read. Entries are trimmed; only single-line ones of 1–80 characters are kept; claude's placeholders (`[Pasted text #N …]`, `[Image #N]`) are dropped; for `shell`, so are entries shorter than 3 characters.
-- Ranked by count, ties by the most recent; at most 10.
+- At most the last 1 MiB of the file is read. Entries are trimmed; blank ones, ones over 32 KiB and claude's placeholders (`[Pasted text #N …]`, `[Image #N]`) are skipped. Multi-line entries are kept.
+- Newest first; an entry seen more than once appears once, at its newest position; at most 30.
 - A missing or unreadable file is an empty list, not an error.
+
+## Commands
+
+The command strip's items for the program in front of a session, merged with your arrangement (ADR-0057 §4–§5). Authenticated; `PUT` and `DELETE` need the `Origin` check.
+
+```
+GET /api/commands?sid=3            (&refresh=1 asks the tool again)
+
+200 {"program": "claude",
+     "items": [
+       {"id": "key:shift-tab", "label": "⇧Tab Mode", "kind": "keys", "send": ["\u001b[Z"], "enter": false, "origin": "key", "hidden": false},
+       {"id": "/compact", "label": "/compact", "kind": "text", "send": ["/compact"], "enter": true, "origin": "builtin", "hidden": false},
+       {"id": "/deep-research", "label": "/deep-research", "kind": "text", "send": ["/deep-research"], "enter": true, "origin": "skill", "hidden": true}
+     ],
+     "arrangement": {"order": ["key:shift-tab", "/compact"]},
+     "warning": ""}
+```
+
+| Case | Reply |
+|---|---|
+| The session's program is `claude` or `codex` | `200` with the items in order; `warning` says why built-ins are missing if the claude probe failed |
+| Any other program | `200 {"program": "<it>", "items": []}` |
+| Unknown sid | `404 not_found` |
+
+```
+PUT /api/commands?program=claude
+{"order": ["/compact", "key:shift-tab"], "visible": {"/deep-research": true}, "edits": {"/compact": {"label": "compact", "enter": true}}, "added": [{"id": "add:1", "label": "继续", "send": "继续", "enter": true}]}
+
+204
+
+DELETE /api/commands?program=claude      → 204, back to the defaults
+```
+
+- `kind: "keys"`: `send` is a list of byte strings written 120 ms apart; `kind: "text"`: `send` has one string, followed by Enter when `enter` is true.
+- `origin`: `key`, `builtin`, `custom`, `skill` (hidden by default), `added`.
+- `arrangement` is the stored arrangement as `PUT` takes it; the editor changes it and sends it back whole.
+- The arrangement is saved to `~/.config/webterm/commands.json` (0600, atomic). Bodies over 256 KiB, more than 1000 entries, or another program than `claude` / `codex` get `400 bad_request`.
 
 ## Health check
 

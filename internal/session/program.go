@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/sunhaijun/webterm/internal/protocol"
 )
 
 // Which program is in front (ADR-0054 §2): the page picks the combo keys and
@@ -61,12 +63,32 @@ func readProgram(pgrp, shell int) string {
 	if shell > 0 && pgrp == shell {
 		return ProgramShell
 	}
-	dir := "/proc/" + strconv.Itoa(pgrp)
-	exe, _ := os.Readlink(dir + "/exe")
+	exe, argv := readProc(pgrp)
+	return classifyProgram(exe, argv)
+}
+
+// readProc reads a process's executable and argv from /proc.
+func readProc(pid int) (exe string, argv []string) {
+	dir := "/proc/" + strconv.Itoa(pid)
+	exe, _ = os.Readlink(dir + "/exe")
 	raw, _ := os.ReadFile(dir + "/cmdline")
-	var argv []string
 	if len(raw) > 0 {
 		argv = strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
 	}
-	return classifyProgram(exe, argv)
+	return exe, argv
+}
+
+// Foreground returns the executable and argv of the program in front of the
+// session (its foreground process group's leader), for running it again: the
+// command strip asks the claude in front for its commands (ADR-0057 §4).
+func (s *Session) Foreground() (exe string, argv []string, ok bool) {
+	if s.Status() != protocol.StatusRunning {
+		return "", nil, false
+	}
+	pgrp, err := foregroundPgrp(s.ptmx)
+	if err != nil || pgrp <= 0 {
+		return "", nil, false
+	}
+	exe, argv = readProc(pgrp)
+	return exe, argv, exe != ""
 }

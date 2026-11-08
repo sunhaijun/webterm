@@ -3,17 +3,21 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/sunhaijun/webterm/internal/auth"
-	"github.com/sunhaijun/webterm/internal/frequent"
+	"github.com/sunhaijun/webterm/internal/commands"
+	"github.com/sunhaijun/webterm/internal/history"
 	"github.com/sunhaijun/webterm/internal/protocol"
+	"github.com/sunhaijun/webterm/internal/session"
 	"github.com/sunhaijun/webterm/internal/uploads"
 	"github.com/sunhaijun/webterm/internal/webui"
 	"github.com/sunhaijun/webterm/internal/wsconn"
@@ -258,20 +262,113 @@ func (a *Agent) writeError(w http.ResponseWriter, status int, code, message stri
 	a.writeJSON(w, status, map[string]string{"code": code, "message": message})
 }
 
-// ---------- Frequent input ----------
+// ---------- History and the command strip (ADR-0057) ----------
 
-// handleFrequent returns the program's most frequent single-line inputs, read
-// now from its own history file (ADR-0054 §3). Nothing is kept or logged.
-func (a *Agent) handleFrequent(w http.ResponseWriter, r *http.Request) {
-	home := a.cfg.Home
-	if home == "" {
-		home, _ = os.UserHomeDir()
+func (a *Agent) home() string {
+	if a.cfg.Home != "" {
+		return a.cfg.Home
 	}
+	home, _ := os.UserHomeDir()
+	return home
+}
+
+// probeDir is the private directory claude's command probe runs in.
+func probeDir(cfg Config) string {
+	if cfg.ProbeDir != "" {
+		return cfg.ProbeDir
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("webterm-%d", os.Getuid()), "probe")
+}
+
+// handleHistory returns what the program was sent recently, newest first, read
+// now from its own history file (ADR-0057 §1). Nothing is kept or logged.
+func (a *Agent) handleHistory(w http.ResponseWriter, r *http.Request) {
 	items := []string{}
-	if home != "" {
-		items = append(items, frequent.Items(r.URL.Query().Get("program"), home, a.sessions.Shell())...)
+	if home := a.home(); home != "" {
+		items = history.Items(r.URL.Query().Get("program"), home, a.sessions.Shell())
 	}
 	a.writeJSON(w, http.StatusOK, map[string][]string{"items": items})
+}
+
+// stripProgram reports whether a program has a command strip.
+func stripProgram(p string) bool { return p == session.ProgramClaude || p == session.ProgramCodex }
+
+// handleCommands returns the command strip for the program in front of a
+// session: the tool's items merged with the user's arrangement (ADR-0057 §4–§5).
+func (a *Agent) handleCommands(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	sid, err := strconv.ParseUint(q.Get("sid"), 10, 16)
+	if err != nil {
+		a.writeError(w, http.StatusBadRequest, "bad_request", "sid is required")
+		return
+	}
+	s, ok := a.sessions.Get(uint16(sid))
+	if !ok {
+		a.writeError(w, http.StatusNotFound, "not_found", "No such session")
+		return
+	}
+	info := s.Info()
+	if !stripProgram(info.Program) {
+		a.writeJSON(w, http.StatusOK, map[string]any{"program": info.Program, "items": []commands.Item{}})
+		return
+	}
+	in := commands.Input{Program: info.Program, Home: a.home(), Cwd: info.CWD}
+	if info.Program == session.ProgramClaude {
+		if exe, argv, ok := s.Foreground(); ok {
+			in.Command = commands.ProbeCommand(exe, argv)
+		}
+	}
+	if q.Get("refresh") == "1" {
+		a.prober.Forget()
+	}
+	items, warning := commands.Catalog(r.Context(), in, a.prober)
+	if warning != "" {
+		a.log.Info("command strip", "program", info.Program, "warning", warning)
+	}
+	arr := a.cmdStore.Load(info.Program)
+	a.writeJSON(w, http.StatusOK, map[string]any{
+		"program": info.Program, "items": commands.Arrange(items, arr), "arrangement": arr, "warning": warning,
+	})
+}
+
+// handlePutCommands saves a program's arrangement (order, visibility, edits,
+// added items) to the commands file.
+func (a *Agent) handlePutCommands(w http.ResponseWriter, r *http.Request) {
+	program := r.URL.Query().Get("program")
+	if !stripProgram(program) || a.cfg.CommandsFile == "" {
+		a.writeError(w, http.StatusBadRequest, "bad_request", "program must be claude or codex")
+		return
+	}
+	var arr commands.Arrangement
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&arr); err != nil {
+		a.writeError(w, http.StatusBadRequest, "bad_request", "Malformed arrangement")
+		return
+	}
+	if err := arr.Validate(); err != nil {
+		a.writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := a.cmdStore.Save(program, arr); err != nil {
+		a.log.Error("save command arrangement", "err", err)
+		a.writeError(w, http.StatusInternalServerError, "internal", "Couldn't save")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteCommands resets a program's arrangement to the defaults.
+func (a *Agent) handleDeleteCommands(w http.ResponseWriter, r *http.Request) {
+	program := r.URL.Query().Get("program")
+	if !stripProgram(program) || a.cfg.CommandsFile == "" {
+		a.writeError(w, http.StatusBadRequest, "bad_request", "program must be claude or codex")
+		return
+	}
+	if err := a.cmdStore.Reset(program); err != nil {
+		a.log.Error("reset command arrangement", "err", err)
+		a.writeError(w, http.StatusInternalServerError, "internal", "Couldn't reset")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------- Uploads ----------

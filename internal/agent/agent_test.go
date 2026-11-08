@@ -90,7 +90,9 @@ func TestITAuth1_RouteMatrix(t *testing.T) {
 	t.Run("routes with auth", func(t *testing.T) {
 		for _, tc := range []struct{ method, path string }{
 			{"GET", "/api/devices"},
-			{"GET", "/api/commands"},
+			{"GET", "/api/commands?sid=1"},
+			{"PUT", "/api/commands?program=claude"},
+			{"GET", "/api/history?program=shell"},
 			{"GET", "/api/settings"},
 			{"GET", "/api/fs?cwd=/"},
 			{"GET", "/api/anything-else"},
@@ -120,12 +122,13 @@ func TestITAuth1_RouteMatrix(t *testing.T) {
 	})
 
 	t.Run("removed endpoints: 404 after auth, not the SPA page", func(t *testing.T) {
-		// /api/commands*, /api/fs and /api/settings went away with command
-		// history (ADR-0026 §6). Without the catch-all they would fall into
-		// the SPA fallback on GET / and return 200 + index.html.
+		// /api/fs and /api/settings went away with command history (ADR-0026
+		// §6), /api/frequent with ADR-0057 (/api/commands is a new route
+		// there). Without the catch-all they would fall into the SPA fallback
+		// on GET / and return 200 + index.html.
 		c := h.client()
 		h.pair(c).Body.Close()
-		for _, p := range []string{"/api/commands", "/api/settings", "/api/fs?cwd=/"} {
+		for _, p := range []string{"/api/frequent?program=shell", "/api/settings", "/api/fs?cwd=/"} {
 			resp := h.do(c, http.MethodGet, p, nil)
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusNotFound {

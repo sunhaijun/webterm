@@ -32,24 +32,24 @@
 | m15 | `feat/40-uploads` | Send screenshots, photos and other files to a session from any device: `POST /api/uploads` to a private temp directory (deleted after 24 hours), the paperclip, paste and drop; the path is pasted into the session it was sent from | [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md), [http-api.md](../30-protocol/http-api.md#uploads), [input.md](../40-frontend/input.md#sending-files-ac-323) |
 | m16 | `feat/40-attention` | "Waiting for you" replaces the unread dot: the agent sets a per-session `attention` flag when the program signals it's your turn (title spinner → idle, a bell or desktop notification, a command of ≥ 10 s returning to the shell) and clears it on `session.seen` from the client in front of the user; tmux-specific guidance removed | [ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md), [session-ux.md](../40-frontend/session-ux.md#waiting-for-you-ac-43), [websocket-protocol.md](../30-protocol/websocket-protocol.md#sessionseen) |
 | m17 | `feat/40-links-clipboard` | Links and the clipboard on touch: one URL detector for Ctrl/Cmd+click and a tap popover (Open · Copy), checked before mouse tracking; OSC 52 write-only from the current session's live output, so claude's `/copy` reaches a phone | [ADR-0053](../20-architecture/adr/0053-links-and-clipboard.md), [input.md](../40-frontend/input.md#links-ac-519) |
-| m18 | `feat/40-input-menus` | A last key column: frequent input from the program's own history (`GET /api/frequent`) and combo keys for the program in front (`program`: shell / claude / codex / other); m10 replanned around a copy view | [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [input.md](../40-frontend/input.md#frequent-input-and-combo-keys-ac-324) |
+| m18 | `feat/40-input-menus` | A last key column: frequent input from the program's own history (`GET /api/frequent`) and combo keys for the program in front (`program`: shell / claude / codex / other); m10 replanned around a copy view | [ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md), [input.md](../40-frontend/input.md#history-and-commands-ac-324) |
 | m19 | `feat/80-ops-setup` | `webterm setup [--check] [--yes]` checks and adds the settings claude, codex and the shell need (claude's `preferredNotifChannel`, codex's `[tui]` notifications, history as you go) with minimal line inserts and backups; a first install offers it | [ADR-0055](../20-architecture/adr/0055-webterm-setup.md), [install.md](../80-ops/install.md#set-up-claude-codex-and-the-shell) |
+| m20 | `feat/40-collapse-keys` | The extra keys collapse with a swipe right into a corner button (tap it or swipe left along the bottom to restore; one resize each way); every control acts only when released in place; pages switch with vertical swipes | [ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md), [input.md](../40-frontend/input.md#collapsing-the-extra-keys-ac-326) |
 
 Released together as **v0.5.0** (2026-11-08): m14–m18.
 
 ## In progress
 
-### m20 · `feat/40-collapse-keys`
+### m21 · `feat/40-command-strip`
 
-More rows for reading: the extra keys collapse into a corner button, and taps on them become releases in place.
+The last column's two keys, reworked from use: ⟲ is recent history, ⌘ a strip of the tool's own commands in your order.
 
 | Deliverable | Docs |
 |---|---|
-| A tap acts only when released within 10px; `data-pressed` instead of `:active` | [ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md), [input.md](../40-frontend/input.md#behavior) |
-| Swipe right collapses the bar (one resize); `keys-restore` bottom-right with the waiting-for-you dot; tap it, swipe left in the bottom band or drag it to restore; kept per device | ADR-0056, [input.md](../40-frontend/input.md#collapsing-the-extra-keys-ac-326), [layout.md](../40-frontend/layout.md#geometry) |
-| Page switching moves to vertical swipes (up to write, down to come back) | ADR-0056, [input.md](../40-frontend/input.md#switching) |
+| ⟲: `GET /api/history`, newest first, distinct, 30, multi-line kept | [ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md), [http-api.md](../30-protocol/http-api.md#history) |
+| ⌘ (claude / codex only): the command strip and its editor (drag, hide, rename, add, reset, refresh); claude's commands from its `init` message, cached by executable; codex's list plus custom prompts; arrangement in `~/.config/webterm/commands.json` | ADR-0057, [http-api.md](../30-protocol/http-api.md#commands), [input.md](../40-frontend/input.md#history-and-commands-ac-324) |
 
-Exit criteria, beyond the usual: UT-keygesture-1, UT-restore-1, UT-prefs, E2E-52, E2E-40 and E2E-10 updated; the "Collapsing the extra keys" section of the manual checklist.
+Exit criteria, beyond the usual: UT-history-1, UT-catalog-claude, UT-catalog-codex, UT-arrange-1, IT-commands-1, E2E-51, E2E-10 updated; the "History and the command strip" section of the manual checklist.
 
 ## Planned
 

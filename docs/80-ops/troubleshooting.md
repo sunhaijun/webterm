@@ -130,9 +130,9 @@ Full-screen programs (vim, less, htop) use the alternate screen, which has no sc
 
 Session names prefer the title set by the foreground program ([ADR-0043](../20-architecture/adr/0043-terminal-title-as-auto-name.md)). Titles set by the shell at the prompt are ignored on purpose; at the prompt the name is the directory. A program that runs others inside itself (a multiplexer, `ssh` to a host whose shell sets no title) shows only what it sets itself.
 
-### Frequent input is empty or old
+### History is empty or old
 
-The list comes from the program's own history file ([ADR-0054](../20-architecture/adr/0054-frequent-input-and-combo-keys.md)): `~/.claude/history.jsonl` for claude, `~/.codex/history.jsonl` for codex, `~/.bash_history` or `~/.zsh_history` for the shell. Only single-line entries of up to 80 characters count.
+The list comes from the program's own history file ([ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md)): `~/.claude/history.jsonl` for claude, `~/.codex/history.jsonl` for codex, `~/.bash_history` or `~/.zsh_history` for the shell. Newest first, at most 30; entries over 32 KiB and claude's `[Pasted text #N]` / `[Image #N]` placeholders are skipped.
 
 bash writes its history file when the shell exits, so a shell that has been open for days adds nothing until then. To write each command as it runs, add to `~/.bashrc`:
 
@@ -141,6 +141,10 @@ PROMPT_COMMAND="history -a${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 ```
 
 `webterm setup` adds it for you (and checks the rest: `webterm setup --check`, [install.md](install.md#set-up-claude-codex-and-the-shell)); webterm never changes your shell config on its own.
+
+### The command strip has no built-in claude commands
+
+The editor (✎ at the strip's end) says why at the top. claude's built-in commands come from running the claude in front once more as `claude -p --bare … --output-format stream-json`, with the network pointed at a dead port, and reading up to its `init` line ([ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md) §4); keys, `/copy`, `/resume` and custom commands are listed anyway. Try it by hand: `claude -p --bare --strict-mcp-config --no-session-persistence --output-format stream-json --verbose x | grep -m1 '"subtype":"init"'` should print a line within a few seconds. After fixing it, tap Refresh in the editor. The result is kept per claude executable, so an upgrade is picked up by itself.
 
 ### The waiting-for-you dot doesn't light
 
