@@ -63,6 +63,8 @@ Every part of the file browser is a sheet built on the `Drawer` primitive ([ADR-
 - **Rows** are 52px, like the session drawer's. Each has a line icon (folder or file), the name, and on the right the size (files only) and the modification time: `14:05` today, `11-07` earlier this year, `2025-11-07` before that.
 - **Order**: folders, then files, then hidden folders, then hidden files. A name starting with `.` is hidden. Hidden entries are dimmed, not filtered out, so there is nothing to switch on. Within each group, names sort naturally (`file2` before `file10`) and ignore case.
 - Symbolic links behave like what they point to. A broken link is a file that can't be opened.
+- **A name that isn't valid UTF-8** (GBK names from a Windows zip, say) can't travel through JSON intact. Its row shows the name with `�`, dimmed, and does nothing when tapped or swiped; the terminal can still rename it.
+- **Every action keeps the full path it started on**, and the path row changes only when the new folder's listing arrives, so a tap on a row while another folder loads can't act on a different folder.
 - **Tap a folder** to open it. **Tap a file** to open its sheet.
 - **Row actions** work as on session rows ([ADR-0039](0039-drawer-row-swipe-actions.md) §1). Swiping left or long-pressing reveals two 72px buttons, **Rename** and **Delete**. Right-clicking with a mouse does the same. Only one row is open at a time.
 - **A folder that can't be read** shows one muted line in place of the rows ("Permission denied", "Not found"). The header still works.
@@ -81,14 +83,14 @@ Every part of the file browser is a sheet built on the `Drawer` primitive ([ADR-
 | No preview | pdf, and anything whose first 8 KiB contains a NUL byte | the file icon, nothing else |
 | Text | everything else | the first 512 KiB as UTF-8 in monospace, wrapped |
 
-- **Text over 512 KiB** gets a third foot button, **End**, which shows the last 512 KiB (a `Range` request, starting after the first newline) and then reads **Start**. Logs are read from the end.
+- **Text over 512 KiB** gets a small **End** button at the right of the first line, which shows the last 512 KiB (a `Range` request, starting after the first newline) and then reads **Start**. Logs are read from the end. It isn't a third foot button: three don't fit a phone's width with "Send to session" readable.
 - **Foot**: two equal buttons.
   - **Share or Download.** On a touch device (`pointer: coarse`) that can share the file (`navigator.canShare({files})`, which also decides by type) and for files up to 100 MiB, it's **Share**. The page fetches the file and hands it to the system share sheet: Save to Files, Save Image, AirDrop, another app. The fetch goes through the page, which holds the cookie, so it doesn't depend on whether an installed PWA shares cookies with the browser. If the browser refuses because the tap is too old by the time the file arrives, the button reads Share again and the next tap shares at once. Everywhere else it's **Download**: a same-origin link with `download=1`, so the browser's download manager streams the file and can resume it.
-  - **Send to session**: pastes the file's path into the session the browser was opened from, through the same path as ADR-0051 §3 (`term.paste` inside `asUserInput`, counted and resent like any input). Every character other than letters (any script), digits and `_ . / , : @ % + = -` gets a backslash in front (table above). A path containing a control character is pasted in single quotes instead. Then every file sheet closes and focus returns as it does after settings. It's disabled when that session isn't running.
+  - **Send to session**: pastes the file's path into the session the browser was opened from, through the same path as ADR-0051 §3 (`term.paste` inside `asUserInput`, counted and resent like any input). Every character other than letters (any script), digits and `_ . / , : @ % + = -` gets a backslash in front (table above). A path containing a control character (C0, DEL or C1) is **never pasted**, and the button is disabled for it: pasted raw, an ESC could end the bracketed paste early and a newline would press Enter, so a file named by a cloned repository or an unpacked archive could type and run a command. Then every file sheet closes and focus returns as it does after settings. It's disabled when that session isn't running.
 
 ### 5. Upload, new folder, rename, delete, new session here
 
-- **Upload** opens a file picker for any type, several at once, from inside the click (iOS requires that). Dropping files on a file sheet does the same; dropping them on the terminal still sends them to the session (ADR-0051). Files go one at a time, in order, to the folder that was shown when they were picked. While they upload the button reads `Uploading 45%` (`2/3 · 45%` for several) and is busy. When each finishes the list reloads if it still shows that folder. Closing the sheet doesn't stop uploads.
+- **Upload** opens a file picker for any type, several at once, from inside the click (iOS requires that). While the file browser is open, files dropped anywhere on the page go into the folder it shows, and the sheet gets the outline: the browser is modal, so the page around it isn't the terminal. With the browser closed, a drop still sends them to the session (ADR-0051). Files go one at a time, in order, to the folder that was shown when they were picked. While they upload the button reads `Uploading 45%` (`2/3 · 45%` for several) and is busy. When each finishes the list reloads if it still shows that folder. Closing the sheet doesn't stop uploads.
 - **The original name is kept, and nothing is ever overwritten.** If the name is taken, the agent saves `<stem>-1<ext>`, then `-2` and so on, and a toast says `Saved as <name>`. A dash rather than ` (1)`, so the new name needs no quoting in a shell.
 - **New folder** opens a name sheet (Create). **Rename** opens one with the current name, the part before the extension selected (Save). If the name is taken, a toast says so, the sheet stays open, and nothing is replaced.
 - **Delete** asks first, in the close-confirmation sheet: `Delete "<name>"?`, then one sentence ("Everything in it is deleted too." for a folder, "This can't be undone." for a file), then Cancel and **Delete** in the warning color, with focus on Delete. Nothing goes to a trash folder.
@@ -102,23 +104,24 @@ The [HTTP API](../../30-protocol/http-api.md#files) has the details. In short:
 GET    /api/fs/list?path=/abs/dir                 → {path, entries: [{name, type, size, mtime}], total}
 GET    /api/fs/raw?path=/abs/file[&download=1]     → the file (Range, ETag, conditional requests)
 POST   /api/fs/upload?dir=/abs/dir&name=<name>     → body = the file → 201 {path, name, size}
-POST   /api/fs/mkdir   {"path": "/abs/dir/new"}    → 201 {path}
+POST   /api/fs/mkdir   {"dir": "/abs/dir", "name": "new"} → 201 {path}
 POST   /api/fs/rename  {"path": "/abs/x", "name": "y"} → 200 {path}
 DELETE /api/fs?path=/abs/x                         → 204
 ```
 
 - **HTTP, not the WebSocket**, for the reason in ADR-0051 §4: one WebSocket carries every session, and a large transfer on it would hold up their output.
-- **The agent user's permissions are the only fence.** Paths are absolute and cleaned, symbolic links are followed as the system follows them, and nothing is limited to the home directory. A paired device already has a shell with exactly these rights, so a fence here would only get in the way (`/var/log`, `/etc`) without stopping anyone. Delete refuses `/` and the home directory itself.
+- **The agent user's permissions are the only fence.** Paths are absolute and cleaned, symbolic links are followed as the system follows them, and nothing is limited to the home directory. A paired device already has a shell with exactly these rights, so a fence here would only get in the way (`/var/log`, `/etc`) without stopping anyone. Delete and rename refuse `/` and the home directory itself, also when reached by another path (`/home` a symlink to `/var/home`); a link to either is just a link.
+- **Names travel separately from folders** (`upload`, `mkdir`, `rename` take a folder or path plus one name), and a name must be one path component, so `../x` or `a/b` never lands somewhere else.
 - Every route requires a device cookie. The writes check `Origin` like the other writes ([auth-pairing.md](../../60-security/auth-pairing.md#route-authentication-matrix-ac-17)).
 - **Uploads stream to disk.** The body goes to a hidden `.webterm-upload-<12 hex>.part` in the target folder (the same file system, so the final rename is atomic). It is created exclusively with mode `0666` minus the umask, like any program's files, and moved into place with a rename that never replaces (`renameat2(RENAME_NOREPLACE)`, or a check and a rename where the file system lacks it). An interrupted request deletes the part file. There is no size limit beyond the disk; a full disk fails the upload and leaves nothing.
-- **Only regular files are served.** A device, FIFO or socket is `400`, and the open never blocks on a FIFO. `http.ServeContent` provides `Range`, `If-None-Match` (the `ETag` is size + modification time), `If-Modified-Since` and `HEAD`, so video seeks and interrupted downloads resume.
+- **Only regular files are served.** A device, FIFO or socket is `400` and is refused before it is opened (opening a device can have side effects); the open never blocks on a FIFO. `http.ServeContent` provides `Range`, `If-None-Match` (the `ETag` is size + modification time), `If-Modified-Since` and `HEAD`, so video seeks and interrupted downloads resume.
 - Logs don't contain paths or names. Operations and sizes are logged only at debug level.
 
 ### 7. A served file never runs on webterm's origin
 
 Raw responses carry three defenses:
 
-1. **`Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox`.** Even a document the browser does render gets an opaque origin, no cookie and no scripts.
+1. **`Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox`.** Even a document the browser does render gets an opaque origin, no cookie and no scripts. `Cache-Control: no-store` keeps a viewed `.env` or key out of the browser's disk cache.
 2. **`Content-Disposition: attachment`** for everything except images other than SVG, video and audio, which are `inline` unless `download=1`. `<img>` and `<video>` ignore the disposition, so the preview works either way. Opening a raw URL as a page downloads anything that could be a document. The filename is RFC 5987-encoded.
 3. **`X-Content-Type-Options: nosniff`** (already on every response), and a `Content-Type` from webterm's own table of extensions, `application/octet-stream` otherwise.
 

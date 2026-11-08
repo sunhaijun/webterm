@@ -61,13 +61,15 @@ GET /api/fs/list?path=/home/u/proj
      "entries": [
        {"name": "src", "type": "dir", "size": 0, "mtime": 1762581600000},
        {"name": "README.md", "type": "file", "size": 4213, "mtime": 1762588000000},
-       {"name": "dev-null-link", "type": "other", "size": 0, "mtime": 1762500000000}
+       {"name": "dev-null-link", "type": "other", "size": 0, "mtime": 1762500000000},
+       {"name": "\ufffd\ufffd.txt", "type": "file", "size": 3, "mtime": 1762500000000, "bad_name": true}
      ],
      "total": 3}
 ```
 
 - `path` is the cleaned path. `entries` are in byte order of their names (the page sorts them for display), at most **5,000**; `total` counts all of them.
 - `type` is that of the link's target for a symbolic link: `dir`, `file` (a regular file) or `other` (a device, FIFO, socket, or a link that points nowhere). `size` is in bytes and `0` except for files; `mtime` is unix milliseconds.
+- `bad_name: true`: the name isn't valid UTF-8, so JSON carries it with U+FFFD in place of the bad bytes. Requests can't address that entry; the page shows it inert.
 - `path` not a folder → `400 bad_request`.
 
 ### Read a file
@@ -79,12 +81,12 @@ GET /api/fs/raw?path=/home/u/proj/shot.png            (&download=1 for a downloa
 Content-Type: image/png
 Content-Disposition: inline; filename="shot.png"      (attachment unless inline is allowed, below)
 Content-Security-Policy: default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox
-Cache-Control: private, no-cache
+Cache-Control: no-store
 ETag: "<size hex>-<mtime ns hex>"
 ```
 
-- **Only regular files.** A folder, device, FIFO or socket is `400 bad_request`; opening never blocks.
-- `http.ServeContent` semantics: `Range` (one range or a suffix like `bytes=-524288`) gives `206`, `If-None-Match` / `If-Modified-Since` give `304`, `HEAD` works.
+- **Only regular files.** A folder, device, FIFO or socket is `400 bad_request`, refused before it is opened; opening never blocks.
+- `http.ServeContent` semantics: `Range` (one range or a suffix like `bytes=-524288`) gives `206`, `If-None-Match` / `If-Modified-Since` give `304`, `HEAD` works. `no-store` keeps viewed files out of the browser's disk cache, so a browser won't revalidate; `ETag` still lets a resumed download check the file didn't change.
 - `Content-Type` comes from the extension (lowercased): `png` `jpg`/`jpeg` `gif` `webp` `avif` `bmp` `ico` `svg` → the image types; `mp4`/`m4v` `webm` `mov` `ogv` → video; `mp3` `m4a` `aac` `wav` `flac` `ogg`/`oga`/`opus` → audio; `pdf` → `application/pdf`; `txt` `log` `md` `csv` → `text/plain; charset=utf-8`; anything else `application/octet-stream`.
 - `Content-Disposition` is `inline` only for image types other than SVG, video and audio, and only without `download=1`; everything else is `attachment`. The filename uses RFC 5987 encoding (`filename*=utf-8''…`) when it isn't plain ASCII.
 
@@ -105,14 +107,14 @@ POST /api/fs/upload?dir=/home/u/proj&name=shot%201.png
 ### New folder, rename, delete
 
 ```
-POST /api/fs/mkdir  {"path": "/home/u/proj/new"}           → 201 {"path": "/home/u/proj/new"}
+POST /api/fs/mkdir  {"dir": "/home/u/proj", "name": "new"}  → 201 {"path": "/home/u/proj/new"}
 POST /api/fs/rename {"path": "/home/u/proj/a.txt", "name": "b.txt"} → 200 {"path": "/home/u/proj/b.txt"}
 DELETE /api/fs?path=/home/u/proj/old                       → 204
 ```
 
-- `mkdir` creates one folder (mode `0777` minus the umask); its parent must exist. The last component follows the `name` rules above.
-- `rename` renames within the same folder; `name` follows the rules above. It never replaces: a taken name is `409 exists`. The same name is `200` and changes nothing.
-- `DELETE` removes a file, a symbolic link (not its target) or a folder with everything in it. It refuses `/` and the agent user's home directory with `400 bad_request`.
+- `mkdir` creates the folder `name` in `dir` (mode `0777` minus the umask); `name` follows the rules above.
+- `rename` renames within the same folder; `name` follows the rules above. It never replaces: a taken name is `409 exists`. The same name is `200` and changes nothing. Renaming `/` or the home directory is `400 bad_request`, as for `DELETE`.
+- `DELETE` removes a file, a symbolic link (not its target) or a folder with everything in it. It refuses `/` and the agent user's home directory with `400 bad_request`, also when the path reaches them another way (a symlinked parent); a link to either is just a link and is deleted.
 - Bodies are JSON, at most 64 KiB.
 
 ## Commands

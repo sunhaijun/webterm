@@ -69,7 +69,7 @@ All absolutely positioned or `position: fixed`, outside the grid; showing or hid
 | Connection banner (`conn-text`, `conn-note`) | Top of the terminal, one line tall | When not online, and for 3 seconds with a connection note ([session-ux.md](session-ux.md), [ADR-0049](../20-architecture/adr/0049-connection-status-in-one-place.md)) |
 | Toast | Top center of the terminal | Messages unrelated to the connection (session limit, input too large, agent notices) |
 | Composition preview (`ime-preview`) | At the terminal cursor | During IME composition in direct input |
-| Drop outline (`.stage[data-drop="true"]`) | A 2px accent outline inside the terminal area | While files are dragged over the page ([input.md](input.md#sending-files-ac-323)); over the file browser's sheets the sheet gets the outline instead ([ADR-0059](../20-architecture/adr/0059-files.md) §5) |
+| Drop outline (`.stage[data-drop="true"]`) | A 2px accent outline inside the terminal area | While files are dragged over the page ([input.md](input.md#sending-files-ac-323)); while the file browser is open its top sheet gets the outline instead, and the files go into its folder ([ADR-0059](../20-architecture/adr/0059-files.md) §5) |
 | Session drawer (phone), settings, session menu, file browser | See [Sheets](#sheets) | When open |
 
 ### Safe area
