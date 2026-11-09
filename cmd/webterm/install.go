@@ -22,7 +22,24 @@ func runInstall(args []string) error {
 	if p, err := filepath.EvalSymlinks(self); err == nil {
 		self = p
 	}
+	return runEmbeddedInstaller(withSelfBinary(self, args))
+}
 
+// runUninstall runs the embedded install.sh with --uninstall (ADR-0065): the
+// installer knows every path it wrote. Run inside a webterm session, the script
+// stops the service last, which ends this process too.
+func runUninstall(args []string) error {
+	return runEmbeddedInstaller(uninstallArgs(args))
+}
+
+func uninstallArgs(args []string) []string {
+	return append([]string{"--uninstall"}, args...)
+}
+
+// runEmbeddedInstaller writes the embedded install.sh to a temp file and runs it
+// with args. The file name matters: --uninstall removes it before it stops the
+// service inside a webterm session, when the deferred Remove won't run.
+func runEmbeddedInstaller(args []string) error {
 	f, err := os.CreateTemp("", "webterm-install-*.sh")
 	if err != nil {
 		return err
@@ -38,7 +55,7 @@ func runInstall(args []string) error {
 	}
 
 	// Pass the terminal through: sudo and the guided steps ask questions.
-	cmd := exec.Command("bash", append([]string{script}, withSelfBinary(self, args)...)...)
+	cmd := exec.Command("bash", append([]string{script}, args...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	err = cmd.Run()
 	var ee *exec.ExitError

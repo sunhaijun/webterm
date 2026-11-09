@@ -90,6 +90,11 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] One-line install from a release: `curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install.sh | bash` on a fresh server asks for the address, then the HTTPS port (Enter = 8443), and ends with a QR code whose link has `:8443`
 - [ ] On a machine with ufw enabled: `sudo ufw status` shows 80 and the chosen HTTPS port after the install
 - [ ] Switch the same machine from IP to a domain: after `./webterm install --domain X`, both the `webterm` status overview and `webterm pair` use the new domain, **the open sessions survive** (hot upgrade with the new command line, ADR-0047 §1), and the browser connects at the new address without a manual restart
+- [ ] Switch from IP to a domain on a server installed on 8443 (ADR-0064): `webterm install --domain X` with no other flag serves `https://X:8443`, `cat ~/.config/webterm/install-state` still has `--https-port 8443` (and `--channel dev` if it had it)
+- [ ] A failed install changes nothing (ADR-0064 §3): with another program on 443, `webterm install --https-port 443` fails at the service step; `install-state` and `config` still name the old port, and `webterm update` succeeds
+- [ ] `webterm uninstall` over SSH (ADR-0065): lists what it removes, asks; after `y`, `systemctl status webterm` says the unit doesn't exist, `which webterm` finds nothing, `~/.config/webterm` and `~/.local/share/webterm` are gone, and it printed the ufw commands for 80 and the HTTPS port
+- [ ] `webterm uninstall` inside a webterm session: the same questions; the session closes at the end, and over SSH afterwards nothing is left (as above)
+- [ ] `webterm uninstall --keep-data`, then the one-line install: no address question (the previous settings are replayed), the old devices still work after the page reloads, and no new certificate is issued
 - [ ] Upgrade from v0.3.0 with a new `--https-port`: `reload` does two hot upgrades (the old agent can't take a command line), sessions survive, and the new port answers
 - [ ] Install from the web (`gh api … | bash -s -- --channel dev`): the log shows "Handing over to webterm …" (the binary's bundled install script), and the installed version is the dev build
 

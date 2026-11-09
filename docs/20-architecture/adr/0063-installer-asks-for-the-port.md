@@ -1,6 +1,6 @@
 # ADR-0063 The installer asks for the HTTPS port
 
-Status: Accepted (2026-11-08). Amends [ADR-0046](0046-guided-install.md) §1 and §2. Builds on [ADR-0062](0062-several-machines.md).
+Status: Accepted (2026-11-08). Amends [ADR-0046](0046-guided-install.md) §1 and §2. Builds on [ADR-0062](0062-several-machines.md). §4 extended by [ADR-0064](0064-new-address-keeps-the-install.md): the port is kept under a new `--domain` too.
 
 ## Context
 

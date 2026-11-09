@@ -1,6 +1,6 @@
 # ADR-0045 The install script ships inside the binary
 
-Status: Accepted (2026-10-31). Extended by [ADR-0046](0046-guided-install.md).
+Status: Accepted (2026-10-31). Extended by [ADR-0046](0046-guided-install.md). §3 amended by [ADR-0064](0064-new-address-keeps-the-install.md): `install-state` is replayed under a new `--domain` too, and written only once the install worked.
 
 ## Context
 

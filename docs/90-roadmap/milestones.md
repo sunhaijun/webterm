@@ -50,7 +50,9 @@ Released as **v0.8.0** (2026-11-08): m24.
 
 ## In progress
 
-Nothing right now. Next candidates are below.
+### m25 · `feat/80-ops-uninstall`
+
+Installer fixes and `webterm uninstall`. A new `--domain` keeps the rest of the previous install (ports, channel, prefix), and config and `install-state` are written only once the install worked ([ADR-0064](../20-architecture/adr/0064-new-address-keeps-the-install.md)). `webterm uninstall` removes the service, the binary, config, data and sent files after one question, leaves firewall rules, lingering and claude/codex settings with the command for each, and works inside a webterm session ([ADR-0065](../20-architecture/adr/0065-uninstall.md)). AC-1.19, AC-1.26; real-device checks in the manual checklist ("Deployment").
 
 ## Planned
 
