@@ -39,6 +39,7 @@
 | m22 | `feat/40-enter-key` | The last key column becomes ⌘ over ↵ (Enter, for prompts and pickers with the keyboard down); the command strip has two rows, filled column by column; the history list, `GET /api/history` and setup's shell item removed | [ADR-0058](../20-architecture/adr/0058-enter-key-and-two-row-strip.md), [input.md](../40-frontend/input.md#the-last-column-ac-324) |
 | m23 | `feat/40-files` | A file browser in stacked sheets like the session drawer, in the current session's folder: previews (images, video, audio, text, Markdown rendered with a text size), Share or Download, Send to session, upload without overwriting, new folder / rename / delete, new session here; maximize on wide screens. `/api/fs/*` with the agent user's rights; served files never run on webterm's origin | [ADR-0059](../20-architecture/adr/0059-files.md), [ADR-0060](../20-architecture/adr/0060-files-maximize-and-markdown.md), [ADR-0061](../20-architecture/adr/0061-markdown-text-size.md), [http-api.md](../30-protocol/http-api.md#files) |
 | m24 | `feat/40-machines` | Several machines in one page: servers on subdomains of one domain share the installed page, which talks to one at a time, directly, with that server's own cookie; devices bound to the page origin they paired from, CORS and CSP within the site; the machine button and Machines sheet (add with an address and 16 digits, switch, remove, sign out everywhere). The installer asks for the HTTPS port (Enter = 8443); CLI flags may follow a command's arguments | [ADR-0062](../20-architecture/adr/0062-several-machines.md), [ADR-0063](../20-architecture/adr/0063-installer-asks-for-the-port.md), [session-ux.md](../40-frontend/session-ux.md#machines-ac-107) |
+| m25 | `feat/80-ops-uninstall` | A new `--domain` keeps the rest of the previous install (ports, channel, prefix), and config and `install-state` are written only once the install worked; `webterm uninstall` removes the service, the binary, config, data and sent files after one question, leaves firewall rules, lingering and claude/codex settings with the command for each, and works inside a webterm session | [ADR-0064](../20-architecture/adr/0064-new-address-keeps-the-install.md), [ADR-0065](../20-architecture/adr/0065-uninstall.md), [install.md](../80-ops/install.md#uninstall) |
 
 Released together as **v0.5.0** (2026-11-08): m14–m18.
 
@@ -48,11 +49,11 @@ Released as **v0.7.0** (2026-11-08): m23.
 
 Released as **v0.8.0** (2026-11-08): m24.
 
+Released as **v0.9.0** (2026-11-09): m25, and `dev` showing the release's version right after a tag (AC-8.9).
+
 ## In progress
 
-### m25 · `feat/80-ops-uninstall`
-
-Installer fixes and `webterm uninstall`. A new `--domain` keeps the rest of the previous install (ports, channel, prefix), and config and `install-state` are written only once the install worked ([ADR-0064](../20-architecture/adr/0064-new-address-keeps-the-install.md)). `webterm uninstall` removes the service, the binary, config, data and sent files after one question, leaves firewall rules, lingering and claude/codex settings with the command for each, and works inside a webterm session ([ADR-0065](../20-architecture/adr/0065-uninstall.md)). AC-1.19, AC-1.26; real-device checks in the manual checklist ("Deployment").
+Nothing right now. Next candidates are below.
 
 ## Planned
 
