@@ -74,7 +74,7 @@ The top cell of the extra keys' left column is the **session button** (`data-tes
 
 ```
 ┌─────────────── ═══ ─────────────────┐
-│ Sessions                          ✕ │
+│ tokyo ⌄                           ✕ │  ← the machine button (ADR-0062)
 ├─────────────────────────────────────┤
 │▎[1] webterm     ~/github/webterm    │  ← current: accent left bar + tint
 │ [2] api       • ~/srv/api           │  ← waiting-for-you dot
@@ -88,7 +88,7 @@ The top cell of the extra keys' left column is the **session button** (`data-tes
 └─────────────────────────────────────┘
 ```
 
-- The drawer is the `Drawer` primitive ([layout.md](layout.md#sheets)): a full-width bottom sheet, `data-testid="session-drawer"`. **At least half the visible area tall** (50%, at most 80%); with few sessions the extra height goes to the list.
+- The drawer is the `Drawer` primitive ([layout.md](layout.md#sheets)): a full-width bottom sheet, `data-testid="session-drawer"`. Its title is the **machine button** (`machine-button`): the current machine's name and a chevron, opening the Machines sheet over the drawer ([Machines](#machines-ac-107)). **At least half the visible area tall** (50%, at most 80%); with few sessions the extra height goes to the list.
 - The list (`session-list`) has one row per session (`session-<sid>`): index `[n]` (current order, starting at 1; closing a session renumbers the ones after it; reorderable, see [Ordering](#ordering-ac-413)), name, CWD or exit code, unread dot. Pinned sessions show a pin icon before the name (drawn as `⇵` in the diagrams). Rows are 52px.
 - **Paths** are laid out left to right as is (`<bdi dir="ltr">`); when they don't fit they're cut from the left, with the ellipsis on the left, so the last directories stay visible. **The name gets space first**: the path gives way first, and the name is shown in full if it fits; the path keeps at least `min(6em, 25%)`, and the name is truncated only when it doesn't fit even then ([ADR-0042](../20-architecture/adr/0042-red-means-error-and-line-icons.md) §3).
 - Pinned bottom row: `+ New session` (`new-session`, fills the remaining width), files (`open-files`, a 48px square with a folder icon) and settings (`open-settings`, a 48px square button with a ⚙ icon). All are rounded blocks with a thin border and margins all around, not touching the sheet's edges ([layout.md §Sheets](layout.md#sheets)). Files closes the drawer and opens the file browser in the current session's folder ([ADR-0059](../20-architecture/adr/0059-files.md)); settings closes the drawer and opens settings ([layout.md §Settings](layout.md#settings-ac-53)).
@@ -102,11 +102,11 @@ The top cell of the extra keys' left column is the **session button** (`data-tes
 ### wide (PC / tablet): tab bar
 
 ```
-┌ ▎[1] webterm ✕ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │   + ──── ▢ ⌇ ● ⚙ ┐   equal width, 120–240px
-┌ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │ ▎[1] webterm ✕ │   + ▢ ⌇ ● ⚙ ┐    overflow: the strip scrolls, + stays put
+┌ tokyo⌄ │ ▎[1] webterm ✕ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │   + ──── ▢ ⌇ ● ⚙ ┐   equal width, 120–240px
+┌ tokyo⌄ │ [2] api •   │ [3] ⇵ logs  │ [4] build   │ ▎[1] webterm ✕ │   + ▢ ⌇ ● ⚙ ┐    overflow: the strip scrolls, + stays put
 ```
 
-- The top bar `.topbar` is 36px tall (40px with `pointer: coarse`) and always visible. Left to right: the horizontally scrollable tab strip `data-testid="tabbar"` (**tabs only**), `+`, a spacer, the file browser (`open-files`, [ADR-0059](../20-architecture/adr/0059-files.md)), the paperclip that sends files (`upload-file`, [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)), the connection dot (`conn-dot`), and settings (`open-settings`). `+`, files, the paperclip, the dot, and settings are outside the tab strip and don't scroll with it ([ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)).
+- The top bar `.topbar` is 36px tall (40px with `pointer: coarse`) and always visible. Left to right: the machine button (`machine-button`, [Machines](#machines-ac-107)), the horizontally scrollable tab strip `data-testid="tabbar"` (**tabs only**), `+`, a spacer, the file browser (`open-files`, [ADR-0059](../20-architecture/adr/0059-files.md)), the paperclip that sends files (`upload-file`, [ADR-0051](../20-architecture/adr/0051-send-files-to-a-session.md)), the connection dot (`conn-dot`), and settings (`open-settings`). `+`, files, the paperclip, the dot, and settings are outside the tab strip and don't scroll with it ([ADR-0035](../20-architecture/adr/0035-tabbar-new-button-pinned.md)).
 - A tab (`tab-<sid>`) = index + session name + waiting-for-you dot; pinned sessions show a pin icon before the name (drawn as `⇵` in the diagram); exited sessions are grayed out. Long names are truncated with an ellipsis (the index never is); `title` holds the full name and CWD.
 - The **index** (`tab-<sid>-idx`) is the same `[n]` as in the drawer (current order, starting at 1), so tabs with the same name can be told apart. **Every tab has one**, renamed tabs included, matching the drawer ([ADR-0041](../20-architecture/adr/0041-tab-index-and-edit-icon.md)). Monospace, `--muted`, accent on the current tab.
 - **Width** ([ADR-0031](../20-architecture/adr/0031-tabs-equal-width.md)): all tabs are equal width, sharing the strip's available width, between 120px and 240px.
@@ -183,6 +183,33 @@ The current session (current tab / current drawer row) gets: **an accent left ba
 - Status dot / waiting-for-you dot / exit code colors keep their meanings; they answer other questions (is it running, is it your turn, how did it exit).
 - **The current item must be in view.** With up to 20 sessions, neither the tab bar nor the drawer may fit them all, and `Ctrl+Shift+↑/↓` or the auto-switch after closing can make an off-screen item current. If it's already fully visible, **do nothing**; otherwise `scrollIntoView({ block: 'nearest', inline: 'nearest' })`, **without `smooth`**.
 - **Current-session styling doesn't depend on focus.** Per AC-4.8, focus goes back to the terminal along with the session, so only this styling can say which session is current.
+
+## Machines (AC-10.7)
+
+[ADR-0062](../20-architecture/adr/0062-several-machines.md). Machines on subdomains of one domain share the page; it talks to **one machine at a time**, directly.
+
+```
+┌─────────────── ═══ ─────────────────┐
+│ Machines                          ✕ │
+├─────────────────────────────────────┤
+│▎tokyo      tokyo.example.com:8443   │  ← the page's own machine, always first; current: accent bar
+│ la         la.example.com:8443      │  ← swipe left / long-press: Remove
+├─────────────────────────────────────┤
+│  ┌───────────────────────────────┐  │
+│  │        + Add machine          │  │
+│  └───────────────────────────────┘  │
+└─────────────────────────────────────┘
+```
+
+- **Where**: `machine-button` is the session drawer's title on `compact` and the left end of the tab bar on `wide`. It shows the current machine's name, the first label of its host (`la`); when two machines share a first label, both show the full host. It opens `machines-sheet`, stacked over the drawer.
+- **Rows** (`machine-row`, 52px like session rows): the name, and `host:port` as the meta; the page's own machine first, then in the order added; the current one marked like the current session (`aria-current="true"`). Tap = switch and close the sheets.
+- **Remove**: swipe a row left or long-press it to reveal `machine-row-remove` (not on the own machine), as session rows do ([ADR-0039](../20-architecture/adr/0039-drawer-row-swipe-actions.md)). It signs this device out on that machine (`POST <origin>/auth/logout`) and drops it from the list; if it can't get through, `machine-remove-confirm` asks "Can't reach la. Remove it anyway?" with "It stays signed in there" and Cancel / Remove.
+- **Add machine** (`machine-add`) opens `machine-add-sheet` over it: `machine-address` (placeholder `name.example.com`, no autocorrect or capitals) and `machine-code` (the 16 digits from `webterm pair` on that machine, `inputmode=numeric`, grouped by four like the pairing page), Cancel and `machine-add-ok` (Add, enabled with an address and 16 digits). The address takes a host, `host:port` or a URL; no port means the page's port. A refusal shows one line in `machine-error` and keeps both fields. Success closes the sheets and switches to the new machine.
+- **Switching** rebuilds the app for the chosen machine, as a page load would: the WebSocket to the old machine closes and one to the new machine opens; sessions come back through the snapshot path. Text-page drafts are kept per machine for the life of the page. Theme and font size are the device's.
+- **Startup**: the page opens on the machine used last; if that isn't reachable or answers `401`, on its own machine.
+- **Signed out on a machine**: when the current machine is another one and answers `401`, the page switches to its own machine and opens `machine-add-sheet` with the address filled in and `machine-error` saying "This device was revoked on la" or "Pairing required on la".
+- **Sign out this device** (Settings) signs out of every machine in the list, then of the own one; the signed-out page names any machine it couldn't reach (`signed-out-left`).
+- Only the current machine is connected, so "waiting for you" covers its sessions only.
 
 ## Focus follows the session (AC-4.8)
 

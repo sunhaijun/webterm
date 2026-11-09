@@ -35,15 +35,17 @@
 GET /ws
 Upgrade: websocket
 Cookie: webterm_session=<token>
-Origin: https://<configured domain>
+Origin: https://<configured domain>[:port]
 ```
+
+The URL is the machine's: the page's own agent, or another machine on the same site that the device was paired with from this page ([ADR-0062](../20-architecture/adr/0062-several-machines.md)). The protocol is the same either way.
 
 ### Server-side checks (any failure rejects the upgrade)
 
 | Check | On failure |
 |---|---|
 | Cookie present and maps to a device that isn't revoked | `401` |
-| `Origin` exactly equals the configured domain (under `--dev`, `http://localhost:*` and `http://127.0.0.1:*` are allowed) | `403` |
+| `Origin`, if present, exactly equals the agent's own origin (the configured domain and any non-default port) or the origin the device was paired from (ADR-0062 §4). Under `--dev`, `http://localhost:*`, `http://127.0.0.1:*`, `http://[::1]:*` and `http://*.localhost:*` count as the agent's own | `403` |
 
 **No version negotiation in the handshake** — the handshake carries no client version (`Sec-WebSocket-Protocol` isn't used). The version is negotiated in `hello`/`welcome`, and a mismatch returns `error{code:"protocol_unsupported"}`, which gives a readable error instead of a bare handshake failure.
 

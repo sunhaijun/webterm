@@ -56,6 +56,12 @@ All options: `install.sh --help` or `webterm install --help`.
 
 Run `webterm pair` (on the server, or in a session on a device that's already paired) and scan the QR code. If you can't scan, open `https://<address>/pair` and type the 16 digits. Codes expire after 5 minutes and work once. On a phone, "Add to Home Screen" installs webterm as an app.
 
+## Several machines
+
+One page can switch between servers that are **subdomains of one domain** (`tokyo.example.com`, `la.example.com`), each running its own webterm ([ADR-0062](../20-architecture/adr/0062-several-machines.md)). Install each one as usual with its own subdomain, one host name per server; the same `--https-port` everywhere saves typing it. Then, on the server to add, run `webterm pair`; in the page, open the session drawer (or the machine name at the left of the tab bar), tap the machine name → Add machine, and enter its address (`la.example.com`; no port means the page's port) and the 16 digits. The page talks to that server directly; nothing is shared between the servers.
+
+Servers on bare IP addresses can't be added (an IP address is a site of its own to the browser), nor can a domain on the Public Suffix List such as a dynamic-DNS name. All servers in one page must run a webterm with this feature.
+
 ## Day to day
 
 ```bash
@@ -228,7 +234,7 @@ Command-line flags override the file; unknown keys are an error with the line nu
 | `webterm install` | Install or upgrade using this binary |
 | `webterm update` | Upgrade to the latest release |
 | `webterm pair [--wait]` | Print a pairing code and QR code |
-| `webterm devices [list \| revoke <id> \| revoke-all]` | Manage devices |
+| `webterm devices [list \| revoke <id> \| revoke-all]` | Manage devices; a device added from another machine's page shows `via <that machine>` |
 | `webterm doctor [--acme] [--guide]` | Check prerequisites; `--acme` obtains the certificate, `--guide` waits for you to fix things |
 | `webterm setup [--check] [--yes]` | Check and add the claude and codex settings webterm uses ([above](#set-up-claude-and-codex)) |
 | `webterm attach [name \| n] [--new] [--list]` | Attach this terminal to a session ([From a terminal over SSH](#from-a-terminal-over-ssh)) |

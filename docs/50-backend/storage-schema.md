@@ -65,13 +65,16 @@ CREATE TABLE devices (
     created_at   INTEGER NOT NULL,      -- unix ms
     last_seen_at INTEGER NOT NULL,
     last_ip      TEXT,
-    revoked_at   INTEGER                -- NULL = active
+    revoked_at   INTEGER,               -- NULL = active
+    origin       TEXT                   -- 0004: the page origin it was paired from (ADR-0062); NULL = the agent's own
 );
 CREATE UNIQUE INDEX idx_devices_token ON devices(token_hash);
 CREATE INDEX idx_devices_active ON devices(revoked_at) WHERE revoked_at IS NULL;
 ```
 
 **Only the token hash is stored** (AC-1.10). A leaked database gives an attacker no usable cookie.
+
+`origin` binds a device paired from another machine's page to that page's origin: requests carrying `Origin` must come from the agent's own origin or this one ([ADR-0062](../20-architecture/adr/0062-several-machines.md) §4). Existing rows get NULL and keep working only from the agent's own page, as before.
 
 `last_seen_at` / `last_ip` updates are throttled (at most one write per device per 60 seconds), so requests don't each write to the database.
 
@@ -98,6 +101,7 @@ internal/store/migrations/
   0002_pairing_digits.sql
   0003_drop_commands.sql      DROP TABLE IF EXISTS commands;
                               DELETE FROM settings WHERE key = 'history_enabled';
+  0004_device_origin.sql      ALTER TABLE devices ADD COLUMN origin TEXT;
 ```
 
 `0003` removes command history, following [ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md): an upgraded database no longer keeps the user's raw commands. It then runs `PRAGMA incremental_vacuum` to give the pages back to the filesystem.

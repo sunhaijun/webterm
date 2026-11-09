@@ -152,6 +152,18 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Phone: halfway down a long `.md`, the larger-text button is still at the top; tapping it keeps the paragraph you were reading in place; the next `.md` opens at that size
 - [ ] Open a raw `.html` URL from the address bar (`/api/fs/raw?path=…`) → it downloads, nothing renders
 
+## Several machines (every time machines, CORS, the Origin rule or the CSP change, since m24)
+
+[ADR-0062](../20-architecture/adr/0062-several-machines.md). Two servers on subdomains of one domain, both on 8443, one of them installed as the PWA.
+
+- [ ] iPhone, the installed PWA: Add machine with the other server's `webterm pair` digits (address without a port) → it opens on the other server; New session there, run something, switch back and forth; kill the PWA and reopen → it opens on the server used last
+- [ ] iPhone, the PWA: on the other server, the file browser shows that server's files; an image preview and a video play; Share saves a file
+- [ ] Android (Chrome and the PWA): the same
+- [ ] Revoke the device on the other server (`webterm devices revoke`) while the PWA is on it → it says so and offers to pair again
+- [ ] Stop the server that serves the PWA; with the PWA open on the other server, keep working and switch sessions there
+- [ ] Remove a machine, and Sign out this device with two machines: afterwards neither server lists the device; a cookie of another site on the same domain (if any) is still there
+- [ ] Desktop Safari with "Prevent cross-site tracking" on: adding and switching still work
+
 ## Waiting for you (every time the attention rules change, since m16)
 
 [ADR-0052](../20-architecture/adr/0052-waiting-for-you-replaces-unread.md). Two or three sessions, claude in one and codex in another.

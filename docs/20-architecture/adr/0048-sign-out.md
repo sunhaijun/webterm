@@ -1,6 +1,6 @@
 # ADR-0048 Sign out this device
 
-Status: Accepted (2026-11-04). Builds on [ADR-0037](0037-settings-theme-and-font-size.md) (settings) and [ADR-0038](0038-close-confirm-sheet.md) (in-app confirmation).
+Status: Accepted (2026-11-04); §1 amended by [ADR-0062](0062-several-machines.md) §12: `Clear-Site-Data` no longer includes `"cookies"` (its scope is the whole registrable domain) and goes only to the agent's own origin, and with several machines signing out covers each of them (§11). Builds on [ADR-0037](0037-settings-theme-and-font-size.md) (settings) and [ADR-0038](0038-close-confirm-sheet.md) (in-app confirmation).
 
 ## Context
 

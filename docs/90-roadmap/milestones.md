@@ -47,7 +47,9 @@ Released as **v0.7.0** (2026-11-08): m23.
 
 ## In progress
 
-Nothing right now. Next candidates are below.
+### m24 · `feat/40-machines`
+
+Several machines in one page ([ADR-0062](../20-architecture/adr/0062-several-machines.md)): servers on subdomains of one domain share the installed page, which talks to one of them at a time, directly, with that server's own cookie. Agent: devices bound to the page origin they were paired from (`devices.origin`, migration 0004), the `Origin` rule on every authenticated request, CORS within the site, CSP sources for the site, `Clear-Site-Data` without `"cookies"`. Page: the machine button and Machines sheet, adding with an address and 16 digits, switching, removing, signing out everywhere. US-10, AC-10, E2E-56; real-device checks in the manual checklist ("Several machines").
 
 ## Planned
 
