@@ -73,7 +73,7 @@ webterm setup --check        # are claude and codex set up?
 journalctl -u webterm -f     # logs
 ```
 
-`webterm update --when-idle` waits until no session is running a command; `--force-restart` restarts instead (closes all sessions). Changing the address or ports with `webterm install --domain … --https-port …` is a hot upgrade too: sessions survive. If the running agent can't be upgraded in place, the installer stops and says so rather than restarting.
+`webterm update --when-idle` waits until no session is running a command; `--force-restart` restarts instead (closes all sessions). Changing the address with `webterm install --domain …` (the ports, channel and prefix stay) or a port with `--https-port …` is a hot upgrade too: sessions survive. If the running agent can't be upgraded in place, the installer stops and says so rather than restarting.
 
 Problems: [troubleshooting.md](troubleshooting.md).
 
@@ -133,11 +133,11 @@ The installer puts `webterm` in `/usr/local/bin`, which ssh commands find. With 
 | Port 80 | must stay open | can close after issuance |
 | Moving servers | devices pair again | update the record |
 
-To switch, reinstall with `--domain <new address>`; every device must pair again (it's a different origin to the browser). IPv6-only servers need a domain with an `AAAA` record.
+To switch, run `webterm install --domain <new address>`. Everything else stays as installed: the HTTPS port, the channel, the prefix ([ADR-0064](../20-architecture/adr/0064-new-address-keeps-the-install.md)). Every device must pair again (it's a different origin to the browser). IPv6-only servers need a domain with an `AAAA` record.
 
 ## Non-standard ports
 
-A first install serves HTTPS on 8443 unless you choose another port at the prompt or with `--https-port` ([ADR-0063](../20-architecture/adr/0063-installer-asks-for-the-port.md)); an existing install keeps its port. For `https://<address>/` without a port, choose 443 (`--https-port 443`) when nothing else holds it. Pairing links and redirects include the port automatically. Certificates are still validated on port 80, so keep 80 free. With both ports above 1024, no capability is needed.
+A first install serves HTTPS on 8443 unless you choose another port at the prompt or with `--https-port` ([ADR-0063](../20-architecture/adr/0063-installer-asks-for-the-port.md)); an existing install keeps its port, also when its address changes. For `https://<address>/` without a port, choose 443 (`--https-port 443`) when nothing else holds it. Pairing links and redirects include the port automatically. Certificates are still validated on port 80, so keep 80 free. With both ports above 1024, no capability is needed.
 
 ## Reverse proxy or tunnel
 
@@ -240,6 +240,7 @@ Command-line flags override the file; unknown keys are an error with the line nu
 | `webterm setup [--check] [--yes]` | Check and add the claude and codex settings webterm uses ([above](#set-up-claude-and-codex)) |
 | `webterm attach [name \| n] [--new] [--list]` | Attach this terminal to a session ([From a terminal over SSH](#from-a-terminal-over-ssh)) |
 | `webterm reload [--when-idle] [-- serve …]` | Hot-upgrade to the binary on disk; after `--`, the command line the new process starts with |
+| `webterm uninstall [--keep-data] [--yes] [--dry-run]` | Remove webterm from this machine ([Uninstall](#uninstall)) |
 | `webterm version` | Version |
 
 Flags may come before or after a command's arguments: `webterm devices revoke-all --data-dir /srv/webterm` and `webterm devices --data-dir /srv/webterm revoke-all` do the same thing.
@@ -260,11 +261,25 @@ sqlite3 ~/.local/share/webterm/webterm.db ".backup webterm-backup.db"
 ## Uninstall
 
 ```bash
-sudo systemctl disable --now webterm
-sudo rm /etc/systemd/system/webterm.service /usr/local/bin/webterm
-sudo systemctl daemon-reload
-rm -rf ~/.local/share/webterm ~/.config/webterm
+webterm uninstall
 ```
+
+It lists what it will remove, says that every session closes, and asks once ([ADR-0065](../20-architecture/adr/0065-uninstall.md)):
+
+- the service (system, and an old user service) and the binary;
+- `~/.config/webterm` (config, install-state, the command strip's arrangement);
+- the data directory: devices, certificates, the ACME account;
+- files sent to sessions (`/tmp/webterm-<uid>`).
+
+| Option | |
+|---|---|
+| `--keep-data` | Keep the config and data directories: a later install has the same settings, paired devices and certificate |
+| `--yes` | Don't ask (needed without a terminal) |
+| `--dry-run` | Show the plan, change nothing |
+
+It leaves alone what other software may use, and prints the command for each one it finds: the ufw or firewalld rules for the two ports, lingering for your user, and the notification settings `webterm setup` added to claude and codex. Run inside webterm, the session closes at the end, once everything else is removed.
+
+Without the binary, the installer does the same: `curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install.sh | bash -s -- --uninstall`.
 
 ## Build from source
 
