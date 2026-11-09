@@ -64,11 +64,20 @@ Open the pairing link from the agent's output with port 5173 instead of 8080.
 | Trigger | Result | Installed by |
 |---|---|---|
 | push to `main` | the rolling `dev` prerelease | `install.sh --channel dev` |
-| `v*` tag | a release with generated notes | `install.sh` (default) |
+| `v*` tag | a release with generated notes, and `dev` too when the tag is on main's head | `install.sh` (default) |
 
 Both run `make release`: cross-compile amd64 and arm64, copy install.sh, write SHA256SUMS, and assert a static binary (AC-8.1) with the frontend embedded (AC-8.2).
 
 The version comes from `git describe --tags --dirty --match 'v[0-9]*'`, or `dev-<sha>` without a tag. `--match` matters: the lightweight `dev` tag can sit on the same commit as a release tag, and `git describe` would otherwise pick it. The workflow fails a release whose binary doesn't report the tag.
+
+`dev` always holds main's head, with the version that commit has now (AC-8.9). A release is tagged on main's merge commit seconds after the push, so main's run usually checked the commit out before the tag existed, and its binary would report the previous release (`v0.7.0-9-ga01fd22` for v0.8.0's commit). [`scripts/dev-prerelease.sh`](../../scripts/dev-prerelease.sh) decides, after the build, whether a run publishes `dev`:
+
+| Run | Publishes `dev` when |
+|---|---|
+| push to `main` | the commit is still main's head, and no `v*` tag on it is missing from the binary's version |
+| `v*` tag | the tagged commit is main's head |
+
+So right after a release, `dev` is the release's binaries, and a run that main has moved past leaves `dev` to the newer one. Runs publish `dev` one at a time (concurrency group `dev-prerelease`).
 
 To release:
 
