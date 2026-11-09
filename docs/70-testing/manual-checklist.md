@@ -87,8 +87,8 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] `webterm install` (ADR-0045): `scp` the binary up and install directly, with no `gh` and no `GH_TOKEN` on the server; the last screen of the install is the QR code
 - [ ] Guided install (ADR-0046), port 80 blocked in the security group: the installer names the console page to open, waits; after opening the port, Enter re-checks and the install finishes with a QR code. Run without a terminal (`ssh server ./webterm install </dev/null`), it stops before writing a systemd unit
 - [ ] Guided install with a domain whose `A` record doesn't exist yet: the installer shows the record to add and continues on its own once it resolves
-- [ ] One-line install from a release: `curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install.sh | bash` on a fresh server asks for the address and ends with a QR code
-- [ ] On a machine with ufw enabled: `sudo ufw status` shows 80/443 after the install
+- [ ] One-line install from a release: `curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install.sh | bash` on a fresh server asks for the address, then the HTTPS port (Enter = 8443), and ends with a QR code whose link has `:8443`
+- [ ] On a machine with ufw enabled: `sudo ufw status` shows 80 and the chosen HTTPS port after the install
 - [ ] Switch the same machine from IP to a domain: after `./webterm install --domain X`, both the `webterm` status overview and `webterm pair` use the new domain, **the open sessions survive** (hot upgrade with the new command line, ADR-0047 §1), and the browser connects at the new address without a manual restart
 - [ ] Upgrade from v0.3.0 with a new `--https-port`: `reload` does two hot upgrades (the old agent can't take a command line), sessions survive, and the new port answers
 - [ ] Install from the web (`gh api … | bash -s -- --channel dev`): the log shows "Handing over to webterm …" (the binary's bundled install script), and the installed version is the dev build
@@ -151,6 +151,18 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Desktop: maximize, reload, open files again → still maximized; double-click the header restores
 - [ ] Phone: halfway down a long `.md`, the larger-text button is still at the top; tapping it keeps the paragraph you were reading in place; the next `.md` opens at that size
 - [ ] Open a raw `.html` URL from the address bar (`/api/fs/raw?path=…`) → it downloads, nothing renders
+
+## Several machines (every time machines, CORS, the Origin rule or the CSP change, since m24)
+
+[ADR-0062](../20-architecture/adr/0062-several-machines.md). Two servers on subdomains of one domain, both on 8443, one of them installed as the PWA.
+
+- [ ] iPhone, the installed PWA: Add machine with the other server's `webterm pair` digits (address without a port) → it opens on the other server; New session there, run something, switch back and forth; kill the PWA and reopen → it opens on the server used last
+- [ ] iPhone, the PWA: on the other server, the file browser shows that server's files; an image preview and a video play; Share saves a file
+- [ ] Android (Chrome and the PWA): the same
+- [ ] Revoke the device on the other server (`webterm devices revoke`) while the PWA is on it → it says so and offers to pair again
+- [ ] Stop the server that serves the PWA; with the PWA open on the other server, keep working and switch sessions there
+- [ ] Remove a machine, and Sign out this device with two machines: afterwards neither server lists the device; a cookie of another site on the same domain (if any) is still there
+- [ ] Desktop Safari with "Prevent cross-site tracking" on: adding and switching still work
 
 ## Waiting for you (every time the attention rules change, since m16)
 

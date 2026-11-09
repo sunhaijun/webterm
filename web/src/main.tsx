@@ -1,7 +1,6 @@
 import { render } from 'preact'
 
-import { App } from './app/app'
-import { Gate } from './ui/gate'
+import { Root } from './machines/root'
 import { PairPage } from './ui/pair'
 import { applyTheme, readTheme } from './ui/prefs'
 import '@xterm/xterm/css/xterm.css'
@@ -12,11 +11,7 @@ applyTheme(readTheme())
 
 const root = document.getElementById('app')!
 render(
-  location.pathname === '/pair' ? (
-    <PairPage />
-  ) : (
-    <Gate>{(revoke, signedOut) => <App onRevoked={revoke} onSignedOut={signedOut} />}</Gate>
-  ),
+  location.pathname === '/pair' ? <PairPage /> : <Root />,
   root,
 )
 

@@ -17,6 +17,9 @@ type Device struct {
 	LastSeenAt int64  `json:"last_seen_at"`
 	LastIP     string `json:"last_ip"`
 	RevokedAt  *int64 `json:"revoked_at,omitempty"`
+	// Origin is the page origin the device was paired from when that wasn't
+	// the agent's own (ADR-0062 §4); empty otherwise.
+	Origin string `json:"origin,omitempty"`
 }
 
 // TokenHash returns the SHA-256 of token.
@@ -28,36 +31,38 @@ func TokenHash(token string) []byte {
 	return sum[:]
 }
 
-// CreateDevice records a newly paired device.
-func (s *Store) CreateDevice(id, name, token, ip string, now time.Time) (*Device, error) {
+// CreateDevice records a newly paired device. origin is the page origin it
+// was paired from, or empty for the agent's own page (ADR-0062 §4).
+func (s *Store) CreateDevice(id, name, token, ip, origin string, now time.Time) (*Device, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ms := now.UnixMilli()
 	_, err := s.db.Exec(
-		`INSERT INTO devices (id, name, token_hash, created_at, last_seen_at, last_ip)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		id, name, TokenHash(token), ms, ms, nullStr(ip))
+		`INSERT INTO devices (id, name, token_hash, created_at, last_seen_at, last_ip, origin)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, name, TokenHash(token), ms, ms, nullStr(ip), nullStr(origin))
 	if err != nil {
 		return nil, fmt.Errorf("store: create device: %w", err)
 	}
-	return &Device{ID: id, Name: name, CreatedAt: ms, LastSeenAt: ms, LastIP: ip}, nil
+	return &Device{ID: id, Name: name, CreatedAt: ms, LastSeenAt: ms, LastIP: ip, Origin: origin}, nil
 }
 
 // DeviceByToken looks up a device by its cookie token. Revoked devices are
 // not returned.
 func (s *Store) DeviceByToken(token string) (*Device, error) {
 	row := s.db.QueryRow(`
-		SELECT id, name, created_at, last_seen_at, last_ip
+		SELECT id, name, created_at, last_seen_at, last_ip, origin
 		FROM devices WHERE token_hash = ? AND revoked_at IS NULL`, TokenHash(token))
 	var d Device
-	var ip sql.NullString
-	if err := row.Scan(&d.ID, &d.Name, &d.CreatedAt, &d.LastSeenAt, &ip); err != nil {
+	var ip, origin sql.NullString
+	if err := row.Scan(&d.ID, &d.Name, &d.CreatedAt, &d.LastSeenAt, &ip, &origin); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
 	d.LastIP = ip.String
+	d.Origin = origin.String
 	return &d, nil
 }
 
@@ -72,7 +77,7 @@ func (s *Store) TokenRevoked(token string) (bool, error) {
 // ListDevices returns all non-revoked devices, most recently paired first.
 func (s *Store) ListDevices() ([]Device, error) {
 	rows, err := s.db.Query(`
-		SELECT id, name, created_at, last_seen_at, last_ip
+		SELECT id, name, created_at, last_seen_at, last_ip, origin
 		FROM devices WHERE revoked_at IS NULL ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -81,11 +86,12 @@ func (s *Store) ListDevices() ([]Device, error) {
 	out := []Device{} // not nil, or it encodes as JSON null
 	for rows.Next() {
 		var d Device
-		var ip sql.NullString
-		if err := rows.Scan(&d.ID, &d.Name, &d.CreatedAt, &d.LastSeenAt, &ip); err != nil {
+		var ip, origin sql.NullString
+		if err := rows.Scan(&d.ID, &d.Name, &d.CreatedAt, &d.LastSeenAt, &ip, &origin); err != nil {
 			return nil, err
 		}
 		d.LastIP = ip.String
+		d.Origin = origin.String
 		out = append(out, d)
 	}
 	return out, rows.Err()

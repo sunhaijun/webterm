@@ -190,3 +190,6 @@ export const MaximizeIcon = () => <Icon d="M3.5 2.5h7a1 1 0 0 1 1 1v7a1 1 0 0 1-
 
 /** Restore: two overlapping squares, the front one at the bottom left. */
 export const RestoreIcon = () => <Icon d="M3 5h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1zM5 5v-2a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-2" />
+
+/** Chevron down: the machine button opens the Machines sheet (ADR-0062 §8). */
+export const ChevronDownIcon = ({ size = 12 }: { size?: number }) => <Icon d="M3.25 5.25L7 9l3.75-3.75" size={size} />

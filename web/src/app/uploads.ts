@@ -3,6 +3,7 @@
  * contents count as files, the upload request, and the toast for each failure. The
  * controller does the rest: target session, order, and pasting the returned path.
  */
+import { apiURL } from '../machines/current'
 
 /** What the agent said about one upload. `status` 0 = the request never got an answer. */
 export type UploadOutcome = { ok: true; path: string } | { ok: false; status: number }
@@ -12,9 +13,9 @@ export type Upload = (file: File) => Promise<UploadOutcome>
 /** POST /api/uploads with the file as the body (http-api.md#uploads). */
 export const uploadFile: Upload = async (file) => {
   try {
-    const r = await fetch(`/api/uploads?name=${encodeURIComponent(file.name)}`, {
+    const r = await fetch(apiURL(`/api/uploads?name=${encodeURIComponent(file.name)}`), {
       method: 'POST',
-      credentials: 'same-origin',
+      credentials: 'include',
       headers: { 'Content-Type': file.type || 'application/octet-stream' },
       body: file,
     })

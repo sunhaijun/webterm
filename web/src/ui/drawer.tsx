@@ -43,7 +43,7 @@ export interface DrawerProps {
   /** A fixed row of buttons at the bottom ("+ New session · ⚙" in the session drawer, "Cancel · OK" in confirm and rename). */
   foot?: ComponentChildren
   /** Which kind of sheet; CSS sizes each one by it (the session drawer has a minimum height, ADR-0037 §5). */
-  variant?: 'sessions' | 'settings' | 'confirm' | 'rename' | 'files' | 'file'
+  variant?: 'sessions' | 'settings' | 'confirm' | 'rename' | 'files' | 'file' | 'machines'
   children: ComponentChildren
 }
 

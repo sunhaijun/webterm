@@ -94,15 +94,32 @@ Can't scan it? Open  https://term.example.com/pair  in your phone's browser and 
 
 **Implementation note**: `webterm pair` is a separate process that writes to the same DB. SQLite's WAL mode supports access from several processes, but `SQLITE_BUSY` has to be handled (`busy_timeout = 5000`).
 
+## Pairing from another machine's page (AC-10.2, [ADR-0062](../20-architecture/adr/0062-several-machines.md))
+
+Machines that are subdomains of one registrable domain are on the same site, so one page can use them all. To add one, the page sends the 16 digits from that machine's `webterm pair` to `POST <that machine>/auth/pair` with credentials; the response's `Set-Cookie` lands in the browser's jar for that host, with the usual attributes. The agent decides by the request's `Origin`:
+
+| `Origin` | Result | The device's `origin` |
+|---|---|---|
+| none, or the agent's own | paired as before | empty |
+| another origin on the agent's site | paired | that origin |
+| anything else | `403 cross_site`; the code isn't consumed and no failure is counted | — |
+
+**The device is bound to that origin.** Every authenticated request carrying an `Origin` header — the WebSocket upgrade, writes and reads — must come from the agent's own origin or the device's `origin`; anything else is `403 forbidden` and logged. A device without `origin` works only from the agent's own page, as before. A site is decided with the Public Suffix List (`golang.org/x/net/publicsuffix`); an IP address is a site of its own, so an agent in IP mode never accepts another origin.
+
+CORS headers (`Access-Control-Allow-Origin: <origin>`, `-Credentials: true`) go to any origin on the site, on every `/auth/` and `/api/` response including refusals, so the page can read a `401`; preflights from other origins get `403`. CORS only lets a page read answers; the binding decides what it may do.
+
 ## Device management (AC-1.3)
 
 `GET /api/devices`:
 
 ```json
 [
-  { "id": "a3f…", "name": "iPhone · Safari", "created_at": …, "last_seen_at": …, "last_ip": "1.2.3.4", "current": true }
+  { "id": "a3f…", "name": "iPhone · Safari", "created_at": …, "last_seen_at": …, "last_ip": "1.2.3.4", "current": true },
+  { "id": "9c1…", "name": "iPhone · Safari", "created_at": …, "last_seen_at": …, "last_ip": "1.2.3.4", "origin": "https://tokyo.example.com:8443" }
 ]
 ```
+
+- `origin` is present when the device was paired from another machine's page (above); `webterm devices` shows it as `via tokyo.example.com:8443`
 
 - `current` marks the device making the request (so you don't kick yourself out by accident — the UI asks for confirmation on it)
 - `name` is inferred from `User-Agent` (`iPhone · Safari` / `macOS · Chrome`) and can be changed with `PATCH`
@@ -113,7 +130,11 @@ Updates to `last_seen_at` / `last_ip` are throttled (at most one write per devic
 
 ### Signing out (AC-1.22, [ADR-0048](../20-architecture/adr/0048-sign-out.md))
 
-`POST /auth/logout` revokes the requesting device, exactly like revoking it from elsewhere, and on the same response clears the cookie and sends `Clear-Site-Data: "cookies", "storage", "cache"`. The cookie is `HttpOnly`, so this response is the only way the page can get rid of it; and revoking matters more than deleting: a copied token stops working too. The page then removes its own `localStorage` keys, service worker and caches, for browsers that ignore `Clear-Site-Data`. Offline it refuses: a local-only sign-out would leave a token the server still accepts.
+`POST /auth/logout` revokes the requesting device, exactly like revoking it from elsewhere, and on the same response clears the cookie with `Set-Cookie` (`Max-Age=0`). The cookie is `HttpOnly`, so this response is the only way the page can get rid of it; and revoking matters more than deleting: a copied token stops working too. To a request from the agent's own origin (or without `Origin`) it also sends `Clear-Site-Data: "storage", "cache"`. The page then removes its own `localStorage` keys, service worker and caches, for browsers that ignore `Clear-Site-Data`. Offline it refuses: a local-only sign-out would leave a token the server still accepts.
+
+**Never `"cookies"`** ([ADR-0062](../20-architecture/adr/0062-several-machines.md) §12): that directive clears every cookie of the registrable domain, so signing out of one machine would drop the cookies of its sibling machines (their tokens still valid on the servers) and of unrelated services on the same domain.
+
+With several machines, "Sign out this device" signs out of each machine the page added first, then of the page's own; Remove on one machine sends the same request to that machine only (ADR-0062 §10–§11).
 
 ### Revocation takes effect immediately (AC-1.11)
 
@@ -162,7 +183,8 @@ Rate-limit state lives in memory (cleared on restart) and is never written to th
 |---|---|
 | `GET /` `GET /assets/*` `GET /manifest.json` `GET /sw.js` | ✗ |
 | `GET /pair` | ✗ (the page itself; the code is in the fragment) |
-| `POST /auth/pair` | ✗ (this is the pairing entry point, protected by rate limiting) |
+| `POST /auth/pair` | ✗ (this is the pairing entry point, protected by rate limiting; `403 cross_site` from another site) |
+| `OPTIONS /auth/*` `OPTIONS /api/*` | ✗ (CORS preflight: `204` for an origin on the agent's site, `403` otherwise; never reaches a handler) |
 | `POST /auth/logout` | ✓ (plus the `Origin` check; signs out the requesting device) |
 | `GET /healthz` | ✗ (returns only `ok`, discloses nothing) |
 | `GET /.well-known/acme-challenge/*` | ✗ (ACME, :80 only) |
@@ -186,7 +208,7 @@ When an unauthenticated user opens `/`, the frontend JS calls `/api/devices`, ge
 
 The only differences under `--dev`:
 - the cookie has no `Secure`
-- `Origin` may be `http://localhost:*` / `http://127.0.0.1:*`
+- `Origin` may be `http://localhost:*`, `http://127.0.0.1:*`, `http://[::1]:*` or `http://*.localhost:*`; all of them count as the agent's own origin, and all get CORS headers. Chromium resolves `*.localhost` to the loopback address, so two dev agents at `a.test.localhost` and `b.test.localhost` behave as two machines on one site (E2E-56)
 - no certificate is requested and no HSTS is sent
 
 Pairing works exactly the same — startup prints `http://127.0.0.1:8080/pair#...`; open it locally.

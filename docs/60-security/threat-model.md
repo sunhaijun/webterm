@@ -92,9 +92,11 @@ This is the project's biggest risk, so the security design comes before the feat
 | Mitigation | Implementation |
 |---|---|
 | `SameSite=Strict` cookie | Cross-site requests carry no credentials |
-| WebSocket `Origin` check | Must exactly equal the configured domain; a mismatch returns 403 (AC-1.8) |
+| WebSocket `Origin` check | Must exactly equal the agent's own origin or the origin the device was paired from; a mismatch returns 403 (AC-1.8, [ADR-0062](../20-architecture/adr/0062-several-machines.md) §4) |
 | Every mutation uses a non-GET method | REST writes use only `POST`/`PATCH`/`DELETE` |
-| `Origin` check on REST writes | `POST /auth/logout`, the device routes, `POST /api/uploads` and the file browser's writes (`POST /api/fs/*`, `DELETE /api/fs`) refuse a cross-site `Origin` with 403, in case a browser or proxy gets `SameSite` wrong |
+| `Origin` check on every authenticated request | Any authenticated request that carries `Origin` — writes, and since ADR-0062 reads too — is refused with 403 unless it comes from the agent's own origin or the device's `origin`, in case a browser or proxy gets `SameSite` wrong, and because CORS (below) answers every origin on the site |
+| CORS only within the site | `Access-Control-Allow-Origin` echoes only an origin on the agent's site (same scheme and registrable domain), with credentials; a preflight from anywhere else gets 403. CORS lets another machine's page read answers; the binding above decides whether it may act |
+| Pairing refuses other sites | `POST /auth/pair` from an `Origin` off the agent's site gets `403 cross_site` before the code is checked |
 
 **Why the WebSocket checks `Origin` separately**: the WebSocket handshake **is not protected by CORS**. Modern browsers don't send `SameSite=Strict` cookies on a cross-site WS handshake either, but this behavior has varied historically. The Origin check is a necessary second line of defense.
 
@@ -112,7 +114,7 @@ This is the project's biggest risk, so the security design comes before the feat
 | Files served by the file browser ([ADR-0059](../20-architecture/adr/0059-files.md) §7) | `GET /api/fs/raw` answers with `Content-Security-Policy: … sandbox` (an opaque origin: no cookie, no scripts, even if the browser renders it), `Content-Disposition: attachment` for everything but non-SVG images, video and audio, `nosniff`, and a `Content-Type` from webterm's own table. The page shows text with `textContent` and SVG only through `<img>`; it renders no Markdown or HTML. A cloned repository's `.html` or `.svg` therefore never runs as a page on webterm's origin. `Cache-Control: no-store` keeps viewed files out of the browser's disk cache |
 | Markdown previews ([ADR-0060](../20-architecture/adr/0060-files-maximize-and-markdown.md) §2) | The one place the page inserts HTML. markdown-it runs with raw HTML off, so tags in the file come out as text; links only to `http(s)`, `mailto`, anchors and relative paths; images only from the agent. Clicks are handled by one listener, never inline handlers, and the CSP (`script-src 'self'`) would stop any script or handler that slipped through |
 | File names typed into a session ([ADR-0059](../20-architecture/adr/0059-files.md) §4) | Send to session backslash-escapes the path and never pastes one with a control character, so a name crafted to end the bracketed paste (`ESC[201~`) and press Enter can't run a command |
-| CSP | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://<domain>; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'` |
+| CSP | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://<domain> <site sources>; img-src 'self' data: <site sources>; media-src 'self' <site sources>; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`. `<site sources>` are the other machines' ([ADR-0062](../20-architecture/adr/0062-several-machines.md) §6): `https://*.<site>:* https://<site>:*`, plus the `wss://` forms in `connect-src`; empty in IP mode. Scripts still come only from `'self'` |
 
 Session names, CWDs and file names are the server data that reaches the DOM (tab bar, session drawer, file browser). Always use `textContent`, and check this specifically in review.
 
@@ -165,6 +167,17 @@ Session names, CWDs and file names are the server data that reaches the DOM (tab
 
 The same check tmux makes for `/tmp/tmux-<uid>`. Files in the directory are as private as the user's home directory; another local user who is root can read them anyway.
 
+### T10 Several machines in one page
+
+[ADR-0062](../20-architecture/adr/0062-several-machines.md): a page served by one machine also drives the other machines on its site that the device was paired with from it.
+
+| Threat | Mitigation / accepted |
+|---|---|
+| A compromised machine serves a page that drives the others | **Accepted**, inherent in one page for several machines: the page's code acts with the cookies of every machine it added. It adds no network path; each machine's device list shows which devices are bound to which page (`origin`) and can revoke them |
+| Another page on the same domain (a blog, a sibling subdomain) uses the cookies | `SameSite` treats it as same-site, so the cookie is sent. It still can't act or read: every authenticated request with `Origin` must come from the agent's own origin or the device's bound one (T4). Accepted: it can embed `/api/fs/raw` in an `<img>` (no `Origin`), without reading the pixels. Keep untrusted content off the domain the machines live on |
+| Signing out of one machine clears the others' cookies | `Clear-Site-Data: "cookies"` is never sent: it applies to the whole registrable domain (ADR-0062 §12) |
+| A device left signed in on a machine that couldn't be reached at sign-out | The signed-out page names the machine; only that machine can revoke the token (`webterm devices revoke`) |
+
 ## Out of scope
 
 | Measure | Why not |
@@ -181,7 +194,7 @@ The same check tmux makes for `/tmp/tmux-<uid>`. Files in the directory are as p
 If a change touches any of the following, the PR description must state its security impact:
 
 - [ ] A new route reachable without authentication
-- [ ] Changes to cookie attributes, the auth middleware or the Origin check
+- [ ] Changes to cookie attributes, the auth middleware, the Origin check or the CORS headers
 - [ ] New data written to disk (especially anything that could contain terminal output)
 - [ ] New fields written to logs
 - [ ] Changes to how sessions are started (shell arguments, injected environment variables)

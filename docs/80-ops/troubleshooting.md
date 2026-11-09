@@ -14,7 +14,7 @@ sudo systemctl start webterm
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `no viable challenge type found`, `Invalid response from http://…` | Let's Encrypt can't reach the server | Allow inbound TCP 80/443 in the **cloud firewall** (most common), then `ufw status`. From another machine: `curl -sI http://<address>/` must not time out |
+| `no viable challenge type found`, `Invalid response from http://…` | Let's Encrypt can't reach the server | Allow inbound TCP 80 and the HTTPS port (8443 by default) in the **cloud firewall** (most common), then `ufw status`. From another machine: `curl -sI http://<address>/` must not time out |
 | DNS points elsewhere | Record missing, wrong, or not propagated | Use an `A`/`AAAA` record, not a CNAME; wait for the TTL |
 | Cloudflare proxy (orange cloud) | Cloudflare intercepts the challenge | Set the record to DNS only |
 | `rateLimited` | Let's Encrypt limits | Failed validations: 5 per hour, wait ~15 minutes. Issued certificates: 50 per domain/IP and 5 duplicates per week — usually from deleting `certs/` repeatedly; wait |
@@ -170,6 +170,20 @@ What `ssh -t server webterm attach` prints when it can't attach ([install.md](in
 | `the running agent is too old for attach` | The agent is older than v0.5.0 | `webterm update`; sessions survive |
 | `webterm: command not found` | Installed with `--prefix` outside the `PATH` of ssh's non-login shell | Give the full path: `ssh -t server ~/.local/bin/webterm attach` |
 | `that is the session this command runs in` | Ran attach inside a webterm session and picked that same session | Pick another one; a session can't show itself |
+
+## Several machines
+
+Messages when adding a machine ([install.md](install.md#several-machines), [ADR-0062](../20-architecture/adr/0062-several-machines.md)):
+
+| Message | Cause | Fix |
+|---|---|---|
+| IP addresses can't be added | The address is an IP | Give the server a subdomain of the page's domain |
+| Not on this page's domain | The host's domain differs from the page's | Use a subdomain of the same domain as the page |
+| `… refused this page` | The server answers but not to this page: its webterm is older than this feature, or its domain isn't the same site as the page's (a public suffix such as a dynamic-DNS name) | `webterm update` on that server; check the domain |
+| `Can't reach …` | Wrong address or port, the server is down, or the port is closed in its firewall | Open `https://<address>/healthz` in a browser: it should say `ok`. No port in the address means the page's port |
+| Invalid or expired pairing code | The code was mistyped, used or older than 5 minutes | Run `webterm pair` on that server again |
+
+When a server signs this device out (revoked there), the page goes back to its own server and offers to pair again with that server's address filled in. A server that was unreachable during "Sign out this device" is listed on the signed-out page; revoke the device there with `webterm devices revoke <id>`.
 
 ## Mobile
 

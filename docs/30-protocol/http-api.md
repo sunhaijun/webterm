@@ -9,12 +9,18 @@
 - Every `/api/*` route requires a valid device cookie and returns `401` without one ([`../60-security/auth-pairing.md`](../60-security/auth-pairing.md#route-authentication-matrix-ac-17))
 - Requests and responses are JSON (`Content-Type: application/json`). The exceptions are the request bodies of `POST /api/uploads` and `POST /api/fs/upload`, which are the file itself, and the response of `GET /api/fs/raw`, which is the file
 - Writes use only `POST` / `PATCH` / `DELETE`. **No CSRF token is needed** — the cookie is `SameSite=Strict`, so cross-site requests never carry credentials
-- Errors are always `{"code": "...", "message": "..."}`; `code` reuses the values from [WebSocket protocol §7](websocket-protocol.md#7-error-codes), plus the HTTP-only `not_found`, `too_large`, `forbidden` (the agent user may not do that) and `exists` (the name is taken). Unknown or removed `/api/*` paths **authenticate first** (401 if unauthenticated), then return 404 `not_found` — they must not fall through to the frontend's page fallback route
+- **`Origin`**: an authenticated request that carries `Origin` must come from the agent's own origin or from the origin the device was paired from; anything else is `403 forbidden`, reads included ([ADR-0062](../20-architecture/adr/0062-several-machines.md) §4). Requests without `Origin` (same-origin `GET`, `<img>`, `<video>`) aren't affected
+- **CORS** ([ADR-0062](../20-architecture/adr/0062-several-machines.md) §5): a request under `/auth/` or `/api/` whose `Origin` is on the agent's site (same scheme and registrable domain; under `--dev`, any local origin) gets `Access-Control-Allow-Origin: <origin>`, `Access-Control-Allow-Credentials: true` and `Vary: Origin` on every response, refusals included. A preflight `OPTIONS` from such an origin gets `204` with `Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE`, `Access-Control-Allow-Headers: Content-Type, Range` and `Access-Control-Max-Age: 600`; from any other origin `403` without CORS headers. CORS decides who may read an answer, the `Origin` rule above who may act
+- Errors are always `{"code": "...", "message": "..."}`; `code` reuses the values from [WebSocket protocol §7](websocket-protocol.md#7-error-codes), plus the HTTP-only `not_found`, `too_large`, `forbidden` (the agent user may not do that, or the `Origin` may not act for this device), `exists` (the name is taken) and `cross_site` (pairing from another site). Unknown or removed `/api/*` paths **authenticate first** (401 if unauthenticated), then return 404 `not_found` — they must not fall through to the frontend's page fallback route
 - Timestamps are always integer unix milliseconds
 
 ## Pairing and devices
 
 See [`../60-security/auth-pairing.md`](../60-security/auth-pairing.md): `POST /auth/pair`, `POST /auth/logout`, `GET /api/devices`, `PATCH /api/devices/:id`, `DELETE /api/devices/:id`, `POST /api/devices/revoke-all`.
+
+- `POST /auth/pair` from an `Origin` that is neither the agent's own nor on its site → `403 cross_site`, before the code is looked at (it stays valid). From another origin on the site, the new device is bound to that origin (`origin` in the device JSON)
+- `POST /auth/logout` sends `Clear-Site-Data: "storage", "cache"` only to the agent's own origin (or a request without `Origin`; under `--dev`, the local origin whose host and port are the request's), and never `"cookies"`; the cookie is cleared with `Set-Cookie` ([ADR-0062](../20-architecture/adr/0062-several-machines.md) §12)
+- A device in `GET /api/devices` has `origin` when it was paired from another machine's page
 
 ## Uploads
 

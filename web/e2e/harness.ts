@@ -63,7 +63,7 @@ export class Agent {
   private pairUsed = false
   private log = ''
 
-  private readonly port: number
+  readonly port: number
 
   private constructor(proc: ChildProcess, port: number, dataDir: string, opts: AgentOptions) {
     this.proc = proc
@@ -129,14 +129,47 @@ export class Agent {
    * changes (ADR-0003).
    */
   async restart(): Promise<void> {
+    await this.halt()
+    await this.resume()
+  }
+
+  /** halt kills the agent and keeps its data directory, so `resume` brings the same devices back (E2E-56). */
+  async halt(): Promise<void> {
     const old = this.proc
     const exited = new Promise<void>((res) => old.once('exit', () => res()))
     old.kill('SIGKILL')
     await exited
     await waitFor(async () => !(await this.healthy()), 'old agent stopped serving', 10_000)
+  }
+
+  /** resume starts the agent again on the same port and data directory. */
+  async resume(): Promise<void> {
     this.proc = spawn(BINARY, Agent.args(this.port, this.dataDir, this.opts), { stdio: ['ignore', 'pipe', 'pipe'], env: Agent.env(this.dataDir, this.opts) })
     this.collect(this.proc)
     await waitFor(() => this.healthy(), 'new agent is up')
+  }
+
+  /** url is this agent's address under another host name (`b.test.localhost`, E2E-56). */
+  url(host: string): string {
+    return `http://${host}:${this.port}`
+  }
+
+  /** newPairDigits mints a fresh pairing code and returns its 16 digits, as `webterm pair` prints them. */
+  async newPairDigits(): Promise<string> {
+    const { out } = await this.mintPair()
+    const m = out.match(/\b(\d{4}-\d{4}-\d{4}-\d{4})\b/)
+    if (!m) throw new Error(`webterm pair printed no numeric code:\n${out}`)
+    return m[1]!
+  }
+
+  /** revokeAll runs `webterm devices revoke-all`, as an admin on the server would. */
+  async revokeAll(): Promise<void> {
+    // The default data directory points into this agent's too: if --data-dir were ever ignored
+    // (as it once was after the subcommand), this must not reach the developer's own devices
+    const env = { ...process.env, XDG_DATA_HOME: join(this.dataDir, 'xdg-data'), XDG_CONFIG_HOME: join(this.dataDir, 'xdg-config') }
+    const proc = spawn(BINARY, ['devices', '--data-dir', this.dataDir, 'revoke-all'], { stdio: ['ignore', 'pipe', 'pipe'], env })
+    const code = await new Promise<number>((res) => proc.on('exit', (c) => res(c ?? -1)))
+    if (code !== 0) throw new Error(`webterm devices revoke-all exited ${code}`)
   }
 
   /**

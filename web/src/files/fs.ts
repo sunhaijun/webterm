@@ -3,6 +3,7 @@
  * path row, formatting, what kind of preview a file gets, and the path pasted by
  * Send to session. The sheets are in `browser.tsx`.
  */
+import { apiURL } from '../machines/current'
 
 export interface Entry {
   name: string
@@ -206,7 +207,7 @@ export function decodeText(bytes: Uint8Array, tail: boolean): string {
 // ---------- Requests ----------
 
 export function rawUrl(path: string, download = false): string {
-  return `/api/fs/raw?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`
+  return apiURL(`/api/fs/raw?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`)
 }
 
 async function failure(r: Response): Promise<Failure> {
@@ -221,7 +222,7 @@ async function failure(r: Response): Promise<Failure> {
 
 async function call<T>(input: string, init: RequestInit, want: number, parse: (r: Response) => Promise<T>): Promise<Result<T>> {
   try {
-    const r = await fetch(input, { credentials: 'same-origin', ...init })
+    const r = await fetch(apiURL(input), { credentials: 'include', ...init })
     if (r.status !== want) return await failure(r)
     return { ok: true, ...(await parse(r)) }
   } catch {
@@ -255,7 +256,7 @@ export function removeEntry(path: string): Promise<Result<object>> {
 export async function readChunk(path: string, tail: boolean): Promise<Result<{ bytes: Uint8Array }>> {
   const range = tail ? `bytes=-${TEXT_BYTES}` : `bytes=0-${TEXT_BYTES - 1}`
   try {
-    const r = await fetch(rawUrl(path), { credentials: 'same-origin', headers: { Range: range } })
+    const r = await fetch(rawUrl(path), { credentials: 'include', headers: { Range: range } })
     if (r.status !== 200 && r.status !== 206) return await failure(r)
     return { ok: true, bytes: new Uint8Array(await r.arrayBuffer()) }
   } catch {
@@ -266,7 +267,7 @@ export async function readChunk(path: string, tail: boolean): Promise<Result<{ b
 /** The whole file as a `File`, for the share sheet. */
 export async function fetchFile(path: string): Promise<Result<{ file: File }>> {
   try {
-    const r = await fetch(rawUrl(path), { credentials: 'same-origin' })
+    const r = await fetch(rawUrl(path), { credentials: 'include' })
     if (r.status !== 200) return await failure(r)
     const blob = await r.blob()
     const type = (r.headers.get('Content-Type') ?? blob.type).split(';')[0]
@@ -288,7 +289,9 @@ export interface Uploaded {
 export function uploadTo(dir: string, file: File, onProgress: (fraction: number) => void): Promise<Result<Uploaded>> {
   return new Promise((resolve) => {
     const x = new XMLHttpRequest()
-    x.open('POST', `/api/fs/upload?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`)
+    x.open('POST', apiURL(`/api/fs/upload?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`))
+    // Another machine's origin (ADR-0062): send its cookie; on the own machine this changes nothing
+    x.withCredentials = true
     x.setRequestHeader('Content-Type', 'application/octet-stream')
     x.upload.onprogress = (e) => {
       if (e.lengthComputable && e.total > 0) onProgress(e.loaded / e.total)

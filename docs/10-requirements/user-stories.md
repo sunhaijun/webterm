@@ -112,3 +112,11 @@ Each story has acceptance criteria in [`acceptance-criteria.md`](acceptance-crit
 **US-9.3** (m23) I put photos or any file into the folder I'm looking at, under their own names; nothing that's already there is overwritten. I can create a folder, rename and delete things, each with the same small sheets the sessions use.
 
 **US-9.4** (m23) A screenshot my tests wrote on the server goes to claude with one tap (Send to session), and New session here opens a shell in the folder I'm looking at.
+
+---
+
+## US-10 Several machines
+
+**US-10.1** (m24) I have servers in several countries, each a subdomain of my domain, often on port 8443. From the one webterm I installed on my phone I add another server with its address and the 16 digits its `webterm pair` prints, and from then on I switch between servers with two taps — straight to that server, through nothing else ([ADR-0062](../20-architecture/adr/0062-several-machines.md)).
+
+**US-10.2** (m24) Each server is still its own: it knows only its own devices, I can remove a server from my list (which signs this device out there), and signing out of the device signs it out everywhere. If a server signed me out, the page tells me and lets me pair again on the spot. If the server that served the page is down, I can still use the others.

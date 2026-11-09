@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/creack/pty"
 
 	"github.com/sunhaijun/webterm/scripts"
 )
@@ -109,7 +112,7 @@ func TestInstallScriptDefaultAddress(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
-		if got := execStart(t, out); got != "ExecStart=/usr/local/bin/webterm serve --domain 203.0.113.9" {
+		if got := execStart(t, out); got != "ExecStart=/usr/local/bin/webterm serve --domain 203.0.113.9 --https-port 8443" {
 			t.Errorf("ExecStart = %q", got)
 		}
 	})
@@ -154,7 +157,7 @@ func TestInstallScriptDefaultAddress(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
-		if got := execStart(t, out); got != "ExecStart=/usr/local/bin/webterm serve --domain term.example.com" {
+		if got := execStart(t, out); got != "ExecStart=/usr/local/bin/webterm serve --domain term.example.com --https-port 8443" {
 			t.Errorf("ExecStart = %q", got)
 		}
 	})
@@ -335,6 +338,87 @@ func TestInstallScriptSetup(t *testing.T) {
 						t.Errorf("install-state keeps %s:\n%s", l, state)
 					}
 				}
+			}
+		})
+	}
+}
+
+// UT-install-port (AC-1.21, ADR-0063): a first install serves HTTPS on 8443
+// unless another port is chosen; a previous install keeps its port, 443
+// included (install-state leaves 443 out); --https-port wins.
+func TestInstallScriptDefaultPort(t *testing.T) {
+	cases := []struct {
+		name  string
+		state []string
+		args  []string
+		want  string
+	}{
+		{"first install", nil, []string{"--domain", "term.example.com"}, " --https-port 8443"},
+		{"first install, --https-port 443", nil, []string{"--domain", "term.example.com", "--https-port", "443"}, ""},
+		{"first install, --https-port 9443", nil, []string{"--domain", "term.example.com", "--https-port", "9443"}, " --https-port 9443"},
+		{"previous install on 443", []string{"--domain", "term.example.com"}, nil, ""},
+		{"previous install on 8443", []string{"--domain", "term.example.com", "--https-port", "8443"}, nil, " --https-port 8443"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sb := newSandbox(t)
+			if c.state != nil {
+				sb.writeState(t, c.state...)
+			}
+			out, err := sb.run(t, nil, append([]string{"--print-unit"}, c.args...)...)
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if got, want := execStart(t, out), "ExecStart=/usr/local/bin/webterm serve --domain term.example.com"+c.want; got != want {
+				t.Errorf("ExecStart = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// UT-install-port (AC-1.21, ADR-0063): the address and port questions, run on
+// a terminal as the installer runs them (they read /dev/tty).
+func TestInstallScriptAsksPort(t *testing.T) {
+	cases := []struct {
+		name, call, input string
+		want              string
+		says              string
+	}{
+		{"Enter is 8443", "ask_port", "\n", "domain= port=8443 given=0", "Which HTTPS port?"},
+		{"another port", "ask_port", "9443\n", "domain= port=9443 given=0", ""},
+		{"443", "ask_port", "443\n", "domain= port=443 given=0", ""},
+		{"asked again until valid", "ask_port", "abc\n70000\n80\n09443\n", "domain= port=9443 given=0", "choose another"},
+		{"host:port at the address", "ask_address 203.0.113.9", "term.example.com:9443\n", "domain=term.example.com port=9443 given=1", ""},
+		{"a pasted URL with a port", "ask_address 203.0.113.9", "https://term.example.com:8443/pair\n", "domain=term.example.com port=8443 given=1", ""},
+		{"Enter at the address", "ask_address 203.0.113.9", "\n", "domain=203.0.113.9 port=443 given=0", ""},
+		{"a bad port at the address is asked again", "ask_address 203.0.113.9", "term.example.com:80\nterm.example.com\n", "domain=term.example.com port=443 given=0", "choose another"},
+	}
+	// Only the functions: the script's top level would install.
+	const prelude = `set -euo pipefail
+eval "$(sed -n '/^die()/p; /^info()/p; /^port_ok()/,/^}/p; /^ask_port()/,/^}/p; /^ask_address()/,/^}/p' "$0")"
+HTTP_PORT=80 HTTPS_PORT=443 DEFAULT_HTTPS_PORT=8443 PORT_GIVEN=0 DOMAIN="" ADDR_SOURCE=""
+`
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", prelude+c.call+"\necho \"RESULT domain=$DOMAIN port=$HTTPS_PORT given=$PORT_GIVEN\"", installScript)
+			ptmx, err := pty.Start(cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ptmx.Close()
+			if _, err := ptmx.Write([]byte(c.input)); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			_, _ = io.Copy(&out, ptmx) // ends with EIO once bash exits
+			if err := cmd.Wait(); err != nil {
+				t.Fatalf("%v\n%s", err, out.String())
+			}
+			if !strings.Contains(out.String(), "RESULT "+c.want+"\r\n") {
+				t.Errorf("want %q in:\n%s", c.want, out.String())
+			}
+			if c.says != "" && !strings.Contains(out.String(), c.says) {
+				t.Errorf("want %q in:\n%s", c.says, out.String())
 			}
 		})
 	}

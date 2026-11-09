@@ -29,7 +29,7 @@ func TestMigrationsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	v1, _ := s1.SchemaVersion()
-	if _, err := s1.CreateDevice("dev-1", "iPhone", "tok", "1.2.3.4", time.Now()); err != nil {
+	if _, err := s1.CreateDevice("dev-1", "iPhone", "tok", "1.2.3.4", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	s1.Close()

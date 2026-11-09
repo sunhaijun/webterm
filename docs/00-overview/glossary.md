@@ -10,6 +10,9 @@ Use these terms in docs and code. Don't invent synonyms.
 |---|---|
 | **agent** | The webterm binary running on the target server. It serves static assets, authentication, the WebSocket terminal stream and session management. "Server" in these docs means the agent. |
 | **client** | The browser SPA, served by the agent via `go:embed`. |
+| **machine** | One agent as the page sees it: its origin (scheme, host, port). The page's **own machine** served it; other machines on the same site (subdomains of one domain) can be added to its list and switched to ([ADR-0062](../20-architecture/adr/0062-several-machines.md)). |
+| **site** | Scheme + registrable domain (eTLD+1, from the Public Suffix List), the unit of `SameSite`: `https://a.example.com:8443` and `https://b.example.com` are the same site, different origins. An IP address is a site of its own. |
+| **bound origin** | `devices.origin`: the page origin a device was paired from when that wasn't the agent's own. Requests with that device's cookie and an `Origin` header must come from the agent's own origin or this one. |
 | **terminal emulator (agent-side)** | One emulator per session (`internal/vterm`, wrapping tuios.dev/vt). It consumes all PTY output and can export a snapshot at any time. xterm.js in the browser only displays ([ADR-0026](../20-architecture/adr/0026-agent-holds-terminal-state.md)). |
 
 ## Sessions and data flow

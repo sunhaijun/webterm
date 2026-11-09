@@ -8,6 +8,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks'
 
 import { FilesBrowser } from '../files/browser'
+import type { MachineCtx } from '../machines/context'
+import { hostPort } from '../machines/machines'
+import { AddMachineSheet, MachineButton, MachinesSheet, RemoveMachineConfirm } from '../machines/sheets'
 import { ExtraKeys } from '../keys/extrakeys'
 import { Drawer } from '../ui/drawer'
 import { FolderIcon, GearIcon, PlusIcon } from '../ui/icons'
@@ -33,16 +36,27 @@ export interface AppProps {
   onRevoked?(): void
   /** Called when this device signed itself out (AC-1.22); the gate swaps in the pairing page. */
   onSignedOut?(): void
+  /** The machines this page switches between (ADR-0062); absent, there is just this one. */
+  machines?: MachineCtx
 }
 
-export function App({ onRevoked, onSignedOut }: AppProps = {}) {
-  const ctl = useMemo(() => new AppController(), [])
+export function App({ onRevoked, onSignedOut, machines: m }: AppProps = {}) {
+  const ctl = useMemo(() => new AppController({ signOut: m?.signOut, pages: m?.pages }), [])
   const [, setTick] = useState(0)
   const rerender = () => setTick((n) => n + 1)
   const rootRef = useRef<HTMLDivElement>(null)
   const areaRef = useRef<HTMLDivElement>(null)
   const [menu, setMenu] = useState<MenuAt | null>(null)
   const [renaming, setRenaming] = useState<number | null>(null)
+  // The Machines sheets (ADR-0062 §8). A machine that signed this device out reopens Add with its address (§9).
+  const [machinesOpen, setMachinesOpen] = useState(false)
+  const [adding, setAdding] = useState<{ address: string; error: string; existing: string[] } | null>(() =>
+    m?.repair ? { address: hostPort(m.repair.origin), error: m.repair.message, existing: m.list.filter((o) => o !== m.repair?.origin) } : null,
+  )
+  const [removeAsk, setRemoveAsk] = useState<string | null>(null)
+  useEffect(() => {
+    if (m?.repair) m.clearRepair()
+  }, [])
 
   // Subscribe before mounting, both in layout effects. mount() starts connecting
   // right away; a useEffect runs after paint, and on localhost/LAN the welcome
@@ -87,6 +101,28 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
     ctl.rename(sid, name)
   }
 
+  const machineName = m ? (m.names.get(m.current) ?? hostPort(m.current)) : ''
+  const closeMachines = () => {
+    setMachinesOpen(false)
+    if (s.form === 'wide' && !s.coarse && !s.sessionsOpen) ctl.focusTerm()
+  }
+  const pickMachine = (o: string) => {
+    if (!m) return
+    setMachinesOpen(false)
+    if (o === m.current) {
+      ctl.closeSessions()
+      return
+    }
+    m.switchTo(o)
+  }
+  const removeMachine = async (o: string, force: boolean) => {
+    if (!m) return
+    setRemoveAsk(null)
+    const r = await m.remove(o, force)
+    if (r === 'unreachable') setRemoveAsk(o)
+    else if (r === 'failed') ctl.notify('error', `Couldn't sign out of ${m.names.get(o) ?? hostPort(o)}`)
+  }
+
   return (
     <div
       class="app"
@@ -98,6 +134,7 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
     >
       {s.form === 'wide' && (
         <TopBar
+          machine={m ? { name: machineName, onOpen: () => setMachinesOpen(true) } : undefined}
           sessions={s.sessions}
           conn={s.conn}
           connInfo={s.connInfo}
@@ -178,6 +215,7 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
           title="Sessions"
           testid="session-drawer"
           variant="sessions"
+          head={m ? <MachineButton name={machineName} onOpen={() => setMachinesOpen(true)} /> : undefined}
           backButton
           onClose={() => ctl.closeSessions()}
           foot={
@@ -285,6 +323,35 @@ export function App({ onRevoked, onSignedOut }: AppProps = {}) {
       {closing && <CloseConfirm name={closing.name} onOk={() => ctl.confirmClose()} onCancel={() => ctl.cancelClose()} />}
 
       {s.signingOut && <SignOutConfirm onOk={() => void ctl.confirmSignOut()} onCancel={() => ctl.cancelSignOut()} />}
+
+      {m && machinesOpen && (
+        <MachinesSheet
+          own={m.own}
+          current={m.current}
+          list={m.list}
+          names={m.names}
+          onPick={pickMachine}
+          onRemove={(o) => void removeMachine(o, false)}
+          onAdd={() => setAdding({ address: '', error: '', existing: m.list })}
+          onClose={closeMachines}
+        />
+      )}
+      {m && adding && (
+        <AddMachineSheet
+          address={adding.address}
+          error={adding.error}
+          existing={adding.existing}
+          onAdd={(origin, digits) => m.add(origin, digits)}
+          onCancel={() => setAdding(null)}
+        />
+      )}
+      {m && removeAsk && (
+        <RemoveMachineConfirm
+          name={m.names.get(removeAsk) ?? hostPort(removeAsk)}
+          onOk={() => void removeMachine(removeAsk, true)}
+          onCancel={() => setRemoveAsk(null)}
+        />
+      )}
 
       <LinkPopover pop={s.linkPop} onOpen={() => ctl.openLink()} onCopy={() => ctl.copyLink()} onClose={ctl.closeLinkPop} />
       <KeyMenus

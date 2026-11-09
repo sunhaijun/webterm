@@ -169,6 +169,13 @@ func NormalizeCode(s string) string {
 // Pair consumes a pairing code, creates a device and returns its session
 // token.
 func (a *Auth) Pair(code, userAgent, ip string, now time.Time) (*store.Device, string, error) {
+	return a.PairFrom(code, userAgent, ip, "", now)
+}
+
+// PairFrom is Pair for a device paired from another machine's page: origin
+// is that page's origin, which the device is then bound to (ADR-0062 §4).
+// The caller has checked that origin is on the agent's site.
+func (a *Auth) PairFrom(code, userAgent, ip, origin string, now time.Time) (*store.Device, string, error) {
 	if err := a.store.ConsumePairing(NormalizeCode(code), now); err != nil {
 		return nil, "", ErrInvalidCode
 	}
@@ -180,7 +187,7 @@ func (a *Auth) Pair(code, userAgent, ip string, now time.Time) (*store.Device, s
 	if _, err := rand.Read(idBytes); err != nil {
 		return nil, "", err
 	}
-	dev, err := a.store.CreateDevice(hex.EncodeToString(idBytes), DeviceName(userAgent), token, ip, now)
+	dev, err := a.store.CreateDevice(hex.EncodeToString(idBytes), DeviceName(userAgent), token, ip, origin, now)
 	if err != nil {
 		return nil, "", err
 	}

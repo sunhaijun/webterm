@@ -381,8 +381,11 @@ func TestITAuth5_SignOut(t *testing.T) {
 	if !cleared {
 		t.Error("the response doesn't clear the cookie")
 	}
-	if got := resp.Header.Get("Clear-Site-Data"); !strings.Contains(got, `"cookies"`) || !strings.Contains(got, `"storage"`) || !strings.Contains(got, `"cache"`) {
-		t.Errorf("Clear-Site-Data = %q, want cookies, storage and cache", got)
+	// Never "cookies": its scope is the whole registrable domain, so it would
+	// sign the device out of sibling machines and unrelated services too
+	// (ADR-0062 §12). The cookie is cleared by Set-Cookie above.
+	if got := resp.Header.Get("Clear-Site-Data"); strings.Contains(got, `"cookies"`) || !strings.Contains(got, `"storage"`) || !strings.Contains(got, `"cache"`) {
+		t.Errorf("Clear-Site-Data = %q, want storage and cache, not cookies", got)
 	}
 
 	if got := withToken(http.MethodGet, "/api/devices", ""); got != http.StatusUnauthorized {

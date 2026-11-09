@@ -34,20 +34,25 @@ Flags:
 	if err := applyConfig(fs, args); err != nil {
 		return err
 	}
-	if err := fs.Parse(args); err != nil {
+	pos, err := parseInterleaved(fs, args) // `attach work --data-dir X` (AC-8.8)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() > 1 {
+	if len(pos) > 1 {
 		fs.Usage()
 		return exitCode(2)
 	}
-	if *newSession && fs.NArg() > 0 {
+	target := ""
+	if len(pos) == 1 {
+		target = pos[0]
+	}
+	if *newSession && target != "" {
 		return errors.New("--new takes no session name")
 	}
 
-	err := attach.Run(context.Background(), attach.Options{
+	err = attach.Run(context.Background(), attach.Options{
 		Socket: attachSocketPath(*dataDir),
-		Target: fs.Arg(0),
+		Target: target,
 		New:    *newSession,
 		List:   *list,
 		In:     os.Stdin,

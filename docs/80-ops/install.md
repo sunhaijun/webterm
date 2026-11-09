@@ -4,7 +4,7 @@
 
 - Linux (x86_64 or arm64) and a regular user with `sudo` — not root
 - A public IPv4 address. A domain is optional
-- Inbound TCP 80 and 443 allowed by your cloud provider's firewall (security group)
+- Inbound TCP 80 and the HTTPS port (8443 unless you choose another) allowed by your cloud provider's firewall (security group)
 
 ## Install
 
@@ -17,12 +17,13 @@ curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install
 The installer walks you through it ([ADR-0046](../20-architecture/adr/0046-guided-install.md)):
 
 1. **Address.** Press Enter to use the server's public IP, or type a domain.
-2. **Firewall.** Opens ports 80/443 in ufw or firewalld if either is active.
-3. **Certificate.** Requests a Let's Encrypt certificate. If something outside the server is missing, it stops, tells you exactly what to do, and checks again:
+2. **Port.** Press Enter for HTTPS on 8443, or type another port (443 if nothing else uses it). A port typed with the address (`term.example.com:9443`) is used without asking.
+3. **Firewall.** Opens port 80 and the HTTPS port in ufw or firewalld if either is active.
+4. **Certificate.** Requests a Let's Encrypt certificate. If something outside the server is missing, it stops, tells you exactly what to do, and checks again:
    - *DNS:* shows the `A` record to add and waits until it resolves to this server.
-   - *Cloud firewall:* names the console page to open ports 80/443 in, and re-checks when you press Enter.
-4. **Service.** Installs a systemd service running as your user and starts it.
-5. **Pairing.** Prints a QR code. Scan it with your phone and you're in.
+   - *Cloud firewall:* names the console page to open port 80 and the HTTPS port in, and re-checks when you press Enter.
+5. **Service.** Installs a systemd service running as your user and starts it.
+6. **Pairing.** Prints a QR code. Scan it with your phone and you're in.
 
 Re-running the same command later upgrades in place; open sessions survive.
 
@@ -43,7 +44,7 @@ curl -fsSL …/install.sh | bash -s -- --domain term.example.com
 | Option | Meaning |
 |---|---|
 | `--domain <name or IPv4>` | Address to serve. Default: the previous install's, else ask |
-| `--https-port <n>` | Use another HTTPS port when 443 is taken |
+| `--https-port <n>` | HTTPS port. Default: the previous install's, else ask (Enter = 8443; 8443 without a terminal) |
 | `--channel dev` | Install the rolling build of `main` |
 | `--version <tag>` | Install a specific release |
 | `--setup` / `--no-setup` | Set up claude and codex without asking / don't ask ([below](#set-up-claude-and-codex)) |
@@ -55,6 +56,12 @@ All options: `install.sh --help` or `webterm install --help`.
 ## Pair more devices
 
 Run `webterm pair` (on the server, or in a session on a device that's already paired) and scan the QR code. If you can't scan, open `https://<address>/pair` and type the 16 digits. Codes expire after 5 minutes and work once. On a phone, "Add to Home Screen" installs webterm as an app.
+
+## Several machines
+
+One page can switch between servers that are **subdomains of one domain** (`tokyo.example.com`, `la.example.com`), each running its own webterm ([ADR-0062](../20-architecture/adr/0062-several-machines.md)). Install each one as usual with its own subdomain, one host name per server; the same `--https-port` everywhere saves typing it. Then, on the server to add, run `webterm pair`; in the page, open the session drawer (or the machine name at the left of the tab bar), tap the machine name → Add machine, and enter its address (`la.example.com`; no port means the page's port) and the 16 digits. The page talks to that server directly; nothing is shared between the servers.
+
+Servers on bare IP addresses can't be added (an IP address is a site of its own to the browser), nor can a domain on the Public Suffix List such as a dynamic-DNS name. All servers in one page must run a webterm with this feature.
 
 ## Day to day
 
@@ -130,7 +137,7 @@ To switch, reinstall with `--domain <new address>`; every device must pair again
 
 ## Non-standard ports
 
-When 443 is taken (by Xray, another web server, …): `--https-port 8443`. Pairing links and redirects include the port automatically. Certificates are still validated on port 80, so keep 80 free. With both ports above 1024, no capability is needed.
+A first install serves HTTPS on 8443 unless you choose another port at the prompt or with `--https-port` ([ADR-0063](../20-architecture/adr/0063-installer-asks-for-the-port.md)); an existing install keeps its port. For `https://<address>/` without a port, choose 443 (`--https-port 443`) when nothing else holds it. Pairing links and redirects include the port automatically. Certificates are still validated on port 80, so keep 80 free. With both ports above 1024, no capability is needed.
 
 ## Reverse proxy or tunnel
 
@@ -228,12 +235,14 @@ Command-line flags override the file; unknown keys are an error with the line nu
 | `webterm install` | Install or upgrade using this binary |
 | `webterm update` | Upgrade to the latest release |
 | `webterm pair [--wait]` | Print a pairing code and QR code |
-| `webterm devices [list \| revoke <id> \| revoke-all]` | Manage devices |
+| `webterm devices [list \| revoke <id> \| revoke-all]` | Manage devices; a device added from another machine's page shows `via <that machine>` |
 | `webterm doctor [--acme] [--guide]` | Check prerequisites; `--acme` obtains the certificate, `--guide` waits for you to fix things |
 | `webterm setup [--check] [--yes]` | Check and add the claude and codex settings webterm uses ([above](#set-up-claude-and-codex)) |
 | `webterm attach [name \| n] [--new] [--list]` | Attach this terminal to a session ([From a terminal over SSH](#from-a-terminal-over-ssh)) |
 | `webterm reload [--when-idle] [-- serve …]` | Hot-upgrade to the binary on disk; after `--`, the command line the new process starts with |
 | `webterm version` | Version |
+
+Flags may come before or after a command's arguments: `webterm devices revoke-all --data-dir /srv/webterm` and `webterm devices --data-dir /srv/webterm revoke-all` do the same thing.
 
 ## Data and backups
 
