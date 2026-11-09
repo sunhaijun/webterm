@@ -1,6 +1,6 @@
 # ADR-0060 The file browser: maximize, and Markdown rendered
 
-Status: Accepted (2026-11-08). Amends [ADR-0059](0059-files.md) §1 (sheet size on `wide`) and §4 (previews), and reverses its "Rendering Markdown" alternative. Adds AC-9.13 and AC-9.14 and E2E-54. Neither the HTTP API nor the protocol changes.
+Status: Accepted (2026-11-08); §2 "Looks" amended by [ADR-0061](0061-markdown-text-size.md) (text size, the size line stays at the top). Amends [ADR-0059](0059-files.md) §1 (sheet size on `wide`) and §4 (previews), and reverses its "Rendering Markdown" alternative. Adds AC-9.13 and AC-9.14 and E2E-54. Neither the HTTP API nor the protocol changes.
 
 ## Context
 
@@ -32,7 +32,7 @@ ADR-0059 turned Markdown rendering down as "a sanitizer and an attack surface". 
   - **a relative path** is resolved against the file's folder (query and anchor dropped, `%`-escapes decoded) and opened in the browser. A file replaces the one shown; a folder closes the file and shows that folder in the list. Missing → a toast.
 - **Images**: a relative `src` is loaded from the agent (`/api/fs/raw`, resolved like a link), so a README's screenshots show. Anything else isn't loaded: an `http(s)` image becomes a link carrying its alt text, and other schemes become the alt text alone. External images would tell a third party when and from where you read the file, and the page's CSP (`img-src 'self' data:`) would block them anyway.
 - **Inserted once as HTML** markdown-it produced (the only `innerHTML` in the page). One click listener on the container handles every link: there are no inline handlers. The page's CSP (`script-src 'self'`, no `'unsafe-inline'`) is a second, independent barrier: even a tag or handler that slipped through couldn't run.
-- **Looks**: the UI font at 15px, at most 760px wide, centered when maximized; code and tables in their own horizontal scroll; colors from the theme's variables.
+- **Looks**: the UI font at 15px (eight sizes from 12 to 24px since [ADR-0061](0061-markdown-text-size.md)), at most 760px wide (50em since ADR-0061), centered when maximized; code and tables in their own horizontal scroll; colors from the theme's variables.
 
 ## Alternatives considered
 

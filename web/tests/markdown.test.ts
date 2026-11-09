@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { linkKind, renderMarkdown, resolveRel, slugify } from '../src/files/markdown'
-import { FILES_MAX_KEY, readFilesMax, writeFilesMax } from '../src/ui/prefs'
+import { FILES_MAX_KEY, MD_SIZE_KEY, MD_SIZES, readFilesMax, readMdSize, stepMdSize, writeFilesMax, writeMdSize } from '../src/ui/prefs'
 
 /** Renders into a detached element, so assertions look at the DOM the page would get. */
 function dom(src: string, dir = '/home/u/proj'): HTMLElement {
@@ -92,5 +92,31 @@ describe('UT-files-7 maximize is remembered per device (AC-9.13)', () => {
     expect(readFilesMax()).toBe(false)
     localStorage.setItem(FILES_MAX_KEY, 'yes')
     expect(readFilesMax()).toBe(false)
+  })
+})
+
+describe('UT-files-8 Markdown text size (AC-9.15)', () => {
+  it('steps through eight sizes and stops at the ends', () => {
+    expect(MD_SIZES).toEqual([12, 13, 14, 15, 17, 19, 21, 24])
+    expect(stepMdSize(15, 1)).toBe(17)
+    expect(stepMdSize(15, -1)).toBe(14)
+    expect(stepMdSize(24, 1)).toBe(24)
+    expect(stepMdSize(12, -1)).toBe(12)
+    expect(stepMdSize(16, 1)).toBe(17)
+    expect(stepMdSize(16, -1)).toBe(15)
+    let px = 12
+    for (let i = 0; i < 7; i++) px = stepMdSize(px, 1)
+    expect(px).toBe(24)
+  })
+
+  it('remembers a step; anything else reads as 15', () => {
+    localStorage.removeItem(MD_SIZE_KEY)
+    expect(readMdSize()).toBe(15)
+    writeMdSize(21)
+    expect(readMdSize()).toBe(21)
+    for (const bad of ['16', '30', 'big', '']) {
+      localStorage.setItem(MD_SIZE_KEY, bad)
+      expect(readMdSize()).toBe(15)
+    }
   })
 })
