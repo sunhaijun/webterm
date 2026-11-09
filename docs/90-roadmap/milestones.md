@@ -37,16 +37,17 @@
 | m20 | `feat/40-collapse-keys` | The extra keys collapse with a swipe right into a corner button (tap it or swipe left along the bottom to restore; one resize each way); every control acts only when released in place; pages switch with vertical swipes | [ADR-0056](../20-architecture/adr/0056-collapsible-extra-keys.md), [input.md](../40-frontend/input.md#collapsing-the-extra-keys-ac-326) |
 | m21 | `feat/40-command-strip` | ⌘ becomes a strip of claude's / codex's own commands in your order, with an editor (drag, hide, rename, add, reset, refresh); claude's list from its `init` message, cached by executable and re-probed after upgrades; arrangement in `~/.config/webterm/commands.json`, shared by devices; ⟲ became recent history (removed again in m22) | [ADR-0057](../20-architecture/adr/0057-command-strip-and-history.md), [http-api.md](../30-protocol/http-api.md#commands) |
 | m22 | `feat/40-enter-key` | The last key column becomes ⌘ over ↵ (Enter, for prompts and pickers with the keyboard down); the command strip has two rows, filled column by column; the history list, `GET /api/history` and setup's shell item removed | [ADR-0058](../20-architecture/adr/0058-enter-key-and-two-row-strip.md), [input.md](../40-frontend/input.md#the-last-column-ac-324) |
+| m23 | `feat/40-files` | A file browser in stacked sheets like the session drawer, in the current session's folder: previews (images, video, audio, text, Markdown rendered with a text size), Share or Download, Send to session, upload without overwriting, new folder / rename / delete, new session here; maximize on wide screens. `/api/fs/*` with the agent user's rights; served files never run on webterm's origin | [ADR-0059](../20-architecture/adr/0059-files.md), [ADR-0060](../20-architecture/adr/0060-files-maximize-and-markdown.md), [ADR-0061](../20-architecture/adr/0061-markdown-text-size.md), [http-api.md](../30-protocol/http-api.md#files) |
 
 Released together as **v0.5.0** (2026-11-08): m14–m18.
 
 Released together as **v0.6.0** (2026-11-08): m19–m22.
 
+Released as **v0.7.0** (2026-11-08): m23.
+
 ## In progress
 
-### m23 · `feat/40-files`
-
-The file browser ([ADR-0059](../20-architecture/adr/0059-files.md)): stacked sheets like the session drawer, opened from the drawer's bottom row (phone) or the tab bar (desktop / tablet) in the current session's folder; previews images, video, audio and text (a log from its end); Share (touch) or Download; Send to session (a backslash-escaped path); upload into the folder without overwriting; new folder, rename, delete; new session here. `/api/fs/*` with the agent user's rights; served files never run on webterm's origin. Then maximize on wide screens and Markdown rendered ([ADR-0060](../20-architecture/adr/0060-files-maximize-and-markdown.md)), with its text size ([ADR-0061](../20-architecture/adr/0061-markdown-text-size.md)). Exit: the usual criteria plus AC-9, E2E-53, E2E-54, E2E-55, and the manual checklist's "Files".
+Nothing right now. Next candidates are below.
 
 ## Planned
 
@@ -70,7 +71,7 @@ Since m17, links open or copy with a tap and programs can copy with OSC 52 (clau
 
 By value (scrollback is already solved by [ADR-0024](../20-architecture/adr/0024-scrollback-layered-model.md) §1 and ADR-0026):
 
-1. **File browser + download**: m23 ([ADR-0059](../20-architecture/adr/0059-files.md)). Next on top of it: a folder as a zip, tapping a path in the terminal to open it, editing text files
+1. **File browser + download**: done in m23 ([ADR-0059](../20-architecture/adr/0059-files.md), v0.7.0). Next on top of it: a folder as a zip, tapping a path in the terminal to open it, editing text files
 2. **Passkey / WebAuthn**: closes the gap where adding a new device requires access to the server's terminal
 3. **Split panes on desktop**
 
