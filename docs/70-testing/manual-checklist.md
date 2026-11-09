@@ -87,8 +87,8 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] `webterm install` (ADR-0045): `scp` the binary up and install directly, with no `gh` and no `GH_TOKEN` on the server; the last screen of the install is the QR code
 - [ ] Guided install (ADR-0046), port 80 blocked in the security group: the installer names the console page to open, waits; after opening the port, Enter re-checks and the install finishes with a QR code. Run without a terminal (`ssh server ./webterm install </dev/null`), it stops before writing a systemd unit
 - [ ] Guided install with a domain whose `A` record doesn't exist yet: the installer shows the record to add and continues on its own once it resolves
-- [ ] One-line install from a release: `curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install.sh | bash` on a fresh server asks for the address and ends with a QR code
-- [ ] On a machine with ufw enabled: `sudo ufw status` shows 80/443 after the install
+- [ ] One-line install from a release: `curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install.sh | bash` on a fresh server asks for the address, then the HTTPS port (Enter = 8443), and ends with a QR code whose link has `:8443`
+- [ ] On a machine with ufw enabled: `sudo ufw status` shows 80 and the chosen HTTPS port after the install
 - [ ] Switch the same machine from IP to a domain: after `./webterm install --domain X`, both the `webterm` status overview and `webterm pair` use the new domain, **the open sessions survive** (hot upgrade with the new command line, ADR-0047 §1), and the browser connects at the new address without a manual restart
 - [ ] Upgrade from v0.3.0 with a new `--https-port`: `reload` does two hot upgrades (the old agent can't take a command line), sessions survive, and the new port answers
 - [ ] Install from the web (`gh api … | bash -s -- --channel dev`): the log shows "Handing over to webterm …" (the binary's bundled install script), and the installed version is the dev build

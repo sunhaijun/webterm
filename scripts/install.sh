@@ -35,6 +35,8 @@ FORCE=0
 BASE_URL=""
 HTTPS_PORT=443
 HTTP_PORT=80
+PORT_GIVEN=0   # 1 once the HTTPS port came from the command line, install-state or the address
+DEFAULT_HTTPS_PORT=8443   # a first install's HTTPS port unless another is chosen (ADR-0063)
 BINARY=""
 SETUP_CLI=""   # "" = ask on a first install, 1 = --setup, 0 = --no-setup
 ADDR_SOURCE=""
@@ -79,7 +81,8 @@ Usage: install.sh [options]
 
   --domain <addr>     Domain name or public IPv4. Default: the previous install's
                       settings, otherwise ask (Enter = this server's public IP)
-  --https-port <n>    HTTPS port (default 443; e.g. 8443 if 443 is taken)
+  --https-port <n>    HTTPS port. Default: the previous install's, otherwise ask
+                      (Enter = 8443; 8443 without a terminal)
   --http-port <n>     Port for certificate validation and redirects (default 80)
   --dev               Local trial: install the binary only, no service, no setcap
   --binary <path>     Install this local binary instead of downloading
@@ -121,7 +124,7 @@ while [ $# -gt 0 ]; do
         --no-setcap) DO_SETCAP=0; shift ;;
         --if-newer) IF_NEWER=1; shift ;;
         --base-url) BASE_URL="${2:?--base-url needs a value}"; shift 2 ;;
-        --https-port) HTTPS_PORT="${2:?--https-port needs a value}"; shift 2 ;;
+        --https-port) HTTPS_PORT="${2:?--https-port needs a value}"; PORT_GIVEN=1; shift 2 ;;
         --http-port) HTTP_PORT="${2:?--http-port needs a value}"; shift 2 ;;
         --force) FORCE=1; shift ;;
         --when-idle) WHEN_IDLE=1; shift ;;
@@ -195,11 +198,49 @@ ask_address() {
         ans="${ans#http://}"; ans="${ans#https://}"; ans="${ans%%/*}"   # tolerate a pasted URL
         case "$ans" in
             *:*:*) ;;   # IPv6: finish_args explains why it's refused
-            *:*) info "Type just the host name; for another HTTPS port, rerun with --https-port ${ans##*:}"; continue ;;
+            *:*)        # host:port: that is the HTTPS port, not asked again (ADR-0063)
+                port_ok "${ans##*:}" || continue
+                HTTPS_PORT=$((10#${ans##*:})); PORT_GIVEN=1; ans="${ans%:*}" ;;
         esac
         if [ -z "$ans" ] && [ -n "$ip" ]; then DOMAIN="$ip"; ADDR_SOURCE="this server's public IP"; return; fi
         if [ -n "$ans" ]; then DOMAIN="$ans"; ADDR_SOURCE=""; return; fi
     done
+}
+
+# port_ok checks a typed HTTPS port and says what's wrong with it.
+port_ok() {
+    case "$1" in ''|*[!0-9]*) info "Type a port number"; return 1 ;; esac
+    if [ "${#1}" -gt 5 ] || [ "$((10#$1))" -lt 1 ] || [ "$((10#$1))" -gt 65535 ]; then info "Ports are 1-65535"; return 1; fi
+    if [ "$((10#$1))" = "$HTTP_PORT" ]; then info "Port $HTTP_PORT is for certificate validation; choose another"; return 1; fi
+}
+
+# ask_port prompts for the HTTPS port on the terminal (ADR-0063). Enter accepts 8443.
+ask_port() {
+    local ans
+    printf '\n\033[1m%s\033[0m\n' "Which HTTPS port?"
+    info "Press Enter for $DEFAULT_HTTPS_PORT, or type another (443 if nothing else uses it)."
+    while :; do
+        printf '  > '
+        IFS= read -r ans </dev/tty || die "No port given."
+        ans="${ans//[[:space:]]/}"
+        if [ -z "$ans" ]; then HTTPS_PORT=$DEFAULT_HTTPS_PORT; return; fi
+        port_ok "$ans" || continue
+        HTTPS_PORT=$((10#$ans)); return
+    done
+}
+
+# choose_port picks the HTTPS port for a first install: ask on the terminal,
+# Enter = 8443; without one, 8443 (ADR-0063). --https-port, a port typed with the
+# address and a previous install's port (443 included: install-state leaves it
+# out) are kept. FRESH is unset under --print-unit, which counts as first.
+choose_port() {
+    [ "$PORT_GIVEN" = 0 ] && [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ] \
+        && [ ! -f "$STATE_FILE" ] && [ "${FRESH:-1}" = 1 ] || return 0
+    HTTPS_PORT=$DEFAULT_HTTPS_PORT
+    if have_tty && [ "$DRY_RUN" != 1 ] && [ "$PRINT_UNIT" != 1 ]; then
+        ask_port
+    fi
+    finish_args
 }
 
 # needs_address: only a production service install needs an address.
@@ -304,6 +345,7 @@ if [ "$PRINT_UNIT" = 1 ]; then
     [ "$(id -u)" != 0 ] || die "Don't run this as root: the unit's User= is whoever runs the script."
     replay_state
     choose_address
+    choose_port
     [ -n "$DOMAIN" ] || die "--print-unit needs an address (--domain, or a previous install)"
     render_unit
     exit 0
@@ -391,6 +433,13 @@ if command -v bash >/dev/null 2>&1; then
 fi
 
 if [ -n "$BINARY" ] || [ "$DRY_RUN" = 1 ]; then
+    choose_address
+    choose_port
+    if [ -n "$DOMAIN" ]; then
+        if [ -n "$ADDR_SOURCE" ]; then info "Address:  $DOMAIN ($ADDR_SOURCE)"; else info "Address:  $DOMAIN"; fi
+        info "Ports:    $HTTPS_PORT (HTTPS), $HTTP_PORT (certificate validation)"
+    fi
+    # After the questions, so it names the ports chosen (ADR-0063 §6)
     if [ "$FRESH" = 1 ] && [ "$DRY_RUN" != 1 ]; then
         cat <<EOF
 
@@ -398,10 +447,6 @@ if [ -n "$BINARY" ] || [ "$DRY_RUN" = 1 ]; then
   $HTTPS_PORT in your cloud provider's firewall (security group). If it isn't open yet,
   the installer will stop at the certificate step, say where to open it, and wait.
 EOF
-    fi
-    choose_address
-    if [ -n "$DOMAIN" ]; then
-        if [ -n "$ADDR_SOURCE" ]; then info "Address:  $DOMAIN ($ADDR_SOURCE)"; else info "Address:  $DOMAIN"; fi
     fi
 fi
 

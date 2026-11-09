@@ -106,15 +106,15 @@ func runDoctor(args []string) error {
 
 	if c.dev {
 		fmt.Fprintln(d.out, "\n(--dev: address and port checks skipped)")
-		return d.summarize(false)
+		return d.summarize(nil)
 	}
 	if c.domain == "" {
 		d.fail("Address", "No --domain given. Use a domain name, or this server's public IPv4.")
-		return d.summarize(false)
+		return d.summarize(nil)
 	}
 	if err := agent.CheckAddress(c.domain); err != nil {
 		d.fail("Address", err.Error())
-		return d.summarize(false)
+		return d.summarize(nil)
 	}
 
 	if agent.IsIPAddress(c.domain) {
@@ -146,7 +146,10 @@ func runDoctor(args []string) error {
 			})
 		}
 	}
-	return d.summarize(!*acmeCheck)
+	if *acmeCheck {
+		return d.summarize(nil)
+	}
+	return d.summarize([]int{*httpPort, *httpsPort})
 }
 
 func (d *doctor) check(name string, fn func() (string, error)) {
@@ -404,9 +407,9 @@ func portBusy(p int) bool {
 	return true
 }
 
-// summarize prints the verdict. firewallHint adds the note that only --acme can
-// tell whether the cloud firewall lets traffic in.
-func (d *doctor) summarize(firewallHint bool) error {
+// summarize prints the verdict. firewallHint, the HTTP and HTTPS ports, adds
+// the note that only --acme can tell whether the cloud firewall lets them in.
+func (d *doctor) summarize(firewallHint []int) error {
 	fmt.Fprintln(d.out)
 	if d.failed > 0 {
 		return fmt.Errorf("%d check(s) failed; see above", d.failed)
@@ -416,8 +419,8 @@ func (d *doctor) summarize(firewallHint bool) error {
 	} else {
 		fmt.Fprintln(d.out, "All checks passed.")
 	}
-	if firewallHint {
-		fmt.Fprintln(d.out, "Whether your cloud firewall lets port 80/443 in can't be checked from inside this machine;")
+	if len(firewallHint) == 2 {
+		fmt.Fprintf(d.out, "Whether your cloud firewall lets TCP %d and %d in can't be checked from inside this machine;\n", firewallHint[0], firewallHint[1])
 		fmt.Fprintln(d.out, "add --acme to actually request the certificate (stop the service first).")
 	}
 	return nil

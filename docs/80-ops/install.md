@@ -4,7 +4,7 @@
 
 - Linux (x86_64 or arm64) and a regular user with `sudo` — not root
 - A public IPv4 address. A domain is optional
-- Inbound TCP 80 and 443 allowed by your cloud provider's firewall (security group)
+- Inbound TCP 80 and the HTTPS port (8443 unless you choose another) allowed by your cloud provider's firewall (security group)
 
 ## Install
 
@@ -17,12 +17,13 @@ curl -fsSL https://github.com/sunhaijun/webterm/releases/latest/download/install
 The installer walks you through it ([ADR-0046](../20-architecture/adr/0046-guided-install.md)):
 
 1. **Address.** Press Enter to use the server's public IP, or type a domain.
-2. **Firewall.** Opens ports 80/443 in ufw or firewalld if either is active.
-3. **Certificate.** Requests a Let's Encrypt certificate. If something outside the server is missing, it stops, tells you exactly what to do, and checks again:
+2. **Port.** Press Enter for HTTPS on 8443, or type another port (443 if nothing else uses it). A port typed with the address (`term.example.com:9443`) is used without asking.
+3. **Firewall.** Opens port 80 and the HTTPS port in ufw or firewalld if either is active.
+4. **Certificate.** Requests a Let's Encrypt certificate. If something outside the server is missing, it stops, tells you exactly what to do, and checks again:
    - *DNS:* shows the `A` record to add and waits until it resolves to this server.
-   - *Cloud firewall:* names the console page to open ports 80/443 in, and re-checks when you press Enter.
-4. **Service.** Installs a systemd service running as your user and starts it.
-5. **Pairing.** Prints a QR code. Scan it with your phone and you're in.
+   - *Cloud firewall:* names the console page to open port 80 and the HTTPS port in, and re-checks when you press Enter.
+5. **Service.** Installs a systemd service running as your user and starts it.
+6. **Pairing.** Prints a QR code. Scan it with your phone and you're in.
 
 Re-running the same command later upgrades in place; open sessions survive.
 
@@ -43,7 +44,7 @@ curl -fsSL …/install.sh | bash -s -- --domain term.example.com
 | Option | Meaning |
 |---|---|
 | `--domain <name or IPv4>` | Address to serve. Default: the previous install's, else ask |
-| `--https-port <n>` | Use another HTTPS port when 443 is taken |
+| `--https-port <n>` | HTTPS port. Default: the previous install's, else ask (Enter = 8443; 8443 without a terminal) |
 | `--channel dev` | Install the rolling build of `main` |
 | `--version <tag>` | Install a specific release |
 | `--setup` / `--no-setup` | Set up claude and codex without asking / don't ask ([below](#set-up-claude-and-codex)) |
@@ -136,7 +137,7 @@ To switch, reinstall with `--domain <new address>`; every device must pair again
 
 ## Non-standard ports
 
-When 443 is taken (by Xray, another web server, …): `--https-port 8443`. Pairing links and redirects include the port automatically. Certificates are still validated on port 80, so keep 80 free. With both ports above 1024, no capability is needed.
+A first install serves HTTPS on 8443 unless you choose another port at the prompt or with `--https-port` ([ADR-0063](../20-architecture/adr/0063-installer-asks-for-the-port.md)); an existing install keeps its port. For `https://<address>/` without a port, choose 443 (`--https-port 443`) when nothing else holds it. Pairing links and redirects include the port automatically. Certificates are still validated on port 80, so keep 80 free. With both ports above 1024, no capability is needed.
 
 ## Reverse proxy or tunnel
 

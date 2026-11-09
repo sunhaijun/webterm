@@ -14,7 +14,7 @@ sudo systemctl start webterm
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `no viable challenge type found`, `Invalid response from http://…` | Let's Encrypt can't reach the server | Allow inbound TCP 80/443 in the **cloud firewall** (most common), then `ufw status`. From another machine: `curl -sI http://<address>/` must not time out |
+| `no viable challenge type found`, `Invalid response from http://…` | Let's Encrypt can't reach the server | Allow inbound TCP 80 and the HTTPS port (8443 by default) in the **cloud firewall** (most common), then `ufw status`. From another machine: `curl -sI http://<address>/` must not time out |
 | DNS points elsewhere | Record missing, wrong, or not propagated | Use an `A`/`AAAA` record, not a CNAME; wait for the TTL |
 | Cloudflare proxy (orange cloud) | Cloudflare intercepts the challenge | Set the record to DNS only |
 | `rateLimited` | Let's Encrypt limits | Failed validations: 5 per hour, wait ~15 minutes. Issued certificates: 50 per domain/IP and 5 duplicates per week — usually from deleting `certs/` repeatedly; wait |

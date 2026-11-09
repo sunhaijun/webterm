@@ -1,6 +1,6 @@
 # ADR-0046 Guided install
 
-Status: Accepted (2026-11-01). Builds on [ADR-0045](0045-install-from-the-binary.md).
+Status: Accepted (2026-11-01). Builds on [ADR-0045](0045-install-from-the-binary.md). §1 and §2 amended by [ADR-0063](0063-installer-asks-for-the-port.md): the installer also asks for the HTTPS port (Enter = 8443), and the firewall note follows the questions.
 
 ## Context
 
