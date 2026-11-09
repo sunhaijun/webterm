@@ -1,7 +1,8 @@
 name: Release
 
 # Every push to main refreshes the rolling `dev` prerelease; every v* tag publishes a
-# release. Both ship webterm-linux-{amd64,arm64}, install.sh and SHA256SUMS.
+# release, and refreshes `dev` too when it's on main's head (AC-8.9). Both ship
+# webterm-linux-{amd64,arm64}, install.sh and SHA256SUMS.
 on:
   push:
     branches: [main]
@@ -54,21 +55,6 @@ jobs:
           name: webterm-binaries
           path: release/
 
-      - name: Refresh the dev prerelease
-        if: github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete dev --yes --cleanup-tag 2>/dev/null || true
-          gh release create dev release/* \
-            --prerelease \
-            --title "dev (rolling build of main)" \
-            --notes "Automatic build of main at \`${GITHUB_SHA::7}\`, replaced on every push. Use a \`v*\` release unless you need the latest changes.
-
-          \`\`\`
-          curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/dev/install.sh | bash -s -- --channel dev
-          \`\`\`"
-
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -82,3 +68,58 @@ jobs:
           curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.sh | bash
           \`\`\`" \
             --generate-notes
+
+  # dev is main's head with the version that commit has now (AC-8.9,
+  # docs/80-ops/development.md#releases). A release is tagged seconds after its merge
+  # is pushed, so main's run may have built before the tag existed; then the tag's
+  # run publishes dev instead.
+  dev:
+    name: Refresh the dev prerelease
+    needs: build
+    runs-on: ubuntu-latest
+    # One run at a time decides and publishes, so runs can't interleave the delete
+    # and create, or publish an older commit over a newer one.
+    concurrency:
+      group: dev-prerelease
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4 # scripts/dev-prerelease.sh
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: webterm-binaries
+          path: release/
+
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x release/webterm-linux-*
+          export REF="$GITHUB_REF" SHA="$GITHUB_SHA"
+          MAIN_HEAD="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          TAGS="$(gh api --paginate "repos/$GITHUB_REPOSITORY/tags" \
+            --jq ".[] | select(.commit.sha == \"$GITHUB_SHA\") | .name | select(startswith(\"v\"))")"
+          VERSION="$(release/webterm-linux-amd64 version)"
+          export MAIN_HEAD TAGS VERSION
+          decision="$(bash scripts/dev-prerelease.sh)"
+          echo "$decision"
+          echo "publish=$([ "$decision" = publish ] && echo true || echo false)" >>"$GITHUB_OUTPUT"
+          echo "version=${VERSION#webterm }" >>"$GITHUB_OUTPUT"
+
+      - name: Publish dev
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          gh release delete dev --yes --cleanup-tag 2>/dev/null || true
+          gh release create dev release/* \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "dev (rolling build of main)" \
+            --notes "Automatic build of main at \`${GITHUB_SHA::7}\` (\`${VERSION}\`), replaced on every push. Use a \`v*\` release unless you need the latest changes.
+
+          \`\`\`
+          curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/dev/install.sh | bash -s -- --channel dev
+          \`\`\`"
