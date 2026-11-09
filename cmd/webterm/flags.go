@@ -87,3 +87,26 @@ func defaultDataDir() string {
 	}
 	return filepath.Join(home, ".local", "share", "webterm")
 }
+
+// parseInterleaved parses fs from args with flags allowed before, between and
+// after the arguments, and returns the arguments (AC-8.8). Go's flag package
+// stops at the first argument, so `devices revoke-all --data-dir X` would
+// otherwise ignore --data-dir and act on the default data directory, which on
+// a server is the running service's. After "--" everything is an argument.
+func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return pos, nil
+		}
+		if n := len(args) - len(rest); n > 0 && args[n-1] == "--" {
+			return append(pos, rest...), nil
+		}
+		pos = append(pos, rest[0])
+		args = rest[1:]
+	}
+}

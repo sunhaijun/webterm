@@ -241,6 +241,8 @@ Command-line flags override the file; unknown keys are an error with the line nu
 | `webterm reload [--when-idle] [-- serve …]` | Hot-upgrade to the binary on disk; after `--`, the command line the new process starts with |
 | `webterm version` | Version |
 
+Flags may come before or after a command's arguments: `webterm devices revoke-all --data-dir /srv/webterm` and `webterm devices --data-dir /srv/webterm revoke-all` do the same thing.
+
 ## Data and backups
 
 ```

@@ -19,7 +19,9 @@ func runDevices(args []string) error {
 	if err := applyConfig(fs, args); err != nil {
 		return err
 	}
-	if err := fs.Parse(args); err != nil {
+	// Flags may follow the command: `devices revoke-all --data-dir X` (AC-8.8)
+	pos, err := parseInterleaved(fs, args)
+	if err != nil {
 		return err
 	}
 	st, err := store.Open(c.dataDir)
@@ -29,8 +31,8 @@ func runDevices(args []string) error {
 	defer st.Close()
 
 	sub := "list"
-	if fs.NArg() > 0 {
-		sub = fs.Arg(0)
+	if len(pos) > 0 {
+		sub = pos[0]
 	}
 	switch sub {
 	case "list":
@@ -45,10 +47,10 @@ func runDevices(args []string) error {
 		return writeDevices(os.Stdout, devs)
 
 	case "revoke":
-		if fs.NArg() < 2 {
+		if len(pos) < 2 {
 			return fmt.Errorf("usage: webterm devices revoke <id>")
 		}
-		id, err := resolveDeviceID(st, fs.Arg(1))
+		id, err := resolveDeviceID(st, pos[1])
 		if err != nil {
 			return err
 		}
