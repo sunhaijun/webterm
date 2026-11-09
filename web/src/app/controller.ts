@@ -8,6 +8,7 @@ import { Sticky, appAction, extraKeyBytes, type ExtraKeyId } from '../keys/keyma
 import { RawIme, cursorPosition } from '../keys/raw'
 import { TextPages, type KeyPage, type TextPageEls, type TextSend } from '../keys/textpage'
 import { clearLocalData } from './localdata'
+import { apiURL, wsURL } from '../machines/current'
 import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, routeInput, type SessionView } from '../sessions/store'
 import { shouldSendSeen } from '../sessions/attention'
@@ -154,8 +155,11 @@ export class AppController {
   private readonly store: SessionStore
   private readonly enc = new TextEncoder()
   private area: HTMLElement | null = null
-  /** Per-session page and draft; the text page follows the session (AC-3.22, ADR-0036). */
-  private readonly pages = new TextPages()
+  /**
+   * Per-session page and draft; the text page follows the session (AC-3.22, ADR-0036). Kept
+   * per machine by the page for its lifetime, so switching machines loses no draft (ADR-0062 §7).
+   */
+  private readonly pages: TextPages
   private textPage: TextPageEls | null = null
   private untrackText: (() => void) | null = null
   /** The session whose draft is currently in the text box. */
@@ -239,13 +243,16 @@ export class AppController {
       signOut?: () => Promise<number>
       hasFocus?: () => boolean
       upload?: Upload
+      /** The current machine's text pages and drafts (ADR-0062 §7). */
+      pages?: TextPages
     } = {},
   ) {
     this.hasFocus = opts.hasFocus ?? (() => document.hasFocus())
     this.upload = opts.upload ?? uploadFile
-    this.authProbe = opts.authProbe ?? (() => fetch('/api/devices', { credentials: 'same-origin' }).then((r) => r.status))
+    this.authProbe = opts.authProbe ?? (() => fetch(apiURL('/api/devices'), { credentials: 'include' }).then((r) => r.status))
     this.signOutRequest =
-      opts.signOut ?? (() => fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' }).then((r) => r.status))
+      opts.signOut ?? (() => fetch(apiURL('/auth/logout'), { method: 'POST', credentials: 'include' }).then((r) => r.status))
+    this.pages = opts.pages ?? new TextPages()
     this.state = {
       form: readForm(),
       coarse: isCoarsePointer(),
@@ -283,7 +290,7 @@ export class AppController {
       keysCollapsed: readKeysCollapsed(),
     }
     this.conn = new Connection({
-      url: opts.url ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
+      url: opts.url ?? wsURL(),
       clientID: opts.clientID ?? clientID(),
       socketFactory: opts.socketFactory,
       handlers: {
@@ -427,7 +434,7 @@ export class AppController {
     const seq = ++this.stripSeq
     let strip: Strip | null = null
     try {
-      const r = await fetch(`/api/commands?sid=${sid}${refresh ? '&refresh=1' : ''}`, { credentials: 'same-origin' })
+      const r = await fetch(apiURL(`/api/commands?sid=${sid}${refresh ? '&refresh=1' : ''}`), { credentials: 'include' })
       if (r.ok) strip = parseStrip(await r.json())
     } catch {
       // Offline: keep what's shown
@@ -517,9 +524,9 @@ export class AppController {
     this.set({ strip: shown ?? { ...strip, arrangement: a } })
     this.persist(
       (program) =>
-        fetch(`/api/commands?program=${program}`, {
+        fetch(apiURL(`/api/commands?program=${program}`), {
           method: 'PUT',
-          credentials: 'same-origin',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(a),
         }),
@@ -578,7 +585,7 @@ export class AppController {
 
   /** Reset: back to the defaults. */
   resetCommands(): void {
-    this.persist((program) => fetch(`/api/commands?program=${program}`, { method: 'DELETE', credentials: 'same-origin' }), null)
+    this.persist((program) => fetch(apiURL(`/api/commands?program=${program}`), { method: 'DELETE', credentials: 'include' }), null)
   }
 
   /** Refresh: ask claude again now. */

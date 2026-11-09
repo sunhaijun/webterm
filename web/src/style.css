@@ -975,3 +975,31 @@ button { font: inherit; color: inherit; }
 .file-markdown blockquote { margin-left: 0; padding: 0 0 0 12px; border-left: 3px solid var(--line-strong); color: var(--muted); }
 .file-markdown hr { border: 0; border-top: 1px solid var(--line); margin: 1.4em 0; }
 .file-markdown img { max-width: 100%; }
+
+/* ---------- Machines (ADR-0062 §8) ---------- */
+
+/* The machine button: the session drawer's title on compact, the tab bar's first item on wide */
+.machine-btn {
+  flex: 0 1 auto; min-width: 0;
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 0; border-radius: 8px; padding: 6px 8px; margin-left: -8px;
+  background: transparent; color: var(--fg);
+  font: inherit; font-size: 16px; font-weight: 600;
+  cursor: pointer;
+}
+.drawer-head .machine-btn { margin-right: auto; }
+.machine-btn .icon { flex: none; color: var(--muted); }
+.machine-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.machine-btn:hover, .machine-btn:focus-visible { background: var(--surface); outline: none; }
+.topbar .machine-btn {
+  flex: none; max-width: 160px; margin: 0; padding: 0 8px 0 12px; border-radius: 0;
+  font-size: 13px; color: var(--muted);
+  box-shadow: 1px 0 0 var(--line);
+}
+.topbar .machine-btn:hover { background: var(--hover); color: var(--fg); }
+/* One action per row: Remove */
+.machine-list { --row-actions: 72px; }
+.machine-row { padding-right: 14px; }
+.machine-fields { display: flex; flex-direction: column; gap: 12px; }
+.machine-fields .pair-digits { font-family: var(--font-mono); letter-spacing: 0.04em; }
+.machine-error { margin: 0; color: var(--err); font-size: 14px; }

@@ -21,10 +21,13 @@ import { PressTracker } from '../ui/longpress'
 import { capturePointer } from '../ui/pointer'
 import { DragReorder } from '../ui/reorder'
 import { needsReveal } from '../ui/viewport'
+import { MachineButton } from '../machines/sheets'
 import { connLabel } from './notices'
 import { RenameInput } from './sessions'
 
 export interface TopBarProps {
+  /** The machine button at the left end (ADR-0062 §8). */
+  machine?: { name: string; onOpen(): void }
   sessions: SessionView[]
   conn: ConnState
   connInfo: StateInfo
@@ -162,6 +165,7 @@ export function TopBar(p: TopBarProps) {
 
   return (
     <div class="topbar" onPointerDown={keepFocus}>
+      {p.machine && <MachineButton name={p.machine.name} onOpen={p.machine.onOpen} />}
       <div class="tabbar" data-testid="tabbar" role="tablist" aria-label="Sessions" ref={stripRef}>
         {p.sessions.map((s, index) => (
           <div

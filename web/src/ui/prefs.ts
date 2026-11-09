@@ -89,7 +89,7 @@ export function stepMdSize(px: number, dir: -1 | 1): number {
 }
 
 // localStorage throws in private windows or with site data disabled, so wrap every access.
-function safeGet(k: string): string | null {
+export function safeGet(k: string): string | null {
   try {
     return localStorage.getItem(k)
   } catch {
@@ -97,7 +97,7 @@ function safeGet(k: string): string | null {
   }
 }
 
-function safeSet(k: string, v: string): void {
+export function safeSet(k: string, v: string): void {
   try {
     localStorage.setItem(k, v)
   } catch {
