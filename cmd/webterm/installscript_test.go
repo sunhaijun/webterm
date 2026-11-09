@@ -137,15 +137,57 @@ func TestInstallScriptDefaultAddress(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit --domain ignores install-state", func(t *testing.T) {
+	// ADR-0064: switching IP → domain keeps the port, channel and prefix.
+	t.Run("a new --domain keeps the rest of install-state", func(t *testing.T) {
 		sb := newSandbox(t)
-		sb.writeState(t, "--domain", "old.example.com", "--https-port", "8443")
-		out, err := sb.run(t, nil, "--print-unit", "--domain", "203.0.113.5")
+		sb.writeState(t, "--domain", "203.0.113.5", "--https-port", "8443", "--prefix", "/opt/wt", "--channel", "dev")
+		out, err := sb.run(t, nil, "--print-unit", "--domain", "term.example.com")
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
 		}
-		if got := execStart(t, out); got != "ExecStart=/usr/local/bin/webterm serve --domain 203.0.113.5" {
+		if got := execStart(t, out); got != "ExecStart=/opt/wt/webterm serve --domain term.example.com --https-port 8443" {
 			t.Errorf("ExecStart = %q", got)
+		}
+
+		out, err = sb.run(t, nil, "--print-unit", "--domain", "term.example.com", "--https-port", "443")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got := execStart(t, out); got != "ExecStart=/opt/wt/webterm serve --domain term.example.com" {
+			t.Errorf("an explicit --https-port 443 should win: %q", got)
+		}
+	})
+
+	t.Run("a trial without an address isn't carried over to --domain", func(t *testing.T) {
+		sb := newSandbox(t)
+		sb.writeState(t, "--no-service", "--no-setcap")
+		out, err := sb.run(t, nil, "--print-unit", "--domain", "term.example.com")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got := execStart(t, out); got != "ExecStart=/usr/local/bin/webterm serve --domain term.example.com --https-port 8443" {
+			t.Errorf("a first install after a trial should get the first-install port: %q", got)
+		}
+	})
+
+	t.Run("a new --domain keeps the channel in a real install", func(t *testing.T) {
+		sb := newSandbox(t)
+		bin := filepath.Join(sb.home, "webterm-new")
+		fakeBinary(t, bin, true)
+		sb.writeState(t, "--domain", "203.0.113.5", "--https-port", "8443", "--channel", "dev",
+			"--prefix", sb.prefix, "--no-service", "--no-setcap")
+		out, err := sb.run(t, nil, "--binary", bin, "--domain", "term.example.com")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		got, err := os.ReadFile(filepath.Join(sb.config, "install-state"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := strings.Join([]string{"--domain", "term.example.com", "--https-port", "8443",
+			"--prefix", sb.prefix, "--channel", "dev", "--no-service", "--no-setcap"}, "\n")
+		if !strings.Contains(string(got), want) {
+			t.Errorf("install-state =\n%s\nwant it to contain\n%s", got, want)
 		}
 	})
 
@@ -422,4 +464,64 @@ HTTP_PORT=80 HTTPS_PORT=443 DEFAULT_HTTPS_PORT=8443 PORT_GIVEN=0 DOMAIN="" ADDR_
 			}
 		})
 	}
+}
+
+// UT-install-saved-after (AC-1.19, ADR-0064 §3): config and install-state are
+// written only once the service runs, so a failed service step leaves both as
+// they were and `webterm update` keeps replaying the install that worked.
+func TestInstallScriptSavesSettingsAfterTheService(t *testing.T) {
+	setup := func(t *testing.T) (fakeSystem, string, string, string) {
+		fs := newFakeSystem(t)
+		bin := filepath.Join(fs.home, "webterm-new")
+		fakeBinary(t, bin, true)
+		fs.writeState(t, "--domain", "203.0.113.5", "--https-port", "8443", "--prefix", fs.prefix)
+		state := filepath.Join(fs.config, "install-state")
+		cfg := filepath.Join(fs.config, "config")
+		mustWrite(t, cfg, "domain = 203.0.113.5\nhttps-port = 8443\n", 0o644)
+		return fs, bin, state, cfg
+	}
+	read := func(t *testing.T, p string) string {
+		t.Helper()
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+
+	t.Run("a failed service step changes neither", func(t *testing.T) {
+		fs, bin, state, cfg := setup(t)
+		oldState, oldCfg := read(t, state), read(t, cfg)
+		out, err := fs.run(t, []string{"FAKE_FAIL=restart webterm"},
+			"--binary", bin, "--no-setcap", "--no-setup", "--domain", "term.example.com", "--https-port", "443")
+		if err == nil {
+			t.Fatalf("the install should fail at the service step:\n%s", out)
+		}
+		if indexOf(fs.calls(t), "sudo systemctl restart webterm") < 0 {
+			t.Fatalf("didn't get as far as the service step: %q\n%s", fs.calls(t), out)
+		}
+		if got := read(t, state); got != oldState {
+			t.Errorf("install-state changed by a failed install:\n%s", got)
+		}
+		if got := read(t, cfg); got != oldCfg {
+			t.Errorf("config changed by a failed install:\n%s", got)
+		}
+	})
+
+	t.Run("a working install saves them", func(t *testing.T) {
+		fs, bin, state, cfg := setup(t)
+		out, err := fs.run(t, nil, "--binary", bin, "--no-setcap", "--no-setup", "--domain", "term.example.com")
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if got := read(t, state); !strings.Contains(got, "--domain\nterm.example.com\n--https-port\n8443\n") {
+			t.Errorf("install-state not saved with the new address and the kept port:\n%s", got)
+		}
+		if got := read(t, cfg); !strings.Contains(got, "domain = term.example.com") || !strings.Contains(got, "https-port = 8443") {
+			t.Errorf("config not synced:\n%s", got)
+		}
+		if !strings.Contains(read(t, fs.unit), "--domain term.example.com --https-port 8443") {
+			t.Errorf("unit:\n%s", read(t, fs.unit))
+		}
+	})
 }

@@ -14,8 +14,10 @@
 #
 # Steps: get the binary → install to /usr/local/bin and setcap → open the local
 # firewall → obtain the certificate (guided: waits for you to fix the cloud firewall
-# or DNS, ADR-0046) → write config and a systemd system service running as you
-# (ADR-0034) → start → print a pairing QR code.
+# or DNS, ADR-0046) → a systemd system service running as you (ADR-0034), started →
+# save the settings (ADR-0064) → print a pairing QR code.
+#
+# --uninstall removes it again (ADR-0065).
 
 set -euo pipefail
 
@@ -40,6 +42,13 @@ DEFAULT_HTTPS_PORT=8443   # a first install's HTTPS port unless another is chose
 BINARY=""
 SETUP_CLI=""   # "" = ask on a first install, 1 = --setup, 0 = --no-setup
 ADDR_SOURCE=""
+STATE_USED=0   # 1 once a previous install's arguments were replayed (ADR-0064)
+UNINSTALL=0
+KEEP_DATA=0
+YES=0
+# Where the system's files are: "" on a server. Tests point it at a sandbox so that
+# nothing they run can touch the real unit, firewall or cgroup.
+SYSROOT="${WEBTERM_SYSROOT:-}"
 # Kept verbatim: handed to the downloaded binary and replayed after install-state.
 ORIG_ARGS=("$@")
 
@@ -98,6 +107,11 @@ Usage: install.sh [options]
   --setup             Set up claude and codex for webterm without asking
                       (notifications; a first install asks)
   --no-setup          Don't ask about it
+  --uninstall         Remove webterm from this machine: service, binary, config,
+                      data, sent files (asks first; webterm uninstall does this)
+  --keep-data         With --uninstall: keep the config and data directories
+                      (settings, devices, certificate) for a later install
+  --yes               With --uninstall: don't ask
   --print-unit        Print the systemd unit and exit
   --force             Continue even if the certificate check fails
   --dry-run           Print what would be done
@@ -133,6 +147,9 @@ while [ $# -gt 0 ]; do
         --setup) SETUP_CLI=1; shift ;;
         --no-setup) SETUP_CLI=0; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
+        --uninstall) UNINSTALL=1; shift ;;
+        --keep-data) KEEP_DATA=1; shift ;;
+        --yes) YES=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option $1 (see --help)" ;;
     esac
@@ -231,11 +248,11 @@ ask_port() {
 
 # choose_port picks the HTTPS port for a first install: ask on the terminal,
 # Enter = 8443; without one, 8443 (ADR-0063). --https-port, a port typed with the
-# address and a previous install's port (443 included: install-state leaves it
-# out) are kept. FRESH is unset under --print-unit, which counts as first.
+# address and a replayed previous install's port (443 included: install-state
+# leaves it out) are kept. FRESH is unset under --print-unit, which counts as first.
 choose_port() {
     [ "$PORT_GIVEN" = 0 ] && [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ] \
-        && [ ! -f "$STATE_FILE" ] && [ "${FRESH:-1}" = 1 ] || return 0
+        && [ "$STATE_USED" = 0 ] && [ "${FRESH:-1}" = 1 ] || return 0
     HTTPS_PORT=$DEFAULT_HTTPS_PORT
     if have_tty && [ "$DRY_RUN" != 1 ] && [ "$PRINT_UNIT" != 1 ]; then
         ask_port
@@ -246,21 +263,37 @@ choose_port() {
 # needs_address: only a production service install needs an address.
 needs_address() { [ -z "$DOMAIN" ] && [ "$DEV" = 0 ] && [ "$SETUP_SERVICE" = 1 ]; }
 
-# replay_state reuses a previous install's arguments when --domain wasn't given
-# (ADR-0045 §3); the command line wins. It never prompts, so the script fetched by
-# curl can run it too (it needs --channel to download the right build).
+# read_state fills the array STATE with install-state's arguments, if any.
+read_state() {
+    local line
+    STATE=()
+    [ -f "$STATE_FILE" ] || return 0
+    while IFS= read -r line; do
+        case "$line" in ''|'#'*) continue ;; esac
+        STATE+=("$line")
+    done < "$STATE_FILE"
+}
+
+# replay_state reuses a previous install's arguments (ADR-0045 §3, ADR-0064): the
+# saved ones first, then the command line, which wins. Without --domain that is
+# the whole previous install. With --domain only the address changes, provided the
+# previous install had one: a trial without an address (--dev, --no-service) isn't
+# carried over. It never prompts, so the script fetched by curl can run it too (it
+# needs --channel to download the right build).
 replay_state() {
-    needs_address || return 0
-    if [ -f "$STATE_FILE" ]; then
-        local state=() line
-        while IFS= read -r line; do
-            case "$line" in ''|'#'*) continue ;; esac
-            state+=("$line")
-        done < "$STATE_FILE"
-        parse_args "${state[@]}" "${ORIG_ARGS[@]}"
-        ADDR_SOURCE="previous install, $STATE_FILE"
-        finish_args
+    [ "$DEV" = 0 ] && [ -f "$STATE_FILE" ] || return 0
+    local new_address="$DOMAIN" a had_address=0
+    read_state
+    for a in "${STATE[@]}"; do [ "$a" != --domain ] || had_address=1; done
+    if [ -n "$new_address" ]; then
+        [ "$had_address" = 1 ] || return 0
+    else
+        needs_address || return 0
     fi
+    parse_args "${STATE[@]}" "${ORIG_ARGS[@]}"
+    STATE_USED=1
+    [ -n "$new_address" ] || ADDR_SOURCE="previous install, $STATE_FILE"
+    finish_args
 }
 
 # choose_address picks the address for a first install: ask on the terminal,
@@ -290,7 +323,7 @@ choose_address() {
 RUN_USER="$(id -un)"
 RUN_GROUP="$(id -gn)"
 RUN_UID="$(id -u)"
-SYSTEM_UNIT="/etc/systemd/system/webterm.service"
+SYSTEM_UNIT="$SYSROOT/etc/systemd/system/webterm.service"
 USER_UNIT="$HOME/.config/systemd/user/webterm.service"
 
 render_unit() {
@@ -363,7 +396,7 @@ service_active() { system_unit_active || user_unit_active; }
 # inside_webterm_unit: are we running inside a webterm session? Migrating stops the
 # user service, which would kill this session and the script with it. Checks the
 # cgroup, not $WEBTERM_SESSION, which any child process may have inherited.
-inside_webterm_unit() { grep -q '/webterm\.service$' /proc/self/cgroup 2>/dev/null; }
+inside_webterm_unit() { grep -q '/webterm\.service$' "$SYSROOT/proc/self/cgroup" 2>/dev/null; }
 migrate_hint() {
     cat <<EOF
 
@@ -376,6 +409,187 @@ migrate_hint() {
      Run it over SSH, not inside webterm: stopping the user service ends that session.
 EOF
 }
+# ufw_enabled reads ufw.conf, which is world-readable, so it needs no sudo.
+ufw_enabled() { [ -r "$SYSROOT/etc/ufw/ufw.conf" ] && grep -q '^ENABLED=yes' "$SYSROOT/etc/ufw/ufw.conf"; }
+
+# ---------- Uninstall (ADR-0065) ----------
+#
+# Removes what the installer put on this machine, after one question. Over SSH the
+# service stops first, then the files go. Inside a webterm session stopping the
+# service ends this script too, so there it is the last step. Firewall rules,
+# lingering and claude's and codex's settings may matter to other software: they
+# stay, and the command to undo each is printed.
+
+# config_value KEY prints KEY's value in the config file (key = value, leading
+# dashes allowed, as the config parser reads it).
+config_value() {
+    [ -f "$CONFIG_DIR/config" ] || return 0
+    sed -n -E "s/^[[:space:]]*-*$1[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*\$/\1/p" "$CONFIG_DIR/config" | tail -n 1
+}
+
+# unit_exec prints the program the system unit runs.
+unit_exec() { sed -n -E 's/^ExecStart=([^ ]+).*/\1/p' "$SYSTEM_UNIT" 2>/dev/null | head -n 1; }
+
+# stop_webterm stops the services being removed, if they run. Their unit files
+# may already be gone: systemd keeps a running unit loaded until it stops.
+stop_webterm() {
+    if [ -n "$U_SYS" ] && system_unit_active; then run sudo systemctl stop webterm; fi
+    if [ -n "$U_USER" ] && user_unit_active; then run systemctl --user stop webterm; fi
+}
+
+# left_alone prints what the installer may have changed that stays, with the
+# command to undo each.
+left_alone() {
+    local notes=() set=()
+    if ufw_enabled; then
+        notes+=("ufw:        sudo ufw delete allow $HTTP_PORT/tcp && sudo ufw delete allow $HTTPS_PORT/tcp")
+    fi
+    if systemctl is-active --quiet firewalld 2>/dev/null; then
+        notes+=("firewalld:  sudo firewall-cmd --permanent --remove-port=$HTTPS_PORT/tcp --remove-port=$HTTP_PORT/tcp && sudo firewall-cmd --reload")
+    fi
+    if [ -e "$SYSROOT/var/lib/systemd/linger/$RUN_USER" ]; then
+        notes+=("lingering:  sudo loginctl disable-linger $RUN_USER")
+    fi
+    if grep -qs '"preferredNotifChannel"' "$HOME/.claude/settings.json"; then set+=('"preferredNotifChannel" in ~/.claude/settings.json'); fi
+    if grep -qsE '^[[:space:]]*(tui\.)?notification_condition[[:space:]]*=' "$HOME/.codex/config.toml"; then set+=('notification_condition in ~/.codex/config.toml'); fi
+    if [ "${#set[@]}" -gt 0 ]; then
+        notes+=("claude/codex notifications (webterm setup adds them): $(IFS=,; echo "${set[*]}" | sed 's/,/, /g'); edit by hand")
+    fi
+    [ "${#notes[@]}" -gt 0 ] || return 0
+    printf '\n'
+    info "Left as they are (other software may rely on them). To undo:"
+    local n
+    for n in "${notes[@]}"; do info "  $n"; done
+}
+
+uninstall() {
+    [ "$(id -u)" != 0 ] || die "Don't run this as root: webterm's files are in the home directory of the user it runs as.
+      Run it as that user; it calls sudo when needed."
+    # The previous install's prefix and ports; the command line wins.
+    read_state
+    [ "${#STATE[@]}" = 0 ] || parse_args "${STATE[@]}" "${ORIG_ARGS[@]}"
+
+    U_SYS="" U_USER=""
+    local other_unit="" bin="" bin_sudo="" d k dup custom sent inside=0
+    local dirs=() kept=()
+    if [ -f "$SYSTEM_UNIT" ]; then
+        # Only this install's service: another prefix or user is someone else's.
+        if grep -qx "User=$RUN_USER" "$SYSTEM_UNIT" && [ "$(unit_exec)" = "$PREFIX/webterm" ]; then
+            U_SYS="$SYSTEM_UNIT"
+        else
+            other_unit="$(unit_exec)"
+        fi
+    fi
+    if [ -f "$USER_UNIT" ]; then U_USER="$USER_UNIT"; fi
+    if [ -e "$PREFIX/webterm" ] || [ -L "$PREFIX/webterm" ]; then
+        bin="$PREFIX/webterm"
+        [ -w "$PREFIX" ] || bin_sudo=sudo
+    fi
+
+    # The service has no XDG_DATA_HOME, so its data is in ~/.local/share/webterm
+    # unless the config names a data-dir; a data-dir counts only if it holds
+    # webterm.db, so a mistyped one never takes a real directory with it.
+    custom="$(config_value data-dir)"
+    case "$custom" in /*) [ -f "$custom/webterm.db" ] || custom="" ;; *) custom="" ;; esac
+    for d in "${XDG_DATA_HOME:-$HOME/.local/share}/webterm" "$HOME/.local/share/webterm" ${custom:+"$custom"} "$CONFIG_DIR"; do
+        d="${d%/}"
+        [ -d "$d" ] || continue
+        case "$d" in ''|/|"$HOME") continue ;; esac
+        dup=0
+        for k in "${dirs[@]}" "${kept[@]}"; do [ "$k" != "$d" ] || dup=1; done
+        [ "$dup" = 0 ] || continue
+        if [ "$KEEP_DATA" = 1 ]; then kept+=("$d"); else dirs+=("$d"); fi
+    done
+    sent="${TMPDIR:-/tmp}"; sent="${sent%/}/webterm-$(id -u)"
+    if [ -d "$sent" ]; then dirs+=("$sent"); fi
+
+    step "Uninstalling webterm"
+    if [ -z "$U_SYS$U_USER$bin" ] && [ "${#dirs[@]}" = 0 ]; then
+        info "Nothing to remove: no webterm service, binary or files for $RUN_USER."
+        [ -z "$other_unit" ] || info "$SYSTEM_UNIT runs $other_unit, not $PREFIX/webterm; left alone."
+        return 0
+    fi
+    info "This removes:"
+    [ -z "$U_SYS" ] || info "  $U_SYS (the service)"
+    [ -z "$U_USER" ] || info "  $U_USER (the user service)"
+    [ -z "$bin" ] || info "  $bin (the program)"
+    for d in "${dirs[@]}"; do
+        case "$d" in
+            "$CONFIG_DIR") info "  $d (settings)" ;;
+            "$sent") info "  $d (files sent to sessions)" ;;
+            *) info "  $d (devices, certificates)" ;;
+        esac
+    done
+    if [ -n "$U_SYS$U_USER" ]; then info "Every webterm session closes."; fi
+    for d in "${kept[@]}"; do info "Kept (--keep-data):    $d"; done
+    [ -z "$other_unit" ] || info "Left alone: $SYSTEM_UNIT runs $other_unit, not $PREFIX/webterm."
+
+    if [ "$DRY_RUN" != 1 ] && [ "$YES" != 1 ]; then
+        have_tty || die "Nothing removed: there's no terminal to ask on. To remove without asking, add --yes."
+        printf '\n  Remove webterm? [y/N] ' >/dev/tty
+        local ans=""
+        IFS= read -r ans </dev/tty || ans=""
+        case "$ans" in
+            [yY]*) ;;
+            *) info "Nothing removed."; return 0 ;;
+        esac
+    fi
+    if [ "$DRY_RUN" != 1 ] && { [ -n "$U_SYS" ] || [ -n "$bin_sudo" ]; }; then
+        command -v sudo >/dev/null 2>&1 || die "Removing the service or $bin needs sudo, which isn't installed."
+        # Ask for the password now, not halfway through.
+        if ! sudo -n true 2>/dev/null; then
+            have_tty || die "sudo will ask for your password, but there's no terminal. Use ssh -t."
+            sudo -v || die "Nothing removed: sudo failed."
+        fi
+    fi
+    if inside_webterm_unit; then inside=1; fi
+
+    # Disable and remove the units first; a running service keeps running.
+    if [ -n "$U_SYS" ]; then
+        run sudo systemctl disable webterm
+        run sudo rm -f "$U_SYS"
+        run sudo systemctl daemon-reload
+        done_msg "Disabled the service and removed $U_SYS"
+    fi
+    if [ -n "$U_USER" ]; then
+        run systemctl --user disable webterm || true
+        run rm -f "$U_USER"
+        run systemctl --user daemon-reload || true
+        done_msg "Disabled the user service and removed $U_USER"
+    fi
+    # Over SSH: stop it before the files go, so it writes nothing back.
+    [ "$inside" = 1 ] || stop_webterm
+    if [ -n "$bin" ]; then
+        run $bin_sudo rm -f "$bin"
+        done_msg "Removed $bin"
+    fi
+    for d in "${dirs[@]}"; do
+        run rm -rf "$d"
+        done_msg "Removed $d"
+    done
+    left_alone
+
+    if [ "$inside" = 1 ] && [ -n "$U_SYS$U_USER" ]; then
+        # Stopping the service ends this session, and this script with it.
+        printf '\n'
+        info "Stopping webterm last: this session closes now."
+        if [ "$DRY_RUN" != 1 ]; then
+            case "$0" in */webterm-install-*.sh) rm -f "$0" ;; esac
+        fi
+        stop_webterm
+    fi
+    if [ "$DRY_RUN" = 1 ]; then
+        step "Done (dry run): nothing was changed"
+    else
+        step "webterm is removed"
+        [ "${#kept[@]}" = 0 ] || info "Kept for a later install: ${kept[*]}"
+    fi
+}
+
+if [ "$UNINSTALL" = 1 ]; then
+    uninstall
+    exit 0
+fi
 
 # ---------- 1. Preflight ----------
 
@@ -707,8 +921,8 @@ fi
 # firewall is out of reach; the certificate step detects that one.
 open_firewall() {
     local p opened=""
-    # ufw.conf is world-readable; ufw lives in sbin, which sudo's secure_path includes.
-    if [ -r /etc/ufw/ufw.conf ] && grep -q '^ENABLED=yes' /etc/ufw/ufw.conf; then
+    # ufw lives in sbin, which sudo's secure_path includes.
+    if ufw_enabled; then
         for p in "$HTTP_PORT" "$HTTPS_PORT"; do
             run_quiet sudo ufw allow "$p/tcp"
         done
@@ -748,10 +962,10 @@ elif [ "$SETUP_SERVICE" = 1 ] && [ "$DEV" = 0 ]; then
     info "webterm is already running (upgrade); its ports and certificate are in use, skipping"
 fi
 
-# ---------- 5. Config file ----------
+# ---------- Settings: config file and install-state ----------
 #
-# Lets pair/doctor/devices work without repeating --domain/--https-port. Address and
-# ports are synced on every install; other keys you added are left alone.
+# The config lets pair/doctor/devices work without repeating --domain/--https-port.
+# Address and ports are synced on every install; other keys you added are left alone.
 CONFIG_FILE="$CONFIG_DIR/config"
 
 # config_set KEY VALUE rewrites the line for KEY, deletes it if VALUE is empty,
@@ -770,50 +984,55 @@ config_set() {
     fi
 }
 
-if [ -n "$DOMAIN" ]; then
-    [ "$SETUP_SERVICE" = 1 ] && step "5/6 Writing the config"
+# save_settings writes the config's address and ports, and install-state. Only
+# once the install worked (ADR-0064 §3): after the service is up, or with
+# --no-service after the binary is in place. A failed install leaves both as they
+# were, so `webterm update` keeps replaying the last install that worked.
+#
+# `webterm update` and `webterm install` replay install-state's arguments. One
+# argument per line, exactly as on the command line, so replaying needs no mapping.
+# Only the effective, persistent ones: --dry-run/--force/--if-newer are one-shot,
+# and --dev is stored as its expansion (--no-service --no-setcap).
+save_settings() {
+    if [ -n "$DOMAIN" ]; then
+        [ "$SETUP_SERVICE" = 0 ] || step "6/6 Saving the settings"
+        if [ "$DRY_RUN" = 1 ]; then
+            info "Would update $CONFIG_FILE (domain=$DOMAIN$PORT_ARGS; other keys untouched)"
+        else
+            mkdir -p "$CONFIG_DIR"
+            if [ ! -f "$CONFIG_FILE" ]; then
+                {
+                    echo "# webterm config. Keys are the flags of 'webterm serve --help' without the leading --."
+                    echo "# The installer keeps domain/http-port/https-port in sync; it never touches other keys."
+                } > "$CONFIG_FILE"
+            fi
+            config_set domain "$DOMAIN"
+            if [ "$HTTP_PORT" = 80 ]; then config_set http-port ""; else config_set http-port "$HTTP_PORT"; fi
+            if [ "$HTTPS_PORT" = 443 ]; then config_set https-port ""; else config_set https-port "$HTTPS_PORT"; fi
+            info "Updated $CONFIG_FILE (domain=$DOMAIN$PORT_ARGS)"
+        fi
+    fi
+
     if [ "$DRY_RUN" = 1 ]; then
-        info "Would update $CONFIG_FILE (domain=$DOMAIN$PORT_ARGS; other keys untouched)"
+        info "Would write $STATE_FILE"
     else
         mkdir -p "$CONFIG_DIR"
-        if [ ! -f "$CONFIG_FILE" ]; then
-            {
-                echo "# webterm config. Keys are the flags of 'webterm serve --help' without the leading --."
-                echo "# The installer keeps domain/http-port/https-port in sync; it never touches other keys."
-            } > "$CONFIG_FILE"
-        fi
-        config_set domain "$DOMAIN"
-        if [ "$HTTP_PORT" = 80 ]; then config_set http-port ""; else config_set http-port "$HTTP_PORT"; fi
-        if [ "$HTTPS_PORT" = 443 ]; then config_set https-port ""; else config_set https-port "$HTTPS_PORT"; fi
-        info "Updated $CONFIG_FILE (domain=$DOMAIN$PORT_ARGS)"
+        {
+            echo "# Written by webterm's install.sh; 'webterm update' reinstalls with these arguments."
+            echo "# One argument per line."
+            [ -n "$DOMAIN" ] && printf -- '--domain\n%s\n' "$DOMAIN"
+            [ "$HTTPS_PORT" = 443 ] || printf -- '--https-port\n%s\n' "$HTTPS_PORT"
+            [ "$HTTP_PORT" = 80 ] || printf -- '--http-port\n%s\n' "$HTTP_PORT"
+            [ "$PREFIX" = /usr/local/bin ] || printf -- '--prefix\n%s\n' "$PREFIX"
+            [ "$CHANNEL" = latest ] || printf -- '--channel\n%s\n' "$CHANNEL"
+            [ "$SETUP_SERVICE" = 1 ] || echo "--no-service"
+            # Only with --no-service (as --dev expands): replayed on a service
+            # install, it would leave every updated binary unable to bind 80/443.
+            [ "$DO_SETCAP" = 1 ] || [ "$SETUP_SERVICE" = 1 ] || echo "--no-setcap"
+            true
+        } > "$STATE_FILE"
     fi
-fi
-
-# ---------- Install state ----------
-#
-# `webterm update` and a bare `webterm install` replay these arguments. One argument
-# per line, exactly as on the command line, so replaying needs no mapping. Only the
-# effective, persistent ones: --dry-run/--force/--if-newer are one-shot, and --dev is
-# stored as its expansion (--no-service --no-setcap).
-if [ "$DRY_RUN" = 1 ]; then
-    info "Would write $STATE_FILE"
-else
-    mkdir -p "$CONFIG_DIR"
-    {
-        echo "# Written by webterm's install.sh; 'webterm update' reinstalls with these arguments."
-        echo "# One argument per line."
-        [ -n "$DOMAIN" ] && printf -- '--domain\n%s\n' "$DOMAIN"
-        [ "$HTTPS_PORT" = 443 ] || printf -- '--https-port\n%s\n' "$HTTPS_PORT"
-        [ "$HTTP_PORT" = 80 ] || printf -- '--http-port\n%s\n' "$HTTP_PORT"
-        [ "$PREFIX" = /usr/local/bin ] || printf -- '--prefix\n%s\n' "$PREFIX"
-        [ "$CHANNEL" = latest ] || printf -- '--channel\n%s\n' "$CHANNEL"
-        [ "$SETUP_SERVICE" = 1 ] || echo "--no-service"
-        # Only with --no-service (as --dev expands): replayed on a service
-        # install, it would leave every updated binary unable to bind 80/443.
-        [ "$DO_SETCAP" = 1 ] || [ "$SETUP_SERVICE" = 1 ] || echo "--no-setcap"
-        true
-    } > "$STATE_FILE"
-fi
+}
 
 # ---------- claude and codex (ADR-0055) ----------
 #
@@ -848,6 +1067,7 @@ setup_programs() {
 # ---------- 6. Service ----------
 
 if [ "$SETUP_SERVICE" = 0 ]; then
+    save_settings
     setup_programs
     step "6/6 Done"
     if [ -n "$DOMAIN" ]; then
@@ -876,7 +1096,7 @@ EOF
 fi
 
 if [ "$KEEP_USER_UNIT" = 1 ]; then
-    step "6/6 Hot upgrade (user service, unit unchanged)"
+    step "5/6 Hot upgrade (user service, unit unchanged)"
     IDLE_ARG=""
     [ "$WHEN_IDLE" = 1 ] && IDLE_ARG="--when-idle"
     if do_reload $IDLE_ARG; then
@@ -889,7 +1109,7 @@ if [ "$KEEP_USER_UNIT" = 1 ]; then
     migrate_hint
 else
 
-step "6/6 Setting up the systemd service (runs as $RUN_USER)"
+step "5/6 Setting up the systemd service (runs as $RUN_USER)"
 
 if [ "$MIGRATE" = 1 ]; then
     # Stop the user service first: both would fight over the same ports.
@@ -960,6 +1180,7 @@ fi
 fi # SWITCH
 fi # KEEP_USER_UNIT
 
+save_settings
 setup_programs
 
 if [ "$DRY_RUN" = 1 ]; then
