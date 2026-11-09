@@ -41,6 +41,18 @@ func (a *Agent) requireAuth(next http.Handler) http.Handler {
 			a.writeError(w, http.StatusUnauthorized, "unauthorized", "Pairing required")
 			return
 		}
+		// Every authenticated request carrying Origin must come from the agent's
+		// own origin or the one the device was paired from (ADR-0062 §4). Reads
+		// too: CORS answers every origin on the site, so without this any page
+		// on the same domain could read the API with the user's cookie. Always
+		// logged: the request passed auth, so it is not scanner noise, and a
+		// rejected WebSocket would otherwise just retry with an empty log.
+		if !a.originAllowed(r, dev) {
+			a.log.Warn("request rejected: Origin may not act for this device",
+				"path", r.URL.Path, "origin", r.Header.Get("Origin"), "expected", a.allowedOrigin(), "device", dev.ID)
+			a.writeError(w, http.StatusForbidden, "forbidden", "This page may not act for this device")
+			return
+		}
 		a.auth.MaybeRenew(w, r, dev, time.Now())
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), deviceKey, dev)))
 	})
@@ -56,12 +68,21 @@ func (a *Agent) securityHeaders(next http.Handler) http.Handler {
 	if a.cfg.Domain != "" {
 		connectSrc += " wss://" + a.cfg.Domain
 	}
+	// The other machines on the site (ADR-0062 §6): the page talks to them
+	// and previews their files. Scripts still come only from 'self'.
+	imgSrc, mediaSrc := "'self' data:", "'self'"
+	if web, sockets := a.siteSources(); web != "" {
+		connectSrc += " " + web + " " + sockets
+		imgSrc += " " + web
+		mediaSrc += " " + web
+	}
 	csp := strings.Join([]string{
 		"default-src 'self'",
 		"script-src 'self'",
 		"style-src 'self' 'unsafe-inline'",
 		"connect-src " + connectSrc,
-		"img-src 'self' data:",
+		"img-src " + imgSrc,
+		"media-src " + mediaSrc,
 		"font-src 'self'",
 		"manifest-src 'self'",
 		"worker-src 'self'",
@@ -83,22 +104,11 @@ func (a *Agent) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// sameOrigin guards state-changing /api requests with the same Origin check
-// as the WebSocket handshake. The SameSite=Strict cookie already keeps
-// cross-site requests unauthenticated; this is the second line of defense, so
-// that a browser or proxy that gets SameSite wrong can't be used to revoke
-// devices from another site (threat model T4).
-func (a *Agent) sameOrigin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.checkOrigin(r) {
-			a.writeError(w, http.StatusForbidden, "forbidden", "Cross-origin request refused")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// checkOrigin validates the Origin of a WebSocket handshake.
+// checkOrigin reports whether a request comes from the agent's own origin, or
+// has no Origin at all (non-browser clients such as wscat and the integration
+// tests still need cookie auth, so this is not a bypass). Requests that a
+// device is behind use originAllowed, which also accepts the origin the device
+// was paired from (ADR-0062 §4).
 //
 // WebSocket handshakes are not protected by CORS. Modern browsers don't send
 // SameSite=Strict cookies on cross-site WS handshakes either, but that
@@ -106,18 +116,7 @@ func (a *Agent) sameOrigin(next http.Handler) http.Handler {
 // line of defense (AC-1.8 / threat model T4).
 func (a *Agent) checkOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
-	if origin == "" {
-		// Non-browser clients (wscat, integration tests) send no Origin. They
-		// still need cookie auth, so this is not a bypass.
-		return true
-	}
-	if a.cfg.Domain != "" && origin == a.allowedOrigin() {
-		return true
-	}
-	if a.cfg.Dev {
-		return isLocalOrigin(origin)
-	}
-	return false
+	return origin == "" || a.isOwnOrigin(origin)
 }
 
 // allowedOrigin is the Origin the browser is expected to send.
@@ -131,18 +130,4 @@ func (a *Agent) checkOrigin(r *http.Request) bool {
 // startup log also use, so there is a single definition.
 func (a *Agent) allowedOrigin() string {
 	return ExternalURL(a.cfg.Domain, a.cfg.HTTPSPort)
-}
-
-// isLocalOrigin reports whether origin is a loopback address (allowed only
-// under --dev).
-func isLocalOrigin(origin string) bool {
-	rest, ok := strings.CutPrefix(origin, "http://")
-	if !ok {
-		return false
-	}
-	host, _, found := strings.Cut(rest, ":")
-	if !found {
-		host = rest
-	}
-	return host == "localhost" || host == "127.0.0.1" || host == "[::1]"
 }

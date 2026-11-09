@@ -99,13 +99,16 @@ func (a *Agent) Hub() *wsconn.Hub { return a.hub }
 
 // Handler returns the handler wrapped in global middleware.
 func (a *Agent) Handler() http.Handler {
-	return a.securityHeaders(a.mux)
+	return a.securityHeaders(a.cors(a.mux))
 }
 
 // routes defines the routes and their auth requirements.
 //
 // The auth matrix is in docs/60-security/auth-pairing.md. The easiest one to
 // miss: /ws must require auth; the middleware cannot wrap only REST (AC-1.7).
+// requireAuth also checks Origin on every request that carries one, reads
+// and writes alike (ADR-0062 §4); CORS preflights are answered by a.cors
+// before the mux.
 func (a *Agent) routes() {
 	// No auth: static assets, the pairing page and endpoint, health check.
 	a.mux.Handle("GET /", a.staticHandler())
@@ -115,7 +118,7 @@ func (a *Agent) routes() {
 	a.mux.Handle("GET /sw.js", a.staticHandler())
 	a.mux.Handle("GET /manifest.json", a.staticHandler())
 	a.mux.HandleFunc("POST /auth/pair", a.handlePair)
-	a.mux.Handle("POST /auth/logout", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleLogout))))
+	a.mux.Handle("POST /auth/logout", a.requireAuth(http.HandlerFunc(a.handleLogout)))
 	a.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok")) // reveals nothing, not even the version
@@ -124,20 +127,20 @@ func (a *Agent) routes() {
 	// Auth required.
 	a.mux.Handle("GET /ws", a.requireAuth(http.HandlerFunc(a.handleWS)))
 	a.mux.Handle("GET /api/devices", a.requireAuth(http.HandlerFunc(a.handleListDevices)))
-	a.mux.Handle("PATCH /api/devices/{id}", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handlePatchDevice))))
-	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeDevice))))
-	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleRevokeAll))))
-	a.mux.Handle("POST /api/uploads", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleUpload))))
+	a.mux.Handle("PATCH /api/devices/{id}", a.requireAuth(http.HandlerFunc(a.handlePatchDevice)))
+	a.mux.Handle("DELETE /api/devices/{id}", a.requireAuth(http.HandlerFunc(a.handleRevokeDevice)))
+	a.mux.Handle("POST /api/devices/revoke-all", a.requireAuth(http.HandlerFunc(a.handleRevokeAll)))
+	a.mux.Handle("POST /api/uploads", a.requireAuth(http.HandlerFunc(a.handleUpload)))
 	a.mux.Handle("GET /api/commands", a.requireAuth(http.HandlerFunc(a.handleCommands)))
-	a.mux.Handle("PUT /api/commands", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handlePutCommands))))
-	a.mux.Handle("DELETE /api/commands", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleDeleteCommands))))
-	// The file browser (ADR-0059): reads authenticated, writes also check Origin
+	a.mux.Handle("PUT /api/commands", a.requireAuth(http.HandlerFunc(a.handlePutCommands)))
+	a.mux.Handle("DELETE /api/commands", a.requireAuth(http.HandlerFunc(a.handleDeleteCommands)))
+	// The file browser (ADR-0059)
 	a.mux.Handle("GET /api/fs/list", a.requireAuth(http.HandlerFunc(a.handleFsList)))
 	a.mux.Handle("GET /api/fs/raw", a.requireAuth(http.HandlerFunc(a.handleFsRaw)))
-	a.mux.Handle("POST /api/fs/upload", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleFsUpload))))
-	a.mux.Handle("POST /api/fs/mkdir", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleFsMkdir))))
-	a.mux.Handle("POST /api/fs/rename", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleFsRename))))
-	a.mux.Handle("DELETE /api/fs", a.requireAuth(a.sameOrigin(http.HandlerFunc(a.handleFsDelete))))
+	a.mux.Handle("POST /api/fs/upload", a.requireAuth(http.HandlerFunc(a.handleFsUpload)))
+	a.mux.Handle("POST /api/fs/mkdir", a.requireAuth(http.HandlerFunc(a.handleFsMkdir)))
+	a.mux.Handle("POST /api/fs/rename", a.requireAuth(http.HandlerFunc(a.handleFsRename)))
+	a.mux.Handle("DELETE /api/fs", a.requireAuth(http.HandlerFunc(a.handleFsDelete)))
 
 	// Every other /api/* path authenticates first, then 404s (auth matrix:
 	// /api/* ✓). Without this they would fall through to the SPA fallback on

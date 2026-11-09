@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -40,13 +42,7 @@ func runDevices(args []string) error {
 			fmt.Println("No authorized devices. Run webterm pair to create a pairing code.")
 			return nil
 		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "ID\tNAME\tLAST SEEN\tLAST IP")
-		for _, d := range devs {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", d.ID[:8], d.Name,
-				time.UnixMilli(d.LastSeenAt).Format("2006-01-02 15:04"), d.LastIP)
-		}
-		return w.Flush()
+		return writeDevices(os.Stdout, devs)
 
 	case "revoke":
 		if fs.NArg() < 2 {
@@ -93,4 +89,21 @@ func resolveDeviceID(st *store.Store, prefix string) (string, error) {
 	default:
 		return "", fmt.Errorf("%q matches %d devices; use a longer prefix", prefix, len(hits))
 	}
+}
+
+// writeDevices prints the device table. A device paired from another
+// machine's page ends with "via <host[:port]>", that page's address
+// (ADR-0062 §4), so it can be told apart from one paired here.
+func writeDevices(out io.Writer, devs []store.Device) error {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tNAME\tLAST SEEN\tLAST IP")
+	for _, d := range devs {
+		via := ""
+		if d.Origin != "" {
+			via = "\tvia " + strings.TrimPrefix(strings.TrimPrefix(d.Origin, "https://"), "http://")
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s%s\n", d.ID[:8], d.Name,
+			time.UnixMilli(d.LastSeenAt).Format("2006-01-02 15:04"), d.LastIP, via)
+	}
+	return w.Flush()
 }

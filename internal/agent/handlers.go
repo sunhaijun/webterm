@@ -77,6 +77,19 @@ func (a *Agent) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A page on another machine of this site may pair, and the device is then
+	// bound to that page's origin (ADR-0062 §4). Anything off the site is
+	// refused before the code is looked at, so it stays valid, and isn't
+	// counted as a failed guess.
+	bound := ""
+	if origin := r.Header.Get("Origin"); origin != "" && !a.isOwnOrigin(origin) {
+		if !a.onSite(origin) {
+			a.writeError(w, http.StatusForbidden, "cross_site", "This page is on another site")
+			return
+		}
+		bound = origin
+	}
+
 	var req pairRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxJSONBody)).Decode(&req); err != nil || req.Code == "" {
 		a.auth.Limiter().Failed(ip, now)
@@ -84,7 +97,7 @@ func (a *Agent) handlePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dev, token, err := a.auth.Pair(req.Code, r.Header.Get("User-Agent"), ip, now)
+	dev, token, err := a.auth.PairFrom(req.Code, r.Header.Get("User-Agent"), ip, bound, now)
 	if err != nil {
 		if tripped := a.auth.Limiter().Failed(ip, now); tripped {
 			// The global circuit breaker must be visible to whoever runs the server.
@@ -97,15 +110,22 @@ func (a *Agent) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	a.auth.Limiter().Succeeded(ip)
 	a.auth.SetSessionCookie(w, token)
-	a.log.Info("new device paired", "device", dev.ID, "name", dev.Name, "ip", ip)
+	a.log.Info("new device paired", "device", dev.ID, "name", dev.Name, "ip", ip, "origin", bound)
 	a.writeJSON(w, http.StatusOK, map[string]any{"device": dev})
 }
 
 // handleLogout signs out the requesting device (AC-1.22, ADR-0048). It revokes
 // the device rather than only clearing the cookie, so a copied token stops
-// working too, and asks the browser to drop everything it holds for this
-// origin. The device's other tabs lose their WebSocket through the revocation
-// scan (AC-1.11).
+// working too, and asks the browser to drop what this origin's page keeps.
+// The device's other tabs lose their WebSocket through the revocation scan
+// (AC-1.11).
+//
+// Clear-Site-Data never says "cookies" (ADR-0062 §12): that clears every
+// cookie of the registrable domain, which would sign the device out of the
+// sibling machines locally (their tokens still valid on the servers) and out
+// of unrelated services on the same domain. Set-Cookie clears ours. A
+// sign-out from another machine's page gets no Clear-Site-Data at all: this
+// origin's storage isn't that page's.
 func (a *Agent) handleLogout(w http.ResponseWriter, r *http.Request) {
 	dev := deviceFrom(r)
 	if err := a.store.RevokeDevice(dev.ID, time.Now()); err != nil {
@@ -113,23 +133,19 @@ func (a *Agent) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auth.ClearSessionCookie(w)
-	w.Header().Set("Clear-Site-Data", `"cookies", "storage", "cache"`)
+	if a.checkOrigin(r) {
+		w.Header().Set("Clear-Site-Data", `"storage", "cache"`)
+	}
 	a.log.Info("device signed out", "device", dev.ID, "name", dev.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------- WebSocket ----------
 
+// handleWS serves the WebSocket. requireAuth has checked the cookie and the
+// Origin (the agent's own, or the page the device was paired from) and logs a
+// rejected one.
 func (a *Agent) handleWS(w http.ResponseWriter, r *http.Request) {
-	if !a.checkOrigin(r) {
-		// Always log this. The request already passed auth, so it is not
-		// scanner noise: one of the user's own devices is being rejected.
-		// Otherwise the client just keeps retrying and the server log is empty.
-		a.log.Warn("WebSocket rejected: Origin mismatch",
-			"origin", r.Header.Get("Origin"), "expected", a.allowedOrigin())
-		a.writeError(w, http.StatusForbidden, "forbidden", "Origin does not match the configured domain")
-		return
-	}
 	a.serveConn(w, r, func() bool {
 		// Checking only at handshake is not enough; a WebSocket can stay
 		// open for days (AC-1.11).
@@ -201,13 +217,17 @@ func (a *Agent) handleListDevices(w http.ResponseWriter, r *http.Request) {
 	cur := deviceFrom(r)
 	out := make([]map[string]any, 0, len(devs))
 	for _, d := range devs {
-		out = append(out, map[string]any{
+		m := map[string]any{
 			"id": d.ID, "name": d.Name, "created_at": d.CreatedAt,
 			"last_seen_at": d.LastSeenAt, "last_ip": d.LastIP,
 			// current marks the requesting device; the UI asks for extra
 			// confirmation so users don't revoke themselves by accident.
 			"current": cur != nil && d.ID == cur.ID,
-		})
+		}
+		if d.Origin != "" {
+			m["origin"] = d.Origin // paired from another machine's page (ADR-0062 §4)
+		}
+		out = append(out, m)
 	}
 	a.writeJSON(w, http.StatusOK, out)
 }
