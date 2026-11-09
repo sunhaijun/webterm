@@ -95,7 +95,7 @@ Remove sends `POST <origin>/auth/logout`: the agent revokes the device and clear
 
 ### 12. `Clear-Site-Data` without cookies
 
-`POST /auth/logout` no longer sends `"cookies"` in `Clear-Site-Data`. That directive clears every cookie of the **registrable domain**, not of the origin: signing out of one machine would drop the cookies of all its sibling machines from the browser, leaving their tokens valid on the servers with no device holding them, and would also sign the user out of unrelated services on the same domain. The cookie is cleared by `Set-Cookie` with `Max-Age=0` for this host, as it already was. `"storage", "cache"` are sent only when the request comes from the agent's own origin (or has no `Origin`): a sign-out from another machine's page must not ask the browser to clear storage it doesn't use. This amends ADR-0048 §1.
+`POST /auth/logout` no longer sends `"cookies"` in `Clear-Site-Data`. That directive clears every cookie of the **registrable domain**, not of the origin: signing out of one machine would drop the cookies of all its sibling machines from the browser, leaving their tokens valid on the servers with no device holding them, and would also sign the user out of unrelated services on the same domain. The cookie is cleared by `Set-Cookie` with `Max-Age=0` for this host, as it already was. `"storage", "cache"` are sent only when the request comes from the agent's own origin (or has no `Origin`): a sign-out from another machine's page must not ask the browser to clear storage it doesn't use. Under `--dev` every local origin counts as the agent's own, so there "own" also means the origin's host and port are the request's. This amends ADR-0048 §1.
 
 ### 13. Different versions
 

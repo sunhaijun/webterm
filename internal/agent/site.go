@@ -68,6 +68,23 @@ func (a *Agent) isOwnOrigin(origin string) bool {
 	return a.cfg.Dev && isLocalOrigin(origin)
 }
 
+// fromOwnPage reports whether r comes from a page this agent served: no
+// Origin, or the agent's own origin with the request's host and port. Under
+// --dev every local origin counts as the agent's own, but only the page this
+// agent served shares its storage, so Clear-Site-Data goes to that one alone
+// (ADR-0062 §12).
+func (a *Agent) fromOwnPage(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	if !a.isOwnOrigin(origin) {
+		return false
+	}
+	u, err := url.Parse(origin)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
 // onSite reports whether origin is on the agent's site: the same scheme and
 // registrable domain, on any port. In IP mode only the agent's own origin is;
 // under --dev every local origin is.

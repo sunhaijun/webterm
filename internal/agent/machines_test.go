@@ -339,3 +339,40 @@ func TestITMachines3_CORS(t *testing.T) {
 		}
 	})
 }
+
+// IT-machines-2 under --dev: every local origin counts as the agent's own,
+// but a sign-out from another local page (a.test.localhost signing out of
+// b.test.localhost, E2E-56) still gets no Clear-Site-Data; that page doesn't
+// share this agent's storage (AC-10.6, ADR-0062 §12).
+func TestITMachines2_DevSignOutFromAnotherLocalPage(t *testing.T) {
+	h := newHarness(t)
+	token := func() string {
+		resp := h.pair(h.client())
+		resp.Body.Close()
+		for _, ck := range resp.Cookies() {
+			if ck.Name == auth.CookieName {
+				return ck.Value
+			}
+		}
+		t.Fatal("no token received")
+		return ""
+	}
+	for _, c := range []struct {
+		origin string
+		want   string
+	}{
+		{"http://a.test.localhost:4000", ""},
+		{"http://localhost:4000", ""},
+		{h.srv.URL, `"storage", "cache"`},
+		{"", `"storage", "cache"`},
+	} {
+		resp := h.mreq(http.MethodPost, "/auth/logout", c.origin, token(), nil, nil)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("%q: status %d", c.origin, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Clear-Site-Data"); got != c.want {
+			t.Errorf("Origin %q: Clear-Site-Data = %q, want %q", c.origin, got, c.want)
+		}
+	}
+}

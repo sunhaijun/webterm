@@ -133,7 +133,7 @@ func (a *Agent) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auth.ClearSessionCookie(w)
-	if a.checkOrigin(r) {
+	if a.fromOwnPage(r) {
 		w.Header().Set("Clear-Site-Data", `"storage", "cache"`)
 	}
 	a.log.Info("device signed out", "device", dev.ID, "name", dev.Name)

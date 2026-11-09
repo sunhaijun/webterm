@@ -19,7 +19,7 @@
 See [`../60-security/auth-pairing.md`](../60-security/auth-pairing.md): `POST /auth/pair`, `POST /auth/logout`, `GET /api/devices`, `PATCH /api/devices/:id`, `DELETE /api/devices/:id`, `POST /api/devices/revoke-all`.
 
 - `POST /auth/pair` from an `Origin` that is neither the agent's own nor on its site → `403 cross_site`, before the code is looked at (it stays valid). From another origin on the site, the new device is bound to that origin (`origin` in the device JSON)
-- `POST /auth/logout` sends `Clear-Site-Data: "storage", "cache"` only to the agent's own origin (or a request without `Origin`), and never `"cookies"`; the cookie is cleared with `Set-Cookie` ([ADR-0062](../20-architecture/adr/0062-several-machines.md) §12)
+- `POST /auth/logout` sends `Clear-Site-Data: "storage", "cache"` only to the agent's own origin (or a request without `Origin`; under `--dev`, the local origin whose host and port are the request's), and never `"cookies"`; the cookie is cleared with `Set-Cookie` ([ADR-0062](../20-architecture/adr/0062-several-machines.md) §12)
 - A device in `GET /api/devices` has `origin` when it was paired from another machine's page
 
 ## Uploads
