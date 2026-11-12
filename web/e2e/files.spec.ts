@@ -537,22 +537,108 @@ test.describe('desktop markdown', () => {
     await page.getByTestId('files-up').click()
     await waitRow(page, 'doc.md')
     await openFile(page, 'doc.md')
-    await page.getByTestId('file-source').click()
+    const source = page.getByTestId('file-source')
+    await expect(source).toHaveAttribute('aria-label', 'Source')
+    await expect(source).toHaveAttribute('aria-pressed', 'false')
+    const [sb, lb] = await Promise.all([source.boundingBox(), page.getByTestId('md-larger').boundingBox()])
+    expect([sb!.width, sb!.height], 'square, the size of the A buttons (ADR-0066 §2)').toEqual([lb!.width, lb!.height])
+    await source.click()
     await expect(page.getByTestId('file-text')).toContainText('## Next Steps')
-    await expect(page.getByTestId('file-source')).toHaveText('Preview')
-    await page.getByTestId('file-source').click()
+    await expect(source).toHaveAttribute('aria-pressed', 'true')
+    await source.click()
     await expect(page.getByTestId('file-markdown').locator('h2#md-next-steps')).toBeVisible()
+    await expect(source).toHaveAttribute('aria-pressed', 'false')
   })
 })
 
 test.describe('phone markdown', () => {
   test.use(PIXEL)
 
-  test('E2E-54 (2) no maximize on a phone', async ({ page }) => {
+  test('E2E-57 full height on a phone: the body scrolls, the handle and header pull, the button, remembered, one long pull closes', async ({ page }) => {
+    writeDocs()
     await agent.open(page)
     await atPrompt(page)
+    await page.evaluate(() => (document.querySelector('.app') as HTMLElement).style.setProperty('--sa-top', '20px'))
+    await cd(page, proj)
+    await page.waitForTimeout(300)
+    let resizes = await hooks.resizes(page)
     await openFiles(page)
-    await expect(page.getByTestId('files-max')).toHaveCount(0)
+    await waitRow(page, 'doc.md')
+    await openFile(page, 'doc.md')
+    await expect(page.getByTestId('file-markdown').locator('h2#md-next-steps')).toHaveCount(1)
+    const sheet = page.getByTestId('file-sheet')
+    const max = sheet.getByTestId('files-max')
+    const visible = await page.getByTestId('file-backdrop').evaluate((el) => el.clientHeight)
+    const rest = visible * 0.8
+    const height = (id: string) => page.getByTestId(id).evaluate((el) => el.getBoundingClientRect().height)
+    const heightIs = (id: string, want: number) => waitFor(async () => Math.abs((await height(id)) - want) <= 1, `${id} is ${want}px tall`)
+    const scrollTop = () => sheet.evaluate((s) => s.querySelector('.drawer-body')!.scrollTop)
+    const center = async (loc: Locator) => {
+      const b = (await loc.boundingBox())!
+      return { x: b.x + Math.min(b.width / 2, 40), y: b.y + b.height / 2 }
+    }
+    const pull = async (loc: Locator, dy: number) => {
+      const from = await center(loc)
+      await touchDrag(page, from, { x: from.x, y: from.y + dy })
+    }
+    await expect(max).toHaveAttribute('aria-pressed', 'false')
+    await heightIs('file-sheet', rest)
+
+    // (1) Up on the body scrolls it and leaves the height alone
+    const body = sheet.locator('.drawer-body')
+    const bb = (await body.boundingBox())!
+    await touchDrag(page, { x: bb.x + bb.width / 2, y: bb.y + bb.height * 0.7 }, { x: bb.x + bb.width / 2, y: bb.y + bb.height * 0.7 - 200 })
+    await waitFor(async () => (await scrollTop()) > 0, 'the body scrolled')
+    await page.waitForTimeout(250)
+    await heightIs('file-sheet', rest)
+    await expect(max).toHaveAttribute('aria-pressed', 'false')
+
+    // (2) A short pull on the handle settles back; a longer one on the header goes full height
+    await pull(sheet.locator('.drawer-grab'), -30)
+    await page.waitForTimeout(250)
+    await heightIs('file-sheet', rest)
+    await expect(max).toHaveAttribute('aria-pressed', 'false')
+    await pull(sheet.locator('.drawer-title'), -120)
+    await expect(max).toHaveAttribute('aria-pressed', 'true')
+    await heightIs('file-sheet', visible)
+    const look = await sheet.evaluate((el) => {
+      const s = getComputedStyle(el)
+      return { radius: s.borderTopLeftRadius, pad: s.paddingTop, top: Math.round(el.getBoundingClientRect().top) }
+    })
+    expect(look).toEqual({ radius: '0px', pad: '20px', top: 0 })
+    await heightIs('files-sheet', visible)
+
+    // (3) Down from the header with the body scrolled → 80%; the button both ways
+    expect(await scrollTop()).toBeGreaterThan(0)
+    await pull(sheet.locator('.drawer-title'), 100)
+    await expect(max).toHaveAttribute('aria-pressed', 'false')
+    await heightIs('file-sheet', rest)
+    await max.tap()
+    await expect(max).toHaveAttribute('aria-pressed', 'true')
+    await heightIs('file-sheet', visible)
+    await max.tap()
+    await expect(max).toHaveAttribute('aria-pressed', 'false')
+    await heightIs('file-sheet', rest)
+    expect(await hooks.resizes(page), 'no resize').toBe(resizes)
+
+    // (4) Remembered
+    await max.tap()
+    await expect(max).toHaveAttribute('aria-pressed', 'true')
+    await closeSheet(page, 'file-sheet')
+    await closeSheet(page, 'files-sheet')
+    await page.reload()
+    await atPrompt(page)
+    await page.waitForTimeout(300)
+    resizes = await hooks.resizes(page)
+    await openFiles(page)
+    const visible2 = await page.getByTestId('files-backdrop').evaluate((el) => el.clientHeight)
+    await heightIs('files-sheet', visible2)
+    await expect(page.getByTestId('files-sheet').getByTestId('files-max')).toHaveAttribute('aria-pressed', 'true')
+
+    // (5) One long pull from full height closes
+    await pull(page.getByTestId('files-sheet').locator('.drawer-head'), visible2 * 0.2 + 140)
+    await expect(page.getByTestId('files-sheet')).toHaveCount(0)
+    expect(await hooks.resizes(page), 'no resize').toBe(resizes)
   })
 
   test('E2E-55 (4) text size on a phone', async ({ page }) => {

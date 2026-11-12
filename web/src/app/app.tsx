@@ -281,7 +281,6 @@ export function App({ onRevoked, onSignedOut, machines: m }: AppProps = {}) {
           start={s.files.start}
           home={s.home}
           coarse={s.coarse}
-          wide={s.form === 'wide'}
           canSend={filesSession?.status === 'running'}
           upload={s.filesUpload}
           changed={s.filesChanged}

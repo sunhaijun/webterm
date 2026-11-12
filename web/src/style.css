@@ -915,8 +915,9 @@ button { font: inherit; color: inherit; }
 }
 .file-end:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 6%, var(--surface)); }
 .file-end:disabled { opacity: 0.35; cursor: default; }
-/* Smaller / larger text (ADR-0061 §1): a small and a large A */
-.file-textsize { width: 36px; padding: 0; }
+/* Smaller / larger text (ADR-0061 §1): a small and a large A; Source: `</>`, accent while the source shows (ADR-0066 §2) */
+.file-square { width: 36px; padding: 0; }
+.file-end[aria-pressed='true'] { color: var(--accent); }
 .file-textsize-a { font-weight: 600; line-height: 1; }
 .file-textsize-a[data-size='small'] { font-size: 12px; }
 .file-textsize-a[data-size='large'] { font-size: 17px; }
@@ -939,7 +940,11 @@ button { font: inherit; color: inherit; }
 /* Maximized on wide (ADR-0060 §1): the sheet fills the visible area */
 .drawer-backdrop[data-max='true'] { padding: 0; }
 .drawer[data-max='true'] { width: 100%; height: 100%; max-height: 100%; border: 0; border-radius: 0; }
-.app[data-form='compact'] .drawer-max { display: none; }
+/* Full height on compact (ADR-0066 §1): the grab handle stays, and the handle and header clear the status bar */
+.app[data-form='compact'] .drawer[data-max='true'] { height: 100%; max-height: 100%; border-radius: 0; padding-top: var(--sa-top); }
+@media (prefers-reduced-motion: no-preference) {
+  .app[data-form='compact'] .drawer:is([data-variant='files'], [data-variant='file']) { transition: height 160ms ease; }
+}
 .drawer-head { user-select: none; -webkit-user-select: none; }
 
 /* Markdown rendered (ADR-0060 §2) */

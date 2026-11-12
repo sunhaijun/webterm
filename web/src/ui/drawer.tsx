@@ -3,7 +3,8 @@
  * confirmation (ADR-0018, layout.md).
  *
  * The shape follows `.app[data-form]` (decided in CSS, ADR-0037 §4): a full-width bottom
- * sheet on `compact` (grab handle, swipe down to close), a centered dialog on `wide`.
+ * sheet on `compact` (grab handle, swipe down to close; with `max`, also pulled up to full
+ * height, ADR-0066 §1), a centered dialog on `wide`.
  * Closes via backdrop click · `Esc` · ✕ · swipe down (sheet), plus the system back button
  * with `backButton`.
  *
@@ -18,7 +19,7 @@ import { useLayoutEffect, useRef } from 'preact/hooks'
 
 import { backStack } from './backstack'
 import { CloseIcon, MaximizeIcon, RestoreIcon } from './icons'
-import { installSwipeDismiss } from './swipe'
+import { installSheetDrag } from './swipe'
 
 export interface DrawerProps {
   title: string
@@ -36,8 +37,9 @@ export interface DrawerProps {
   /** Replaces the title in the header row (the file browser's up button and path); `title` still names the dialog. */
   head?: ComponentChildren
   /**
-   * Maximize and restore (the file browser on `wide`, ADR-0060 §1): a button left of ✕ and a
-   * double-click on the header toggle it; maximized, the sheet fills the visible area.
+   * Maximize and restore (the file browser, ADR-0060 §1 and ADR-0066 §1): a button left of ✕ and
+   * a double-click on the header toggle it; maximized, the sheet fills the visible area. On
+   * `compact` the grab handle and header also pull it up to full height and back down.
    */
   max?: { on: boolean; toggle(): void }
   /** A fixed row of buttons at the bottom ("+ New session · ⚙" in the session drawer, "Cancel · OK" in confirm and rename). */
@@ -62,14 +64,20 @@ export function Drawer({
   const sheetRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  const maxRef = useRef(max)
+  maxRef.current = max
 
   // useLayoutEffect, not useEffect: Preact runs useEffect after paint, when the sheet is
   // already clickable but gestures and Esc aren't wired up yet.
   useLayoutEffect(() => {
     const el = sheetRef.current
     if (!el) return
-    // Only the compact sheet closes on swipe down; this checks the same attribute the CSS does
-    return installSwipeDismiss(el, () => closeRef.current(), () => el.closest('.app[data-form="compact"]') !== null)
+    return installSheetDrag(el, {
+      // Only the compact sheet is dragged; this checks the same attribute the CSS does
+      enabled: () => el.closest('.app[data-form="compact"]') !== null,
+      onDismiss: () => closeRef.current(),
+      max: () => maxRef.current,
+    })
   }, [])
   useLayoutEffect(() => {
     // Pull focus into the sheet: it is modal, and with focus outside Esc has no clear target.

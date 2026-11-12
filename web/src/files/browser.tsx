@@ -11,7 +11,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 
 import { Drawer } from '../ui/drawer'
 import { MD_SIZES, readFilesMax, readMdSize, stepMdSize, writeFilesMax, writeMdSize } from '../ui/prefs'
-import { BackIcon, FileIcon, FolderIcon, FolderPlusIcon, TerminalIcon, UploadIcon } from '../ui/icons'
+import { BackIcon, CodeIcon, FileIcon, FolderIcon, FolderPlusIcon, TerminalIcon, UploadIcon } from '../ui/icons'
 import { useRowGestures } from '../ui/rowgestures'
 import { ROW_ACT_PX } from '../ui/rowswipe'
 import {
@@ -61,8 +61,6 @@ export interface FilesProps {
   start: string
   home: string | null
   coarse: boolean
-  /** The `wide` form: the sheets can be maximized (ADR-0060 §1). */
-  wide: boolean
   /** The session the browser was opened from is running (Send to session). */
   canSend: boolean
   upload: UploadProgress | null
@@ -101,15 +99,14 @@ export function FilesBrowser(p: FilesProps) {
   const [deleting, setDeleting] = useState<Target | null>(null)
   const rows = useRowGestures<string>(ROW_ACTIONS)
   const [maxOn, setMaxOn] = useState(readFilesMax)
-  const max = p.wide
-    ? {
-        on: maxOn,
-        toggle: () => {
-          writeFilesMax(!maxOn)
-          setMaxOn(!maxOn)
-        },
-      }
-    : undefined
+  /** Maximized on `wide`, full height on `compact` (ADR-0060 §1, ADR-0066 §1): one state, kept per device. */
+  const max = {
+    on: maxOn,
+    toggle: () => {
+      writeFilesMax(!maxOn)
+      setMaxOn(!maxOn)
+    },
+  }
   const loadSeq = useRef(0)
   const crumbRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -424,7 +421,7 @@ interface FileSheetProps {
   entry: Entry
   coarse: boolean
   canSend: boolean
-  max: { on: boolean; toggle(): void } | undefined
+  max: { on: boolean; toggle(): void }
   onOpenPath(path: string): void
   onClose(): void
   onSend(path: string): void
@@ -671,7 +668,7 @@ function FileSheet({ path, entry, coarse, canSend, max, onOpenPath, onClose, onS
             <>
               <button
                 type="button"
-                class="file-end file-textsize"
+                class="file-end file-square"
                 data-testid="md-smaller"
                 aria-label="Smaller text"
                 title="Smaller text"
@@ -684,7 +681,7 @@ function FileSheet({ path, entry, coarse, canSend, max, onOpenPath, onClose, onS
               </button>
               <button
                 type="button"
-                class="file-end file-textsize"
+                class="file-end file-square"
                 data-testid="md-larger"
                 aria-label="Larger text"
                 title="Larger text"
@@ -700,14 +697,17 @@ function FileSheet({ path, entry, coarse, canSend, max, onOpenPath, onClose, onS
           {kind === 'markdown' && !binary && (
             <button
               type="button"
-              class="file-end"
+              class="file-end file-square"
               data-testid="file-source"
+              aria-label="Source"
+              title="Source"
+              aria-pressed={source ? 'true' : 'false'}
               onClick={() => {
                 setSource(!source)
                 setTail(false)
               }}
             >
-              {source ? 'Preview' : 'Source'}
+              <CodeIcon />
             </button>
           )}
           {long && !binary && !rendered && (
