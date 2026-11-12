@@ -753,10 +753,10 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 > [ADR-0060](../20-architecture/adr/0060-files-maximize-and-markdown.md). `web/e2e/files.spec.ts`. As E2E-53, plus `proj/doc.md` (a heading `## Next Steps`, a table, a list, a fenced code block, raw `<script>window.__md=1</script>` and `<img src=x onerror="window.__md=2">`, links reading `next` (to the anchor `#next-steps`), `other` (to `notes/other.md`), `up` (to `src`), `js` (to `javascript:alert(1)`) and `web` (to `https://example.com/`), images with alt `shot` (`shot.png`) and alt `remote` (`https://example.com/x.png`), and enough paragraphs to scroll) and `proj/notes/other.md` (`# Other`). The browser's requests are recorded.
 
 1. **Maximize** (1440×900, mouse): open files → `files-max` has `aria-pressed="false"`; click it → `files-sheet` is 1440×900 (±1) at (0, 0) and `aria-pressed="true"`; open `b.txt` → `file-sheet` has the same rect; double-click its header (not a button) → both back to 720px wide; double-click again → maximized; close everything, reload, open files → still maximized; click `files-max` → restored; `resizes()` never changed
-2. **No button on a phone** (Pixel 5): `files-max` is absent
+2. *(Replaced by E2E-57: phones have the button too, [ADR-0066](../20-architecture/adr/0066-files-full-height-on-phones.md).)*
 3. **Rendered** (1440×900): open `doc.md` → `file-markdown` has an `h2` "Next Steps" with id `md-next-steps`, a `table` and a `pre`; its text contains `<script>` literally; there is no `script`, `iframe` or `img[onerror]` element in it, and `window.__md` is undefined; `[js]` is text, not a link; the `shot.png` image loads from `/api/fs/raw` (`naturalWidth > 0`); no request went to `example.com`, and the remote image is an `a` reading `remote`
 4. **Links**: click `next` → the heading is within the preview's visible area, below `file-meta` ([ADR-0061](../20-architecture/adr/0061-markdown-text-size.md) §2); click `web` → the `window.open` recorder (or a `popup` event) got `https://example.com/` and the file sheet is still open; click `other` → the file sheet shows `other.md` with an `h1` "Other"; back to `doc.md`, click `up` → no file sheet, the last crumb is `src`
-5. **Source**: open `doc.md`, click `file-source` → `file-text` shows `## Next Steps` and the button reads Preview; click it again → `file-markdown` is back
+5. **Source**: open `doc.md` → `file-source` is labeled Source with `aria-pressed="false"` and as tall and wide as `md-larger`; click it → `file-text` shows `## Next Steps` and `aria-pressed` is true; click it again → `file-markdown` is back and `aria-pressed` false
 
 ## E2E-55 Markdown text size (AC-9.15)
 
@@ -779,3 +779,13 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 6. **Removing**: on `a`, long-press `b`'s row → `machine-row-remove` → the request to B's `/auth/logout` gets `204` with no `Clear-Site-Data`; the list has only `a`; B's old cookie now gets `401`; the page still works on `a` (A's cookie is intact). Add B again, stop B, Remove → `machine-remove-confirm`; Cancel keeps it, Remove drops it
 7. **Signing out everywhere**: add B again; Settings → Sign out this device → confirm → B's `/auth/logout` comes before A's; A's response has `Clear-Site-Data: "storage", "cache"` and no `"cookies"`; both old cookies get `401`. Variant: with B stopped, the signed-out page lists `b.test.localhost:<B>` in `signed-out-left`
 8. **Phone** (Pixel 5): the drawer's title is `machine-button`; the sheets are bottom sheets; switching works as on desktop. **Desktop** (1440×900): `machine-button` is the tab bar's first child, left of `tabbar`
+
+## E2E-57 Full height on a phone (AC-9.13, AC-9.16)
+
+> [ADR-0066](../20-architecture/adr/0066-files-full-height-on-phones.md). `web/e2e/files.spec.ts`, Pixel 5, touch through CDP. As E2E-55 (`doc.md` long enough to scroll), with `--sa-top` set to 20px on `.app` before the first step.
+
+1. **The body scrolls**: open files, open `doc.md` → `file-sheet` is 80% of the visible area (±1) and `files-max` has `aria-pressed="false"`; drag up 200px on `file-markdown` → still 80%, and the body scrolled
+2. **Pull up**: drag the grab handle up 30px and release → still 80%; drag the header up 120px → `file-sheet` fills the visible area (±1) with a 0 corner radius and a 20px top padding, `files-max` has `aria-pressed="true"`, and `files-sheet` under it is full height too
+3. **Down to 80% from the header, and the button**: with the body still scrolled, drag the header down 100px → 80% and `aria-pressed` false; tap `files-max` → full height; tap it again → 80%
+4. **Remembered**: tap `files-max` (full), close both sheets, reload, open files → `files-sheet` is full height
+5. **One long pull closes**: drag `files-sheet`'s header down by the gap to 80% plus 140px → the sheet is gone; `resizes()` never changed
