@@ -25,7 +25,7 @@ Two requests after reading Markdown on a phone:
 ### 2. Source as an icon
 
 - **`file-source` becomes a square icon button** the size of the two "A" buttons: `</>`, drawn like the other line icons ([ADR-0037](0037-settings-theme-and-font-size.md) §3). The size line reads `A A </>`, and Source stays rightmost ([ADR-0061](0061-markdown-text-size.md) §1).
-- **A toggle, not a label that flips**: its name stays "Source" (`aria-label`, `title`), `aria-pressed` is true while the source shows, and then the icon is in the accent color, which means "this one is selected" ([layout.md](../40-frontend/layout.md#theme)). Tapping it again shows the rendered file.
+- **A toggle, not a label that flips**: its name stays "Source" (`aria-label`, `title`), `aria-pressed` is true while the source shows, and then the icon is in the accent color, which means "this one is selected" ([layout.md](../../40-frontend/layout.md#theme)). Tapping it again shows the rendered file.
 - End / Start for long files stay words: they name a place, and there is no common symbol for either.
 
 ## Alternatives considered
