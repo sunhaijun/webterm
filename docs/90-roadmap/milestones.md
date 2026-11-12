@@ -51,6 +51,8 @@ Released as **v0.8.0** (2026-11-08): m24.
 
 Released as **v0.9.0** (2026-11-09): m25, and `dev` showing the release's version right after a tag (AC-8.9).
 
+Released as **v0.10.0** (2026-11-12): the file browser's sheets pull up to full height on phones, and Source becomes a `</>` toggle ([ADR-0066](../20-architecture/adr/0066-files-full-height-on-phones.md), a follow-up to m23).
+
 ## In progress
 
 Nothing right now. Next candidates are below.
