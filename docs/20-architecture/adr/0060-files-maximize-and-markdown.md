@@ -1,6 +1,6 @@
 # ADR-0060 The file browser: maximize, and Markdown rendered
 
-Status: Accepted (2026-11-08); §2 "Looks" amended by [ADR-0061](0061-markdown-text-size.md) (text size, the size line stays at the top). Amends [ADR-0059](0059-files.md) §1 (sheet size on `wide`) and §4 (previews), and reverses its "Rendering Markdown" alternative. Adds AC-9.13 and AC-9.14 and E2E-54. Neither the HTTP API nor the protocol changes.
+Status: Accepted (2026-11-08); §2 "Looks" amended by [ADR-0061](0061-markdown-text-size.md) (text size, the size line stays at the top); §1 amended by [ADR-0066](0066-files-full-height-on-phones.md) (full height on phones too, reversing "Maximize on phones" below) and §2's Source button by the same ADR (an icon that stays pressed). Amends [ADR-0059](0059-files.md) §1 (sheet size on `wide`) and §4 (previews), and reverses its "Rendering Markdown" alternative. Adds AC-9.13 and AC-9.14 and E2E-54. Neither the HTTP API nor the protocol changes.
 
 ## Context
 

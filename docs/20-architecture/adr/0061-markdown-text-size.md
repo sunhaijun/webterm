@@ -1,6 +1,6 @@
 # ADR-0061 Markdown previews: text size
 
-Status: Accepted (2026-11-08). Amends [ADR-0060](0060-files-maximize-and-markdown.md) §2 ("Looks"). Adds AC-9.15 and E2E-55. Neither the HTTP API nor the protocol changes.
+Status: Accepted (2026-11-08); §1's Source button amended by [ADR-0066](0066-files-full-height-on-phones.md) (a `</>` icon the size of the "A" buttons). Amends [ADR-0060](0060-files-maximize-and-markdown.md) §2 ("Looks"). Adds AC-9.15 and E2E-55. Neither the HTTP API nor the protocol changes.
 
 ## Context
 

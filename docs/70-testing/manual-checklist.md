@@ -154,6 +154,7 @@ The real test of the "never disconnects" promise; automation can only simulate i
 - [ ] Rename and delete from a row's swipe and long-press (phone) and right-click (desktop); New folder; New session here opens a shell in that folder
 - [ ] A README and a claude-written plan (`.md`) render on the phone: tables scroll sideways, code blocks too; Source shows the text; a relative link opens the other file
 - [ ] Desktop: maximize, reload, open files again → still maximized; double-click the header restores
+- [ ] iPhone PWA and Android: pull a `.md` file's handle up → full height, the handle and header below the status bar and notch; halfway down the file, pull the header down → 80%; one long pull from full height closes it; the maximize button does the same
 - [ ] Phone: halfway down a long `.md`, the larger-text button is still at the top; tapping it keeps the paragraph you were reading in place; the next `.md` opens at that size
 - [ ] Open a raw `.html` URL from the address bar (`/api/fs/raw?path=…`) → it downloads, nothing renders
 
