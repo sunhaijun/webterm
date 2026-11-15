@@ -193,6 +193,40 @@ describe('neighbors', () => {
     store.activate(1, area)
     expect(store.step(-1)).toBe(3)
   })
+
+  it('swiping (AC-4.15): adjacent(±1) is the neighbour in display order, without wrapping; activeHost is the mounted host', () => {
+    const { store, area } = make()
+    expect(store.adjacent(1), 'no sessions').toBeNull()
+    expect(store.activeHost()).toBeNull()
+    for (const sid of [1, 2, 3]) store.upsert(info(sid))
+    store.move(3, 1) // display order 3 1 2
+    store.activate(1, area)
+    expect(store.adjacent(1)).toMatchObject({ sid: 2, index: 3 })
+    expect(store.adjacent(-1)).toMatchObject({ sid: 3, index: 1 })
+    store.activate(3, area)
+    expect(store.adjacent(-1), 'first: nothing before it').toBeNull()
+    store.activate(2, area)
+    expect(store.adjacent(1), 'last: nothing after it').toBeNull()
+    expect(store.activeHost()?.parentElement).toBe(area)
+    expect(store.activeHost()?.className).toBe('term-host')
+  })
+
+  it('hosts are mounted and unmounted at rest: no transform or swipe marking left over (ADR-0067)', () => {
+    const { store, area } = make()
+    for (const sid of [1, 2]) store.upsert(info(sid))
+    store.activate(1, area)
+    const h1 = store.activeHost()!
+    h1.style.transform = 'translateX(-80px)'
+    h1.dataset.swiping = 'true'
+    store.activate(2, area)
+    expect(h1.style.transform).toBe('')
+    expect(h1.dataset.swiping).toBeUndefined()
+    const h2 = store.activeHost()!
+    h2.style.transform = 'translateX(40px)'
+    store.activate(1, area)
+    store.activate(2, area)
+    expect(h2.style.transform).toBe('')
+  })
 })
 
 describe('process-exited line (AC-4.5)', () => {

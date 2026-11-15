@@ -77,7 +77,7 @@ The version comes from `git describe --tags --dirty --match 'v[0-9]*'`, or `dev-
 | push to `main` | the commit is still main's head, and no `v*` tag on it is missing from the binary's version |
 | `v*` tag | the tagged commit is main's head |
 
-So right after a release, `dev` is the release's binaries, and a run that main has moved past leaves `dev` to the newer one. Runs publish `dev` one at a time (concurrency group `dev-prerelease`).
+So right after a release, `dev` is the release's binaries, and a run that main has moved past leaves `dev` to the newer one. Runs build and publish one at a time (concurrency group `release`), in one job: the binaries are published from the runner that built them and are never stored as an Actions artifact, which would count against the account's storage ([strategy.md §Storage](../70-testing/strategy.md#storage)).
 
 To release:
 

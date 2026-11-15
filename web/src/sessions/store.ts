@@ -68,6 +68,15 @@ interface Entry {
   exitShown: boolean
 }
 
+/**
+ * A host is mounted and unmounted at rest: no transform or swipe marking left over from a
+ * swipe whose end never arrived (ADR-0067).
+ */
+function atRest(host: HTMLElement): void {
+  host.style.transform = ''
+  delete host.dataset.swiping
+}
+
 export class SessionStore {
   private readonly entries = new Map<number, Entry>()
   /**
@@ -198,9 +207,11 @@ export class SessionStore {
     const prev = this.activeSid !== null ? this.entries.get(this.activeSid) : undefined
     if (prev && prev !== e) {
       prev.host.remove()
+      atRest(prev.host)
       if (!prev.pinned) this.conn.unsubscribe(prev.info.sid)
     }
 
+    atRest(e.host)
     container.appendChild(e.host)
     if (!e.opened) {
       e.term.term.open(e.host)
@@ -273,6 +284,20 @@ export class SessionStore {
     const i = this.activeSid === null ? -1 : ids.indexOf(this.activeSid)
     const next = (((i + delta) % ids.length) + ids.length) % ids.length
     return ids[next] ?? null
+  }
+
+  /** The active session's neighbour for a swipe (AC-4.15): +1 next, -1 previous, no wrapping. */
+  adjacent(delta: 1 | -1): SessionView | null {
+    const list = this.list()
+    const i = list.findIndex((s) => s.active)
+    if (i < 0) return null
+    return list[i + delta] ?? null
+  }
+
+  /** The mounted session's host element, which a swipe moves. */
+  activeHost(): HTMLElement | null {
+    const e = this.activeSid === null ? undefined : this.entries.get(this.activeSid)
+    return e?.host.isConnected ? e.host : null
   }
 
   first(): number | null {

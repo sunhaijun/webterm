@@ -182,7 +182,7 @@ Sending from the text page **ignores sticky CTRL / ALT**: text and Enter go out 
 - The program decides how many lines one wheel step scrolls: a program that scrolls 5 lines per step moves the content 5 lines per row of finger travel ([ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md) §3).
 - At most 3 wheel events per `touchmove`; the excess is dropped, not carried over to the next frame (a fast flick must not flood the PTY, ADR-0029).
 - Full-screen programs move at best one line per step, and the content trails the finger by one network round trip.
-- A drag starts once travel reaches 10px (the tap threshold) and is mostly vertical. Travel accumulates from the start point, so the first 10px aren't lost. Horizontal drags do nothing.
+- A drag starts once travel reaches 10px (the tap threshold) and is mostly vertical. Travel accumulates from the start point, so the first 10px aren't lost. A clearly sideways drag switches sessions ([session-ux.md](session-ux.md#swiping-on-the-terminal-ac-415), AC-4.15); other drags that aren't mostly vertical do nothing.
 - While converting, `touchmove` calls `preventDefault` so the browser doesn't also scroll natively.
 - xterm 5.5 doesn't do this itself: when the program enables mouse tracking, its touch handler just returns, and browsers don't synthesize wheel events from drags ([ADR-0029](../20-architecture/adr/0029-touch-drag-to-wheel.md)).
 - The synthetic `wheel` is `window.event` during its dispatch and is in the user-input event list, so it passes during replay (see [The replay gate](#the-replay-gate-ac-215-adr-0020) below).

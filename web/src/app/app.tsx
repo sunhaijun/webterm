@@ -157,6 +157,8 @@ export function App({ onRevoked, onSignedOut, machines: m }: AppProps = {}) {
       )}
 
       <div class="stage" data-drop={s.dropping && !s.files ? 'true' : undefined}>
+        {/* Under the terminal: the moving terminal uncovers it during a session swipe (ADR-0067); the controller fills it */}
+        <div class="swipe-peek" data-testid="swipe-peek" aria-hidden="true" hidden />
         <div class="term" data-testid="terminal" ref={areaRef} />
         <ConnBanner state={s.conn} info={s.connInfo} fatal={s.fatal} note={s.connNote} />
         <ToastView toast={s.toast} />
