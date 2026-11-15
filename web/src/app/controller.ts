@@ -778,6 +778,7 @@ export class AppController {
     // A sideways swipe on the terminal goes to the neighbouring session (ADR-0067). Capture
     // phase: once a touch is a swipe, the tap toggle, drag-to-wheel and xterm never see it.
     this.peekEl = area.parentElement?.querySelector<HTMLElement>(':scope > .swipe-peek') ?? null
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')
     const unswipe = installSessionSwipe(area, {
       neighbour: (dir) => {
         const s = this.store.adjacent(dir)
@@ -788,7 +789,7 @@ export class AppController {
       viewportWidth: () => window.innerWidth,
       // While collapsed, the bottom band belongs to the restore swipe (ADR-0056 §3)
       bandTop: () => (this.state.keysCollapsed ? area.getBoundingClientRect().bottom - BAND_PX : null),
-      reducedMotion: () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true,
+      reducedMotion: () => reduceMotion?.matches === true,
       peek: (p) => this.showPeek(p),
       switchTo: (sid) => this.select(sid),
     })

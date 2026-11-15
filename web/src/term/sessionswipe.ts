@@ -215,8 +215,16 @@ export function installSessionSwipe(el: HTMLElement, target: SwipeTarget): () =>
 
   const onStart = (e: TouchEvent) => {
     stop()
-    // A second finger cancels a swipe under way; and nothing starts with more than one
-    if (g) abort(g)
+    if (g && e.touches.length > 1) abort(g) // A second finger cancels a swipe under way
+    else if (g?.axis === 'swipe') {
+      // A new touch while a swipe never ended: its touchend went to a node that was detached
+      // meanwhile (the session closed elsewhere) and never reached us. Clean up, no animation.
+      target.peek(null)
+      if (g.host) {
+        g.host.style.transform = ''
+        delete g.host.dataset.swiping
+      }
+    }
     g = null
     const t = e.touches[0]
     if (e.touches.length !== 1 || !t) return
@@ -268,7 +276,9 @@ export function installSessionSwipe(el: HTMLElement, target: SwipeTarget): () =>
     const dx = t.clientX - cur.x
     const dy = t.clientY - cur.y
     const dir: 1 | -1 = dx < 0 ? 1 : -1
-    const nb = dx === 0 ? null : target.neighbour(dir)
+    // The session it started on is still current (not closed or switched meanwhile)
+    const same = target.host() === cur.host
+    const nb = dx === 0 || !same ? null : target.neighbour(dir)
     const w = target.width()
     if (!nb || !releaseSwitches(dx, dy, speed.speed(), w)) {
       abort(cur)

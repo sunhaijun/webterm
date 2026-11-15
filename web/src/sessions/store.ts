@@ -68,6 +68,15 @@ interface Entry {
   exitShown: boolean
 }
 
+/**
+ * A host is mounted and unmounted at rest: no transform or swipe marking left over from a
+ * swipe whose end never arrived (ADR-0067).
+ */
+function atRest(host: HTMLElement): void {
+  host.style.transform = ''
+  delete host.dataset.swiping
+}
+
 export class SessionStore {
   private readonly entries = new Map<number, Entry>()
   /**
@@ -198,9 +207,11 @@ export class SessionStore {
     const prev = this.activeSid !== null ? this.entries.get(this.activeSid) : undefined
     if (prev && prev !== e) {
       prev.host.remove()
+      atRest(prev.host)
       if (!prev.pinned) this.conn.unsubscribe(prev.info.sid)
     }
 
+    atRest(e.host)
     container.appendChild(e.host)
     if (!e.opened) {
       e.term.term.open(e.host)

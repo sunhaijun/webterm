@@ -40,7 +40,7 @@ Single-finger gestures already on the terminal: tap (keyboard, links, a click un
   The speed is measured over the last 100ms of the touch, not the whole of it, so a slow drag ending in a flick counts and a fast drag that stops doesn't. Moves stamped at the same millisecond give no speed.
 - **Switching is the drawer's switch**, run in the `touchend` handler: focus follows the session (the keyboard stays up if it was up, which iOS allows only inside the gesture), the text page follows ([ADR-0036](0036-text-page-per-session.md)), open popovers close, and no `resize` is sent. The new terminal slides in from the side the finger went, continuing from where the old one was (200ms, ease-out).
 - **Otherwise it slides back** (180ms).
-- A new touch during either animation ends it at once. If the neighbour was closed during the swipe, the release slides back.
+- A new touch during either animation ends it at once. If the neighbour was closed during the swipe, or the current session changed (closed elsewhere), the release slides back.
 - With `prefers-reduced-motion`, nothing moves: the label still appears, and releasing switches at once.
 
 ## Alternatives considered
@@ -56,5 +56,6 @@ Single-finger gestures already on the terminal: tap (keyboard, links, a click un
 
 - `web/src/term/sessionswipe.ts` holds the decisions as pure functions and installs the gesture on the terminal container, in the capture phase so it can keep a swipe's events from xterm and the other gestures. The store gets `adjacent(±1)`, which doesn't wrap.
 - The terminal host (`.term-host`) gets the terminal background so it hides the label as it slides over it.
+- The store mounts and unmounts hosts at rest (no transform). If a host is detached mid-swipe (its session closed elsewhere), the swipe's `touchend` goes to the detached node and never arrives; nothing is left on the host, and the next touch hides the label.
 - Tests: UT-sessionswipe-1 (start, lock, release, follow, speed), UT-store (adjacent), E2E-58. E2E-44's horizontal drag (one session) still sends nothing.
 - Real-device feel (thumb arcs, Safari's edge swipes, a PWA) goes in the manual checklist.

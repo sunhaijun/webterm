@@ -439,6 +439,27 @@ describe('installSessionSwipe', () => {
     expect(r.switched).toEqual([])
   })
 
+  it('the current session changed during the swipe: slides back, does not switch from the new one', () => {
+    const old = r.host
+    drag(r, 200, 300, -130, 0, { release: false })
+    r.host = document.createElement('div')
+    fire(r.screen, 'touchend', [], 1300, [{ x: 70, y: 300 }])
+    expect(r.switched).toEqual([])
+    expect(old.style.transform).toBe('')
+  })
+
+  it("a swipe whose end never arrived (its host was detached) is cleaned up by the next touch, without animating", () => {
+    const old = r.host
+    drag(r, 200, 300, -130, 0, { release: false })
+    expect(r.peeks.at(-1)).not.toBeNull()
+    const n = r.anims.length
+    fire(r.screen, 'touchstart', [{ x: 200, y: 300 }], 3000)
+    expect(r.peeks.at(-1)).toBeNull()
+    expect(old.style.transform).toBe('')
+    expect(old.dataset.swiping).toBeUndefined()
+    expect(r.anims.length).toBe(n)
+  })
+
   it('a new touch during an animation ends it at once', () => {
     drag(r, 200, 300, -140, 0)
     const a = r.anims.at(-1)!
