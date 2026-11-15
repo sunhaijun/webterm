@@ -261,6 +261,8 @@ ci.yml   # PULL REQUESTS ONLY, one job:
 e2e.yml  # NOT run automatically in CI: manual trigger only, see below
 ```
 
+`release.yml` (merges to `main` and `v*` tags) is described in [development.md §Releases](../80-ops/development.md#releases).
+
 ### Why one job, and why only on pull requests
 
 **Actions bills each job rounded up to the minute.** Five separate jobs (`go` / `web` / `static` / `fmt` / `docs`) measured 3.6 / 0.7 / 1.9 / 0.3 / 0.1 minutes, so rounding alone wasted two minutes, and `go` and `static` each ran `npm ci && npm run build`. One job builds once and reuses the result.
@@ -275,7 +277,7 @@ Two more guards against waste: `concurrency` cancels superseded runs on the same
 
 The cost: **main has no CI result of its own**. This relies on the [CLAUDE.md](../../CLAUDE.md) rule of never developing directly on `main`: every change goes through a PR, and the PR run tests the merged tree.
 
-**E2E doesn't run in CI; it runs locally.** One run takes about 6 minutes (install browsers + build + 90 cases), and Actions minutes are limited. The automatic triggers (merge to main, PR label) were removed; `e2e.yml` keeps only `workflow_dispatch`. When you want a CI result, run `gh workflow run E2E --ref <branch>` by hand; otherwise it costs nothing.
+**E2E doesn't run in CI; it runs locally.** One run takes about 6 minutes (install browsers + build + 90 cases). This was decided while the repository was private and minutes were limited; the local run stays the gate. The automatic triggers (merge to main, PR label) were removed; `e2e.yml` keeps only `workflow_dispatch`. When you want a CI result, run `gh workflow run E2E --ref <branch>` by hand; otherwise it costs nothing.
 
 So **a green local `make e2e` is a hard gate for every PR** ([CLAUDE.md](../../CLAUDE.md)), with no CI safety net:
 
@@ -283,6 +285,14 @@ So **a green local `make e2e` is a hard gate for every PR** ([CLAUDE.md](../../C
 - E2E requires a full build first (`npm run build` → `go build`), which proves the `go:embed` paths really work; the local run takes exactly that path
 - What we give up is the net for "differences that only show up in the CI environment". It caught two in the past: the Go job didn't build the frontend → `go:embed` of an empty directory → `GET /` returned 503; and focus still on body right after a sheet opened → Esc couldn't close it ([ADR-0018](../20-architecture/adr/0018-one-drawer-primitive.md)). **This is an informed trade-off**: from now on such differences are caught only by a manual run, which is worth doing before merging when a change touches the protocol / reconnect / input / layout, or changes the E2E suite or the build itself
 - `ci.yml` coverage is unchanged: `go vet` / `go test -race` / frontend typecheck and unit tests / single-binary assertions / gofmt / doc links run on every push to every PR (not again after merging to main, for the reasons above)
+
+### Storage
+
+The repository is public, so standard GitHub-hosted runners cost no minutes. What still counts is **storage**: Actions artifacts share the account's storage allowance with GitHub Packages (500 MB on a free account), and are kept 90 days by default. So:
+
+- **No artifacts between jobs.** `release.yml` used to hand its binaries from a build job to a `dev` job as an artifact, about 13.5 MB per merge to `main`; 1.4 GB had piled up by November 2026. It is one job now, publishing from the runner that built the binaries.
+- `e2e.yml` uploads its Playwright report only on failure, kept 3 days.
+- The npm cache (`setup-node`) has its own 10 GB per repository and doesn't count.
 
 ## Coverage
 
