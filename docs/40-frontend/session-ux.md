@@ -160,7 +160,7 @@ The top cell of the extra keys' left column is the **session button** (`data-tes
 
 - Both switching rows also need `|dx| > |dy|` over the whole touch.
 - **Speed** is measured over the last 100ms of the touch; moves stamped at the same millisecond give no speed (synthetic events often are, and must not count as a flick).
-- **Switching is `select()`**, the drawer's switch, called inside `touchend`: [focus follows the session](#focus-follows-the-session-ac-48) (iOS keeps the keyboard up only from inside a gesture), the text page follows, popovers close, no `resize`. The new terminal slides in from the side the finger went, starting where the old one's edge was (200ms ease-out); the old host's `transform` is cleared.
+- **Switching is `select()`**, the drawer's switch, called inside `touchend`: [focus follows the session](#focus-follows-the-session-ac-48) (iOS keeps the keyboard up only from inside a gesture), the text page follows, popovers close, no `resize`. The new terminal comes in from the opposite side (from the right after a swipe left), starting where the old one's edge was (200ms ease-out); the old host's `transform` is cleared.
 - A new touch during either animation ends it at once.
 - Hosts are mounted and unmounted at rest (the store clears any `transform` and `data-swiping`): if the current session closes mid-swipe, its `touchend` goes to a detached node and never arrives, and the next touch hides the label.
 - `prefers-reduced-motion`: nothing moves; `swipe-peek` still appears, and releasing switches at once.

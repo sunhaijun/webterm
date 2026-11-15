@@ -38,7 +38,7 @@ Single-finger gestures already on the terminal: tap (keyboard, links, a click un
   - and in both cases the whole travel is still mostly horizontal (`|dx| > |dy|`).
   
   The speed is measured over the last 100ms of the touch, not the whole of it, so a slow drag ending in a flick counts and a fast drag that stops doesn't. Moves stamped at the same millisecond give no speed.
-- **Switching is the drawer's switch**, run in the `touchend` handler: focus follows the session (the keyboard stays up if it was up, which iOS allows only inside the gesture), the text page follows ([ADR-0036](0036-text-page-per-session.md)), open popovers close, and no `resize` is sent. The new terminal slides in from the side the finger went, continuing from where the old one was (200ms, ease-out).
+- **Switching is the drawer's switch**, run in the `touchend` handler: focus follows the session (the keyboard stays up if it was up, which iOS allows only inside the gesture), the text page follows ([ADR-0036](0036-text-page-per-session.md)), open popovers close, and no `resize` is sent. The new terminal comes in from the opposite side (from the right after a swipe left), starting where the old one's edge was (200ms, ease-out).
 - **Otherwise it slides back** (180ms).
 - A new touch during either animation ends it at once. If the neighbour was closed during the swipe, or the current session changed (closed elsewhere), the release slides back.
 - With `prefers-reduced-motion`, nothing moves: the label still appears, and releasing switches at once.

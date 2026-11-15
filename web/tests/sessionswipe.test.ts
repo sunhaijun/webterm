@@ -341,7 +341,7 @@ describe('installSessionSwipe', () => {
     expect(r.switched).toEqual([3])
   })
 
-  it('the new terminal slides in from the side the finger went, starting where the old edge was', () => {
+  it('the new terminal comes in from the opposite side, starting where the old edge was', () => {
     const old = r.host
     drag(r, 200, 300, -140, 0)
     expect(old.style.transform, "the old host's transform is cleared").toBe('')
