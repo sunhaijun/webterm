@@ -13,7 +13,8 @@
  *
  * Vertical drag: xterm's own touch scrolling without mouse tracking; with it,
  * installDragWheel turns the drag into wheel events (ADR-0029 / 0032), since xterm 5.5
- * ignores touch while mouse tracking. Horizontal drags do nothing.
+ * ignores touch while mouse tracking. A clearly sideways drag switches sessions
+ * (term/sessionswipe.ts, ADR-0067); other drags that aren't mostly vertical do nothing.
  */
 
 import { canStartRestore, isRestoreSwipe } from '../keys/collapse'
@@ -215,8 +216,8 @@ export interface RestoreSwipeTarget {
  * Installs "swipe left along the bottom to bring the collapsed extra keys back" on the
  * terminal area (ADR-0056 §3). The swipe must start in the bottom band, where the bar was,
  * and at least EDGE_PX from either screen edge: edge swipes belong to the system (Android
- * Back, Safari Forward). Horizontal drags do nothing else on the terminal, so this takes
- * nothing from taps, scrolling or the program's mouse.
+ * Back, Safari Forward). The session swipe (term/sessionswipe.ts) leaves the band to it, and
+ * this takes nothing from taps, scrolling or the program's mouse.
  */
 export function installRestoreSwipe(el: HTMLElement, target: RestoreSwipeTarget): () => void {
   let start: { x: number; y: number } | null = null

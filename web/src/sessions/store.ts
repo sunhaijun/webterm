@@ -275,6 +275,20 @@ export class SessionStore {
     return ids[next] ?? null
   }
 
+  /** The active session's neighbour for a swipe (AC-4.15): +1 next, -1 previous, no wrapping. */
+  adjacent(delta: 1 | -1): SessionView | null {
+    const list = this.list()
+    const i = list.findIndex((s) => s.active)
+    if (i < 0) return null
+    return list[i + delta] ?? null
+  }
+
+  /** The mounted session's host element, which a swipe moves. */
+  activeHost(): HTMLElement | null {
+    const e = this.activeSid === null ? undefined : this.entries.get(this.activeSid)
+    return e?.host.isConnected ? e.host : null
+  }
+
   first(): number | null {
     return this.ordered()[0]?.info.sid ?? null
   }

@@ -13,7 +13,8 @@ import { Code, T, type ServerMessage, type Welcome } from '../protocol/messages'
 import { SessionStore, routeInput, type SessionView } from '../sessions/store'
 import { shouldSendSeen } from '../sessions/attention'
 import { installDragWheel, installRestoreSwipe, installTapToggle } from '../term/gestures'
-import { previewBar } from '../keys/collapse'
+import { installSessionSwipe, type Peek } from '../term/sessionswipe'
+import { BAND_PX, previewBar } from '../keys/collapse'
 import { openUrl } from '../term/links'
 import { themeFromCss, type TermHandle } from '../term/terminal'
 import { asUserInput, inUserInputEvent } from '../term/userinput'
@@ -161,6 +162,9 @@ export class AppController {
    */
   private readonly pages: TextPages
   private textPage: TextPageEls | null = null
+  /** The label in the gap a session swipe leaves (ADR-0067); a sibling of the terminal area. */
+  private peekEl: HTMLElement | null = null
+  private peekKey = ''
   private untrackText: (() => void) | null = null
   /** The session whose draft is currently in the text box. */
   private textOwner: number | null = null
@@ -771,6 +775,24 @@ export class AppController {
     })
     const undrag = installDragWheel(area, () => this.activeTerm() ?? null)
 
+    // A sideways swipe on the terminal goes to the neighbouring session (ADR-0067). Capture
+    // phase: once a touch is a swipe, the tap toggle, drag-to-wheel and xterm never see it.
+    this.peekEl = area.parentElement?.querySelector<HTMLElement>(':scope > .swipe-peek') ?? null
+    const unswipe = installSessionSwipe(area, {
+      neighbour: (dir) => {
+        const s = this.store.adjacent(dir)
+        return s && { sid: s.sid, index: s.index, name: s.name, attention: s.attention }
+      },
+      host: () => this.store.activeHost(),
+      width: () => area.clientWidth,
+      viewportWidth: () => window.innerWidth,
+      // While collapsed, the bottom band belongs to the restore swipe (ADR-0056 §3)
+      bandTop: () => (this.state.keysCollapsed ? area.getBoundingClientRect().bottom - BAND_PX : null),
+      reducedMotion: () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true,
+      peek: (p) => this.showPeek(p),
+      switchTo: (sid) => this.select(sid),
+    })
+
     // Theme follows the system (AC-5.3): when the OS switches light/dark the CSS variables
     // change and xterm must re-read them. Harmless when light or dark is forced.
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
@@ -837,6 +859,9 @@ export class AppController {
       untap()
       unrestore()
       undrag()
+      unswipe()
+      this.showPeek(null)
+      this.peekEl = null
       this.sendResize.cancel()
       this.ime?.dispose()
       this.untrackText?.()
@@ -917,6 +942,48 @@ export class AppController {
       focused: this.hasFocus(),
     })
     if (seen) this.conn.send({ t: T.sessionSeen, sid })
+  }
+
+  /**
+   * The swipe label (ADR-0067): the neighbour's `[n]`, name and waiting-for-you dot, on the
+   * side the terminal uncovers. Updated every frame of a swipe, so only progress and
+   * readiness change unless the neighbour does; DOM directly, no re-render.
+   */
+  private showPeek(p: Peek | null): void {
+    const el = this.peekEl
+    if (!el) return
+    if (!p) {
+      el.hidden = true
+      el.style.opacity = ''
+      el.style.transform = ''
+      this.peekKey = ''
+      return
+    }
+    const key = `${p.sid} ${p.index} ${p.attention} ${p.side} ${p.name}`
+    if (key !== this.peekKey) {
+      this.peekKey = key
+      const idx = document.createElement('span')
+      idx.className = 'swipe-peek-idx'
+      idx.textContent = `[${p.index}]`
+      const name = document.createElement('span')
+      name.className = 'swipe-peek-name'
+      name.textContent = p.name
+      const parts: HTMLElement[] = [idx, name]
+      if (p.attention) {
+        const dot = document.createElement('span')
+        dot.className = 'attention-dot'
+        parts.push(dot)
+      }
+      el.replaceChildren(...parts)
+      el.dataset.side = p.side
+    }
+    if (p.ready) el.dataset.ready = 'true'
+    else delete el.dataset.ready
+    // Fades in and drifts 12px toward the middle as the finger travels
+    const drift = (1 - p.progress) * 12 * (p.side === 'right' ? 1 : -1)
+    el.style.opacity = String(p.progress)
+    el.style.transform = `translateY(-50%) translateX(${drift}px)`
+    el.hidden = false
   }
 
   step(delta: number): void {

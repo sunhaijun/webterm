@@ -144,7 +144,7 @@ The top cell of the extra keys' left column is the **session button** (`data-tes
 
 **While swiping**:
 
-- The current `.term-host` follows the finger one to one from the point the swipe was recognized (`transform` only: no `fit()`, no `resize`).
+- The current `.term-host` follows the finger one to one from the point the swipe was recognized (`transform` only: no `fit()`, no `resize`). While it moves (and while it slides back or in) it has `data-swiping`: a line at its left and right edges, and the stage behind it dimmed, so the page is seen moving, not only its text.
 - **Finger left = next, finger right = previous**, in the order of the tabs and the drawer. **No wrapping.**
 - **`swipe-peek`** sits in the uncovered strip, vertically centered: the neighbour's `[n]`, name and waiting-for-you dot. It fades in with the travel, and gets `data-ready="true"` (accent color) once releasing would switch by distance.
 - With no session on that side, the terminal moves with resistance, `(1 − 1 / (0.55·d / W + 1)) · W` for travel `d` and terminal width `W`, shows no label, and always slides back.

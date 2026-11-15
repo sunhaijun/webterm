@@ -25,6 +25,7 @@ Single-finger gestures already on the terminal: tap (keyboard, links, a click un
 ### 2. While swiping
 
 - **The terminal follows the finger** one to one, counted from where the swipe was recognized, so it doesn't jump 10px when it starts. It moves with a `transform` only: no `fit()`, no `resize`.
+- **The page is seen moving**: while it moves, the terminal shows a line at its left and right edges and the gap behind it is dimmed. Terminal and gap would otherwise share one background, and only the text would seem to slide.
 - **The gap shows where you are going**: a label in the uncovered strip, vertically centered, with the neighbour's `[n]` index and name and its waiting-for-you dot. It fades in with the travel and turns the accent color once releasing would switch.
 - **Finger left = next session, finger right = previous**, in the order of the tabs and the drawer: the next one is the tab to the right, the row below. **No wrapping**: with no session on that side the terminal moves with resistance (iOS's rubber band, `(1 − 1 / (0.55·d / W + 1)) · W`), shows no label and always slides back.
 - **Nothing reaches the program or xterm** once a touch is a swipe: its moves and its release stop at the terminal container, so no scrolling, no wheel events, no mouse reports, no keyboard toggle, and no synthesized click.

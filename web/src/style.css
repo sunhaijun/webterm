@@ -179,7 +179,32 @@ button { font: inherit; color: inherit; }
   overscroll-behavior: contain;
   touch-action: none;
 }
-.term-host { height: 100%; }
+.term-host { height: 100%; background: var(--term-bg); } /* opaque: covers .swipe-peek while it moves */
+/* Swiping between sessions (ADR-0067): the neighbour's [n] and name in the gap the terminal
+   leaves. Before .term in the DOM, so the moving .term-host paints over it; the controller sets
+   data-side, data-ready, opacity and the drift transform. */
+.swipe-peek {
+  position: absolute; top: 50%;
+  display: flex; align-items: center; gap: 6px;
+  max-width: calc(50% - 32px);
+  padding: 8px 12px; border-radius: 12px;
+  font-size: 14px; line-height: 20px; white-space: nowrap;
+  color: var(--fg);
+  background: var(--term-bg);
+  border: 1px solid var(--line-strong);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+/* While a swipe moves the terminal, it shows its edges and the gap behind it is dimmed, so the
+   page is seen moving rather than only its text */
+.term-host[data-swiping='true'] { box-shadow: -1px 0 0 var(--line-strong), 1px 0 0 var(--line-strong); }
+.stage:has(.term-host[data-swiping='true']) { background: color-mix(in srgb, var(--fg) 7%, var(--term-bg)); }
+.swipe-peek[data-side='right'] { right: 16px; }
+.swipe-peek[data-side='left'] { left: 16px; }
+.swipe-peek[data-ready='true'] { color: var(--accent); border-color: var(--accent); }
+.swipe-peek-idx { flex: none; color: var(--muted); font-family: var(--font-mono); font-size: 13px; }
+.swipe-peek[data-ready='true'] .swipe-peek-idx { color: inherit; }
+.swipe-peek-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .term .xterm { height: 100%; }
 .term .xterm-viewport { overscroll-behavior: contain; background-color: transparent !important; }
 /* The text layer ignores pointers. xterm's DOM renderer replaces the row elements on every refresh,

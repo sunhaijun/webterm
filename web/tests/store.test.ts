@@ -193,6 +193,23 @@ describe('neighbors', () => {
     store.activate(1, area)
     expect(store.step(-1)).toBe(3)
   })
+
+  it('swiping (AC-4.15): adjacent(±1) is the neighbour in display order, without wrapping; activeHost is the mounted host', () => {
+    const { store, area } = make()
+    expect(store.adjacent(1), 'no sessions').toBeNull()
+    expect(store.activeHost()).toBeNull()
+    for (const sid of [1, 2, 3]) store.upsert(info(sid))
+    store.move(3, 1) // display order 3 1 2
+    store.activate(1, area)
+    expect(store.adjacent(1)).toMatchObject({ sid: 2, index: 3 })
+    expect(store.adjacent(-1)).toMatchObject({ sid: 3, index: 1 })
+    store.activate(3, area)
+    expect(store.adjacent(-1), 'first: nothing before it').toBeNull()
+    store.activate(2, area)
+    expect(store.adjacent(1), 'last: nothing after it').toBeNull()
+    expect(store.activeHost()?.parentElement).toBe(area)
+    expect(store.activeHost()?.className).toBe('term-host')
+  })
 })
 
 describe('process-exited line (AC-4.5)', () => {
