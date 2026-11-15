@@ -40,6 +40,7 @@
 | m23 | `feat/40-files` | A file browser in stacked sheets like the session drawer, in the current session's folder: previews (images, video, audio, text, Markdown rendered with a text size), Share or Download, Send to session, upload without overwriting, new folder / rename / delete, new session here; maximize on wide screens, full height on phones. `/api/fs/*` with the agent user's rights; served files never run on webterm's origin | [ADR-0059](../20-architecture/adr/0059-files.md), [ADR-0060](../20-architecture/adr/0060-files-maximize-and-markdown.md), [ADR-0061](../20-architecture/adr/0061-markdown-text-size.md), [ADR-0066](../20-architecture/adr/0066-files-full-height-on-phones.md), [http-api.md](../30-protocol/http-api.md#files) |
 | m24 | `feat/40-machines` | Several machines in one page: servers on subdomains of one domain share the installed page, which talks to one at a time, directly, with that server's own cookie; devices bound to the page origin they paired from, CORS and CSP within the site; the machine button and Machines sheet (add with an address and 16 digits, switch, remove, sign out everywhere). The installer asks for the HTTPS port (Enter = 8443); CLI flags may follow a command's arguments | [ADR-0062](../20-architecture/adr/0062-several-machines.md), [ADR-0063](../20-architecture/adr/0063-installer-asks-for-the-port.md), [session-ux.md](../40-frontend/session-ux.md#machines-ac-107) |
 | m25 | `feat/80-ops-uninstall` | A new `--domain` keeps the rest of the previous install (ports, channel, prefix), and config and `install-state` are written only once the install worked; `webterm uninstall` removes the service, the binary, config, data and sent files after one question, leaves firewall rules, lingering and claude/codex settings with the command for each, and works inside a webterm session | [ADR-0064](../20-architecture/adr/0064-new-address-keeps-the-install.md), [ADR-0065](../20-architecture/adr/0065-uninstall.md), [install.md](../80-ops/install.md#uninstall) |
+| m26 | `feat/40-swipe-sessions` | A clearly sideways swipe on the terminal switches to the next or previous session, without wrapping: the terminal follows the finger, the gap names the neighbour, release past a quarter of the width or a flick switches, otherwise it slides back; never from the screen edges or the collapsed keys' restore band, and nothing reaches the program | [ADR-0067](../20-architecture/adr/0067-swipe-between-sessions.md), [session-ux.md](../40-frontend/session-ux.md#swiping-on-the-terminal-ac-415) |
 
 Released together as **v0.5.0** (2026-11-08): m14–m18.
 
@@ -55,9 +56,7 @@ Released as **v0.10.0** (2026-11-12): the file browser's sheets pull up to full 
 
 ## In progress
 
-| Milestone | Branch | What it delivers | Key docs |
-|---|---|---|---|
-| m26 | `feat/40-swipe-sessions` | A clearly sideways swipe on the terminal switches to the next or previous session, without wrapping: the terminal follows the finger, the gap names the neighbour, release past a quarter of the width or a flick switches, otherwise it slides back; never from the screen edges or the collapsed keys' restore band, and nothing reaches the program | [ADR-0067](../20-architecture/adr/0067-swipe-between-sessions.md), [session-ux.md](../40-frontend/session-ux.md#swiping-on-the-terminal-ac-415) |
+Nothing right now. Next candidates are below.
 
 ## Planned
 
