@@ -56,7 +56,7 @@ There's no main/alternate screen distinction and no "history truncated" notice: 
 
 ## Switching sessions (AC-4.10)
 
-This is the only place the two forms differ (form rules in [layout.md](layout.md#form-ac-518)).
+The session button and drawer (`compact`) and the tab bar (`wide`) are the only place the two forms differ (form rules in [layout.md](layout.md#form-ac-518)). On touch devices, both forms also switch with a [sideways swipe on the terminal](#swiping-on-the-terminal-ac-415), a shortcut to the neighbours.
 
 ### compact (phone): session button and bottom drawer
 
@@ -120,6 +120,50 @@ The top cell of the extra keys' left column is the **session button** (`data-tes
 - Tabs follow the current order and can be dragged to reorder ([Ordering](#ordering-ac-413)). When they don't fit (each would be narrower than 120px), tabs stay at 120px and the strip scrolls horizontally; when the current tab changes, it's scrolled into view (no-op if it's already fully visible; no `smooth`).
 - The scrollbar is hidden. A **vertical mouse wheel** over the strip scrolls it horizontally (not intercepted when everything fits); horizontal trackpad swipes work as usual.
 - Switching tabs doesn't change terminal geometry.
+
+### Swiping on the terminal (AC-4.15)
+
+[ADR-0067](../20-architecture/adr/0067-swipe-between-sessions.md). On touch devices, in both forms, a clearly sideways swipe on the terminal goes to the neighbouring session. It is a shortcut: the drawer and the tabs stay the way to see and reach every session.
+
+```
+ finger ←                                 finger → at the first session
+┌──────────────────────────┬──────────┐  ┌───┬──────────────────────────┐
+│ $ ls                     │          │  │   │ $ ls                     │
+│ README.md  web/          │ [3] api •│  │   │ README.md  web/          │  ← resists, no label,
+│ $ ▌                      │          │  │   │ $ ▌                      │    slides back
+└──────────────────────────┴──────────┘  └───┴──────────────────────────┘
+   the terminal follows the finger;          (no session on that side)
+   the gap names where you're going
+```
+
+**Which touches** (`web/src/term/sessionswipe.ts`):
+
+- One finger, starting on the terminal **at least 24px from both screen edges** (the edges are Android's Back and Safari's Back / Forward). While the extra keys are collapsed, a touch starting in the bottom 80px is the [restore swipe](input.md#collapsing-the-extra-keys-ac-326), not this.
+- **Decided once, at 10px of travel**: a swipe only if `|dx| ≥ 2·|dy|` (within about 27° of horizontal). Anything else is not a swipe for the rest of the touch, so the [vertical drag](input.md#vertical-drag-ac-321) rules apply and a scroll can't become a switch.
+- A second finger cancels it (the terminal slides back).
+
+**While swiping**:
+
+- The current `.term-host` follows the finger one to one from the point the swipe was recognized (`transform` only: no `fit()`, no `resize`).
+- **Finger left = next, finger right = previous**, in the order of the tabs and the drawer. **No wrapping.**
+- **`swipe-peek`** sits in the uncovered strip, vertically centered: the neighbour's `[n]`, name and waiting-for-you dot. It fades in with the travel, and gets `data-ready="true"` (accent color) once releasing would switch by distance.
+- With no session on that side, the terminal moves with resistance, `(1 − 1 / (0.55·d / W + 1)) · W` for travel `d` and terminal width `W`, shows no label, and always slides back.
+- From the moment it is a swipe, its `touchmove` and `touchend` stop at `.term` (capture phase, `preventDefault`): xterm doesn't scroll, no wheel events or mouse reports go out, the keyboard doesn't toggle, and no click is synthesized.
+
+**Releasing**:
+
+| The release | Result |
+|---|---|
+| Horizontal travel ≥ min(¼ terminal width, 160px), and the finger isn't heading back at ≥ 0.3 px/ms | Switch |
+| Horizontal travel ≥ 40px, at ≥ 0.5 px/ms in the swipe's direction (a flick) | Switch |
+| Anything else, a second finger, `touchcancel`, or the neighbour was closed meanwhile | Slide back (180ms) |
+
+- Both switching rows also need `|dx| > |dy|` over the whole touch.
+- **Speed** is measured over the last 100ms of the touch; moves stamped at the same millisecond give no speed (synthetic events often are, and must not count as a flick).
+- **Switching is `select()`**, the drawer's switch, called inside `touchend`: [focus follows the session](#focus-follows-the-session-ac-48) (iOS keeps the keyboard up only from inside a gesture), the text page follows, popovers close, no `resize`. The new terminal slides in from the side the finger went, starting where the old one's edge was (200ms ease-out); the old host's `transform` is cleared.
+- A new touch during either animation ends it at once.
+- `prefers-reduced-motion`: nothing moves; `swipe-peek` still appears, and releasing switches at once.
+- `.term-host` has the terminal background, so it covers `swipe-peek` as it slides back over it.
 
 ### Row actions (compact)
 

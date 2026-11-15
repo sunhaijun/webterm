@@ -789,3 +789,18 @@ To add back any optimization (per-frame batching, scrollback pause, write budget
 3. **Down to 80% from the header, and the button**: with the body still scrolled, drag the header down 100px → 80% and `aria-pressed` false; tap `files-max` → full height; tap it again → 80%
 4. **Remembered**: tap `files-max` (full), close both sheets, reload, open files → `files-sheet` is full height
 5. **One long pull closes**: drag `files-sheet`'s header down by the gap to 80% plus 140px → the sheet is gone; `resizes()` never changed
+
+## E2E-58 Swiping between sessions (AC-4.15, AC-4.8, AC-3.26)
+
+> [ADR-0067](../20-architecture/adr/0067-swipe-between-sessions.md). `web/e2e/sessionswipe.spec.ts`, Pixel 5 (393px wide: switching by distance needs 98px) unless noted, real CDP touch drags; `WebSocket.send` recorded. Sessions A, B, C in that order. A "flick" is 140px in ten moves 16ms apart; a "slow drag" is the same followed by 300ms holding still, then the release.
+
+1. **Next and previous**: on B, flick left from the middle of the terminal → C is current, no `.term-host` has a `transform` once it settles, `swipe-peek` is hidden, `resizes()` is unchanged and no INPUT frame was sent; flick right → B; again → A
+2. **No wrapping**: on A, drag right 150px and hold → the current host has moved right by more than 0 and less than half of that, and `swipe-peek` is hidden; release → still A, no `transform`. On C, the same to the left → still C
+3. **The label, and switching by distance**: on A, slow drag left 60px → while holding, `swipe-peek` is visible, reads `[2]` and B's name, and has no `data-ready`; release → still A. Slow drag left 130px → while holding, `data-ready="true"`; release → B
+4. **Changing your mind**: on B, drag left 220px, then back to 150px in seven moves 16ms apart, release at once → still B
+5. **Not a swipe**: on B, a drag of (−120px, +70px) → no host moved during it and B is still current; a flick left starting 10px from the right edge, and a flick right starting 10px from the left edge → still B; a 30px flick → still B; a slow drag left 130px with a second finger added before the release → still B, no `transform`
+6. **Focus follows**: tap the terminal so its textarea has focus, flick left → C is current and the focused element is C's helper textarea; tap to blur, flick right → B, and no textarea has focus
+7. **Collapsed keys**: collapse the extra keys; flick left from x = 200 in the bottom 40px of the terminal → the keys are back and B is still current; collapse again, flick left from the middle of the terminal → C; restore
+8. **Under mouse tracking**: on B, run `printf '\e[?1000h\e[?1006h'; sleep 60`, then flick left → C, and no INPUT frame was sent (no mouse report, no wheel)
+9. **Tablet** (iPad Mini, touch, `wide`): two sessions, the second current; flick right on the terminal → the first is current and its tab has `aria-current="true"`
+10. **Mouse** (1440×900): two sessions; drag 200px left across the terminal with the mouse → still the same session

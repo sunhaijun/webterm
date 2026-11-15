@@ -55,7 +55,9 @@ Released as **v0.10.0** (2026-11-12): the file browser's sheets pull up to full 
 
 ## In progress
 
-Nothing right now. Next candidates are below.
+| Milestone | Branch | What it delivers | Key docs |
+|---|---|---|---|
+| m26 | `feat/40-swipe-sessions` | A clearly sideways swipe on the terminal switches to the next or previous session, without wrapping: the terminal follows the finger, the gap names the neighbour, release past a quarter of the width or a flick switches, otherwise it slides back; never from the screen edges or the collapsed keys' restore band, and nothing reaches the program | [ADR-0067](../20-architecture/adr/0067-swipe-between-sessions.md), [session-ux.md](../40-frontend/session-ux.md#swiping-on-the-terminal-ac-415) |
 
 ## Planned
 

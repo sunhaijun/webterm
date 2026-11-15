@@ -38,6 +38,9 @@ Automation can only dispatch composition events; it can't test how a real IME's 
 - [ ] iPhone with home indicator: `+ New session` and ⚙ in the drawer sit fully above the indicator, with a gap; with one session the drawer is about half the screen; the settings sheet also clears the indicator
 - [ ] iOS / Android: ⚙ has the same stroke weight as `+` and ✎ and isn't rendered as a color emoji
 - [ ] iOS / Android: swipe a drawer row left to reveal Pin / Rename / Close; scrolling the list doesn't open rows; the rename sheet sits fully above the keyboard
+- [ ] iOS Safari tab, iOS PWA, Android Chrome: with three sessions, swipe sideways on the terminal (ADR-0067) → the terminal follows the thumb, the gap names the neighbour, a flick or a swipe past about a quarter of the width switches, a short or reversed one slides back; the first and last session resist and never wrap
+- [ ] While reading claude's output and a long scrollback, scroll up and down quickly with a thumb for a minute → never switches session; swiping in from either screen edge does the system's Back / Forward, not a switch
+- [ ] With the keyboard up, swipe to the next session → the keyboard stays up and typing goes to the new session
 - [ ] Close a session running claude (try both the tab ✕ and swipe-to-close in the drawer) → no "Session not found" error appears
 - [ ] Tablet / PC: switching tabs, renaming (double-click / long-press), closing, and creating with `+` all work; the terminal doesn't reflow on switch
 - [ ] Tablet: open more tabs than fit; `+` stays visible right of the tab strip; tapping the current tab's ✕ and `+` never hits the other
